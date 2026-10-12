@@ -172,6 +172,51 @@ def test_pdf_resume_regenerates_missing_primitive_from_verified_render() -> None
         assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
 
 
+@pytest.mark.parametrize(
+    ("ocr_policy", "expected_text", "expected_dimensions"),
+    [
+        (True, ["1077"], 1),
+        (False, [], 0),
+        (None, [], 0),
+    ],
+    ids=["default-on", "explicit-off", "historical-manifest"],
+)
+def test_pdf_resume_regenerates_missing_primitive_with_ocr_policy(
+    ocr_policy: bool | None,
+    expected_text: list[str],
+    expected_dimensions: int,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144)
+        if ocr_policy is None:
+            manifest["configuration"].pop("auto_ocr_roi")
+        else:
+            manifest["configuration"]["auto_ocr_roi"] = ocr_policy
+
+        manifest_path = output / "pdf-run-manifest.json"
+        run_pdf_stages(source, output, manifest_path, manifest)
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primitive_path = output / persisted["pages"][0]["stages"]["primitive_ir"]["artifact"]
+        primitive_path.unlink()
+
+        run_pdf_stages(source, output, manifest_path, persisted)
+
+        resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+        text = [item["text_data"]["content"] for item in primitive["primitives"] if item["type"] == "text"]
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert text == expected_text
+        assert evidence["build_result"]["dimension_count"] == expected_dimensions
+        if ocr_policy is None:
+            assert "auto_ocr_roi" not in resumed["configuration"]
+        else:
+            assert resumed["configuration"]["auto_ocr_roi"] is ocr_policy
+
+
 def test_pdf_cli_run_and_resume() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

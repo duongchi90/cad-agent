@@ -192,7 +192,12 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
             rendered = output_dir / page["rendered_png"]["artifact"]
             if not _completed(output_dir, page.get("rendered_png", {})):
                 raise ManifestError(f"PDF page {page['page']} rendered-page checkpoint is invalid.")
-            _run_primitive(rendered, primitive, float(manifest["configuration"]["scale_mm_per_px"]))
+            _run_primitive(
+                rendered,
+                primitive,
+                float(manifest["configuration"]["scale_mm_per_px"]),
+                auto_ocr_roi=bool(manifest["configuration"].get("auto_ocr_roi", False)),
+            )
             _write_page_stage(manifest_path, manifest, page, "primitive_ir", primitive, "Primitive IR regenerated from verified rendered page.")
             stages["semantic_ir"] = _stage()
             stages["dxf"] = _stage()

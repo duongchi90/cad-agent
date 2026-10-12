@@ -272,7 +272,7 @@ def _write_stage(
     write_manifest(manifest_path, manifest)
 
 
-def _run_primitive(source: Path, output: Path, scale: float) -> None:
+def _run_primitive(source: Path, output: Path, scale: float, *, auto_ocr_roi: bool = False) -> None:
     from primitive_ir_lib.run_image import run
 
     run(
@@ -281,6 +281,7 @@ def _run_primitive(source: Path, output: Path, scale: float) -> None:
         scale_mm_per_px=scale,
         preset="real_scan_tuned_v1",
         merge_lines=True,
+        auto_ocr_roi=auto_ocr_roi,
     )
 
 
