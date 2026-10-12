@@ -86,6 +86,14 @@
    - Verified 8 positive/negative controls (rectangle, cross-hatch, parallel tracks, T-junction, crosshair, bridged gap, tall vertical, 30° aligned) and 8 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`DIMENSION_GEOMETRY_EXTRACTION_V1_READY_FOR_CODEX`).
 
+11. **Table Cell Grid Extraction (`research/antigravity/2026-10-11/table_extraction/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `table_extraction.py`: single-linkage chaining grid collapse on closely spaced columns (100% cell loss), midpoint-only filtering dropping overshooting borders, rigid Cartesian product fracturing merged header cells, short text underlines inside cells splitting columns across the whole table, and phantom table emission on scattered CAD lines.
+   - Benchmarked 4 strategies (A: Current Main, B: Centroid Clustered Grid, C: Span-Filtered Grid, D: Topological Cell Graph Oracle), proving Strategy D achieves 100.0% accuracy across 7 test cases (vs 14.3% in Strategy A) and runs at < 2.5 ms for 200-cell BOMs (0.38 ms/crop batch throughput).
+   - Resolved merged header cells and multi-row spanning cells using topological divider segment matrices and Disjoint Set Union (DSU) grouping.
+   - Enforced outer perimeter closure guard (>= 70% span coverage on >= 3 sides) and internal divider span coverage (>= 65%), eliminating false table detection on dimension witness lines, cross-hatching, mechanical contours, and text rulings.
+   - Verified 7 positive/negative controls (dimension witness, cross-hatch, L-bracket, text ruling, scattered geometry, ISO 7200 title block, standard BOM parts list) and 8 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`TABLE_CELL_GRID_EXTRACTION_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -166,6 +174,12 @@
 | `dimension_geometry` | [`test_dimension_geometry_controls.py`](dimension_geometry/test_dimension_geometry_controls.py) | Controls Test | `RESEARCH_ONLY` | `91584da6647fdbf6f1328fae2363a5b655acb55298c96fcd0ea5b2ff03d0223a` | Positive fixtures and strong negative controls (rectangle, hatch, tracks, T-junction, crosshair) |
 | `dimension_geometry` | [`test_dimension_geometry_degenerate_and_perf.py`](dimension_geometry/test_dimension_geometry_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `b02d372482db38d0f674300d578dc714dcd589d30c03cb8852f9826feff745e4` | Blank, black, tiny, noise, extreme aspect ratio, ambiguity, and latency profiling (3.07 ms/crop) |
 | `dimension_geometry` | [`dimension_geometry_empirical_specification.md`](dimension_geometry/dimension_geometry_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `918cec3a7df47294813c993d53de61cfe000f174cf5e9a209f9f08d1bf128399` | Complete empirical specification for robust dimension geometry extraction (Sections 10-20, `DIMENSION_GEOMETRY_EXTRACTION_V1`) |
+| `table_extraction` | [`table_extraction_engine.py`](table_extraction/table_extraction_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `61a8e2707f15ee3c46afcd56f770587ff6099a9582a53ca6acad620c3fdfa4cb` | Reference implementation of Strategies A-D for robust table cell grid extraction |
+| `table_extraction` | [`test_causal_red_table_extraction.py`](table_extraction/test_causal_red_table_extraction.py) | Causal RED Test | `RESEARCH_ONLY` | `bceee989942bcb6efd8822e99acade15628d3d9714c1bcbf74ce332ca84237d4` | Public causal RED reproducing 5 baseline failure modes on production table_extraction.py |
+| `table_extraction` | [`test_table_extraction_benchmark.py`](table_extraction/test_table_extraction_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `6a3d1b33dbff42e81a54e58b80b2b8082d6f71d9a2cd9b1a7d4c3e971365d2eb` | Empirical benchmark comparing Strategies A-D across 7 topologies (BOM, title block, merged cells) |
+| `table_extraction` | [`test_table_extraction_controls.py`](table_extraction/test_table_extraction_controls.py) | Controls Test | `RESEARCH_ONLY` | `19a21ae0d4fc13818fb55cb215d76bad43567eaeb31628a949701ba3b21c94f0` | Positive fixtures (ISO 7200, BOM) and strong negative controls (dimension, hatch, L-bracket) |
+| `table_extraction` | [`test_table_extraction_degenerate_and_perf.py`](table_extraction/test_table_extraction_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `d56f7ecb93bf5a172cd3e54504a906c9222b334e15c355049b2b50526a7c1ac4` | Empty, zero-length, non-finite coords, micro-ROI, inverted ROI, broken borders, and latency profiling |
+| `table_extraction` | [`table_cell_grid_extraction_empirical_specification.md`](table_extraction/table_cell_grid_extraction_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `363aff123f360b3fe1dea777e9a0cfa2f20c469ea40ecf1867b4b2c7d7edc850` | Complete empirical specification for robust table cell grid extraction (Sections 10-20, `TABLE_CELL_GRID_EXTRACTION_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
