@@ -137,6 +137,13 @@
    - Verified 8 positive/negative controls (flange bore with tangents, closed rectangular frame, slotted plate, multi-segment collinear split, low-confidence rejection, self-perpendicular triad rejection, concentric-tangent clash rejection, dense false perpendicular matrix) and 6 degenerate/non-finite edge cases.
    - 5 empirical scripts + 1 formal specification (`TRANSITIVE_AND_CONFLICTING_CONSTRAINT_PRUNING_V1_READY_FOR_CODEX`).
 
+18. **Circular Pitch Bolt Pattern Recognition (`research/antigravity/2026-10-11/bolt_circle_patterns/`):**
+   - Public causal RED reproducing 5 baseline failure modes on production `semantic_ir_lib/pattern_compound.py`: 4-hole flange bolt circle complete omission, 6-hole PCD pitch pattern omission without center bore, 8-hole wheel hub bolt pattern omission, naive proximity false positive blob clustering, and irregular non-uniform angular spacing rejection.
+   - Benchmarked 4 strategies (A: Current Main, B: Naive Proximity Clusterer, C: Radius-Only Equality Matcher, D: Rigorous Pitch Circle Center & Angular Pitch Validator), proving Strategy D achieves 100.0% accuracy across 8 test scenarios (vs 0.0% in Strategy A and 37.5% in Strategy C) and executes in < 5 ms across 90 circles forming 10 distinct patterns.
+   - Robust pattern recognition validating hole radius equality ($\pm 5\%$), algebraic circle fitting (Kasa fit), concentric center bore detection ($R_{pcd} \le 6 \cdot R_{bore}$), and uniform angular spacing ($\Delta \theta = 2\pi / N \pm 6^\circ$ for full arrays or sector arrays).
+   - Verified 8 positive/negative controls (5-hole star, 16-hole turbine flange, multi-pattern flange, 180 deg sector arc, unequal hole size rejection, elliptical arrangement rejection, background lines non-interference, < 3 holes rejection) and 5 degenerate/non-finite edge cases.
+   - 5 empirical scripts + 1 formal specification (`CIRCULAR_PITCH_BOLT_PATTERN_RECOGNITION_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -259,6 +266,12 @@
 | `constraint_pruning` | [`test_constraint_pruning_controls.py`](constraint_pruning/test_constraint_pruning_controls.py) | Controls Test | `RESEARCH_ONLY` | `803824f697d6eb390258950e704b6ee9010b11dff90f40c12ae75f9ede26df5c` | Positive fixtures (flange bore, frame, slot, collinear) and strong negative controls |
 | `constraint_pruning` | [`test_constraint_pruning_degenerate_and_perf.py`](constraint_pruning/test_constraint_pruning_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `831b223bcb2974628ca5eca062cd727192bdad112ebd16945bfadf85139da348` | Empty, single, self-referential, extreme confidences, and 1000+ constraint latency profiling |
 | `constraint_pruning` | [`transitive_and_conflicting_constraint_pruning_empirical_specification.md`](constraint_pruning/transitive_and_conflicting_constraint_pruning_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `57a61dee303f3686bc315191f60e41aa0686ede1f8384e5b23ba3ef050ae1261` | Complete empirical specification for transitive and conflicting constraint pruning (Sections 10-20, `TRANSITIVE_AND_CONFLICTING_CONSTRAINT_PRUNING_V1`) |
+| `bolt_circle_patterns` | [`bolt_circle_engine.py`](bolt_circle_patterns/bolt_circle_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `7a09b62c1df74fbba51875bd723598e714a6fe0001b78bd1b40e66a553fbe98a` | Reference implementation of Strategies A-D for circular pitch bolt pattern recognition |
+| `bolt_circle_patterns` | [`test_causal_red_bolt_circle_patterns.py`](bolt_circle_patterns/test_causal_red_bolt_circle_patterns.py) | Causal RED Test | `RESEARCH_ONLY` | `3f2868de2a33ebab7dbf15ed2f32e14d9c50c5fe99d7c9e63117d779524abc83` | Public causal RED reproducing 5 baseline failure modes on production pattern_compound.py |
+| `bolt_circle_patterns` | [`test_bolt_circle_benchmark.py`](bolt_circle_patterns/test_bolt_circle_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `574c48697e47818734d203eb05e9ae00ec460ba83935ad5fbd58a96c857c4578` | Empirical benchmark comparing Strategies A-D across 8 bolt pattern scenarios |
+| `bolt_circle_patterns` | [`test_bolt_circle_controls.py`](bolt_circle_patterns/test_bolt_circle_controls.py) | Controls Test | `RESEARCH_ONLY` | `8aa802e66978c60edbb5a8d5e1f6401bd03cf06b6fa89b1f65d544fbc13f2b60` | Positive fixtures (star, turbine, multi-pattern, sector) and strong negative controls |
+| `bolt_circle_patterns` | [`test_bolt_circle_degenerate_and_perf.py`](bolt_circle_patterns/test_bolt_circle_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `7028da9dd527ec4696128864ff90e5032335f6933f46545a46ecde47f0cefe1e` | Empty, sub-threshold, non-circle, non-finite coords, and 90-circle latency profiling |
+| `bolt_circle_patterns` | [`circular_pitch_bolt_pattern_empirical_specification.md`](bolt_circle_patterns/circular_pitch_bolt_pattern_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `6c1cdc7a88ae8dc51380679e4ef924c3928d78f11a704e2f029e871cbe4d7a6c` | Complete empirical specification for circular pitch bolt pattern recognition (Sections 10-20, `CIRCULAR_PITCH_BOLT_PATTERN_RECOGNITION_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
