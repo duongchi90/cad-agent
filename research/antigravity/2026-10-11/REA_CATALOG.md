@@ -61,7 +61,7 @@
 | **`REA-017`** | `CALIBRATION_CONSENSUS` | `AGENTS.md` Consensus Gate ($\ge 2$ wits, $\le 3\%$) | `ALGORITHM_TRANSFER` | `primitive_ir_lib/calibration.py` | `VALID` | `READY_TO_TRANSFER` | `YES` |
 | **`REA-018`** | `PARAMETRIC_CONSTRAINT_SOLVING` | `solvespace/solvespace` (`python-solvespace==3.0.8`)| `DEPENDENCY_REUSE` | `semantic_ir_lib/constraint_solving.py` | `VALID` | `ALREADY_IMPLEMENTED` | `YES` |
 | **`REA-019`** | `OPEN_SOURCE_CAD_ENGINES` | FreeCAD, LibreCAD, LibreDWG, QCAD | `RESEARCH_PRIOR_ONLY` | *None* | `VALID` | `UNKNOWN` | `CONDITIONAL` |
-| **`REA-020`** | `POLYLINE_BULGE_AND_ARC_RECONSTRUCTION` | Autodesk DXF Spec Group 42 & `ezdxf.math.bulge` | `ALGORITHM_TRANSFER` | `dxf_builder_lib/builder.py` | `VALID` | `READY_TO_TRANSFER` | `YES` |
+| **`REA-020`** | `POLYLINE_BULGE_AND_ARC_RECONSTRUCTION` | Autodesk DXF Spec Group 42 & `ezdxf.math.bulge` | `ALGORITHM_TRANSFER` | `dxf_builder_lib/builder.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
 
 ---
 
@@ -726,19 +726,19 @@
 - **REUSE_CLASS:** `ALGORITHM_TRANSFER`.
 - **CURRENT_CAD_AGENT_OWNER:** `dxf_builder_lib/builder.py` and `primitive_ir_lib/geometry_extraction.py`.
 - **OWNER_MAPPING_STATUS:** `VALID` (Verified on current main).
-- **CURRENT_DISPOSITION:** `READY_TO_TRANSFER`.
+- **CURRENT_DISPOSITION:** `RESEARCH_PRIOR`.
 - **DO_NOT_REPEAT_REA:** `YES`.
-- **RESEARCH_AGAIN_ONLY_IF:** AutoCAD introduces an incompatible non-uniform polyline spline representation replacing LWPOLYLINE Group Code 42.
+- **RESEARCH_AGAIN_ONLY_IF:** A current measured product boundary requires LWPOLYLINE bulge generation, conversion, verification, or persistence and current owners do not already satisfy it.
 - **EVIDENCE_TIER:** `VERIFIED_ALGORITHM_AND_ORACLE`.
-- **LICENSE:** Public Domain / MIT (ezdxf math).
+- **LICENSE:** MIT (ezdxf math) / Copyright Autodesk, Inc. (DXF Reference Documentation).
 - **LICENSE_SOURCE:** Autodesk DXF Reference / ezdxf open repository.
-- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES`.
-- **PROJECT_INTEGRATION_DECISION:** `TRANSFER_ALGORITHM_TO_EXISTING_OWNERS` (Transfer clean-room Python math function to `dxf_builder_lib` and `primitive_ir_lib`; do NOT create new subsystems).
+- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (for clean-room math formulations; no copying of GPL or proprietary implementations).
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Basic bulge math validated; do not implement in production until a measured product RED requires curved polyline representation).
 - **WHAT_WAS_INSPECTED:** Mathematical relationship between 3-point circular arcs, center coordinates, angular traversal direction, and DXF bulge parameter.
 - **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
-  - $b = \tan(\theta/4)$ where $\theta$ is the included central angle.
-  - $b > 0$ denotes Counter-Clockwise (CCW) traversal; $b < 0$ denotes Clockwise (CW) traversal.
-  - Singularity threshold $|b| < 10^{-7}$ must snap to $b = 0.0$ (straight line segment) to prevent radius overflow.
+  - $b = \tan(\theta/4)$ where $\theta$ is the included central angle (Standard invariant).
+  - $b > 0$ denotes Counter-Clockwise (CCW) traversal; $b < 0$ denotes Clockwise (CW) traversal (Standard invariant).
+  - Singularity threshold $|b| < 10^{-7} \implies b = 0.0$ is an internal `PROJECT_HEURISTIC_UNVALIDATED_FOR_PRODUCTION` used in test fixtures, not an Autodesk normative contract.
 - **FAILURE_MODES_AND_LIMITS:**
   - Collinear 3-point inputs produce zero cross-product determinant, yielding division by zero if unshielded. Protected by determinant guard $|\Delta| < 10^{-9}$.
 - **WHAT_NOT_TO_COPY_OR_INVENT:**
@@ -746,6 +746,7 @@
   - Do NOT build an external C++ native curve-fitting module.
 - **DURABLE_POINTERS:**
   - `research/antigravity/2026-10-13/rea_ghidra_maximum_capability/tier4_cad_agent_precompute/`
+  - `research/antigravity/2026-10-13/rea_ghidra_maximum_capability_correction/`
   - `dxf_builder_lib/builder.py`
   - `primitive_ir_lib/geometry_extraction.py`
 
@@ -774,7 +775,7 @@
 | `REA-017` | **YES** | **YES** (`primitive_ir_lib.calibration`) | **YES** | **YES** (`DOCUMENTATION_ONLY`, `TESTS_INSPECTED`) | **YES** (`READY_TO_TRANSFER`) | **NO** | **YES** |
 | `REA-018` | **YES** | **YES** (`semantic_ir_lib.constraint_solving`) | **YES** | **YES** (`BINARY_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`ALREADY_IMPLEMENTED`) | **NO** | **YES** |
 | `REA-019` | **YES** | **YES** (*None*) | **YES** | **YES** (`UNKNOWN`) | **YES** (`UNKNOWN`) | **YES** | **YES** |
-| `REA-020` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`READY_TO_TRANSFER`) | **NO** | **YES** |
+| `REA-020` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
 
 ---
 
