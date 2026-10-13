@@ -251,6 +251,8 @@ def auto_estimate_calibration(
     for text in raw_texts:
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
+        if text.parsed_value <= 0:
+            continue
         line = find_nearest_line(
             text, raw_lines, max_distance_px=max_distance_px,
             angle_tolerance_deg=angle_tolerance_deg, image_bgr=image_bgr,
