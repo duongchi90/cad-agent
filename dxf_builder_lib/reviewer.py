@@ -537,7 +537,7 @@ def review_dxf(
         for axis in _INSERT_SCALE_FIELDS:
             actual_val = getattr(entity.dxf, axis)
             expected_val = written[axis]
-            if abs(actual_val - expected_val) > tolerance_mm:
+            if not _scalar_matches(actual_val, expected_val, tolerance_mm):
                 component_mismatches.append(ComponentMismatch(
                     part_id=part_id, field=axis, expected=expected_val, actual=actual_val,
                     message=f"{part_id}: {axis} INSERT lệch — ghi {expected_val}, đọc lại {actual_val}",
@@ -545,7 +545,9 @@ def review_dxf(
 
         actual_rotation = entity.dxf.rotation
         expected_rotation = written["rotation_deg"]
-        if abs(actual_rotation - expected_rotation) > _ROTATION_TOLERANCE_DEG:
+        if not _scalar_matches(
+            actual_rotation, expected_rotation, _ROTATION_TOLERANCE_DEG,
+        ):
             component_mismatches.append(ComponentMismatch(
                 part_id=part_id, field="rotation_deg",
                 expected=expected_rotation, actual=actual_rotation,
