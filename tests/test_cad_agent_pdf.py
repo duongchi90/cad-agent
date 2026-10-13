@@ -117,6 +117,60 @@ def test_new_and_historical_pdf_manifests_are_draft_reference(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
+    ("scale", "label"),
+    [(float("nan"), "NaN"), (float("inf"), "+Infinity"), (True, "Boolean True")],
+)
+def test_new_pdf_manifest_rejects_nonfinite_and_boolean_manual_scales(
+    tmp_path: Path, scale: float | bool, label: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    source.write_bytes(b"pdf")
+
+    manifest = None
+    try:
+        manifest = new_pdf_manifest(source, scale, "ticket-123", 144)  # type: ignore[arg-type]
+    except ManifestError:
+        pass
+
+    assert manifest is None, (
+        f"new_pdf_manifest accepted {label} manual scale and produced "
+        f"configuration.scale_mm_per_px={manifest['configuration']['scale_mm_per_px']!r}"
+    )
+
+
+@pytest.mark.parametrize("scale_argument", ["nan", "inf"], ids=["nan", "infinity"])
+def test_run_pdf_cli_rejects_nonfinite_scale_before_manifest_or_render_staging(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], scale_argument: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    stage_calls: list[Path] = []
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "cad_agent.pdf.run_pdf_stages",
+            lambda _source, output_dir, *_args: stage_calls.append(output_dir),
+        )
+        exit_code = main([
+            "run-pdf",
+            "--input", str(source),
+            "--output-dir", str(output),
+            "--scale-mm-per-px", scale_argument,
+            "--calibration-approval", "ticket-123",
+        ])
+
+    assert exit_code == 2, (
+        f"CLI accepted scale {scale_argument!r}; stage calls={len(stage_calls)}, "
+        f"manifest exists={(output / 'pdf-run-manifest.json').exists()}, "
+        f"stderr={capsys.readouterr().err!r}"
+    )
+    assert stage_calls == []
+    assert not (output / "pdf-run-manifest.json").exists()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
     ("field", "unsafe_value"),
     [
         ("release_profile", "AUTHORITATIVE"),
@@ -179,6 +233,92 @@ def test_pdf_resume_rejects_changed_source() -> None:
             assert "SHA-256" in str(exc)
         else:  # pragma: no cover - assertion guard
             raise AssertionError("changed PDF was accepted")
+
+
+@pytest.mark.parametrize(
+    ("scale", "label"),
+    [(float("nan"), "NaN"), (float("inf"), "+Infinity"), (True, "Boolean True")],
+)
+def test_pdf_resume_rejects_invalid_scale_before_cached_render_downstream_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scale: float | bool, label: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    manifest["configuration"]["scale_mm_per_px"] = scale
+
+    render_manifest_path = output / "pdf" / "manifest.json"
+    rendered_path = output / "pdf" / "rendered" / "page_01.png"
+    primitive_path = output / "pdf" / "primitive_ir" / "page_01.json"
+    for path in (render_manifest_path, rendered_path, primitive_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    render_manifest_path.write_text('{"pages": []}', encoding="utf-8")
+    rendered_path.write_bytes(b"verified rendered page")
+    primitive_path.write_text('{"primitives": []}', encoding="utf-8")
+
+    def completed(path: Path) -> dict[str, object]:
+        return {
+            "state": "completed",
+            "artifact": path.relative_to(output).as_posix(),
+            "sha256": sha256_file(path),
+            "details": None,
+        }
+
+    def pending(relative_path: str) -> dict[str, object]:
+        return {"state": "pending", "artifact": relative_path, "sha256": None, "details": None}
+
+    manifest["render"] = completed(render_manifest_path)
+    manifest["pages"] = [{
+        "page": 1,
+        "scale_label_candidates": [],
+        "rendered_png": completed(rendered_path),
+        "stages": {
+            "primitive_ir": completed(primitive_path),
+            "semantic_ir": pending("semantic_ir/page_01.json"),
+            "dxf": pending("dxf/page_01.dxf"),
+            "build_evidence": pending("build_evidence/page_01.json"),
+        },
+    }]
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    downstream_calls: list[str] = []
+
+    def fake_semantic(_primitive_path: Path, semantic_path: Path) -> None:
+        downstream_calls.append("semantic")
+        semantic_path.parent.mkdir(parents=True, exist_ok=True)
+        semantic_path.write_text("{}", encoding="utf-8")
+
+    def fake_dxf(
+        _primitive_path: Path, _semantic_path: Path, dxf_path: Path, evidence_path: Path
+    ) -> str:
+        downstream_calls.append("dxf")
+        for path in (dxf_path, evidence_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic", encoding="utf-8")
+        return "synthetic build evidence"
+
+    monkeypatch.setattr("cad_agent.cli._run_semantic", fake_semantic)
+    monkeypatch.setattr("cad_agent.cli._run_dxf", fake_dxf)
+    caught: ManifestError | None = None
+    try:
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    except ManifestError as exc:
+        caught = exc
+
+    changed_files = [
+        path.relative_to(output).as_posix()
+        for path in output.rglob("*")
+        if path.is_file() and (path not in before or path.read_bytes() != before[path])
+    ]
+    assert caught is not None, (
+        f"resume accepted {label} scale with a cached render; downstream calls={downstream_calls}, "
+        f"changed files={changed_files}"
+    )
+    assert downstream_calls == []
+    assert changed_files == []
+    assert {path: path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
 
 
 def test_pdf_resume_rebuilds_only_affected_page_stages() -> None:

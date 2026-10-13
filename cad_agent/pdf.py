@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,15 @@ PAGE_STAGES = ("primitive_ir", "semantic_ir", "dxf", "build_evidence")
 NO_CALIBRATION_CANDIDATE_RESULT = "CALIBRATION_CANDIDATE_EXTRACTION_NOT_SUPPORTED_FOR_THIS_SOURCE"
 
 
+def _is_valid_manual_scale(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
 def _stage(state: str = "pending", artifact: str | None = None, digest: str | None = None) -> dict[str, Any]:
     return {"state": state, "artifact": artifact, "sha256": digest, "details": None}
 
@@ -40,8 +50,8 @@ def new_pdf_manifest(
 ) -> dict[str, Any]:
     if not source.is_file():
         raise ManifestError(f"Input PDF does not exist: {source}")
-    if scale_mm_per_px <= 0:
-        raise ManifestError("PDF manual scale must be positive.")
+    if not _is_valid_manual_scale(scale_mm_per_px):
+        raise ManifestError("PDF manual scale must be a finite positive number.")
     if dpi <= 0:
         raise ManifestError("PDF DPI must be positive.")
     if not approval.strip():
@@ -343,6 +353,8 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
                 raise ManifestError("Persisted no-candidate terminal diagnostics are invalid.")
             raise ManifestError(NO_CALIBRATION_CANDIDATE_RESULT)
         raise ManifestError("Auto-calibration candidate manifests cannot be resumed.")
+    if not _is_valid_manual_scale(manifest.get("configuration", {}).get("scale_mm_per_px")):
+        raise ManifestError("PDF manual scale must be a finite positive number.")
     approval = manifest.get("approvals", {}).get("calibration", {})
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("PDF run manifest has no recorded calibration approval.")
