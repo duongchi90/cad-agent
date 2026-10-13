@@ -62,6 +62,7 @@
 | **`REA-018`** | `PARAMETRIC_CONSTRAINT_SOLVING` | `solvespace/solvespace` (`python-solvespace==3.0.8`)| `DEPENDENCY_REUSE` | `semantic_ir_lib/constraint_solving.py` | `VALID` | `ALREADY_IMPLEMENTED` | `YES` |
 | **`REA-019`** | `OPEN_SOURCE_CAD_ENGINES` | FreeCAD, LibreCAD, LibreDWG, QCAD | `RESEARCH_PRIOR_ONLY` | *None* | `VALID` | `UNKNOWN` | `CONDITIONAL` |
 | **`REA-020`** | `POLYLINE_BULGE_AND_ARC_RECONSTRUCTION` | Autodesk DXF Spec Group 42 & `ezdxf.math.bulge` | `ALGORITHM_TRANSFER` | `dxf_builder_lib/builder.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
+| **`REA-021`** | `DIMENSION_ARROWHEAD_WITNESS_ASSOCIATION` | ISO 129-1, ASME Y14.5, LibreCAD `RS_DimLinear`, DXF Specs | `ALGORITHM_TRANSFER` | `primitive_ir_lib/cross_validation.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
 
 ---
 
@@ -752,6 +753,43 @@
 
 ---
 
+### REA-021: DIMENSION_ARROWHEAD_WITNESS_ASSOCIATION
+- **CAPABILITY:** Geometric discrimination of dimension lines versus witness/extension lines and robust association with dimension text, preventing false conflict misbinding and establishing arrowhead outward flip thresholds.
+- **EXTERNAL_SOURCE:** ISO 129-1:2018 / ASME Y14.5-2018 / LibreCAD `RS_DimLinear` / Autodesk DXF Linear Dimension Specifications (Group Codes 10, 11, 13, 14, 50).
+- **SOURCE_TYPE:** `SPEC_PUBLIC` / `ALGORITHM_OPEN_SOURCE`.
+- **EXACT_VERSION_COMMIT:** `ISO 129-1:2018` / `ASME Y14.5-2018` / LibreCAD 2.2.x (`librecad/src/lib/engine/rs_dimlinear.cpp`).
+- **KNOWN_VERSION_FAMILY:** Standard Drafting & CAD Dimension Systems.
+- **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`rs_dimlinear.cpp`) + `DOCUMENTATION_ONLY` (ISO/ASME/Autodesk DXF Reference) + `TESTS_INSPECTED` (`TRANSFER_ORACLE.py`).
+- **REUSE_CLASS:** `ALGORITHM_TRANSFER`.
+- **CURRENT_CAD_AGENT_OWNER:** `primitive_ir_lib/cross_validation.py` and `dxf_builder_lib/builder.py`.
+- **OWNER_MAPPING_STATUS:** `VALID` (Verified on current main).
+- **CURRENT_DISPOSITION:** `RESEARCH_PRIOR`.
+- **DO_NOT_REPEAT_REA:** `YES`.
+- **RESEARCH_AGAIN_ONLY_IF:** A current measured product boundary or customer holdout exhibits dimension text association failure on non-linear or curved dimensions and current owners do not already satisfy it.
+- **EVIDENCE_TIER:** `VERIFIED_ALGORITHM_AND_ORACLE`.
+- **LICENSE:** Open Specifications / GPL v2 (LibreCAD architecture inspected for clean-room algorithm formulation).
+- **LICENSE_SOURCE:** ISO / ASME Standards / LibreCAD open source repository.
+- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (Clean-room mathematical formulations and algorithms only; zero copying of GPL code).
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Clean-room discriminator algorithm and unit test oracle validated; do not implement in production until a measured product RED requires witness line filtering).
+- **WHAT_WAS_INSPECTED:** Relationship between dimension line orientation ($\theta_{\text{dim}}$), witness line orientation ($\theta_{\text{wit}}$), text orientation ($\theta_{\text{text}}$), arrowhead flip geometry ($L < 2 \cdot S_{\text{arrow}} + W_{\text{text}}$), and DXF definition points.
+- **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
+  - Dimension line is collinear/parallel to dimension text angle modulo $180^\circ$ ($\Delta\theta \le 10^\circ$).
+  - Extension/witness lines are orthogonal to dimension text angle modulo $180^\circ$ ($|\Delta\theta - 90^\circ| \le 10^\circ$).
+  - Arrowheads flip outward when feature span $L < 2 \cdot S_{\text{arrow}} + W_{\text{text}}$.
+  - Witness line misbinding trap (naive nearest line selection picking witness line) causes false positive 85% length conflict, avoided by angular pre-filtering.
+- **FAILURE_MODES_AND_LIMITS:**
+  - Does not cover radial/diametral dimensions (`DIMRADIAL`, `DIMDIAMETER`) or ordinate dimensions (`DIMORDINATE`), which require separate radial ray/datum origin association logic.
+- **WHAT_NOT_TO_COPY_OR_INVENT:**
+  - Do NOT copy LibreCAD C++ source code.
+  - Do NOT create a new subsystem or daemon for dimension association; existing owner `primitive_ir_lib/cross_validation.py` is sufficient.
+- **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-14/dimension_arrowhead_witness_association/TRANSFER_ORACLE.py`.
+- **DURABLE_POINTERS:**
+  - `research/antigravity/2026-10-14/dimension_arrowhead_witness_association/`
+  - `primitive_ir_lib/cross_validation.py`
+  - `dxf_builder_lib/builder.py`
+
+---
+
 # QUALITY AUDIT SUMMARY TABLE
 
 | REA_ID | ENUM_VALID | OWNER_EXISTS | GITHUB_EVIDENCE_COMPLETE | PROVENANCE_CLEAR | DISPOSITION_FAIL_CLOSED | LOCAL_ONLY_GAP | ANTI_REPEAT_SAFE |
@@ -776,6 +814,8 @@
 | `REA-018` | **YES** | **YES** (`semantic_ir_lib.constraint_solving`) | **YES** | **YES** (`BINARY_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`ALREADY_IMPLEMENTED`) | **NO** | **YES** |
 | `REA-019` | **YES** | **YES** (*None*) | **YES** | **YES** (`UNKNOWN`) | **YES** (`UNKNOWN`) | **YES** | **YES** |
 | `REA-020` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
+| `REA-021` | **YES** | **YES** (`primitive_ir_lib.cross_validation`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
+
 
 ---
 

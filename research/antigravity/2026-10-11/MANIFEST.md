@@ -626,7 +626,8 @@
 | `prior_investigations` | [`rea_evidence_driven_code_avoidance_investigation.md`](prior_investigations/rea_evidence_driven_code_avoidance_investigation.md) | Technical Report | `RESEARCH_ONLY` | `098af87a6b52096b83adab59768bff9313659e6f90b92b931cb242a8d16d871c` | REA evidence-driven code avoidance deep investigation report |
 | `prior_investigations` | [`rea_ghidra_maximum_capability_correction`](../2026-10-13/rea_ghidra_maximum_capability_correction/README.md) | Technical Report | `RESEARCH_ONLY` | `f7767bd2b9d1b15e084845cc45a98be4736f876d84eb2253bcfe9f899805dcc2` | REA Ghidra benchmark claim correction and audit report |
 | `prior_investigations` | [`rea_ghidra_true_blind_benchmark`](../2026-10-13/rea_ghidra_true_blind_benchmark/README.md) | Technical Report | `RESEARCH_ONLY` | `8d7d5ad62a2084ac0d466fe8435dfe700bc63ddb0cf6b172cdca39c4bb6ffb32` | Independent blind Ghidra capability evaluation on Wallace target |
-| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `34a269ee052db23664b8b4906f1df93f437ebd64e1d24534bc3d7fdeac702587` | Master REA knowledge base and anti-repeat lookup catalog (hardened) |
+| `prior_investigations` | [`dimension_arrowhead_witness_association`](../2026-10-14/dimension_arrowhead_witness_association/README.md) | Technical Specification | `RESEARCH_ONLY` | `c416e33bbaad655d5ea4cce084697d574a109850560277a61549247078b343bd` | Proactive research precompute for REA-021 dimension line, witness line, and arrowhead association |
+| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `c9c6ed53ed9cb42787c784af0d6bc8a8f06fb6a614dd9fd7f940a2a993e21cb4` | Master REA knowledge base and anti-repeat lookup catalog (hardened, REA-001..REA-021) |
 
 ## Verification and Non-Interference Guarantees
 
