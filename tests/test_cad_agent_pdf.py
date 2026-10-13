@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import tempfile
 from pathlib import Path
@@ -395,6 +396,102 @@ def test_pdf_cli_auto_calibration_candidate_rejects_manual_calibration(
         "--calibration-approval", "verified-ticket",
     ])
     assert result == 2
+
+
+def test_pdf_no_candidate_resume_returns_terminal_without_reextraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lower_pdf = importlib.import_module("primitive_ir_lib.run_pdf")
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    geometry_module = importlib.import_module("primitive_ir_lib.geometry_extraction")
+    original_run = lower_pdf.run
+    extraction_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def count_run(*args: object, **kwargs: object) -> str:
+        extraction_calls.append((args, kwargs))
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(lower_pdf, "run", count_run)
+    monkeypatch.setattr(
+        image_module,
+        "extract_raw_geometry",
+        lambda *_args, **_kwargs: geometry_module.RawGeometry(),
+    )
+    monkeypatch.setattr(image_module, "detect_text_candidate_rois", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *_args, **_kwargs: [])
+
+    source = tmp_path / "no-calibration.pdf"
+    output = tmp_path / "no-calibration"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+
+    from cad_agent.pdf import run_pdf_calibration_candidate
+
+    manifest = run_pdf_calibration_candidate(source, output, manifest_path, 144)
+    no_candidate_result = "CALIBRATION_CANDIDATE_EXTRACTION_NOT_SUPPORTED_FOR_THIS_SOURCE"
+    assert manifest["result"] == no_candidate_result
+    assert 0 < len(manifest["details"]) <= 500
+    assert manifest["render"]["state"] == "pending"
+    assert manifest["pages"] == []
+    assert not (output / "calibration-registry.json").exists()
+    assert len(extraction_calls) == 1
+
+    with pytest.raises(ManifestError) as resume_error:
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    assert len(extraction_calls) == 1
+    assert no_candidate_result in str(resume_error.value)
+    assert not (output / "semantic_ir").exists()
+    assert not (output / "dxf").exists()
+    assert not (output / "build_evidence").exists()
+
+    malformed = read_pdf_manifest(manifest_path)
+    malformed["details"] = "x" * 501
+    with pytest.raises(ManifestError, match="terminal diagnostics are invalid"):
+        run_pdf_stages(source, output, manifest_path, malformed)
+    assert len(extraction_calls) == 1
+
+    source.write_bytes(source.read_bytes() + b"changed source")
+    with pytest.raises(ManifestError, match="SHA-256 does not match"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    assert len(extraction_calls) == 1
+
+
+def test_pdf_candidate_does_not_misclassify_unrelated_value_error_with_matching_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    geometry_module = importlib.import_module("primitive_ir_lib.geometry_extraction")
+    from cad_agent.pdf import run_pdf_calibration_candidate
+
+    monkeypatch.setattr(
+        image_module,
+        "extract_raw_geometry",
+        lambda *_args, **_kwargs: geometry_module.RawGeometry(),
+    )
+    monkeypatch.setattr(
+        image_module,
+        "detect_text_candidate_rois",
+        lambda *_args, **_kwargs: [(1, 1, 40, 40)],
+    )
+
+    def raise_unrelated_error(*_args: object, **_kwargs: object) -> list[object]:
+        raise ValueError(
+            "OCR decoding failed; auto_calibrate không tìm được cặp is only diagnostic text"
+        )
+
+    monkeypatch.setattr(image_module, "extract_text_tesseract", raise_unrelated_error)
+    unrelated_source = tmp_path / "unrelated-error.pdf"
+    unrelated_output = tmp_path / "unrelated-error"
+    _pdf(unrelated_source)
+    with pytest.raises(ValueError, match="OCR decoding failed"):
+        run_pdf_calibration_candidate(
+            unrelated_source,
+            unrelated_output,
+            unrelated_output / "pdf-run-manifest.json",
+            144,
+        )
 
 
 @pytest.mark.parametrize("entry_point", ["direct", "resume-cli"])

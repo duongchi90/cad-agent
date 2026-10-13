@@ -23,6 +23,7 @@ from .manifest import (
 PDF_MANIFEST_SCHEMA_VERSION = "pdf-run-1.0"
 PDF_MANIFEST_NAME = "pdf-run-manifest.json"
 PAGE_STAGES = ("primitive_ir", "semantic_ir", "dxf", "build_evidence")
+NO_CALIBRATION_CANDIDATE_RESULT = "CALIBRATION_CANDIDATE_EXTRACTION_NOT_SUPPORTED_FOR_THIS_SOURCE"
 
 
 def _stage(state: str = "pending", artifact: str | None = None, digest: str | None = None) -> dict[str, Any]:
@@ -224,6 +225,7 @@ def run_pdf_calibration_candidate(
     output_dir.mkdir(parents=True, exist_ok=True)
     write_manifest(manifest_path, manifest)
 
+    from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError
     from primitive_ir_lib.run_pdf import run_pdf as run_primitive_pdf
 
     registry_path = output_dir / "calibration-registry.json"
@@ -240,11 +242,9 @@ def run_pdf_calibration_candidate(
             calibration_registry_path=registry_path,
             calibration_id_prefix="run_pdf",
         )
-    except ValueError as exc:
-        if "auto_calibrate không tìm được cặp" not in str(exc):
-            raise
-        manifest["result"] = "CALIBRATION_CANDIDATE_EXTRACTION_NOT_SUPPORTED_FOR_THIS_SOURCE"
-        manifest["details"] = str(exc)
+    except CalibrationCandidateUnavailableError as exc:
+        manifest["result"] = NO_CALIBRATION_CANDIDATE_RESULT
+        manifest["details"] = str(exc)[:500]
         write_manifest(manifest_path, manifest)
         return manifest
 
@@ -322,6 +322,26 @@ def run_pdf_calibration_candidate(
 def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
     verify_source(manifest, source)
     if manifest.get("configuration", {}).get("calibration_mode") == "auto_candidate":
+        if manifest.get("result") == NO_CALIBRATION_CANDIDATE_RESULT:
+            details = manifest.get("details")
+            approvals = manifest.get("approvals")
+            calibration_approval = approvals.get("calibration") if isinstance(approvals, dict) else None
+            valid_terminal = (
+                isinstance(details, str)
+                and bool(details.strip())
+                and len(details) <= 500
+                and manifest.get("release_profile") == "DRAFT_REFERENCE"
+                and manifest.get("authoritative_release_eligible") is False
+                and isinstance(calibration_approval, dict)
+                and calibration_approval.get("approved") is False
+                and calibration_approval.get("reference") is None
+                and isinstance(manifest.get("render"), dict)
+                and manifest["render"].get("state") == "pending"
+                and manifest.get("pages") == []
+            )
+            if not valid_terminal:
+                raise ManifestError("Persisted no-candidate terminal diagnostics are invalid.")
+            raise ManifestError(NO_CALIBRATION_CANDIDATE_RESULT)
         raise ManifestError("Auto-calibration candidate manifests cannot be resumed.")
     approval = manifest.get("approvals", {}).get("calibration", {})
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
