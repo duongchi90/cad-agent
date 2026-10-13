@@ -320,6 +320,83 @@ def test_pdf_cli_run_and_resume() -> None:
         ]) == 0
 
 
+def test_pdf_cli_auto_calibration_candidate_stops_before_semantic_or_dxf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+    from primitive_ir_lib.text_extraction import RawText
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "candidate"
+    _pdf(source)
+
+    def synthetic_geometry(image, **kwargs):
+        return RawGeometry(lines=[RawLine(
+            id="synthetic-dimension-line",
+            p1_px=(40.0, 100.0),
+            p2_px=(240.0, 100.0),
+            confidence=1.0,
+            bbox_px=(40.0, 100.0, 240.0, 100.0),
+        )])
+
+    def synthetic_text(image, roi_boxes, **kwargs):
+        return [RawText(
+            id="synthetic-dimension-text",
+            content="100",
+            bbox_px=(130, 80, 150, 95),
+            rotation_deg=0.0,
+            confidence=1.0,
+            source="text_tesseract",
+            parsed_value=100.0,
+            semantic_role="dimension_value",
+        )]
+
+    monkeypatch.setattr("primitive_ir_lib.run_image.extract_raw_geometry", synthetic_geometry)
+    monkeypatch.setattr("primitive_ir_lib.run_image.detect_text_candidate_rois", lambda image: [(0, 0, image.shape[1], image.shape[0])])
+    monkeypatch.setattr("primitive_ir_lib.run_image.extract_text_tesseract", synthetic_text)
+    monkeypatch.setattr("primitive_ir_lib.run_image._configure_tesseract", lambda command: None)
+    result = main([
+        "run-pdf", "--input", str(source), "--output-dir", str(output),
+        "--auto-calibrate",
+    ])
+
+    assert result == 0
+    assert "CALIBRATION_NEEDS_VERIFICATION" in capsys.readouterr().out
+    manifest = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["release_profile"] == "DRAFT_REFERENCE"
+    assert manifest["authoritative_release_eligible"] is False
+    assert manifest["result"] == "CALIBRATION_NEEDS_VERIFICATION"
+    registry = json.loads((output / "calibration-registry.json").read_text(encoding="utf-8"))
+    assert [record["id"] for record in registry["records"]] == ["run_pdf_page01", "run_pdf_page02"]
+    assert all(record["status"] == "needs_verification" for record in registry["records"])
+    for page in manifest["pages"]:
+        primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+        assert primitive["calibration"]["status"] == "needs_verification"
+        assert page["calibration"]["status"] == "needs_verification"
+        assert page["calibration"]["candidate_id"] == f"run_pdf_page{page['page']:02d}"
+        assert page["stages"]["semantic_ir"]["state"] == "pending"
+        assert page["stages"]["dxf"]["state"] == "pending"
+        assert page["stages"]["build_evidence"]["state"] == "pending"
+    assert not list(output.rglob("semantic_ir"))
+    assert not list(output.rglob("*.dxf"))
+    assert not list(output.rglob("build_evidence"))
+
+
+def test_pdf_cli_auto_calibration_candidate_rejects_manual_calibration(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    _pdf(source)
+
+    result = main([
+        "run-pdf", "--input", str(source), "--output-dir", str(tmp_path / "candidate"),
+        "--auto-calibrate", "--scale-mm-per-px", "0.5",
+        "--calibration-approval", "verified-ticket",
+    ])
+    assert result == 2
+
+
 def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
