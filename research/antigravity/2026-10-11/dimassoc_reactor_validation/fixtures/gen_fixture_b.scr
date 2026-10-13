@@ -1,0 +1,10 @@
+_FILEDIA 0
+_SECURELOAD 0
+_DIMASSOC 2
+(command "._LINE" '(0 0 0) '(100 0 0) "")
+(setq e (entlast))
+(command "._DIMALIGNED" "" (list e '(50 0 0)) '(50 20 0))
+_SAVEAS
+
+fixture_b_dimassoc2.dwg
+_QUIT

@@ -303,6 +303,14 @@
    - Comprehensive empirical verification across 30 test scenarios (5 RED, 8 benchmark, 11 controls, 6 degenerate & high-density perf) with 100% pass rate.
    - 6 empirical scripts/tests + 1 formal specification (`CALIBRATION_CANDIDATE_EXTRACTION_TRANSFER_V1_READY_FOR_CODEX`).
 
+43. **AutoCAD 2027 Managed DIMASSOC Reactor Differential Validation (`research/antigravity/2026-10-11/dimassoc_reactor_validation/`):**
+   - Independent reverse-engineering and differential object-graph investigation determining whether AutoCAD 2027 managed APIs can reliably distinguish associative dimension reactors (`AcDbDimAssoc`) from unrelated persistent reactors (`GEOMCONSTRAINT`, `HATCH`, `XRECORD`) and prove exact LINE <-> DIMENSION pairing without native mutation.
+   - Core Verdict: Managed read-only database APIs reliably distinguish `NoReactor`, `KnownDimAssocReactor`, `UnknownOtherReactor`, and `MixedReactors` via `ObjectClass.DxfName == "DIMASSOC"` and prove exact pairing via 3 independent structural invariants (symmetric reactor intersection, extension dictionary key `"ACAD_DIMASSOC"`, and hard ownership hierarchy).
+   - Proves current production `BoundedNativeLineEditPolicy.RequireTargetLine()` rejection of all `HasPersistentReactors=true` is overly conservative for pure associative dimensions.
+   - Production change authorization: `NO`. Establishes decision-grade Luna handoff specification (`DIMASSOC_ASSOCIATIVE_LINE_MUTATION_CAUSAL_PROBE_V1`) for future causal in-place mutation probe.
+   - Comprehensive verification across 4 adversarial controls (100% pass rate) inside `accoreconsole.exe`.
+   - 1 report + 1 Luna handoff specification + 5 fixture/inspection scripts + 1 C# managed inspection project/code + 1 execution log (`DIMASSOC_REACTOR_VALIDATION_V1`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -588,6 +596,20 @@
 | `calibration_candidate_transfer` | [`test_candidate_transfer_controls.py`](calibration_candidate_transfer/test_candidate_transfer_controls.py) | Controls Test | `RESEARCH_ONLY` | `8506cf85938649bb2dbf146c5d5d9eb019c0408831ea1f84bee5c0f6fd911b7b` | Positive fixtures and strong negative controls (concentric refusal, unaligned text) |
 | `calibration_candidate_transfer` | [`test_candidate_transfer_degenerate_and_perf.py`](calibration_candidate_transfer/test_candidate_transfer_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `84a4710179b9c46f1f952e4da57819690503fc0f2c1960bccbd9d03292497f61` | Empty, zero-length/radius, NaN/Inf coords, micro/macro dynamic range, high-density perf |
 | `calibration_candidate_transfer` | [`calibration_candidate_extraction_transfer_empirical_specification.md`](calibration_candidate_transfer/calibration_candidate_extraction_transfer_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `b4b07ee56cdd4a856e0aa584136c68c7561534a6c815f2e2bb25601e1b7db203` | Complete empirical specification for Calibration Candidate Extraction Transfer Architecture (`CALIBRATION_CANDIDATE_EXTRACTION_TRANSFER_V1`) |
+
+| `dimassoc_reactor_validation` | [`__init__.py`](dimassoc_reactor_validation/__init__.py) | Package Init | `RESEARCH_ONLY` | `3e9aa5b5620cf323a8cf7b627b55d05391fc1555a9a6f7886b1c509b4f01a1b4` | Package initialization |
+| `dimassoc_reactor_validation` | [`dimassoc_reactor_validation_report.md`](dimassoc_reactor_validation/dimassoc_reactor_validation_report.md) | Specification / Report | `RESEARCH_ONLY` | `041943bfcb113f4a77969e157ac8d44c1454c0ecc60b6968520e7b17939e52e1` | Comprehensive AutoCAD 2027 DIMASSOC reactor differential validation report |
+| `dimassoc_reactor_validation` | [`luna_handoff_causal_mutation_probe.md`](dimassoc_reactor_validation/luna_handoff_causal_mutation_probe.md) | Luna Handoff Spec | `RESEARCH_ONLY` | `8fdd3a3f8de4164f6556aba07053ab4a74849f22606a4eb596d9279c4e1642aa` | Decision-grade Luna handoff specification for DIMASSOC associative-LINE mutation causal probe |
+| `dimassoc_reactor_validation` | [`fixtures/FIXTURE_HASHES.md`](dimassoc_reactor_validation/fixtures/FIXTURE_HASHES.md) | Fixture Provenance | `RESEARCH_ONLY` | `acfcd52478dc042583d9ef3d60ccda4f16ab6811702ea23b653a545aefa2adfb` | Synthetic fixture hashes and reproduction instructions |
+| `dimassoc_reactor_validation` | [`fixtures/gen_fixture_a.scr`](dimassoc_reactor_validation/fixtures/gen_fixture_a.scr) | Fixture Generator | `RESEARCH_ONLY` | `1417110c32744532a16e403ba8ee3534cf66658584cbb397056a7b0ab46d79f5` | Headless generator script for Fixture A (DIMASSOC=1) |
+| `dimassoc_reactor_validation` | [`fixtures/gen_fixture_b.scr`](dimassoc_reactor_validation/fixtures/gen_fixture_b.scr) | Fixture Generator | `RESEARCH_ONLY` | `aa5dd7b433fcafcf275a386f107f2c26e111074d651d21fbd4c1072bdd5acd55` | Headless generator script for Fixture B (DIMASSOC=2) |
+| `dimassoc_reactor_validation` | [`fixtures/create_b.lsp`](dimassoc_reactor_validation/fixtures/create_b.lsp) | Fixture Generator | `RESEARCH_ONLY` | `7de197f4dfac8bf4c1d4f0e55711c5d2f4a27c5b56a00d9d5f1e439e73c052ac` | AutoLISP generator script for Fixture B |
+| `dimassoc_reactor_validation` | [`fixtures/inspect_modelspace.lsp`](dimassoc_reactor_validation/fixtures/inspect_modelspace.lsp) | Inspection Script | `RESEARCH_ONLY` | `627a6899de4e2b540b1d4fefed50bd6d30692a49ec73e77f5cd80ac776df5b40` | AutoLISP ModelSpace entity dump script |
+| `dimassoc_reactor_validation` | [`fixtures/inspect_reactor_details.lsp`](dimassoc_reactor_validation/fixtures/inspect_reactor_details.lsp) | Inspection Script | `RESEARCH_ONLY` | `e8a749d60f7dd5222e7e91bccb9787e208f5dbdd239af477ee8274568db6b94c` | AutoLISP deep reactor pointer inspector |
+| `dimassoc_reactor_validation` | [`ReactorInspector/ReactorInspector.csproj`](dimassoc_reactor_validation/ReactorInspector/ReactorInspector.csproj) | C# Project | `RESEARCH_ONLY` | `f38047a4365f015051801fd5c1ae25515543ee01e365006852628831c64c70e8` | Managed C# AutoCAD 2027 project file for ReactorInspector |
+| `dimassoc_reactor_validation` | [`ReactorInspector/Commands.cs`](dimassoc_reactor_validation/ReactorInspector/Commands.cs) | C# Source | `RESEARCH_ONLY` | `d988fbf8097606854f301e45162dc4989b367c227ff971e7cc1c79bddf2540ba` | Managed C# source for differential graph inspection and adversarial controls |
+| `dimassoc_reactor_validation` | [`ReactorInspector/run_netload.scr`](dimassoc_reactor_validation/ReactorInspector/run_netload.scr) | Runner Script | `RESEARCH_ONLY` | `feb4fcf38998f247cffa58f01cadafdc27622411ac28aef51e40c90961094f94` | Headless accoreconsole runner script for ReactorInspector |
+| `dimassoc_reactor_validation` | [`logs/inspection_result.txt`](dimassoc_reactor_validation/logs/inspection_result.txt) | Execution Log | `RESEARCH_ONLY` | `bc208289b803395cbeda3679295934612c3c8c86c7bcacbb6c674906e2705814` | Raw execution log of headless differential inspection and adversarial controls |
 
 ## Verification and Non-Interference Guarantees
 

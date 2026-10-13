@@ -1,0 +1,101 @@
+### DIFFERENTIAL MANAGED OBJECT GRAPH LOG ###
+
+#################################################################
+### STARTING DIFFERENTIAL MANAGED OBJECT GRAPH INSPECTION ###
+#################################################################
+
+=================================================================
+FIXTURE: FIXTURE_A (DIMASSOC=1)
+PATH: fixture_a_dimassoc1.dwg
+=================================================================
+
+--- ENTITY: Line ---
+  HANDLE: 265
+  OBJECT_ID: (2117979638992)
+  OBJECT_CLASS: AcDbLine
+  DXF_NAME: LINE
+  HAS_PERSISTENT_REACTOR_COUNT: 0
+  EXTENSION_DICTIONARY_ID: (0)
+  EXTENSION_DICTIONARY_KEYS: NONE
+  LINE_START: (0,0,0)
+  LINE_END: (100,0,0)
+  LINE_LENGTH: 100
+
+--- ENTITY: AlignedDimension ---
+  HANDLE: 266
+  OBJECT_ID: (2117979639008)
+  OBJECT_CLASS: AcDbAlignedDimension
+  DXF_NAME: DIMENSION
+  HAS_PERSISTENT_REACTOR_COUNT: 0
+  EXTENSION_DICTIONARY_ID: (0)
+  EXTENSION_DICTIONARY_KEYS: NONE
+  DIMENSION_MEASUREMENT: 100
+  DIMENSION_TEXT: ""
+  DIMENSION_BLOCK_ID: (2117979639056)
+=================================================================
+FIXTURE: FIXTURE_B (DIMASSOC=2)
+PATH: fixture_b_dimassoc2.dwg
+=================================================================
+
+--- ENTITY: Line ---
+  HANDLE: 265
+  OBJECT_ID: (2117979647184)
+  OBJECT_CLASS: AcDbLine
+  DXF_NAME: LINE
+  HAS_PERSISTENT_REACTOR_COUNT: 1
+  -> PERSISTENT_REACTOR_ID: (2117979647632)
+     HAS_THIS_REACTOR: True
+     REACTOR_CLASS_NAME: AcDbDimAssoc
+     REACTOR_DXF_NAME: DIMASSOC
+     REACTOR_OWNER_ID: (2117979647456)
+     REACTOR_IS_ERASED: False
+     REACTOR_PROXY_STATUS: False
+     REACTOR_HANDLE: 281
+  EXTENSION_DICTIONARY_ID: (0)
+  EXTENSION_DICTIONARY_KEYS: NONE
+  LINE_START: (0,0,0)
+  LINE_END: (100,0,0)
+  LINE_LENGTH: 100
+
+--- ENTITY: AlignedDimension ---
+  HANDLE: 266
+  OBJECT_ID: (2117979647200)
+  OBJECT_CLASS: AcDbAlignedDimension
+  DXF_NAME: DIMENSION
+  HAS_PERSISTENT_REACTOR_COUNT: 1
+  -> PERSISTENT_REACTOR_ID: (2117979647632)
+     HAS_THIS_REACTOR: True
+     REACTOR_CLASS_NAME: AcDbDimAssoc
+     REACTOR_DXF_NAME: DIMASSOC
+     REACTOR_OWNER_ID: (2117979647456)
+     REACTOR_IS_ERASED: False
+     REACTOR_PROXY_STATUS: False
+     REACTOR_HANDLE: 281
+  EXTENSION_DICTIONARY_ID: (2117979647456)
+  EXTENSION_DICTIONARY_COUNT: 1
+     KEY: "ACAD_DIMASSOC" -> VALUE_OBJECT_ID: (2117979647632)
+         VALUE_CLASS_NAME: AcDbDimAssoc
+         VALUE_DXF_NAME: DIMASSOC
+         VALUE_HANDLE: 281
+  DIMENSION_MEASUREMENT: 100
+  DIMENSION_TEXT: ""
+  DIMENSION_BLOCK_ID: (2117979647248)
+
+=================================================================
+### RUNNING ORACLE ADVERSARIAL TESTS (CONTROLS 1..4) ###
+=================================================================
+CONTROL_1 (No reactors): Result=NoReactor (Expected=NoReactor) -> PASS=True
+CONTROL_2 (DIMASSOC reactor): Result=KnownDimAssocReactor (Expected=KnownDimAssocReactor) -> PASS=True
+   Observed DxfName=DIMASSOC, ClassName=AcDbDimAssoc
+CONTROL_3 (Unrelated persistent reactor): Result=UnknownOtherReactor (Expected=UnknownOtherReactor) -> PASS=True
+   Observed DxfName=DIMENSION, ClassName=AcDbAlignedDimension
+CONTROL_4 (Multiple mixed reactors): Result=MixedReactors (Expected=MixedReactors) -> PASS=True
+   DIMASSOC count=1, Other count=1
+
+--- PROVING EXACT DIMENSION <-> LINE ASSOCIATION PAIRING ---
+1. Dimension 266 GetPersistentReactorIds() contains shared reactor (2117979639440): True
+2. Dimension ExtensionDictionary has 'ACAD_DIMASSOC' pointing to exact shared reactor (2117979639440): True
+3. AcDbDimAssoc Object OwnerId: (2117979639264) (Matches Dimension ExtensionDictId (2117979639264): True)
+#################################################################
+### DIFFERENTIAL INSPECTION FINISHED ###
+#################################################################

@@ -1,0 +1,18 @@
+(setvar "FILEDIA" 0)
+(setq ss (ssget "X"))
+(if ss
+  (progn
+    (setq i 0)
+    (while (< i (sslength ss))
+      (setq ent (ssname ss i))
+      (setq ed (entget ent))
+      (princ (strcat "\n--- ENTITY " (itoa i) " ---"))
+      (princ (strcat "\nDXF TYPE: " (cdr (assoc 0 ed))))
+      (princ (strcat "\nHANDLE: " (cdr (assoc 5 ed))))
+      (princ (strcat "\nREACTORS: " (vl-prin1-to-string (assoc 102 ed))))
+      (setq i (1+ i))
+    )
+  )
+  (princ "\nNo entities found.")
+)
+(command "._QUIT")

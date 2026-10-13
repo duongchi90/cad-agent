@@ -1,0 +1,11 @@
+_FILEDIA 0
+_DIMASSOC 1
+_LINE 0,0 100,0 
+_DIMALIGNED
+0,0
+100,0
+50,20
+_SAVEAS
+
+fixture_a_dimassoc1.dwg
+_QUIT

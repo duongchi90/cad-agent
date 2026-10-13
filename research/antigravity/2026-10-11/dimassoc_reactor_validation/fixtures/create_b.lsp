@@ -1,0 +1,7 @@
+(setvar "FILEDIA" 0)
+(setvar "DIMASSOC" 2)
+(command "._LINE" '(0 0 0) '(100 0 0) "")
+(setq e (entlast))
+(command "._DIMALIGNED" "" (list e '(50 0 0)) '(50 20 0))
+(command "._SAVEAS" "" "fixture_b_dimassoc2.dwg")
+(command "._QUIT")
