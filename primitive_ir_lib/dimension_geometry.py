@@ -407,8 +407,20 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
             kind_hint=kind_hint,
             confidence=0.35,
         )
-    if len(extension_lines) < 2 and len(witnesses) == 1:
+    if len(witnesses) == 1:
         dimension_line, extension_lines, kind_hint = witnesses[0]
+    elif _is_horizontal(dimension_line) or _is_vertical(dimension_line):
+        # Keep legacy complete spans only when the endpoint lookups resolve to
+        # two geometrically distinct supports. A single merged track can be
+        # returned twice when it lies within both endpoint search windows.
+        if len(extension_lines) >= 2:
+            coordinate_axis = "x" if _is_horizontal(dimension_line) else "y"
+            first_coordinate = _axis_coordinate(extension_lines[0], coordinate_axis)
+            second_coordinate = _axis_coordinate(extension_lines[-1], coordinate_axis)
+            if abs(second_coordinate - first_coordinate) < 28.0:
+                extension_lines = ()
+        else:
+            extension_lines = ()
     if _is_horizontal(dimension_line) and len(extension_lines) >= 2:
         y = dimension_line[0][1]
         dimension_line = _canonical_segment(

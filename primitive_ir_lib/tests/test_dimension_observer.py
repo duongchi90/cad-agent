@@ -20,6 +20,8 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
     fake_ocr_unreadable,
     frozen_dimension_witness_image,
     frozen_dimension_witness_png,
+    pr503_frozen_track_image,
+    pr503_frozen_track_png,
     horizontal_dimension_cluster,
     matching_horizontal_anchors,
     not_a_dimension_disposition,
@@ -116,6 +118,68 @@ def test_competing_witnesses_remain_unresolved_in_actual_observer() -> None:
     assert disposition.observation is not None
     assert disposition.observation["status"] == "UNRESOLVED"
     assert "attachment_unresolved" in disposition.reasons
+
+
+def test_one_extension_track_cannot_confirm_two_distinct_dimension_anchors() -> None:
+    disposition, calls = _observe_pr503_track("one_track_both_endpoints")
+
+    assert calls == 4
+    assert disposition.disposition == "UNRESOLVED"
+    assert disposition.observation is not None
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
+def test_disconnected_inner_tracks_stay_unresolved_in_actual_observer() -> None:
+    disposition, _ = _observe_pr503_track("disconnected_inner_tracks")
+
+    assert disposition.disposition == "UNRESOLVED"
+    assert disposition.observation is not None
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
+def _observe_pr503_track(case: str):
+    image = pr503_frozen_track_image(case)
+    text_bbox = (90, 42, 130, 64)
+    text = RawText(
+        id=f"synthetic-{case}-value-40",
+        content="40",
+        bbox_px=text_bbox,
+        rotation_deg=0.0,
+        confidence=1.0,
+        source="synthetic-fixture-acquisition",
+        parsed_value=40.0,
+        semantic_role="dimension_value",
+    )
+    calls = 0
+
+    def one_observed_text(_crop: np.ndarray) -> list[RawText]:
+        nonlocal calls
+        calls += 1
+        return [text] if calls == 1 else []
+
+    cluster = DimensionCluster(
+        cluster_id=f"SYNTH-{case.upper()}",
+        bbox_px=(0, 0, image.shape[1], image.shape[0]),
+        member_boxes=(text_bbox,),
+    )
+    disposition = observe_dimension_cluster(
+        image,
+        cluster,
+        page_id="SYNTH_PAGE",
+        view_id="SYNTH_VIEW",
+        source_sha256=hashlib.sha256(pr503_frozen_track_png(case)).hexdigest(),
+        ocr_reader=one_observed_text,
+        semantic_anchors=[
+            {"type": "SYNTHETIC_DATUM", "id": "A1", "view_id": "SYNTH_VIEW", "point_px": [90.0, 120.0], "confidence": 1.0},
+            {"type": "SYNTHETIC_DATUM", "id": "A2", "view_id": "SYNTH_VIEW", "point_px": [130.0, 120.0], "confidence": 1.0},
+        ],
+        explicit_role="DRIVING",
+        default_unit="fixture_unit",
+    )
+
+    return disposition, calls
 
 
 def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
