@@ -890,40 +890,45 @@
     },
     "run-pdf": {
       "options": {
-        "--auto-ocr-roi": {
-          "dest": "auto_ocr_roi",
-          "nargs": 0,
-          "required": false
-        },
-        "--calibration-approval": {
-          "dest": "calibration_approval",
-          "nargs": null,
-          "required": true
-        },
-        "--dpi": {
-          "dest": "dpi",
-          "nargs": null,
-          "required": false
-        },
         "--input": {
           "dest": "input",
-          "nargs": null,
-          "required": true
+          "required": true,
+          "nargs": null
         },
         "--output-dir": {
           "dest": "output_dir",
-          "nargs": null,
-          "required": true
+          "required": true,
+          "nargs": null
         },
         "--scale-mm-per-px": {
           "dest": "scale_mm_per_px",
-          "nargs": null,
-          "required": true
+          "required": false,
+          "nargs": null
+        },
+        "--calibration-approval": {
+          "dest": "calibration_approval",
+          "required": false,
+          "nargs": null
+        },
+        "--auto-calibrate": {
+          "dest": "auto_calibrate",
+          "required": false,
+          "nargs": 0
+        },
+        "--dpi": {
+          "dest": "dpi",
+          "required": false,
+          "nargs": null
+        },
+        "--auto-ocr-roi": {
+          "dest": "auto_ocr_roi",
+          "required": false,
+          "nargs": 0
         },
         "--no-auto-ocr-roi": {
           "dest": "auto_ocr_roi",
-          "nargs": 0,
-          "required": false
+          "required": false,
+          "nargs": 0
         }
       }
     }

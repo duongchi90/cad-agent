@@ -37,6 +37,10 @@ from .view_calibration import detect_view_candidates, parse_scale_label
 Bbox = Tuple[int, int, int, int]
 
 
+class CalibrationCandidateUnavailableError(ValueError):
+    """Raised when auto-calibration finds no usable dimension/line pair."""
+
+
 def _title_block_roi(image_width: int, image_height: int) -> Bbox:
     """Return the conventional lower-right title-block search area."""
     return (
@@ -174,7 +178,7 @@ def run(
     else:
         calibration = auto_estimate_calibration(raw_texts, raw_lines, image.shape[0], unit="mm")
         if calibration is None:
-            raise ValueError(
+            raise CalibrationCandidateUnavailableError(
                 "auto_calibrate không tìm được cặp (dimension_value, line gần "
                 "nhất) hợp lệ trong các ROI đã quét — cần cung cấp "
                 "--scale-mm-per-px thủ công hoặc thêm --ocr-roi bao trùm 1 "

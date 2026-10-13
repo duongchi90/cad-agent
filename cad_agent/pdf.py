@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,26 @@ from .manifest import (
 PDF_MANIFEST_SCHEMA_VERSION = "pdf-run-1.0"
 PDF_MANIFEST_NAME = "pdf-run-manifest.json"
 PAGE_STAGES = ("primitive_ir", "semantic_ir", "dxf", "build_evidence")
+NO_CALIBRATION_CANDIDATE_RESULT = "CALIBRATION_CANDIDATE_EXTRACTION_NOT_SUPPORTED_FOR_THIS_SOURCE"
+
+
+def _is_valid_manual_scale(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
+def _is_valid_resumed_manual_scale(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        scale = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(scale) and scale > 0
 
 
 def _stage(state: str = "pending", artifact: str | None = None, digest: str | None = None) -> dict[str, Any]:
@@ -39,8 +60,8 @@ def new_pdf_manifest(
 ) -> dict[str, Any]:
     if not source.is_file():
         raise ManifestError(f"Input PDF does not exist: {source}")
-    if scale_mm_per_px <= 0:
-        raise ManifestError("PDF manual scale must be positive.")
+    if not _is_valid_manual_scale(scale_mm_per_px):
+        raise ManifestError("PDF manual scale must be a finite positive number.")
     if dpi <= 0:
         raise ManifestError("PDF DPI must be positive.")
     if not approval.strip():
@@ -190,8 +211,160 @@ def _ensure_rendered(source: Path, output_dir: Path, manifest_path: Path, manife
     write_manifest(manifest_path, manifest)
 
 
+def run_pdf_calibration_candidate(
+    source: Path,
+    output_dir: Path,
+    manifest_path: Path,
+    dpi: int,
+    *,
+    auto_ocr_roi: bool = True,
+) -> dict[str, Any]:
+    """Create review-only calibration evidence and stop before Semantic IR/DXF."""
+    if not source.is_file():
+        raise ManifestError(f"Input PDF does not exist: {source}")
+    if dpi <= 0:
+        raise ManifestError("PDF DPI must be positive.")
+    if manifest_path.exists():
+        raise ManifestError(f"PDF run manifest already exists: {manifest_path}; use resume-pdf instead.")
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise ManifestError(f"Calibration-candidate output directory is not empty: {output_dir}")
+
+    manifest = classify_draft_reference({
+        "schema_version": PDF_MANIFEST_SCHEMA_VERSION,
+        "source": {"name": source.name, "sha256": sha256_file(source), "kind": "pdf"},
+        "configuration": {
+            "calibration_mode": "auto_candidate",
+            "dpi": dpi,
+            "auto_ocr_roi": auto_ocr_roi,
+        },
+        "approvals": {"calibration": {"approved": False, "reference": None}},
+        "result": "RUNNING",
+        "render": _stage(artifact="pdf/manifest.json"),
+        "pages": [],
+    })
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_manifest(manifest_path, manifest)
+
+    from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError
+    from primitive_ir_lib.run_pdf import run_pdf as run_primitive_pdf
+
+    registry_path = output_dir / "calibration-registry.json"
+    try:
+        primitive_manifest = run_primitive_pdf(
+            source,
+            output_dir / "pdf",
+            scale_mm_per_px=None,
+            dpi=dpi,
+            preset="real_scan_tuned_v1",
+            merge_lines=True,
+            auto_ocr_roi=auto_ocr_roi,
+            auto_calibrate=True,
+            calibration_registry_path=registry_path,
+            calibration_id_prefix="run_pdf",
+        )
+    except CalibrationCandidateUnavailableError as exc:
+        manifest["result"] = NO_CALIBRATION_CANDIDATE_RESULT
+        manifest["details"] = str(exc)[:500]
+        write_manifest(manifest_path, manifest)
+        return manifest
+
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    records = {record.get("id"): record for record in registry.get("records", [])}
+    lower_manifest_path = output_dir / "pdf" / "manifest.json"
+    manifest["render"] = _stage(
+        "completed",
+        "pdf/manifest.json",
+        sha256_file(lower_manifest_path),
+    )
+    manifest["render"]["details"] = "Pages rendered for review-only calibration candidates."
+
+    for item in primitive_manifest.get("pages", []):
+        page_number = int(item["page"])
+        candidate_id = f"run_pdf_page{page_number:02d}"
+        rendered = output_dir / "pdf" / item["rendered_png"]
+        primitive = output_dir / "pdf" / item["primitive_ir"]
+        if not rendered.is_file() or not primitive.is_file():
+            raise ManifestError(f"Calibration candidate page {page_number} is missing an artifact.")
+        primitive_payload = json.loads(primitive.read_text(encoding="utf-8"))
+        calibration = primitive_payload.get("calibration")
+        record = records.get(candidate_id)
+        rendered_sha256 = sha256_file(rendered)
+        if (
+            not isinstance(calibration, dict)
+            or calibration.get("status") != "needs_verification"
+            or calibration.get("source_sha256") != rendered_sha256
+            or not isinstance(record, dict)
+            or record.get("status") != "needs_verification"
+            or record.get("sha256") != rendered_sha256
+        ):
+            raise ManifestError(
+                f"Calibration candidate page {page_number} is not hash-bound and needs_verification."
+            )
+        manifest["pages"].append({
+            "page": page_number,
+            "rendered_png": _stage(
+                "completed",
+                str(rendered.relative_to(output_dir)).replace("\\", "/"),
+                rendered_sha256,
+            ),
+            "calibration": {
+                "candidate_id": candidate_id,
+                "status": "needs_verification",
+                "estimated_scale_mm_per_px": calibration.get("pixel_to_unit_scale"),
+                "method": calibration.get("method"),
+                "source_sha256": rendered_sha256,
+                "unit_interpretation": "unverified hypothesis; not source-proven physical units",
+            },
+            "stages": {
+                "primitive_ir": _stage(
+                    "completed",
+                    str(primitive.relative_to(output_dir)).replace("\\", "/"),
+                    sha256_file(primitive),
+                ),
+                "semantic_ir": _stage(),
+                "dxf": _stage(),
+                "build_evidence": _stage(),
+            },
+        })
+
+    if not manifest["pages"]:
+        raise ManifestError("PDF produced no reviewable calibration-candidate pages.")
+    manifest["result"] = "CALIBRATION_NEEDS_VERIFICATION"
+    manifest["approvals"]["calibration"] = {
+        "approved": False,
+        "reference": None,
+        "status": "needs_verification",
+    }
+    write_manifest(manifest_path, manifest)
+    return manifest
+
+
 def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
     verify_source(manifest, source)
+    if manifest.get("configuration", {}).get("calibration_mode") == "auto_candidate":
+        if manifest.get("result") == NO_CALIBRATION_CANDIDATE_RESULT:
+            details = manifest.get("details")
+            approvals = manifest.get("approvals")
+            calibration_approval = approvals.get("calibration") if isinstance(approvals, dict) else None
+            valid_terminal = (
+                isinstance(details, str)
+                and bool(details.strip())
+                and len(details) <= 500
+                and manifest.get("release_profile") == "DRAFT_REFERENCE"
+                and manifest.get("authoritative_release_eligible") is False
+                and isinstance(calibration_approval, dict)
+                and calibration_approval.get("approved") is False
+                and calibration_approval.get("reference") is None
+                and isinstance(manifest.get("render"), dict)
+                and manifest["render"].get("state") == "pending"
+                and manifest.get("pages") == []
+            )
+            if not valid_terminal:
+                raise ManifestError("Persisted no-candidate terminal diagnostics are invalid.")
+            raise ManifestError(NO_CALIBRATION_CANDIDATE_RESULT)
+        raise ManifestError("Auto-calibration candidate manifests cannot be resumed.")
+    if not _is_valid_resumed_manual_scale(manifest.get("configuration", {}).get("scale_mm_per_px")):
+        raise ManifestError("PDF manual scale must be a finite positive number.")
     approval = manifest.get("approvals", {}).get("calibration", {})
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("PDF run manifest has no recorded calibration approval.")
