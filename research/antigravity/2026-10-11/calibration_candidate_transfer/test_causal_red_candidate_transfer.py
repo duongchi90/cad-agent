@@ -68,11 +68,10 @@ def test_red_2_concentric_circle_ambiguity_hazard():
     assert abs(naive_scale - true_scale) / true_scale == 1.0  # 100% error!
 
 
-def test_red_3_production_find_nearest_line_fails_on_case01_text_gaps():
-    """RED 3: When dimension lines are split by text gaps (as in CASE01), production
-    find_nearest_line returns a half-segment with length 70px instead of the true 220px span.
-    When require_consensus=True, two split lines (e.g. 70px and 75px) produce inconsistent
-    scales that fail consensus, returning None."""
+def test_red_3_production_find_nearest_line_fails_on_collinear_text_gaps():
+    """RED 3: When dimension lines are split by text gaps, production
+    find_nearest_line returns a half-segment with length 90px instead of the true 250px span.
+    When require_consensus=True, split lines produce inconsistent scales that fail consensus."""
     t1 = RawText("t1", "25.0", (100.0, 95.0, 130.0, 105.0), 0.0, 0.95, "ocr", 25.0, "dimension_value")
     # True span is 250px (0 to 250). True scale = 0.100 mm/px.
     # Fragmented into two segments: (0, 100) -> (90, 100) and (140, 100) -> (250, 100)

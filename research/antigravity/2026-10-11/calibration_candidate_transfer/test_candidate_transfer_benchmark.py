@@ -7,7 +7,7 @@ Scenarios:
 3. Isolated Borehole Circle Snapping (Validates clean multi-primitive transfer)
 4. High-DPI Adaptive Corridor (Proves resilience across scan resolutions)
 5. Strict Orientation Alignment (Eliminates perpendicular hijacking)
-6. CASE01 Real Pattern Reproduction (Demonstrates unblocking of candidate extraction)
+6. Broken Dimension Carrier Chain Unblocking (Demonstrates gap bridging across carriers)
 7. Fail-Closed Invariant Preservation (Guarantees no Semantic IR or DXF leak)
 8. Anisotropic Scan Elongation Detection (Aspect ratio distortion flagging)
 """
@@ -113,11 +113,11 @@ def test_scenario_5_orientation_gating_transfers():
     assert res_c.estimated_scale == pytest.approx(50.0 / 200.0, rel=1e-3)
 
 
-def test_scenario_6_case01_smoke_pattern_unblocking():
-    """Scenario 6: CASE01 pattern with 4 split dimension lines (Width 120, Height 80, Pitch 60, Flange 20)
+def test_scenario_6_broken_dimension_carrier_chain_unblocking():
+    """Scenario 6: Broken dimension carrier chains with 4 split dimension lines (Width 120, Height 80, Pitch 60, Flange 20)
     and non-dimension text notes. True scale = 0.100 mm/px.
-    Method A produces 0 candidates or highly erratic fragmented scales.
-    Method C achieves multi-candidate consensus and extracts 0.100 mm/px with error <= 0.2%."""
+    Method A produces fragmented or missing candidates due to gap interruptions.
+    Method C bridges carrier gaps, filters notes, and extracts 0.100 mm/px consensus."""
     texts = [
         SimpleText("w", "120.0", bbox=(585.0, 45.0, 615.0, 55.0), rotation_deg=0.0, parsed_value=120.0),
         SimpleText("h", "80.0", bbox=(35.0, 385.0, 45.0, 415.0), rotation_deg=90.0, parsed_value=80.0),

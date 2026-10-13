@@ -4,7 +4,6 @@ Verifies mathematical boundary conditions, non-finite handling, extreme scale dy
 and strict latency bounds (< 50ms for 100 texts x 500 lines + 50 circles).
 """
 
-import math
 import time
 import pytest
 

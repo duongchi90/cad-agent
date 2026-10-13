@@ -18,7 +18,7 @@ Compares 3 implementations:
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -408,15 +408,25 @@ class MethodC_GuardedMultiPrimitiveOracle:
                     t_p = tx * ux + ty * uy
                     span = max(p[1] for p in projs) - min(p[0] for p in projs)
 
-                    has_left = any(p[1] <= t_p + 30.0 for p in projs)
-                    has_right = any(p[0] >= t_p - 30.0 for p in projs)
+                    # Resolution-independent projected text half-extent along carrier direction
+                    text_half_extent = abs(ux) * (tw / 2.0) + abs(uy) * (th / 2.0)
+                    drafting_gap_clearance = max(4.0, 0.5 * th)
+
+                    has_left = any(p[1] <= t_p + text_half_extent + drafting_gap_clearance for p in projs)
+                    has_right = any(p[0] >= t_p - text_half_extent - drafting_gap_clearance for p in projs)
                     if len(chain) >= 2 and has_left and has_right:
                         if span > best_span:
                             best_span = span
                             best_chain = chain
-                    elif len(chain) == 1 and chain[0].length > best_span:
-                        best_span = chain[0].length
-                        best_chain = chain
+                    else:
+                        # Chain does not flank the text as a bridged gap;
+                        # check if an individual segment in the chain directly serves as carrier
+                        for seg, p in zip(chain, projs):
+                            p_min, p_max = p
+                            if p_min - drafting_gap_clearance <= t_p <= p_max + drafting_gap_clearance:
+                                if seg.length > best_span:
+                                    best_span = seg.length
+                                    best_chain = [seg]
 
                 if best_chain and best_span > 0:
                     axis = "X" if text_angle < 45.0 else ("Y" if text_angle > 45.0 else "ALIGNED")
@@ -472,6 +482,28 @@ class MethodC_GuardedMultiPrimitiveOracle:
                 notes=[f"Consensus failed: only {len(agreeing)}/{len(candidates)} within 3.0%"],
             )
 
+        # Correlated Evidence Check: Ensure contributing candidates represent distinct physical geometry
+        distinct_geometry_ids = set()
+        for c in agreeing:
+            for part in c.geometry_id.split("+"):
+                distinct_geometry_ids.add(part)
+        if len(distinct_geometry_ids) < 2:
+            return PreCalibrationResult(
+                status=TransferState.CONSENSUS_FAILED,
+                estimated_scale=None,
+                unit=explicit_unit or "unknown_unstated",
+                contributing_candidates=candidates,
+                notes=["Consensus failed: contributing candidates are geometrically correlated (share single carrier geometry)"] + notes,
+            )
+
+        # Multi-Modal Scale Cluster Detection (mixed-scale views on single sheet)
+        outlier_scales = [c.scale for c in candidates if abs(c.scale - med) / med > cls.MAX_CONSENSUS_REL_ERROR]
+        if len(outlier_scales) >= 2:
+            outlier_med = _median(outlier_scales)
+            agreeing_outliers = [s for s in outlier_scales if abs(s - outlier_med) / outlier_med <= cls.MAX_CONSENSUS_REL_ERROR]
+            if len(agreeing_outliers) >= 2:
+                notes.append(f"Multi-modal scale clusters detected: secondary cluster median={outlier_med:.4f} (possible mixed view scales); candidate applies only to dominant cluster")
+
         # Check anisotropy
         x_scales = [c.scale for c in agreeing if c.axis == "X"]
         y_scales = [c.scale for c in agreeing if c.axis == "Y"]
@@ -480,6 +512,11 @@ class MethodC_GuardedMultiPrimitiveOracle:
             med_x = _median(x_scales)
             med_y = _median(y_scales)
             anisotropy = med_y / med_x if med_x > 0 else 1.0
+            if abs(anisotropy - 1.0) > cls.MAX_ANISOTROPY_TOLERANCE:
+                notes.append(f"Anisotropy distortion detected: ratio={anisotropy:.4f} exceeds {cls.MAX_ANISOTROPY_TOLERANCE*100.0}% tolerance")
+        else:
+            axis_name = "X" if x_scales else ("Y" if y_scales else "RADIAL")
+            notes.append(f"Unverified cross-axis isotropy: candidates available on {axis_name}-axis only")
 
         max_rel_error = max(abs(c.scale - med) / med for c in agreeing) * 100.0
 

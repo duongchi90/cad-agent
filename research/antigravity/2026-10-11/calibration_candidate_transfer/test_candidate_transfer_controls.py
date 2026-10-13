@@ -14,7 +14,6 @@ Establishes positive and negative control baselines for Method C (Guarded Multi-
   6. Single-witness insufficiency rejection (< 2 candidates cannot produce verified consensus)
 """
 
-import math
 import pytest
 
 from .calibration_candidate_transfer_engine import (
@@ -212,3 +211,50 @@ def test_neg_control_6_single_witness_insufficiency():
     assert any("Single candidate only" in note for note in res.notes)
     # AGENTS.md requires >= 2 independent candidates for automated release:
     assert len(res.contributing_candidates) < 2
+
+
+def test_neg_control_7_correlated_evidence_rejected():
+    """Negative Control 7: Correlated Evidence Hazard.
+    Two text annotations snapping to the SAME carrier line (e.g. duplicate labels or
+    sub-segments of the same entity) cannot be counted as 2 independent witnesses.
+    Consensus must fail closed because geometric independence is violated."""
+    t1 = SimpleText("t1", "100", bbox=(200.0, 90.0, 240.0, 110.0), parsed_value=100.0)
+    t2 = SimpleText("t2", "100", bbox=(700.0, 90.0, 740.0, 110.0), parsed_value=100.0)
+    # Both associate to single line l1
+    l1 = SimpleLine("l1", (0.0, 100.0), (1000.0, 100.0))
+
+    res = MethodC_GuardedMultiPrimitiveOracle.extract_candidate(texts=[t1, t2], lines=[l1])
+
+    assert res.status == TransferState.CONSENSUS_FAILED
+    assert res.estimated_scale is None
+    assert any("geometrically correlated" in n for n in res.notes)
+
+
+def test_control_8_conflicting_mixed_view_scales_refused():
+    """Negative Control 8: Mixed-Scale Views Conflict Hazard.
+    On an unpartitioned sheet with equal dimensions across mixed-scale views (Main 1:1 vs Detail 5:1):
+    - Main view has 2 dimensions: 100mm/1000px and 50mm/500px -> scale 0.100 mm/px.
+    - Detail view has 2 dimensions: 10mm/500px and 5mm/250px -> scale 0.020 mm/px.
+    Without semantic view partitioning, assigning a single global scale would corrupt one or both views.
+    Method C refuses to synthesize a compromise scale and fails closed (status='consensus_failed')."""
+    # Main view (0.100 mm/px)
+    tm1 = SimpleText("tm1", "100", bbox=(480.0, 90.0, 520.0, 110.0), parsed_value=100.0)
+    lm1 = SimpleLine("lm1", (0.0, 100.0), (1000.0, 100.0))
+    tm2 = SimpleText("tm2", "50", bbox=(230.0, 290.0, 270.0, 310.0), parsed_value=50.0)
+    lm2 = SimpleLine("lm2", (0.0, 300.0), (500.0, 300.0))
+
+    # Detail view (0.020 mm/px)
+    td1 = SimpleText("td1", "10", bbox=(1230.0, 90.0, 1270.0, 110.0), parsed_value=10.0)
+    ld1 = SimpleLine("ld1", (1000.0, 100.0), (1500.0, 100.0))
+    td2 = SimpleText("td2", "5", bbox=(1110.0, 290.0, 1150.0, 310.0), parsed_value=5.0)
+    ld2 = SimpleLine("ld2", (1000.0, 300.0), (1250.0, 300.0))
+
+    res = MethodC_GuardedMultiPrimitiveOracle.extract_candidate(
+        texts=[tm1, tm2, td1, td2],
+        lines=[lm1, lm2, ld1, ld2],
+    )
+
+    assert res.status == TransferState.CONSENSUS_FAILED
+    assert res.estimated_scale is None
+    assert res.is_reviewable is False
+    assert res.relative_error_pct > 10.0
