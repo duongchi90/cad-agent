@@ -8,10 +8,22 @@
 - **Research Branch:** `research/antigravity-2026-10-11`
 - **Production Status:** `CATALOG_CORRECTION_ONLY = YES`
 - **Production Impact:** `PRODUCTION_CODE_CHANGE = NO`, `PR503_CHANGE = NO`, `AUTOCAD_MUTATION = NO`
+- **Catalog Status:** `CATALOG_STATUS = ACCEPTED_ANTI_REPEAT_AUTHORITY`
 
 ---
 
 ## 0. Anti-Repeat Recovery & Fail-Closed Doctrine
+
+### Catalog Freeze & Authority Declaration
+- **CATALOG_STATUS:** `ACCEPTED_ANTI_REPEAT_AUTHORITY`
+
+**Authority Principles:**
+- Future sessions consult this catalog first.
+- Entries remain research evidence, not production acceptance.
+- Current GitHub/main must still be fresh-read before material action.
+- `READY_TO_TRANSFER` does not authorize production code absent a current measured RED.
+- `TRANSFER_EXPERIMENT_REQUIRED` means execute only its bounded oracle when relevant.
+- GitHub current state overrides stale owner mappings.
 
 > [!IMPORTANT]
 > **ANTI-REPEAT MANDATE:** Before any agent, researcher, or engineer initiates new reverse engineering, decompilation, or external-library benchmarking, consult this catalog to verify:
@@ -38,7 +50,7 @@
 | **`REA-006`** | `LINE_GRAPH_JUNCTION_SNAPPING` | `Vahe1994/Deep-Vectorization` (`snap_junctions`) | `ALGORITHM_TRANSFER` | `cad_agent/source_fusion_proposal.py` | `VALID` | `ALREADY_IMPLEMENTED` | `YES` |
 | **`REA-007`** | `REPEATED_COMPONENT_DISCOVERY` | BricsCAD `BLOCKIFY` / AutoCAD Smart Blocks | `CLEAN_ROOM_BEHAVIORAL_CONTRACT` | `UNKNOWN` | `UNKNOWN` | `RESEARCH_PRIOR` | `CONDITIONAL` |
 | **`REA-008`** | `CADMIND_TOOLPACKAGE_ARCHITECTURE`| CadMind v1.0.1 (`tools.*.json`, `IPluginPipeServer`) | `CLEAN_ROOM_BEHAVIORAL_CONTRACT` | `cad_agent/mechanical_skills.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
-| **`REA-009`** | `AUTOCAD_MANAGED_ASSEMBLIES` | AutoCAD 2027 (`acdbmgd.dll`, `acdb26.dll`) | `DEPENDENCY_REUSE` (Managed) / `NOT_REUSABLE` (Native) | `autocad_plugin/CadAgent.AutoCAD2027` | `VALID` | `ALREADY_IMPLEMENTED` (Managed) / `REJECTED` (Native) | `YES` |
+| **`REA-009`** | `AUTOCAD_MANAGED_ASSEMBLIES` | AutoCAD 2027 (`acdbmgd.dll`, `acdb26.dll`) | `DEPENDENCY_REUSE` | `autocad_plugin/CadAgent.AutoCAD2027` | `VALID` | `ALREADY_IMPLEMENTED` | `YES` |
 | **`REA-010`** | `DIMASSOC_NATIVE_RELATIONSHIP` | AutoCAD 2027 Managed Object Graph (`DIMASSOC=2`) | `CLEAN_ROOM_BEHAVIORAL_CONTRACT` | `autocad_plugin/CadAgent.AutoCAD2027/Commands/CommandContext.cs` | `VALID` | `TRANSFER_EXPERIMENT_REQUIRED` | `CONDITIONAL` |
 | **`REA-011`** | `DXF_DOCUMENT_CONSTRUCTION` | `ezdxf` (v1.4.x) | `DEPENDENCY_REUSE` | `dxf_builder_lib/builder.py` | `VALID` | `ALREADY_IMPLEMENTED` | `YES` |
 | **`REA-012`** | `WCS_SPATIAL_REGISTRATION` | Scan2CAD 2-Point / Umeyama Similarity $[R\|T]$ | `ALGORITHM_TRANSFER` | `primitive_ir_lib/geometry_alignment.py` | `MOVED` | `READY_TO_TRANSFER` | `YES` |
@@ -337,10 +349,15 @@
 - **EXACT_VERSION_COMMIT:** `26.0.0.0`.
 - **KNOWN_VERSION_FAMILY:** `AutoCAD 2027 Commercial/Preview 64-bit`.
 - **PROVENANCE:** `BINARY_INSPECTED` (`acdbmgd.dll` metadata, `acdb26.dll` PE exports) + `RUNTIME_OBSERVED` (`accoreconsole.exe`).
-- **REUSE_CLASS:** `DEPENDENCY_REUSE` (Managed SDK) / `NOT_REUSABLE` (Native C++ P/Invoke).
+- **REUSE_CLASS:** `DEPENDENCY_REUSE`.
 - **CURRENT_CAD_AGENT_OWNER:** `autocad_plugin/CadAgent.AutoCAD2027`.
 - **OWNER_MAPPING_STATUS:** `VALID` (Verified on current main).
-- **CURRENT_DISPOSITION:** `ALREADY_IMPLEMENTED` (Managed APIs) / `REJECTED` (Native P/Invoke).
+- **CURRENT_DISPOSITION:** `ALREADY_IMPLEMENTED`.
+- **REJECTED_ALTERNATIVE:** `DIRECT_NATIVE_CPP_PINVOKE`.
+- **REJECTED_ALTERNATIVE_DISPOSITION:** `REJECTED`.
+- **REJECTED_ALTERNATIVE_REASON:** MSVC C++ ABI / AcDbObjectId by-value marshaling / version coupling is not a supported safe Cad Agent integration route.
+- **DO_NOT_REPEAT_NATIVE_PINVOKE_RESEARCH:** `YES`.
+- **REOPEN_NATIVE_ROUTE_ONLY_IF:** Autodesk exposes a supported stable managed or C ABI that removes the current ABI boundary, or a measured product RED proves the managed SDK cannot satisfy the required capability.
 - **DO_NOT_REPEAT_REA:** `YES`.
 - **RESEARCH_AGAIN_ONLY_IF:** AutoCAD version upgrades to 2028+ modifying managed API signatures.
 - **EVIDENCE_TIER:** `OBSERVED_MANAGED_METADATA` / `OBSERVED_RUNTIME`.
@@ -710,7 +727,7 @@
 | `REA-006` | **YES** | **YES** (`cad_agent.source_fusion_proposal`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`) | **YES** (`ALREADY_IMPLEMENTED`) | **NO** | **YES** |
 | `REA-007` | **YES** | **NO** (`CURRENT_CAD_AGENT_OWNER=UNKNOWN`) | **YES** | **YES** (`DOCUMENTATION_ONLY`, `COMMERCIAL_BEHAVIORAL_PRIOR`) | **YES** (`RESEARCH_PRIOR`) | **YES** | **YES** |
 | `REA-008` | **YES** | **YES** (`cad_agent.mechanical_skills`) | **YES** | **YES** (`BINARY_INSPECTED`, `DOCUMENTATION_ONLY`) | **YES** (`RESEARCH_PRIOR`) | **YES** | **YES** |
-| `REA-009` | **YES** | **YES** (`autocad_plugin.CadAgent.AutoCAD2027`) | **YES** | **YES** (`BINARY_INSPECTED`, `RUNTIME_OBSERVED`) | **YES** (`ALREADY_IMPLEMENTED` / `REJECTED`) | **NO** | **YES** |
+| `REA-009` | **YES** | **YES** (`autocad_plugin.CadAgent.AutoCAD2027`) | **YES** | **YES** (`BINARY_INSPECTED`, `RUNTIME_OBSERVED`) | **YES** (`ALREADY_IMPLEMENTED`) | **NO** | **YES** |
 | `REA-010` | **YES** | **YES** (`autocad_plugin.Commands.CommandContext`) | **YES** | **YES** (`BINARY_INSPECTED`, `RUNTIME_OBSERVED`) | **YES** (`TRANSFER_EXPERIMENT_REQUIRED`) | **YES** | **YES** |
 | `REA-011` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`ALREADY_IMPLEMENTED`) | **NO** | **YES** |
 | `REA-012` | **YES** | **YES** (`primitive_ir_lib.geometry_alignment`) | **YES** | **YES** (`PAPER_ONLY`, `COMMERCIAL_BEHAVIORAL_PRIOR`) | **YES** (`READY_TO_TRANSFER`) | **NO** | **YES** |
