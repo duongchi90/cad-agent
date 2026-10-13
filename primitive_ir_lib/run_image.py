@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -102,8 +103,12 @@ def run(
     toàn trong auto_estimate_calibration(): kết quả này CHƯA được verify,
     không nên dùng thẳng cho DXF sản xuất mà không kiểm tra lại.
     """
-    if scale_mm_per_px is not None and scale_mm_per_px <= 0:
-        raise ValueError("scale_mm_per_px phải lớn hơn 0")
+    if scale_mm_per_px is not None and (
+        isinstance(scale_mm_per_px, bool)
+        or not math.isfinite(scale_mm_per_px)
+        or scale_mm_per_px <= 0
+    ):
+        raise ValueError("scale_mm_per_px phải là số hữu hạn lớn hơn 0")
     if scale_mm_per_px is None and not auto_calibrate:
         raise ValueError("Cần scale_mm_per_px hoặc bật auto_calibrate=True")
     if calibration_status not in {"verified", "needs_verification"}:
