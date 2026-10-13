@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import tempfile
 from pathlib import Path
@@ -116,6 +117,60 @@ def test_new_and_historical_pdf_manifests_are_draft_reference(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
+    ("scale", "label"),
+    [(float("nan"), "NaN"), (float("inf"), "+Infinity"), (True, "Boolean True")],
+)
+def test_new_pdf_manifest_rejects_nonfinite_and_boolean_manual_scales(
+    tmp_path: Path, scale: float | bool, label: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    source.write_bytes(b"pdf")
+
+    manifest = None
+    try:
+        manifest = new_pdf_manifest(source, scale, "ticket-123", 144)  # type: ignore[arg-type]
+    except ManifestError:
+        pass
+
+    assert manifest is None, (
+        f"new_pdf_manifest accepted {label} manual scale and produced "
+        f"configuration.scale_mm_per_px={manifest['configuration']['scale_mm_per_px']!r}"
+    )
+
+
+@pytest.mark.parametrize("scale_argument", ["nan", "inf"], ids=["nan", "infinity"])
+def test_run_pdf_cli_rejects_nonfinite_scale_before_manifest_or_render_staging(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], scale_argument: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    stage_calls: list[Path] = []
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "cad_agent.pdf.run_pdf_stages",
+            lambda _source, output_dir, *_args: stage_calls.append(output_dir),
+        )
+        exit_code = main([
+            "run-pdf",
+            "--input", str(source),
+            "--output-dir", str(output),
+            "--scale-mm-per-px", scale_argument,
+            "--calibration-approval", "ticket-123",
+        ])
+
+    assert exit_code == 2, (
+        f"CLI accepted scale {scale_argument!r}; stage calls={len(stage_calls)}, "
+        f"manifest exists={(output / 'pdf-run-manifest.json').exists()}, "
+        f"stderr={capsys.readouterr().err!r}"
+    )
+    assert stage_calls == []
+    assert not (output / "pdf-run-manifest.json").exists()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
     ("field", "unsafe_value"),
     [
         ("release_profile", "AUTHORITATIVE"),
@@ -178,6 +233,125 @@ def test_pdf_resume_rejects_changed_source() -> None:
             assert "SHA-256" in str(exc)
         else:  # pragma: no cover - assertion guard
             raise AssertionError("changed PDF was accepted")
+
+
+@pytest.mark.parametrize("scale", ["0.5", " 5e-1 ", 0.5])
+def test_pdf_manual_resume_preserves_finite_positive_numeric_scale_compatibility(
+    tmp_path: Path, scale: str | float
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    manifest_path = output / "pdf-run-manifest.json"
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = read_pdf_manifest(manifest_path)
+    persisted["configuration"]["scale_mm_per_px"] = scale
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+    before = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+
+    run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert {path: path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize(
+    ("scale", "label"),
+    [
+        (float("nan"), "NaN"),
+        (float("inf"), "+Infinity"),
+        (True, "Boolean True"),
+        ("nan", "string NaN"),
+        ("inf", "string Infinity"),
+        ("0", "zero string"),
+        ("-0.5", "negative string"),
+        ("not a number", "malformed string"),
+        (None, "null"),
+        ([], "array"),
+        ({}, "object"),
+    ],
+)
+def test_pdf_resume_rejects_invalid_scale_before_cached_render_downstream_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scale: object, label: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    manifest["configuration"]["scale_mm_per_px"] = scale
+
+    render_manifest_path = output / "pdf" / "manifest.json"
+    rendered_path = output / "pdf" / "rendered" / "page_01.png"
+    primitive_path = output / "pdf" / "primitive_ir" / "page_01.json"
+    for path in (render_manifest_path, rendered_path, primitive_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    render_manifest_path.write_text('{"pages": []}', encoding="utf-8")
+    rendered_path.write_bytes(b"verified rendered page")
+    primitive_path.write_text('{"primitives": []}', encoding="utf-8")
+
+    def completed(path: Path) -> dict[str, object]:
+        return {
+            "state": "completed",
+            "artifact": path.relative_to(output).as_posix(),
+            "sha256": sha256_file(path),
+            "details": None,
+        }
+
+    def pending(relative_path: str) -> dict[str, object]:
+        return {"state": "pending", "artifact": relative_path, "sha256": None, "details": None}
+
+    manifest["render"] = completed(render_manifest_path)
+    manifest["pages"] = [{
+        "page": 1,
+        "scale_label_candidates": [],
+        "rendered_png": completed(rendered_path),
+        "stages": {
+            "primitive_ir": completed(primitive_path),
+            "semantic_ir": pending("semantic_ir/page_01.json"),
+            "dxf": pending("dxf/page_01.dxf"),
+            "build_evidence": pending("build_evidence/page_01.json"),
+        },
+    }]
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    downstream_calls: list[str] = []
+
+    def fake_semantic(_primitive_path: Path, semantic_path: Path) -> None:
+        downstream_calls.append("semantic")
+        semantic_path.parent.mkdir(parents=True, exist_ok=True)
+        semantic_path.write_text("{}", encoding="utf-8")
+
+    def fake_dxf(
+        _primitive_path: Path, _semantic_path: Path, dxf_path: Path, evidence_path: Path
+    ) -> str:
+        downstream_calls.append("dxf")
+        for path in (dxf_path, evidence_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic", encoding="utf-8")
+        return "synthetic build evidence"
+
+    monkeypatch.setattr("cad_agent.cli._run_semantic", fake_semantic)
+    monkeypatch.setattr("cad_agent.cli._run_dxf", fake_dxf)
+    caught: ManifestError | None = None
+    try:
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    except ManifestError as exc:
+        caught = exc
+
+    changed_files = [
+        path.relative_to(output).as_posix()
+        for path in output.rglob("*")
+        if path.is_file() and (path not in before or path.read_bytes() != before[path])
+    ]
+    assert caught is not None, (
+        f"resume accepted {label} scale with a cached render; downstream calls={downstream_calls}, "
+        f"changed files={changed_files}"
+    )
+    assert downstream_calls == []
+    assert changed_files == []
+    assert {path: path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
 
 
 def test_pdf_resume_rebuilds_only_affected_page_stages() -> None:
@@ -318,6 +492,278 @@ def test_pdf_cli_run_and_resume() -> None:
             "--manifest", str(output / "pdf-run-manifest.json"),
             "--input", str(source),
         ]) == 0
+
+
+def test_pdf_cli_auto_calibration_candidate_stops_before_semantic_or_dxf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+    from primitive_ir_lib.text_extraction import RawText
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "candidate"
+    _pdf(source)
+
+    def synthetic_geometry(image, **kwargs):
+        return RawGeometry(lines=[RawLine(
+            id="synthetic-dimension-line",
+            p1_px=(40.0, 100.0),
+            p2_px=(240.0, 100.0),
+            confidence=1.0,
+            bbox_px=(40.0, 100.0, 240.0, 100.0),
+        )])
+
+    def synthetic_text(image, roi_boxes, **kwargs):
+        return [RawText(
+            id="synthetic-dimension-text",
+            content="100",
+            bbox_px=(130, 80, 150, 95),
+            rotation_deg=0.0,
+            confidence=1.0,
+            source="text_tesseract",
+            parsed_value=100.0,
+            semantic_role="dimension_value",
+        )]
+
+    monkeypatch.setattr("primitive_ir_lib.run_image.extract_raw_geometry", synthetic_geometry)
+    monkeypatch.setattr("primitive_ir_lib.run_image.detect_text_candidate_rois", lambda image: [(0, 0, image.shape[1], image.shape[0])])
+    monkeypatch.setattr("primitive_ir_lib.run_image.extract_text_tesseract", synthetic_text)
+    monkeypatch.setattr("primitive_ir_lib.run_image._configure_tesseract", lambda command: None)
+    result = main([
+        "run-pdf", "--input", str(source), "--output-dir", str(output),
+        "--auto-calibrate",
+    ])
+
+    assert result == 0
+    assert "CALIBRATION_NEEDS_VERIFICATION" in capsys.readouterr().out
+    manifest = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["release_profile"] == "DRAFT_REFERENCE"
+    assert manifest["authoritative_release_eligible"] is False
+    assert manifest["result"] == "CALIBRATION_NEEDS_VERIFICATION"
+    registry = json.loads((output / "calibration-registry.json").read_text(encoding="utf-8"))
+    assert [record["id"] for record in registry["records"]] == ["run_pdf_page01", "run_pdf_page02"]
+    assert all(record["status"] == "needs_verification" for record in registry["records"])
+    for page in manifest["pages"]:
+        primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+        assert primitive["calibration"]["status"] == "needs_verification"
+        assert page["calibration"]["status"] == "needs_verification"
+        assert page["calibration"]["candidate_id"] == f"run_pdf_page{page['page']:02d}"
+        assert page["stages"]["semantic_ir"]["state"] == "pending"
+        assert page["stages"]["dxf"]["state"] == "pending"
+        assert page["stages"]["build_evidence"]["state"] == "pending"
+    assert not list(output.rglob("semantic_ir"))
+    assert not list(output.rglob("*.dxf"))
+    assert not list(output.rglob("build_evidence"))
+
+
+def test_pdf_cli_auto_calibration_candidate_rejects_manual_calibration(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    _pdf(source)
+
+    result = main([
+        "run-pdf", "--input", str(source), "--output-dir", str(tmp_path / "candidate"),
+        "--auto-calibrate", "--scale-mm-per-px", "0.5",
+        "--calibration-approval", "verified-ticket",
+    ])
+    assert result == 2
+
+
+def test_pdf_no_candidate_resume_returns_terminal_without_reextraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lower_pdf = importlib.import_module("primitive_ir_lib.run_pdf")
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    geometry_module = importlib.import_module("primitive_ir_lib.geometry_extraction")
+    original_run = lower_pdf.run
+    extraction_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def count_run(*args: object, **kwargs: object) -> str:
+        extraction_calls.append((args, kwargs))
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(lower_pdf, "run", count_run)
+    monkeypatch.setattr(
+        image_module,
+        "extract_raw_geometry",
+        lambda *_args, **_kwargs: geometry_module.RawGeometry(),
+    )
+    monkeypatch.setattr(image_module, "detect_text_candidate_rois", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *_args, **_kwargs: [])
+
+    source = tmp_path / "no-calibration.pdf"
+    output = tmp_path / "no-calibration"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+
+    from cad_agent.pdf import run_pdf_calibration_candidate
+
+    manifest = run_pdf_calibration_candidate(source, output, manifest_path, 144)
+    no_candidate_result = "CALIBRATION_CANDIDATE_EXTRACTION_NOT_SUPPORTED_FOR_THIS_SOURCE"
+    assert manifest["result"] == no_candidate_result
+    assert 0 < len(manifest["details"]) <= 500
+    assert manifest["render"]["state"] == "pending"
+    assert manifest["pages"] == []
+    assert not (output / "calibration-registry.json").exists()
+    assert len(extraction_calls) == 1
+
+    with pytest.raises(ManifestError) as resume_error:
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    assert len(extraction_calls) == 1
+    assert no_candidate_result in str(resume_error.value)
+    assert not (output / "semantic_ir").exists()
+    assert not (output / "dxf").exists()
+    assert not (output / "build_evidence").exists()
+
+    malformed = read_pdf_manifest(manifest_path)
+    malformed["details"] = "x" * 501
+    with pytest.raises(ManifestError, match="terminal diagnostics are invalid"):
+        run_pdf_stages(source, output, manifest_path, malformed)
+    assert len(extraction_calls) == 1
+
+    source.write_bytes(source.read_bytes() + b"changed source")
+    with pytest.raises(ManifestError, match="SHA-256 does not match"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    assert len(extraction_calls) == 1
+
+
+def test_pdf_candidate_does_not_misclassify_unrelated_value_error_with_matching_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    geometry_module = importlib.import_module("primitive_ir_lib.geometry_extraction")
+    from cad_agent.pdf import run_pdf_calibration_candidate
+
+    monkeypatch.setattr(
+        image_module,
+        "extract_raw_geometry",
+        lambda *_args, **_kwargs: geometry_module.RawGeometry(),
+    )
+    monkeypatch.setattr(
+        image_module,
+        "detect_text_candidate_rois",
+        lambda *_args, **_kwargs: [(1, 1, 40, 40)],
+    )
+
+    def raise_unrelated_error(*_args: object, **_kwargs: object) -> list[object]:
+        raise ValueError(
+            "OCR decoding failed; auto_calibrate không tìm được cặp is only diagnostic text"
+        )
+
+    monkeypatch.setattr(image_module, "extract_text_tesseract", raise_unrelated_error)
+    unrelated_source = tmp_path / "unrelated-error.pdf"
+    unrelated_output = tmp_path / "unrelated-error"
+    _pdf(unrelated_source)
+    with pytest.raises(ValueError, match="OCR decoding failed"):
+        run_pdf_calibration_candidate(
+            unrelated_source,
+            unrelated_output,
+            unrelated_output / "pdf-run-manifest.json",
+            144,
+        )
+
+
+@pytest.mark.parametrize("entry_point", ["direct", "resume-cli"])
+@pytest.mark.parametrize("approved", [False, True], ids=["unapproved", "approval-edited"])
+def test_pdf_candidate_manifest_is_rejected_before_resume_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    entry_point: str,
+    approved: bool,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    output.mkdir()
+    _pdf(source)
+
+    rendered_path = output / "pdf" / "rendered_page01.png"
+    primitive_path = output / "pdf" / "primitive_ir" / "page_01.json"
+    rendered_path.parent.mkdir(parents=True)
+    primitive_path.parent.mkdir(parents=True)
+    rendered_path.write_bytes(b"synthetic rendered page")
+    primitive_path.write_text(
+        json.dumps({
+            "calibration": {
+                "status": "needs_verification",
+                "source_sha256": sha256_file(rendered_path),
+            },
+        }),
+        encoding="utf-8",
+    )
+    lower_manifest_path = output / "pdf" / "manifest.json"
+    lower_manifest_path.write_text("{}", encoding="utf-8")
+
+    manifest = new_pdf_manifest(source, 0.5, "synthetic-approval", 144)
+    manifest["configuration"].pop("scale_mm_per_px")
+    manifest["configuration"]["calibration_mode"] = "auto_candidate"
+    manifest["approvals"]["calibration"] = {
+        "approved": approved,
+        "reference": "edited-approval" if approved else None,
+        "status": "needs_verification",
+    }
+    manifest["result"] = "CALIBRATION_NEEDS_VERIFICATION"
+    manifest["render"] = {
+        "state": "completed",
+        "artifact": "pdf/manifest.json",
+        "sha256": sha256_file(lower_manifest_path),
+        "details": None,
+    }
+    manifest["pages"] = [{
+        "page": 1,
+        "rendered_png": {
+            "state": "completed",
+            "artifact": "pdf/rendered_page01.png",
+            "sha256": sha256_file(rendered_path),
+            "details": None,
+        },
+        "calibration": {
+            "candidate_id": "run_pdf_page01",
+            "status": "needs_verification",
+            "source_sha256": sha256_file(rendered_path),
+        },
+        "stages": {
+            "primitive_ir": {
+                "state": "completed",
+                "artifact": "pdf/primitive_ir/page_01.json",
+                "sha256": sha256_file(primitive_path),
+                "details": None,
+            },
+            "semantic_ir": {"state": "pending", "artifact": None, "sha256": None, "details": None},
+            "dxf": {"state": "pending", "artifact": None, "sha256": None, "details": None},
+            "build_evidence": {"state": "pending", "artifact": None, "sha256": None, "details": None},
+        },
+    }]
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    original_manifest_bytes = manifest_path.read_bytes()
+    downstream_calls: list[str] = []
+
+    def record_downstream(*args: object, **kwargs: object) -> None:
+        downstream_calls.append("_ensure_rendered")
+        raise AssertionError("candidate manifest reached the resume renderer")
+
+    monkeypatch.setattr("cad_agent.pdf._ensure_rendered", record_downstream)
+    expected_error = "Auto-calibration candidate manifests cannot be resumed."
+
+    if entry_point == "direct":
+        with pytest.raises(ManifestError, match=expected_error):
+            run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    else:
+        assert main([
+            "resume-pdf", "--manifest", str(manifest_path), "--input", str(source),
+        ]) == 2
+        assert expected_error in capsys.readouterr().err
+
+    assert downstream_calls == []
+    assert manifest_path.read_bytes() == original_manifest_bytes
+    assert not (output / "semantic_ir").exists()
+    assert not (output / "dxf").exists()
+    assert not (output / "build_evidence").exists()
 
 
 def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
