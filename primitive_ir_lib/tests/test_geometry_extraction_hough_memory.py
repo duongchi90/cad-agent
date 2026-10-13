@@ -71,3 +71,44 @@ def test_extract_circles_finds_large_image_circle_with_tiled_hough():
         and abs(circle.radius_px - 100) <= 5
         for circle in circles
     )
+
+
+def test_extract_circles_finds_seam_circle_once_with_tiled_hough():
+    image = np.zeros((2001, 2000, 3), dtype=np.uint8)
+    # max_radius=120 gives a 1,760 px core, so x=1,760 lies on a tile seam.
+    geometry_extraction.cv2.circle(image, (1760, 1000), 80, (255, 255, 255), 3)
+
+    circles = geometry_extraction.extract_circles(
+        image,
+        max_radius=120,
+        param2=45,
+        min_dist=120,
+    )
+
+    assert len(circles) == 1
+    assert abs(circles[0].center_px[0] - 1760) <= 3
+    assert abs(circles[0].center_px[1] - 1000) <= 3
+    assert abs(circles[0].radius_px - 80) <= 5
+
+
+def test_extract_circles_preserves_dense_distinct_circles_without_extras():
+    image = np.zeros((2001, 2000, 3), dtype=np.uint8)
+    expected = [(500, 800), (640, 800)]
+    for center in expected:
+        geometry_extraction.cv2.circle(image, center, 50, (255, 255, 255), 3)
+
+    circles = geometry_extraction.extract_circles(
+        image,
+        max_radius=80,
+        param2=45,
+        min_dist=100,
+    )
+
+    assert len(circles) == 2
+    for expected_x, expected_y in expected:
+        assert any(
+            abs(circle.center_px[0] - expected_x) <= 3
+            and abs(circle.center_px[1] - expected_y) <= 3
+            and abs(circle.radius_px - 50) <= 5
+            for circle in circles
+        )
