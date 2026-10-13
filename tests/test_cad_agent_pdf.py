@@ -397,6 +397,105 @@ def test_pdf_cli_auto_calibration_candidate_rejects_manual_calibration(
     assert result == 2
 
 
+@pytest.mark.parametrize("entry_point", ["direct", "resume-cli"])
+@pytest.mark.parametrize("approved", [False, True], ids=["unapproved", "approval-edited"])
+def test_pdf_candidate_manifest_is_rejected_before_resume_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    entry_point: str,
+    approved: bool,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    output.mkdir()
+    _pdf(source)
+
+    rendered_path = output / "pdf" / "rendered_page01.png"
+    primitive_path = output / "pdf" / "primitive_ir" / "page_01.json"
+    rendered_path.parent.mkdir(parents=True)
+    primitive_path.parent.mkdir(parents=True)
+    rendered_path.write_bytes(b"synthetic rendered page")
+    primitive_path.write_text(
+        json.dumps({
+            "calibration": {
+                "status": "needs_verification",
+                "source_sha256": sha256_file(rendered_path),
+            },
+        }),
+        encoding="utf-8",
+    )
+    lower_manifest_path = output / "pdf" / "manifest.json"
+    lower_manifest_path.write_text("{}", encoding="utf-8")
+
+    manifest = new_pdf_manifest(source, 0.5, "synthetic-approval", 144)
+    manifest["configuration"].pop("scale_mm_per_px")
+    manifest["configuration"]["calibration_mode"] = "auto_candidate"
+    manifest["approvals"]["calibration"] = {
+        "approved": approved,
+        "reference": "edited-approval" if approved else None,
+        "status": "needs_verification",
+    }
+    manifest["result"] = "CALIBRATION_NEEDS_VERIFICATION"
+    manifest["render"] = {
+        "state": "completed",
+        "artifact": "pdf/manifest.json",
+        "sha256": sha256_file(lower_manifest_path),
+        "details": None,
+    }
+    manifest["pages"] = [{
+        "page": 1,
+        "rendered_png": {
+            "state": "completed",
+            "artifact": "pdf/rendered_page01.png",
+            "sha256": sha256_file(rendered_path),
+            "details": None,
+        },
+        "calibration": {
+            "candidate_id": "run_pdf_page01",
+            "status": "needs_verification",
+            "source_sha256": sha256_file(rendered_path),
+        },
+        "stages": {
+            "primitive_ir": {
+                "state": "completed",
+                "artifact": "pdf/primitive_ir/page_01.json",
+                "sha256": sha256_file(primitive_path),
+                "details": None,
+            },
+            "semantic_ir": {"state": "pending", "artifact": None, "sha256": None, "details": None},
+            "dxf": {"state": "pending", "artifact": None, "sha256": None, "details": None},
+            "build_evidence": {"state": "pending", "artifact": None, "sha256": None, "details": None},
+        },
+    }]
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    original_manifest_bytes = manifest_path.read_bytes()
+    downstream_calls: list[str] = []
+
+    def record_downstream(*args: object, **kwargs: object) -> None:
+        downstream_calls.append("_ensure_rendered")
+        raise AssertionError("candidate manifest reached the resume renderer")
+
+    monkeypatch.setattr("cad_agent.pdf._ensure_rendered", record_downstream)
+    expected_error = "Auto-calibration candidate manifests cannot be resumed."
+
+    if entry_point == "direct":
+        with pytest.raises(ManifestError, match=expected_error):
+            run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+    else:
+        assert main([
+            "resume-pdf", "--manifest", str(manifest_path), "--input", str(source),
+        ]) == 2
+        assert expected_error in capsys.readouterr().err
+
+    assert downstream_calls == []
+    assert manifest_path.read_bytes() == original_manifest_bytes
+    assert not (output / "semantic_ir").exists()
+    assert not (output / "dxf").exists()
+    assert not (output / "build_evidence").exists()
+
+
 def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

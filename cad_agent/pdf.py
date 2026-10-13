@@ -321,6 +321,8 @@ def run_pdf_calibration_candidate(
 
 def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
     verify_source(manifest, source)
+    if manifest.get("configuration", {}).get("calibration_mode") == "auto_candidate":
+        raise ManifestError("Auto-calibration candidate manifests cannot be resumed.")
     approval = manifest.get("approvals", {}).get("calibration", {})
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("PDF run manifest has no recorded calibration approval.")
