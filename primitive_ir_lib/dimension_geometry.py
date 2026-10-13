@@ -212,6 +212,120 @@ def _detect_extension_lines(segments: list[Segment], dimension_line: Segment) ->
     return tuple(sorted(candidates, key=lambda item: (item[0][1], item[0][0], item[1][0])))
 
 
+def _axis_coordinate(segment: Segment, axis: str) -> float:
+    index = 0 if axis == "vertical" or axis == "x" else 1
+    return (segment[0][index] + segment[1][index]) / 2.0
+
+
+def _axis_segment_groups(
+    segments: list[Segment], *, axis: str, min_length: float, tolerance: float = 4.0
+) -> list[list[Segment]]:
+    predicate = _is_vertical if axis == "vertical" else _is_horizontal
+    candidates = sorted(
+        (segment for segment in segments if predicate(segment) and _length(segment) >= min_length),
+        key=lambda segment: (_axis_coordinate(segment, axis), segment),
+    )
+    groups: list[list[Segment]] = []
+    for segment in candidates:
+        coordinate = _axis_coordinate(segment, axis)
+        matching = next(
+            (
+                group
+                for group in groups
+                if abs(coordinate - sum(_axis_coordinate(item, axis) for item in group) / len(group))
+                <= tolerance
+            ),
+            None,
+        )
+        (groups.append([segment]) if matching is None else matching.append(segment))
+    return groups
+
+
+def _merged_axis_tracks(
+    segments: list[Segment], *, axis: str, min_length: float, tolerance: float = 4.0
+) -> list[Segment]:
+    tracks: list[Segment] = []
+    for group in _axis_segment_groups(segments, axis=axis, min_length=min_length, tolerance=tolerance):
+        coordinate = sum(_axis_coordinate(segment, axis) for segment in group) / len(group)
+        merged = _merge_axis_segments(segments, axis=axis, coordinate=coordinate, tolerance=tolerance)
+        if merged is not None and _length(merged) >= min_length:
+            tracks.append(merged)
+    return tracks
+
+
+def _unique_axis_witnesses(
+    segments: list[Segment], *, axis: str, tolerance: float = 4.0
+) -> list[tuple[Segment, tuple[Segment, ...], str]]:
+    dimension_axis = "horizontal" if axis == "horizontal" else "vertical"
+    extension_axis = "vertical" if axis == "horizontal" else "horizontal"
+    dimension_groups = _axis_segment_groups(
+        segments, axis=dimension_axis, min_length=18.0, tolerance=tolerance
+    )
+    extension_tracks = _merged_axis_tracks(
+        segments, axis=extension_axis, min_length=28.0, tolerance=tolerance
+    )
+    coordinate_axis = "y" if axis == "horizontal" else "x"
+    along_axis = "x" if axis == "horizontal" else "y"
+    witnesses: list[tuple[Segment, tuple[Segment, ...], str]] = []
+
+    for group in dimension_groups:
+        coordinate = sum(_axis_coordinate(segment, coordinate_axis) for segment in group) / len(group)
+        along_start = min(min(point[0 if along_axis == "x" else 1] for point in segment) for segment in group)
+        along_end = max(max(point[0 if along_axis == "x" else 1] for point in segment) for segment in group)
+        supported: list[tuple[float, Segment]] = []
+        for extension in extension_tracks:
+            extension_coordinate = _axis_coordinate(extension, extension_axis)
+            if axis == "horizontal":
+                extension_reaches_dimension = (
+                    min(point[1] for point in extension) <= coordinate + 8.0
+                    and max(point[1] for point in extension) >= coordinate + 24.0
+                )
+                fragment_reaches_extension = any(
+                    min(point[0] for point in segment) - tolerance
+                    <= extension_coordinate
+                    <= max(point[0] for point in segment) + tolerance
+                    for segment in group
+                )
+            else:
+                extension_reaches_dimension = (
+                    min(point[0] for point in extension) <= coordinate - 8.0
+                    and max(point[0] for point in extension) >= coordinate - 24.0
+                )
+                fragment_reaches_extension = any(
+                    min(point[1] for point in segment) - tolerance
+                    <= extension_coordinate
+                    <= max(point[1] for point in segment) + tolerance
+                    for segment in group
+                )
+            if (
+                along_start - tolerance <= extension_coordinate <= along_end + tolerance
+                and extension_reaches_dimension
+                and fragment_reaches_extension
+            ):
+                supported.append((extension_coordinate, extension))
+        supported.sort(key=lambda item: item[0])
+        if len(supported) != 2 or supported[1][0] - supported[0][0] < 28.0:
+            continue
+        first, second = supported
+        if axis == "horizontal":
+            line = _canonical_segment((first[0], coordinate), (second[0], coordinate))
+            hint = "HORIZONTAL_DISTANCE"
+        else:
+            line = _canonical_segment((coordinate, first[0]), (coordinate, second[0]))
+            hint = "VERTICAL_DISTANCE"
+        witnesses.append((line, (first[1], second[1]), hint))
+    return witnesses
+
+
+def _axis_aligned_witnesses(
+    segments: list[Segment],
+) -> list[tuple[Segment, tuple[Segment, ...], str]]:
+    return [
+        *_unique_axis_witnesses(segments, axis="horizontal"),
+        *_unique_axis_witnesses(segments, axis="vertical"),
+    ]
+
+
 def _contour_arrow_points(binary: np.ndarray, dimension_line: Segment) -> list[Point]:
     contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     endpoints = [dimension_line[0], dimension_line[1]]
@@ -283,6 +397,18 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
         )
 
     extension_lines = _detect_extension_lines(segments, dimension_line)
+    witnesses = _axis_aligned_witnesses(segments)
+    if len(witnesses) > 1:
+        return DimensionGeometryEvidence(
+            dimension_line=dimension_line,
+            extension_lines=(),
+            arrow_points=(),
+            leader_lines=leader_lines,
+            kind_hint=kind_hint,
+            confidence=0.35,
+        )
+    if len(extension_lines) < 2 and len(witnesses) == 1:
+        dimension_line, extension_lines, kind_hint = witnesses[0]
     if _is_horizontal(dimension_line) and len(extension_lines) >= 2:
         y = dimension_line[0][1]
         dimension_line = _canonical_segment(
