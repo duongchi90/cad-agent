@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -34,6 +35,10 @@ from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
+
+
+class CalibrationCandidateUnavailableError(ValueError):
+    """Raised when auto-calibration finds no usable dimension/line pair."""
 
 
 def _title_block_roi(image_width: int, image_height: int) -> Bbox:
@@ -102,8 +107,12 @@ def run(
     toàn trong auto_estimate_calibration(): kết quả này CHƯA được verify,
     không nên dùng thẳng cho DXF sản xuất mà không kiểm tra lại.
     """
-    if scale_mm_per_px is not None and scale_mm_per_px <= 0:
-        raise ValueError("scale_mm_per_px phải lớn hơn 0")
+    if scale_mm_per_px is not None and (
+        isinstance(scale_mm_per_px, bool)
+        or not math.isfinite(scale_mm_per_px)
+        or scale_mm_per_px <= 0
+    ):
+        raise ValueError("scale_mm_per_px phải là số hữu hạn lớn hơn 0")
     if scale_mm_per_px is None and not auto_calibrate:
         raise ValueError("Cần scale_mm_per_px hoặc bật auto_calibrate=True")
     if calibration_status not in {"verified", "needs_verification"}:
@@ -169,7 +178,7 @@ def run(
     else:
         calibration = auto_estimate_calibration(raw_texts, raw_lines, image.shape[0], unit="mm")
         if calibration is None:
-            raise ValueError(
+            raise CalibrationCandidateUnavailableError(
                 "auto_calibrate không tìm được cặp (dimension_value, line gần "
                 "nhất) hợp lệ trong các ROI đã quét — cần cung cấp "
                 "--scale-mm-per-px thủ công hoặc thêm --ocr-roi bao trùm 1 "

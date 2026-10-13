@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -102,6 +103,15 @@ def _configure_console_output() -> None:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _is_valid_manual_scale(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
 def run_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -127,8 +137,8 @@ def run_pdf(
         raise FileNotFoundError(pdf_path)
     if dpi <= 0:
         raise ValueError("dpi must be positive")
-    if scale_mm_per_px is not None and scale_mm_per_px <= 0:
-        raise ValueError("scale_mm_per_px must be positive")
+    if scale_mm_per_px is not None and not _is_valid_manual_scale(scale_mm_per_px):
+        raise ValueError("scale_mm_per_px must be a finite positive number")
     if scale_mm_per_px is None and not auto_calibrate:
         raise ValueError("Cần scale_mm_per_px hoặc bật auto_calibrate=True")
     if auto_calibrate and calibration_registry_path is not None and not calibration_id_prefix:
