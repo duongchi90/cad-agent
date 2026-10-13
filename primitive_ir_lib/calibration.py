@@ -263,6 +263,8 @@ def auto_estimate_calibration(
         if pixel_length <= 0:
             continue
         scale = text.parsed_value / pixel_length
+        if round(scale, 6) <= 0:
+            continue
         candidates.append((text, line, scale))
         if not require_consensus:
             break  # hành vi cũ: dùng ngay ứng viên đầu tiên, không thu thập thêm
