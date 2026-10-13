@@ -297,6 +297,12 @@
    - Comprehensive empirical verification across 28 test scenarios (5 RED, 8 benchmark, 8 controls, 5 degenerate & high-density perf, 2 E2E synthesis tests unblocking CASE01 with 6 valid candidates and `$INSUNITS = 0` draft reference) with 100% pass rate.
    - 6 empirical scripts/tests + 1 formal specification (`DIMENSION_ASSOCIATION_AND_CALIBRATION_EVIDENCE_V1_READY_FOR_CODEX`).
 
+42. **Calibration Candidate Extraction Multi-Primitive Transfer Architecture (`research/antigravity/2026-10-11/calibration_candidate_transfer/`):**
+   - Independent adversarial research determining whether Strategy D multi-primitive association transfers safely from `cross_validate()` (post-calibration) to `auto_estimate_calibration()` (pre-calibration discovery).
+   - Core Verdict: Naive transfer FALSIFIED AS DANGEROUSLY UNSAFE due to Concentric Circle Ambiguity Hazard (100% scale error without prior $S_0$ oracle). Guarded transfer PROVEN SAFE AND FEASIBLE (Method C) under scale-free collinear text gap bridging, concentricity disambiguation guard, text-height adaptive carrier corridor ($\max(30\text{ px}, 3 \times \text{th})$), and $\ge 2$ witness $\le 3.0\%$ consensus gate.
+   - Comprehensive empirical verification across 28 test scenarios (5 RED, 8 benchmark, 9 controls, 6 degenerate & high-density perf) with 100% pass rate.
+   - 6 empirical scripts/tests + 1 formal specification (`CALIBRATION_CANDIDATE_EXTRACTION_TRANSFER_V1_READY_FOR_CODEX`).
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -574,6 +580,14 @@
 | `dimension_association_calibration` | [`test_dimension_association_degenerate_and_perf.py`](dimension_association_calibration/test_dimension_association_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `6cae97318a4f47ab3f1af869ac129c45f886205c75720e5b903368fd45313d50` | Empty, zero-length, non-finite coords, extreme macro/micro scales, 500-line perf |
 | `dimension_association_calibration` | [`test_e2e_calibration_with_association.py`](dimension_association_calibration/test_e2e_calibration_with_association.py) | E2E Integration Test | `RESEARCH_ONLY` | `d5704ec9dfc655ee455554d202048e588b5e39c6797e64d4f3608493d1aac376` | E2E synthesis proving unblocking of CASE01 drawing with 6 valid candidates |
 | `dimension_association_calibration` | [`dimension_association_and_calibration_evidence_empirical_specification.md`](dimension_association_calibration/dimension_association_and_calibration_evidence_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `9a8a245d21d491908824a92144dd6ae5ed7e902b89463ba3450043d924948b92` | Complete empirical specification for Dimension Association & Calibration (Sections 1-7, `DIMENSION_ASSOCIATION_AND_CALIBRATION_EVIDENCE_V1`) |
+
+| `calibration_candidate_transfer` | [`__init__.py`](calibration_candidate_transfer/__init__.py) | Package Init | `RESEARCH_ONLY` | `b573e0be243bd1176af7b7efe46a8dd429011ddc560524253064bbf5056845d6` | Package initialization |
+| `calibration_candidate_transfer` | [`calibration_candidate_transfer_engine.py`](calibration_candidate_transfer/calibration_candidate_transfer_engine.py) | Engine / Oracle | `RESEARCH_ONLY` | `8542994b909585ffdac6141ae8acd404fd38d2af15d6c61f5a2ffcbd616d03e8` | Reference implementation of Methods A, B, and C (Guarded Multi-Primitive Oracle) |
+| `calibration_candidate_transfer` | [`test_causal_red_candidate_transfer.py`](calibration_candidate_transfer/test_causal_red_candidate_transfer.py) | Causal RED Test | `RESEARCH_ONLY` | `b05f97c9b359c7ef877ceca877c16351c255887903d490db56b7c0ae84cb40cd` | Public causal RED reproducing 5 baseline failure modes on candidate extraction transfer |
+| `calibration_candidate_transfer` | [`test_candidate_transfer_benchmark.py`](calibration_candidate_transfer/test_candidate_transfer_benchmark.py) | Strategy Benchmark | `RESEARCH_ONLY` | `fe68dd12dc290595f1b4f4f9c90c5bdb6d0e39af4540f0e5afa4eee6d72d6980` | Empirical benchmark comparing Methods A-C across 8 adversarial scenarios |
+| `calibration_candidate_transfer` | [`test_candidate_transfer_controls.py`](calibration_candidate_transfer/test_candidate_transfer_controls.py) | Controls Test | `RESEARCH_ONLY` | `816c8062a6fde41f62b1b26cbb7f44269178d72e25bf723f48d78d31bd61d6a7` | Positive fixtures and strong negative controls (concentric refusal, unaligned text) |
+| `calibration_candidate_transfer` | [`test_candidate_transfer_degenerate_and_perf.py`](calibration_candidate_transfer/test_candidate_transfer_degenerate_and_perf.py) | Edge & Perf Benchmark | `RESEARCH_ONLY` | `ef87ef2768131450ccbb3e530b0ba2563f280d7bca52f6aa324cb4e142485059` | Empty, zero-length/radius, NaN/Inf coords, micro/macro dynamic range, high-density perf |
+| `calibration_candidate_transfer` | [`calibration_candidate_extraction_transfer_empirical_specification.md`](calibration_candidate_transfer/calibration_candidate_extraction_transfer_empirical_specification.md) | Specification | `RESEARCH_ONLY` | `562c0a0bc1ea52e2ad679a384f8fed808bb4270a1d01a94187570b476061db36` | Complete empirical specification for Calibration Candidate Extraction Transfer Architecture (`CALIBRATION_CANDIDATE_EXTRACTION_TRANSFER_V1`) |
 
 ## Verification and Non-Interference Guarantees
 
