@@ -6,6 +6,7 @@
 - **Scope:** Research artifacts and empirical verification scripts only.
 - **Production Impact:** `RESEARCH_ONLY = YES`, `DO_NOT_MODIFY_PRODUCTION_CODE = YES`, `DO_NOT_CREATE_PR = YES`.
 - **Preserved Epics:** Issue #491 (`NATIVE_LINE_DIMASSOC_FORWARD_OPERABILITY_AND_PERSISTENCE_V1`) and `NO_TOUCH_ARC_CIRCLE_MUTATION_EPIC` unmodified.
+- **Master Knowledge Base:** [`REA_CATALOG.md`](REA_CATALOG.md) — Durable reverse engineering and anti-repeat index.
 
 ## Summary of Preserved Research Groups
 
@@ -610,6 +611,7 @@
 | `dimassoc_reactor_validation` | [`ReactorInspector/Commands.cs`](dimassoc_reactor_validation/ReactorInspector/Commands.cs) | C# Source | `RESEARCH_ONLY` | `d988fbf8097606854f301e45162dc4989b367c227ff971e7cc1c79bddf2540ba` | Managed C# source for differential graph inspection and adversarial controls |
 | `dimassoc_reactor_validation` | [`ReactorInspector/run_netload.scr`](dimassoc_reactor_validation/ReactorInspector/run_netload.scr) | Runner Script | `RESEARCH_ONLY` | `feb4fcf38998f247cffa58f01cadafdc27622411ac28aef51e40c90961094f94` | Headless accoreconsole runner script for ReactorInspector |
 | `dimassoc_reactor_validation` | [`logs/inspection_result.txt`](dimassoc_reactor_validation/logs/inspection_result.txt) | Execution Log | `RESEARCH_ONLY` | `bc208289b803395cbeda3679295934612c3c8c86c7bcacbb6c674906e2705814` | Raw execution log of headless differential inspection and adversarial controls |
+| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `3493ed306092a1a823f14732e3b4ff583e86542cd0cf076adb87570126a5816a` | Master REA knowledge base and anti-repeat lookup catalog |
 
 ## Verification and Non-Interference Guarantees
 
