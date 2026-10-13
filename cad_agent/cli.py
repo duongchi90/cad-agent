@@ -311,7 +311,9 @@ def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path, evidence_p
         str(output),
         semantic_doc=semantic,
         solved_primitives=solved_primitives,
-        build_components=True,
+        # Keep staged reconstruction evidence-bounded: inferred parts remain in Semantic IR;
+        # additional component geometry stays opt-in at explicit builder callers.
+        build_components=False,
         build_dimensions=True,
     )
     review = review_dxf(built)
