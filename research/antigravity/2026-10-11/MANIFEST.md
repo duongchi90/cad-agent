@@ -312,6 +312,12 @@
    - Comprehensive verification across 4 adversarial controls (100% pass rate) inside `accoreconsole.exe`.
    - 1 report + 1 Luna handoff specification + 5 fixture/inspection scripts + 1 C# managed inspection project/code + 1 execution log (`DIMASSOC_REACTOR_VALIDATION_V1`).
 
+44. **Prior Clean-Room Investigations (`research/antigravity/2026-10-11/prior_investigations/`):**
+   - Preserved non-private evidence artifacts and technical investigation reports backing REA catalog entries (`REA-001`, `REA-007`, `REA-008`, `REA-013`).
+   - Includes Wave A capability mining, raster empirical RED and OSS mining, BLOCKIFY behavioral contract specification, CadMind toolpackage reconstruction & evidence reports, and evidence-driven code avoidance investigation.
+   - Eliminates workstation local path dependencies (`GAP-001` - `GAP-005`) making all catalog claims 100% GitHub-recoverable.
+   - 6 research reports/specifications + package `__init__.py`.
+
 ## File Inventory and SHA-256 Signatures
 
 | Research Topic | Filename | Type | Status | SHA-256 Checksum | Description |
@@ -611,7 +617,14 @@
 | `dimassoc_reactor_validation` | [`ReactorInspector/Commands.cs`](dimassoc_reactor_validation/ReactorInspector/Commands.cs) | C# Source | `RESEARCH_ONLY` | `d988fbf8097606854f301e45162dc4989b367c227ff971e7cc1c79bddf2540ba` | Managed C# source for differential graph inspection and adversarial controls |
 | `dimassoc_reactor_validation` | [`ReactorInspector/run_netload.scr`](dimassoc_reactor_validation/ReactorInspector/run_netload.scr) | Runner Script | `RESEARCH_ONLY` | `feb4fcf38998f247cffa58f01cadafdc27622411ac28aef51e40c90961094f94` | Headless accoreconsole runner script for ReactorInspector |
 | `dimassoc_reactor_validation` | [`logs/inspection_result.txt`](dimassoc_reactor_validation/logs/inspection_result.txt) | Execution Log | `RESEARCH_ONLY` | `bc208289b803395cbeda3679295934612c3c8c86c7bcacbb6c674906e2705814` | Raw execution log of headless differential inspection and adversarial controls |
-| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `3493ed306092a1a823f14732e3b4ff583e86542cd0cf076adb87570126a5816a` | Master REA knowledge base and anti-repeat lookup catalog |
+| `prior_investigations` | [`__init__.py`](prior_investigations/__init__.py) | Package Init | `RESEARCH_ONLY` | `1fbdf1e58626e35aabc730e67233f6ee1773b4e3522c77b22a1097c1aed4b5a2` | Package initialization |
+| `prior_investigations` | [`wave_a_cad_capability_mining_report.md`](prior_investigations/wave_a_cad_capability_mining_report.md) | Technical Report | `RESEARCH_ONLY` | `c58a9c6f3ac78866ada49b3d818c3e92af394ee9cbb492bba6cfb56445ba6da3` | Wave A CAD capability reverse-engineering and reuse mining report |
+| `prior_investigations` | [`raster_empirical_red_and_oss_mining.md`](prior_investigations/raster_empirical_red_and_oss_mining.md) | Technical Report | `RESEARCH_ONLY` | `6a629c8580d5041f2b81fd16f885fb52d4ba061c11adb871750b1115940b4e52` | Raster empirical RED test suite and open-source library mining report |
+| `prior_investigations` | [`rea_blockify_behavioral_contract_specification.md`](prior_investigations/rea_blockify_behavioral_contract_specification.md) | Specification | `RESEARCH_ONLY` | `95d841cf705850af3840ac444fcef73b38e486d8050d059993fecd4a43369657` | Clean-room BLOCKIFY behavioral contract specification |
+| `prior_investigations` | [`cadmind_toolpackage_reconstruction.md`](prior_investigations/cadmind_toolpackage_reconstruction.md) | Technical Report | `RESEARCH_ONLY` | `150070edbe90c0dd182757d2ac2b2b184dab12397307abdab672a451d8e84ac3` | CadMind external tool package clean-room reconstruction report |
+| `prior_investigations` | [`cadmind_technical_evidence_report.md`](prior_investigations/cadmind_technical_evidence_report.md) | Technical Report | `RESEARCH_ONLY` | `a2e0bbb683faf9c28edb607a4f74b97c02bb439d1d149437cd6e4003e661c55d` | CadMind technical evidence and binary analysis report |
+| `prior_investigations` | [`rea_evidence_driven_code_avoidance_investigation.md`](prior_investigations/rea_evidence_driven_code_avoidance_investigation.md) | Technical Report | `RESEARCH_ONLY` | `098af87a6b52096b83adab59768bff9313659e6f90b92b931cb242a8d16d871c` | REA evidence-driven code avoidance deep investigation report |
+| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `e4bdf9907d3436f8ee5f48cf632a639d1cb61bf53af00811b61df3f2ecc7a4ae` | Master REA knowledge base and anti-repeat lookup catalog (hardened) |
 
 ## Verification and Non-Interference Guarantees
 
