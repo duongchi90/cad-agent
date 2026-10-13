@@ -278,6 +278,7 @@ def auto_estimate_calibration(
                 f" (cần >= {min_consensus_candidates} để kiểm tra đồng thuận) —"
                 " CHƯA xác minh đồng thuận, dùng thận trọng.]"
             )
+        cal.status = "needs_verification"
         return cal
 
     scales = [c[2] for c in candidates]
@@ -294,6 +295,7 @@ def auto_estimate_calibration(
         agreeing, key=lambda c: abs(c[2] - median_scale)
     )
     cal = estimate_calibration_from_reference(best_text, best_line, image_height_px, unit=unit)
+    cal.status = "needs_verification"
     cal.reference_note = (
         (cal.reference_note or "")
         + f" [Đồng thuận: {len(agreeing)}/{len(candidates)} ứng viên dimension_value"

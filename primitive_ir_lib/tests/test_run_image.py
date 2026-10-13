@@ -9,9 +9,12 @@ from unittest.mock import patch
 
 import cv2
 import numpy as np
+import pytest
 
-from primitive_ir_lib.run_image import run
+from primitive_ir_lib.calibration_registry import add_record, get_verified_scale
+from primitive_ir_lib.assemble import build_document as assemble_document
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+from primitive_ir_lib.run_image import main, run
 from primitive_ir_lib.text_extraction import RawText
 from primitive_ir_lib.validator import validate_document
 
@@ -37,6 +40,7 @@ def test_run_image_writes_valid_primitive_ir_with_manual_scale():
         document = json.loads(output_path.read_text(encoding="utf-8"))
         assert document["calibration"]["method"] == "manual_override"
         assert document["calibration"]["pixel_to_unit_scale"] == 0.5
+        assert document["calibration"]["status"] == "verified"
         assert document["source_document"]["sha256"]
         assert document["primitives"]
         assert validate_document(document) == []
@@ -131,6 +135,95 @@ def test_run_image_passes_ocr_lang_override_to_tesseract(tmp_path):
 
     _, kwargs = mock_extract.call_args
     assert kwargs["lang"] == "eng"
+
+
+def test_registry_with_nonfinite_verified_scale_is_rejected_before_image_staging(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    registry_path = tmp_path / "calibrations.json"
+    image_path.write_bytes(b"synthetic owned image")
+    add_record(registry_path, "fixture", image_path, 0.25, "Known synthetic reference")
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    payload["records"][0]["scale_mm_per_px"] = float("inf")
+    registry_path.write_text(json.dumps(payload), encoding="utf-8")
+    argv = [
+        "run_image", "--image", str(image_path), "--output", str(tmp_path / "ir.json"),
+        "--calibration-registry", str(registry_path), "--calibration-id", "fixture",
+    ]
+
+    with (
+        patch("sys.argv", argv),
+        patch("primitive_ir_lib.run_image._configure_console_output"),
+        patch("primitive_ir_lib.run_image.run") as stage_image,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 2
+    stage_image.assert_not_called()
+
+
+def test_auto_candidate_stays_review_only_through_primitive_and_registry_outputs(tmp_path):
+    image_path = tmp_path / "synthetic.png"
+    output_path = tmp_path / "primitive_ir.json"
+    registry_path = tmp_path / "calibrations.json"
+    image = np.full((80, 240, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+    line = RawLine(
+        id="synthetic-dimension-line", p1_px=(20.0, 50.0), p2_px=(220.0, 50.0),
+        confidence=1.0, bbox_px=(20.0, 50.0, 220.0, 50.0),
+    )
+    dimension = RawText(
+        id="synthetic-dimension", content="100", bbox_px=(105, 30, 135, 45),
+        rotation_deg=0.0, confidence=1.0, source="text_tesseract",
+        parsed_value=100.0, semantic_role="dimension_value",
+    )
+    built_documents = []
+
+    def capture_document(*args, **kwargs):
+        document = assemble_document(*args, **kwargs)
+        built_documents.append(document)
+        return document
+
+    with (
+        patch(
+            "primitive_ir_lib.run_image.extract_raw_geometry",
+            return_value=RawGeometry(lines=[line]),
+        ),
+        patch(
+            "primitive_ir_lib.run_image.extract_text_tesseract",
+            return_value=[dimension],
+        ),
+        patch(
+            "primitive_ir_lib.run_image.build_document",
+            side_effect=capture_document,
+        ),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            auto_calibrate=True, calibration_registry_path=registry_path,
+            calibration_id="synthetic-auto", ocr_rois=[(0, 0, 240, 80)],
+        )
+
+    primitive_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    registry_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    candidate = registry_payload["records"][0]
+    assert primitive_payload["calibration"]["pixel_to_unit_scale"] == 0.5
+    assert primitive_payload["calibration"]["status"] == "needs_verification"
+    assert primitive_payload["calibration"]["source_sha256"] == candidate["sha256"]
+    assert candidate["status"] == "needs_verification"
+    assert candidate["scale_mm_per_px"] == 0.5
+    with pytest.raises(ValueError, match="No verified calibration"):
+        get_verified_scale(registry_path, "synthetic-auto", image_path)
+
+    from semantic_ir_lib.io_utils import _primitive_ir_document_from_dict
+
+    with pytest.raises(ValueError, match="needs_verification"):
+        _primitive_ir_document_from_dict(primitive_payload)
+    from dxf_builder_lib.builder import build_dxf
+
+    assert len(built_documents) == 1
+    with pytest.raises(ValueError, match="needs_verification"):
+        build_dxf(built_documents[0], str(tmp_path / "candidate.dxf"))
 
 
 if __name__ == "__main__":
