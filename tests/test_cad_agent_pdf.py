@@ -8,7 +8,7 @@ import fitz
 import pytest
 
 from cad_agent.cli import main
-from cad_agent.manifest import ManifestError
+from cad_agent.manifest import ManifestError, sha256_file
 from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
 
 
@@ -18,6 +18,61 @@ def _pdf(path: Path, label: str = "A") -> None:
         page = document.new_page(width=400, height=300)
         page.draw_line((30, 50 + index * 30), (350, 50 + index * 30))
         page.insert_text((50, 100), f"{label}-{index + 1}")
+    document.save(path)
+    document.close()
+
+
+def _dimension_pdf(path: Path, label: str = "1077") -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 360), (720, 360), width=1.5)
+    page.draw_line((180, 330), (180, 390), width=1.5)
+    page.draw_line((720, 330), (720, 390), width=1.5)
+    page.insert_text((420, 335), label, fontsize=16, fontname="helv")
+    document.save(path)
+    document.close()
+
+
+def _numeric_note_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 360), (720, 360), width=1.5)
+    page.insert_text((420, 335), "1077", fontsize=16, fontname="helv")
+    document.save(path)
+    document.close()
+
+
+def _numeric_note_with_separate_dimension_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 260), (720, 260), width=1.5)
+    page.insert_text((420, 235), "540", fontsize=16, fontname="helv")
+    page.draw_line((180, 430), (480, 430), width=1.5)
+    page.draw_line((180, 400), (180, 460), width=1.5)
+    page.draw_line((480, 400), (480, 460), width=1.5)
+    page.insert_text((305, 405), "300", fontsize=16, fontname="helv")
+    document.save(path)
+    document.close()
+
+
+def _numeric_note_beside_dimension_structure_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 360), (720, 360), width=1.5)
+    page.draw_line((180, 330), (180, 390), width=1.5)
+    page.draw_line((720, 330), (720, 390), width=1.5)
+    page.insert_text((390, 335), "540", fontsize=16, fontname="helv")
+    document.save(path)
+    document.close()
+
+
+def _numeric_note_centered_on_dimension_structure_pdf(path: Path) -> None:
+    document = fitz.open()
+    page = document.new_page(width=900, height=600)
+    page.draw_line((180, 360), (720, 360), width=1.5)
+    page.draw_line((180, 330), (180, 390), width=1.5)
+    page.draw_line((720, 330), (720, 390), width=1.5)
+    page.insert_text((420, 335), "540", fontsize=16, fontname="helv")
     document.save(path)
     document.close()
 
@@ -161,6 +216,88 @@ def test_pdf_resume_regenerates_missing_primitive_from_verified_render() -> None
         assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
 
 
+@pytest.mark.parametrize(
+    ("ocr_policy", "expected_text", "expected_dimensions"),
+    [
+        (True, ["1077"], 0),
+        (False, [], 0),
+        (None, [], 0),
+    ],
+    ids=["default-on", "explicit-off", "historical-manifest"],
+)
+def test_pdf_resume_regenerates_missing_primitive_with_ocr_policy(
+    ocr_policy: bool | None,
+    expected_text: list[str],
+    expected_dimensions: int,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144)
+        if ocr_policy is None:
+            manifest["configuration"].pop("auto_ocr_roi")
+        else:
+            manifest["configuration"]["auto_ocr_roi"] = ocr_policy
+
+        manifest_path = output / "pdf-run-manifest.json"
+        run_pdf_stages(source, output, manifest_path, manifest)
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primitive_path = output / persisted["pages"][0]["stages"]["primitive_ir"]["artifact"]
+        primitive_path.unlink()
+
+        run_pdf_stages(source, output, manifest_path, persisted)
+
+        resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+        text = [item["text_data"]["content"] for item in primitive["primitives"] if item["type"] == "text"]
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert text == expected_text
+        assert evidence["build_result"]["dimension_count"] == expected_dimensions
+        if ocr_policy:
+            assert primitive["cross_validations"][0]["status"] == "unverified"
+        if ocr_policy is None:
+            assert "auto_ocr_roi" not in resumed["configuration"]
+        else:
+            assert resumed["configuration"]["auto_ocr_roi"] is ocr_policy
+
+
+@pytest.mark.parametrize("remove_dxf", [True, False], ids=["missing-dxf", "completed-dxf"])
+def test_pdf_resume_rebuilds_legacy_confirmed_ocr_primitive(remove_dxf: bool) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144, auto_ocr_roi=True)
+        manifest_path = output / "pdf-run-manifest.json"
+        run_pdf_stages(source, output, manifest_path, manifest)
+
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        page = persisted["pages"][0]
+        primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+        primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+        primitive["cross_validations"][0]["status"] = "confirmed"
+        primitive_path.write_text(json.dumps(primitive), encoding="utf-8")
+        page["stages"]["primitive_ir"]["sha256"] = sha256_file(primitive_path)
+        dxf_path = output / page["stages"]["dxf"]["artifact"]
+        evidence_path = output / page["stages"]["build_evidence"]["artifact"]
+        if remove_dxf:
+            dxf_path.unlink()
+            evidence_path.unlink()
+            page["stages"]["dxf"] = {"state": "pending", "artifact": None, "sha256": None, "details": None}
+            page["stages"]["build_evidence"] = {"state": "pending", "artifact": None, "sha256": None, "details": None}
+        manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+        run_pdf_stages(source, output, manifest_path, persisted)
+
+        repaired = json.loads(primitive_path.read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert repaired["cross_validations"][0]["status"] == "unverified"
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
 def test_pdf_cli_run_and_resume() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -200,3 +337,170 @@ def test_pdf_cli_persists_auto_ocr_roi_choice() -> None:
         ]) == 0
         manifest = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
         assert manifest["configuration"]["auto_ocr_roi"] is True
+
+
+def test_pdf_manifest_helper_default_remains_geometry_only() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144)
+        manifest_path = output / "pdf-run-manifest.json"
+        run_pdf_stages(source, output, manifest_path, manifest)
+
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert persisted["configuration"]["auto_ocr_roi"] is False
+        assert not [item for item in primitive["primitives"] if item["type"] == "text"]
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_cli_defaults_to_ocr_and_retains_explicit_geometry_only_opt_out() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        _dimension_pdf(source)
+
+        default_output = root / "default"
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(default_output),
+            "--scale-mm-per-px", "1", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        default_manifest = json.loads((default_output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+        assert default_manifest["configuration"]["auto_ocr_roi"] is True
+        primitive = json.loads((default_output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        assert [item["text_data"]["content"] for item in primitive["primitives"] if item["type"] == "text"] == ["1077"]
+        assert primitive["cross_validations"][0]["status"] == "unverified"
+        evidence = json.loads((default_output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert evidence["build_result"]["dimension_count"] == 0
+        assert main([
+            "resume-pdf", "--manifest", str(default_output / "pdf-run-manifest.json"),
+            "--input", str(source),
+        ]) == 0
+        resumed = json.loads((default_output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+        assert resumed["configuration"]["auto_ocr_roi"] is True
+
+        opt_out_output = root / "opt-out"
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(opt_out_output),
+            "--scale-mm-per-px", "1", "--calibration-approval", "synthetic-scale",
+            "--no-auto-ocr-roi",
+        ]) == 0
+        opt_out_manifest = json.loads((opt_out_output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+        assert opt_out_manifest["configuration"]["auto_ocr_roi"] is False
+        opt_out_ir = json.loads((opt_out_output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        assert not [item for item in opt_out_ir["primitives"] if item["type"] == "text"]
+        opt_out_evidence = json.loads((opt_out_output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert opt_out_evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_create_dimension_without_cross_validation_support() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension-conflict.pdf"
+        output = root / "run"
+        _dimension_pdf(source, label="1200")
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "1", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        assert [item["text_data"]["content"] for item in primitive["primitives"] if item["type"] == "text"] == ["1200"]
+        assert primitive["cross_validations"][0]["status"] == "unverified"
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_confirm_nearby_numeric_note_as_dimension() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "numeric-note.pdf"
+        output = root / "run"
+        _numeric_note_pdf(source)
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "1", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert primitive["cross_validations"][0]["status"] != "confirmed"
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_borrow_separate_dimension_geometry_for_note() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "numeric-note-and-dimension.pdf"
+        output = root / "run"
+        _numeric_note_with_separate_dimension_pdf(source)
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "0.5", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        cross_validations = {item["text_value"]: item["status"] for item in primitive["cross_validations"]}
+        assert cross_validations[540.0] != "confirmed"
+        assert cross_validations[300.0] == "unverified"
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_confirm_off_center_note_beside_dimension_geometry() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "numeric-note-beside-dimension.pdf"
+        output = root / "run"
+        _numeric_note_beside_dimension_structure_pdf(source)
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "0.5", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert primitive["cross_validations"][0]["status"] != "confirmed"
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_pdf_auto_ocr_does_not_confirm_centered_note_without_association() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "centered-numeric-note.pdf"
+        output = root / "run"
+        _numeric_note_centered_on_dimension_structure_pdf(source)
+
+        assert main([
+            "run-pdf", "--input", str(source), "--output-dir", str(output),
+            "--scale-mm-per-px", "0.5", "--calibration-approval", "synthetic-scale",
+        ]) == 0
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        evidence = json.loads((output / "build_evidence/page_01.json").read_text(encoding="utf-8"))
+        assert primitive["cross_validations"][0]["status"] != "confirmed"
+        assert evidence["build_result"]["dimension_count"] == 0
+
+
+def test_historical_pdf_manifest_without_ocr_choice_remains_geometry_only() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "dimension.pdf"
+        output = root / "run"
+        _dimension_pdf(source)
+        manifest = new_pdf_manifest(source, 1, "synthetic-scale", 144)
+        manifest["configuration"].pop("auto_ocr_roi")
+        manifest_path = output / "pdf-run-manifest.json"
+        output.mkdir()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        historical = read_pdf_manifest(manifest_path)
+        run_pdf_stages(source, output, manifest_path, historical)
+
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert "auto_ocr_roi" not in persisted["configuration"]
+        primitive = json.loads((output / "pdf/primitive_ir/page_01.json").read_text(encoding="utf-8"))
+        assert not [item for item in primitive["primitives"] if item["type"] == "text"]
