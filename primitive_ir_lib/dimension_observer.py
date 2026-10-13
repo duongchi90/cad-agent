@@ -27,6 +27,7 @@ _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ROLES = {"DRIVING", "REFERENCE", "DERIVED"}
 _OCR_ROTATIONS = (0.0, 90.0, -90.0, 180.0)
+ANCHOR_COORDINATE_MODES = ("legacy", "page")
 
 
 class DimensionObserverError(ValueError):
@@ -320,6 +321,21 @@ def _observation_sha256(observation: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _anchors_in_crop_frame(
+    semantic_anchors: Sequence[Mapping[str, object]], *, x0: int, y0: int, mode: str
+) -> Sequence[Mapping[str, object]]:
+    if mode == "legacy":
+        return semantic_anchors
+    crop_anchors: list[Mapping[str, object]] = []
+    for anchor in semantic_anchors:
+        copied = dict(anchor)
+        point = copied.get("point_px")
+        if isinstance(point, (list, tuple)) and len(point) == 2:
+            copied["point_px"] = [float(point[0]) - x0, float(point[1]) - y0]
+        crop_anchors.append(copied)
+    return crop_anchors
+
+
 def observe_dimension_cluster(
     image_bgr: np.ndarray,
     cluster: DimensionCluster,
@@ -333,11 +349,14 @@ def observe_dimension_cluster(
     default_unit: str | None = None,
     blocker_scope: Sequence[str] = (),
     critical: bool = False,
+    anchor_coordinate_mode: str = "legacy",
 ) -> DimensionDisposition:
     """Return exactly one auditable disposition for a supplied cluster."""
     _validate_identifier(page_id, "page_id")
     _validate_identifier(view_id, "view_id")
     _validate_hash(source_sha256, "source_sha256")
+    if not isinstance(anchor_coordinate_mode, str) or anchor_coordinate_mode not in ANCHOR_COORDINATE_MODES:
+        raise DimensionObserverError("anchor_coordinate_mode must be legacy or page")
     if explicit_role is not None and explicit_role not in _ROLES:
         raise DimensionObserverError("explicit_role must be DRIVING, REFERENCE, or DERIVED")
     if not isinstance(critical, bool):
@@ -355,9 +374,10 @@ def observe_dimension_cluster(
         default_unit=default_unit,
     )
     geometry = detect_dimension_geometry(crop)
+    crop_anchors = _anchors_in_crop_frame(semantic_anchors, x0=x0, y0=y0, mode=anchor_coordinate_mode)
     attachment_candidates = _attachment_candidates(
         geometry,
-        semantic_anchors=semantic_anchors,
+        semantic_anchors=crop_anchors,
         view_id=view_id,
     )
     best_attachment = attachment_candidates[0] if attachment_candidates else None
@@ -607,6 +627,7 @@ def build_dimension_register(
 
 
 __all__ = [
+    "ANCHOR_COORDINATE_MODES",
     "Bbox",
     "DimensionCluster",
     "DimensionDisposition",

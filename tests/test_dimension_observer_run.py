@@ -204,3 +204,45 @@ def test_runner_refuses_nonempty_output_directory(tmp_path: Path) -> None:
             output_dir=output,
             ocr_reader=fake_ocr_4500,
         )
+
+def test_runner_records_explicit_anchor_coordinate_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = write_synthetic_dimension_page(tmp_path / "source.png")
+    monkeypatch.setattr(
+        dimension_observer_run,
+        "detect_dimension_clusters",
+        lambda image: [horizontal_dimension_cluster()],
+    )
+
+    register_path = run_dimension_observer(
+        run_id="RUN-VS-T1-ANCHOR-PAGE-MODE",
+        source_image=source,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        output_dir=tmp_path / "run",
+        ocr_reader=fake_ocr_4500,
+        anchor_coordinate_mode="page",
+    )
+
+    evidence = json.loads((register_path.parent / "observer-evidence.json").read_text(encoding="utf-8"))
+    assert evidence["anchor_coordinate_mode"] == "page"
+
+
+def test_runner_rejects_invalid_anchor_coordinate_mode_before_staging(tmp_path: Path) -> None:
+    source = write_synthetic_dimension_page(tmp_path / "source.png")
+    output = tmp_path / "not-created" / "run"
+
+    with pytest.raises(DimensionObserverRunError, match="anchor_coordinate_mode"):
+        run_dimension_observer(
+            run_id="RUN-VS-T1-ANCHOR-INVALID-MODE",
+            source_image=source,
+            page_id="PAGE-001",
+            view_id="SIDE",
+            output_dir=output,
+            ocr_reader=fake_ocr_4500,
+            anchor_coordinate_mode="view",
+        )
+
+    assert not output.parent.exists()
