@@ -34,9 +34,13 @@ import numpy as np
 from .models import new_id
 
 
-# HoughCircles allocates an accumulator proportional to the image area at dp=1.
-# Keep that full-resolution accumulator bounded for large rendered sheets.
-_HOUGH_CIRCLE_FULL_RESOLUTION_MAX_PIXELS = 4_000_000
+# OpenCV HoughCircles allocates several full-resolution work buffers in addition
+# to its accumulator. Keep the direct path for ordinary images, but bound each
+# Hough input on large rendered sheets by splitting the preprocessed image into
+# haloed tiles. With the shipped max-radius presets (<= 200 px), every tile is
+# at most 2,000 x 2,000 pixels while retaining a full-radius halo at seams.
+_HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
+_HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 
 
 @dataclass
@@ -125,29 +129,63 @@ def extract_circles(
     ở mức trung bình-cao vì HoughCircles của OpenCV không trả vote count trực
     tiếp qua API Python — nên đánh dấu rõ đây là ước lượng, không phải số đo."""
     gray = _preprocess(image_bgr)
-    dp = 1 if gray.shape[0] * gray.shape[1] <= _HOUGH_CIRCLE_FULL_RESOLUTION_MAX_PIXELS else 2
-    circles = cv2.HoughCircles(
-        gray, cv2.HOUGH_GRADIENT, dp=dp, minDist=min_dist,
-        param1=param1, param2=param2, minRadius=min_radius, maxRadius=max_radius,
-    )
+    height, width = gray.shape[:2]
+
+    if height * width <= _HOUGH_CIRCLE_DIRECT_MAX_PIXELS:
+        tile_specs = [(0, 0, width, height)]
+    else:
+        halo = max(0, int(max_radius))
+        core_size = max(1, _HOUGH_CIRCLE_TILE_MAX_SIDE_PX - 2 * halo)
+        tile_specs = []
+        for core_y0 in range(0, height, core_size):
+            core_y1 = min(height, core_y0 + core_size)
+            y0 = max(0, core_y0 - halo)
+            y1 = min(height, core_y1 + halo)
+            for core_x0 in range(0, width, core_size):
+                core_x1 = min(width, core_x0 + core_size)
+                x0 = max(0, core_x0 - halo)
+                x1 = min(width, core_x1 + halo)
+                tile_specs.append((x0, y0, x1, y1))
 
     raw_circles: List[RawCircle] = []
-    if circles is None:
-        return raw_circles
+    min_dist_sq = float(min_dist) * float(min_dist)
 
-    # Tương thích cả OpenCV 4 (shape (1,N,3)) lẫn OpenCV 5 (shape (N,3)):
-    # chuẩn hoá về mảng 2D (N,3), mỗi hàng là [x,y,r].
-    circ = np.asarray(circles).reshape(-1, 3)
+    for x0, y0, x1, y1 in tile_specs:
+        tile = gray[y0:y1, x0:x1]
+        circles = cv2.HoughCircles(
+            tile, cv2.HOUGH_GRADIENT, dp=1, minDist=min_dist,
+            param1=param1, param2=param2, minRadius=min_radius, maxRadius=max_radius,
+        )
+        if circles is None:
+            continue
 
-    for x, y, r in circ:
-        bbox = (float(x - r), float(y - r), float(x + r), float(y + r))
-        raw_circles.append(RawCircle(
-            id=new_id("rawcirc"),
-            center_px=(float(x), float(y)),
-            radius_px=float(r),
-            confidence=0.75,  # ước lượng cố định — xem docstring
-            bbox_px=bbox,
-        ))
+        # Tương thích cả OpenCV 4 (shape (1,N,3)) lẫn OpenCV 5 (shape (N,3)):
+        # chuẩn hoá về mảng 2D (N,3), mỗi hàng là [x,y,r].
+        circ = np.asarray(circles).reshape(-1, 3)
+        for local_x, local_y, r in circ:
+            x = float(local_x) + x0
+            y = float(local_y) + y0
+
+            # Halo khiến cùng một circle có thể được phát hiện ở hai tile kề
+            # nhau. HoughCircles đã dùng minDist trong từng tile; áp cùng ngưỡng
+            # lên tọa độ global để giữ semantics cũ ở đường seam.
+            if any(
+                (x - existing.center_px[0]) ** 2 + (y - existing.center_px[1]) ** 2
+                < min_dist_sq
+                for existing in raw_circles
+            ):
+                continue
+
+            radius = float(r)
+            bbox = (x - radius, y - radius, x + radius, y + radius)
+            raw_circles.append(RawCircle(
+                id=new_id("rawcirc"),
+                center_px=(x, y),
+                radius_px=radius,
+                confidence=0.75,  # ước lượng cố định — xem docstring
+                bbox_px=bbox,
+            ))
+
     return raw_circles
 
 
