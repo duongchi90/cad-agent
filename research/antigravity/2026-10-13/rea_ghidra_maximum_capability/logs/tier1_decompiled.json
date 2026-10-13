@@ -1,0 +1,123 @@
+{
+  "0x140001000": {
+    "pseudocode": "\r\nvoid FUN_140001000(double *param_1,double *param_2)\r\n\r\n{\r\n  double dVar1;\r\n  \r\n  if (*param_2 < *param_1) {\r\n    *param_1 = *param_2;\r\n  }\r\n  dVar1 = *param_2;\r\n  if (param_1[2] <= dVar1 && dVar1 != param_1[2]) {\r\n    param_1[2] = dVar1;\r\n  }\r\n  if (param_2[1] < param_1[1]) {\r\n    param_1[1] = param_2[1];\r\n  }\r\n  dVar1 = param_2[1];\r\n  if (param_1[3] <= dVar1 && dVar1 != param_1[3]) {\r\n    param_1[3] = dVar1;\r\n  }\r\n  return;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x1400000e4",
+      "0x1400001cc",
+      "0x140001673"
+    ],
+    "decompile_latency_sec": 25.95,
+    "xrefs_latency_sec": 27.95
+  },
+  "0x140001050": {
+    "pseudocode": "\r\nundefined8 FUN_140001050(undefined1 *param_1,ulonglong param_2,longlong param_3,longlong *param_4)\r\n\r\n{\r\n  double *pdVar1;\r\n  double dVar2;\r\n  double dVar3;\r\n  ulonglong uVar4;\r\n  uint uVar5;\r\n  longlong lVar6;\r\n  ulonglong uVar7;\r\n  ulonglong uVar8;\r\n  ulonglong uVar9;\r\n  double adStack_258 [72];\r\n  \r\n  if ((((param_1 == (undefined1 *)0x0) || (param_2 < 3)) || (param_3 == 0)) ||\r\n     ((param_4 == (longlong *)0x0 || (0x20 < param_2)))) {\r\n    return 0xffffffff;\r\n  }\r\n  adStack_258[1] = 2.65249686368293e-314;\r\n  FUN_140001c50((undefined1 *)(adStack_258 + 6),param_1,(param_2 << 4) / 8 << 3);\r\n  uVar9 = 1;\r\n  do {\r\n    uVar5 = (int)uVar9 - 1;\r\n    dVar2 = adStack_258[uVar9 * 2 + 6];\r\n    dVar3 = adStack_258[uVar9 * 2 + 7];\r\n    if (-1 < (int)uVar5) {\r\n      if (3 < (int)uVar9) {\r\n        do {\r\n          uVar4 = (ulonglong)uVar5;\r\n          if ((adStack_258[uVar4 * 2 + 6] <= dVar2) &&\r\n             ((adStack_258[uVar4 * 2 + 6] != dVar2 || (adStack_258[uVar4 * 2 + 7] <= dVar3))))\r\n          goto LAB_14000122e;\r\n          adStack_258[uVar4 * 2 + 8] = adStack_258[uVar4 * 2 + 6];\r\n          adStack_258[uVar4 * 2 + 9] = adStack_258[uVar4 * 2 + 7];\r\n          if ((adStack_258[uVar4 * 2 + 4] <= dVar2) &&\r\n             ((adStack_258[uVar4 * 2 + 4] != dVar2 || (adStack_258[uVar4 * 2 + 5] <= dVar3)))) {\r\n            uVar5 = uVar5 - 1;\r\n            goto LAB_14000122e;\r\n          }\r\n          adStack_258[uVar4 * 2 + 6] = adStack_258[uVar4 * 2 + 4];\r\n          adStack_258[uVar4 * 2 + 7] = adStack_258[uVar4 * 2 + 5];\r\n          if ((adStack_258[uVar4 * 2 + 2] <= dVar2) &&\r\n             ((adStack_258[uVar4 * 2 + 2] != dVar2 || (adStack_258[uVar4 * 2 + 3] <= dVar3)))) {\r\n            uVar5 = uVar5 - 2;\r\n            goto LAB_14000122e;\r\n          }\r\n          adStack_258[uVar4 * 2 + 4] = adStack_258[uVar4 * 2 + 2];\r\n          adStack_258[uVar4 * 2 + 5] = adStack_258[uVar4 * 2 + 3];\r\n          if ((adStack_258[uVar4 * 2] <= dVar2) &&\r\n             ((adStack_258[uVar4 * 2] != dVar2 || (adStack_258[uVar4 * 2 + 1] <= dVar3)))) {\r\n            uVar5 = uVar5 - 3;\r\n            goto LAB_14000122e;\r\n          }\r\n          uVar5 = uVar5 - 4;\r\n          adStack_258[uVar4 * 2 + 2] = adStack_258[uVar4 * 2];\r\n          adStack_258[uVar4 * 2 + 3] = adStack_258[uVar4 * 2 + 1];\r\n        } while (2 < (int)uVar5);\r\n        if ((int)uVar5 < 0) goto LAB_14000122e;\r\n      }\r\n      do {\r\n        uVar4 = (ulonglong)uVar5;\r\n        if ((adStack_258[uVar4 * 2 + 6] <= dVar2) &&\r\n           ((adStack_258[uVar4 * 2 + 6] != dVar2 || (adStack_258[uVar4 * 2 + 7] <= dVar3)))) break;\r\n        uVar5 = uVar5 - 1;\r\n        adStack_258[uVar4 * 2 + 8] = adStack_258[uVar4 * 2 + 6];\r\n        adStack_258[uVar4 * 2 + 9] = adStack_258[uVar4 * 2 + 7];\r\n      } while (-1 < (int)uVar5);\r\n    }\r\nLAB_14000122e:\r\n    uVar9 = uVar9 + 1;\r\n    adStack_258[(longlong)(int)uVar5 * 2 + 8] = dVar2;\r\n    adStack_258[(longlong)(int)uVar5 * 2 + 9] = dVar3;\r\n    if (param_2 <= uVar9) {\r\n      uVar9 = 0;\r\n      uVar4 = 0;\r\n      do {\r\n        uVar7 = uVar9;\r\n        if (1 < uVar7) {\r\n          do {\r\n            adStack_258[1] = 2.65249708502434e-314;\r\n            dVar2 = FUN_140001390((double *)(param_3 + -0x20 + uVar7 * 0x10),\r\n                                  (double *)(param_3 + -0x10 + uVar7 * 0x10),\r\n                                  adStack_258 + uVar4 * 2 + 6);\r\n            if (0.0 < dVar2) break;\r\n            uVar7 = uVar7 - 1;\r\n          } while (1 < uVar7);\r\n        }\r\n        uVar8 = uVar4 + 1;\r\n        dVar2 = adStack_258[uVar4 * 2 + 7];\r\n        pdVar1 = (double *)(param_3 + uVar7 * 0x10);\r\n        *pdVar1 = adStack_258[uVar4 * 2 + 6];\r\n        pdVar1[1] = dVar2;\r\n        uVar9 = uVar7 + 1;\r\n        uVar4 = uVar8;\r\n      } while (uVar8 < param_2);\r\n      do {\r\n        param_2 = param_2 - 1;\r\n        if (param_2 == 0) {\r\n          lVar6 = uVar9 - 1;\r\n          if (uVar9 == 0) {\r\n            lVar6 = 0;\r\n          }\r\n          *param_4 = lVar6;\r\n          return 0;\r\n        }\r\n        if (uVar7 + 2 <= uVar9) {\r\n          do {\r\n            adStack_258[1] = 2.65249714035969e-314;\r\n            dVar2 = FUN_140001390((double *)(param_3 + -0x20 + uVar9 * 0x10),\r\n                                  (double *)(param_3 + -0x10 + uVar9 * 0x10),\r\n                                  adStack_258 + param_2 * 2 + 4);\r\n            if (0.0 < dVar2) break;\r\n            uVar9 = uVar9 - 1;\r\n          } while (uVar7 + 2 <= uVar9);\r\n        }\r\n        dVar2 = adStack_258[param_2 * 2 + 5];\r\n        pdVar1 = (double *)(param_3 + uVar9 * 0x10);\r\n        *pdVar1 = adStack_258[param_2 * 2 + 4];\r\n        pdVar1[1] = dVar2;\r\n        uVar9 = uVar9 + 1;\r\n      } while( true );\r\n    }\r\n  } while( true );\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x1400016c8",
+      "0x140002220",
+      "0x140002240",
+      "0x140002250",
+      "0x140004000"
+    ],
+    "decompile_latency_sec": 29.44,
+    "xrefs_latency_sec": 31.58
+  },
+  "0x140001390": {
+    "pseudocode": "\r\ndouble FUN_140001390(double *param_1,double *param_2,double *param_3)\r\n\r\n{\r\n  return (param_3[1] - param_1[1]) * (*param_2 - *param_1) -\r\n         (param_2[1] - param_1[1]) * (*param_3 - *param_1);\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x140001288",
+      "0x1400012f8",
+      "0x14000175f"
+    ],
+    "decompile_latency_sec": 27.44,
+    "xrefs_latency_sec": 26.39
+  },
+  "0x1400013d0": {
+    "pseudocode": "\r\ndouble FUN_1400013d0(double *param_1,double *param_2)\r\n\r\n{\r\n  return (param_1[1] - param_2[1]) * (param_1[1] - param_2[1]) +\r\n         (*param_1 - *param_2) * (*param_1 - *param_2);\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x140001733",
+      "0x14000174f"
+    ],
+    "decompile_latency_sec": 31.45,
+    "xrefs_latency_sec": 28.15
+  },
+  "0x1400013f0": {
+    "pseudocode": "\r\nvoid FUN_1400013f0(longlong param_1,ulonglong param_2,ulonglong param_3,double param_4,\r\n                  longlong param_5)\r\n\r\n{\r\n  ulonglong uVar1;\r\n  ulonglong uVar2;\r\n  ulonglong uVar3;\r\n  double dVar4;\r\n  undefined4 uVar5;\r\n  undefined4 uVar6;\r\n  undefined4 uVar7;\r\n  undefined4 uVar8;\r\n  \r\n  while( true ) {\r\n    if (param_3 <= param_2 + 1) {\r\n      return;\r\n    }\r\n    uVar2 = param_2 + 1;\r\n    uVar5 = 0;\r\n    uVar7 = 0;\r\n    uVar1 = param_2;\r\n    if (uVar2 < param_3) {\r\n      uVar3 = param_2;\r\n      uVar6 = uVar5;\r\n      uVar8 = uVar7;\r\n      do {\r\n        dVar4 = FUN_140001710((double *)(uVar2 * 0x10 + param_1),\r\n                              (double *)(param_2 * 0x10 + param_1),\r\n                              (double *)(param_3 * 0x10 + param_1));\r\n        uVar5 = uVar6;\r\n        uVar7 = uVar8;\r\n        if ((double)CONCAT44(uVar8,uVar6) <= dVar4 && dVar4 != (double)CONCAT44(uVar8,uVar6)) {\r\n          uVar5 = SUB84(dVar4,0);\r\n          uVar7 = (undefined4)((ulonglong)dVar4 >> 0x20);\r\n        }\r\n        uVar1 = uVar2;\r\n        if (dVar4 < (double)CONCAT44(uVar8,uVar6) || dVar4 == (double)CONCAT44(uVar8,uVar6)) {\r\n          uVar1 = uVar3;\r\n        }\r\n        uVar2 = uVar2 + 1;\r\n        uVar3 = uVar1;\r\n        uVar6 = uVar5;\r\n        uVar8 = uVar7;\r\n      } while (uVar2 < param_3);\r\n    }\r\n    if ((double)CONCAT44(uVar7,uVar5) < param_4 || (double)CONCAT44(uVar7,uVar5) == param_4) break;\r\n    *(undefined1 *)(uVar1 + param_5) = 1;\r\n    FUN_1400013f0(param_1,param_2,uVar1,param_4,param_5);\r\n    param_2 = uVar1;\r\n  }\r\n  return;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x1400014c5",
+      "0x1400015e3",
+      "0x1400021e0",
+      "0x1400021f0",
+      "0x140004030"
+    ],
+    "decompile_latency_sec": 30.66,
+    "xrefs_latency_sec": 30.41
+  },
+  "0x140001520": {
+    "pseudocode": "\r\nundefined8\r\nFUN_140001520(longlong param_1,ulonglong param_2,double param_3,double *param_4,double *param_5,\r\n             undefined4 *param_6,longlong *param_7)\r\n\r\n{\r\n  double *pdVar1;\r\n  double dVar2;\r\n  undefined4 uVar3;\r\n  undefined8 uVar4;\r\n  longlong lVar5;\r\n  ulonglong uVar6;\r\n  ulonglong uVar7;\r\n  ulonglong uVar8;\r\n  longlong local_res8;\r\n  double *local_498;\r\n  ulonglong local_490;\r\n  double local_488;\r\n  undefined8 local_480;\r\n  double local_478;\r\n  undefined8 local_470;\r\n  undefined4 local_468;\r\n  char acStack_461 [41];\r\n  double local_438 [64];\r\n  undefined1 local_238 [528];\r\n  \r\n  if ((((param_1 == 0) || (param_2 < 3)) || (param_3 < 0.0)) ||\r\n     (((param_5 == (double *)0x0 || (param_6 == (undefined4 *)0x0)) ||\r\n      ((param_7 == (longlong *)0x0 || (0x20 < param_2)))))) {\r\n    uVar4 = 0xffffffff;\r\n  }\r\n  else {\r\n    FUN_140001c80(acStack_461 + 1,0,param_2);\r\n    acStack_461[1] = 1;\r\n    acStack_461[param_2] = '\\x01';\r\n    FUN_1400013f0(param_1,0,param_2 - 1,param_3 * param_3,(longlong)(acStack_461 + 1));\r\n    uVar6 = 0;\r\n    uVar7 = 0;\r\n    do {\r\n      uVar8 = uVar7;\r\n      if (acStack_461[uVar6 + 1] != '\\0') {\r\n        uVar8 = uVar7 + 1;\r\n        pdVar1 = (double *)(param_1 + uVar6 * 0x10);\r\n        dVar2 = pdVar1[1];\r\n        local_438[uVar7 * 2] = *pdVar1;\r\n        local_438[uVar7 * 2 + 1] = dVar2;\r\n      }\r\n      uVar6 = uVar6 + 1;\r\n      uVar7 = uVar8;\r\n    } while (uVar6 < param_2);\r\n    local_498 = local_438;\r\n    uVar7 = 1;\r\n    local_488 = local_438[0];\r\n    local_478 = local_438[0];\r\n    local_480 = local_438[1];\r\n    local_470 = local_438[1];\r\n    local_468 = 1;\r\n    local_490 = uVar8;\r\n    if (1 < uVar8) {\r\n      do {\r\n        FUN_140001000(&local_488,local_438 + uVar7 * 2);\r\n        uVar7 = uVar7 + 1;\r\n      } while (uVar7 < uVar8);\r\n    }\r\n    dVar2 = FUN_140001a40((longlong *)&local_498);\r\n    *param_5 = dVar2;\r\n    if (param_4 == (double *)0x0) {\r\n      uVar3 = 0;\r\n    }\r\n    else {\r\n      uVar7 = FUN_140001790((longlong *)&local_498,param_4);\r\n      uVar3 = (undefined4)uVar7;\r\n    }\r\n    *param_6 = uVar3;\r\n    local_res8 = 0;\r\n    uVar4 = FUN_140001050((undefined1 *)local_438,uVar8,(longlong)local_238,&local_res8);\r\n    lVar5 = 0;\r\n    if ((int)uVar4 == 0) {\r\n      lVar5 = local_res8;\r\n    }\r\n    uVar4 = 0;\r\n    *param_7 = lVar5;\r\n  }\r\n  return uVar4;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x140001c3c",
+      "0x140002284",
+      "0x140002294",
+      "0x140004054"
+    ],
+    "decompile_latency_sec": 35.49,
+    "xrefs_latency_sec": 30.9
+  },
+  "0x140001710": {
+    "pseudocode": "\r\ndouble FUN_140001710(double *param_1,double *param_2,double *param_3)\r\n\r\n{\r\n  double dVar1;\r\n  double dVar2;\r\n  \r\n  dVar1 = FUN_1400013d0(param_2,param_3);\r\n  if (1e-09 <= dVar1) {\r\n    dVar2 = FUN_140001390(param_2,param_3,param_1);\r\n    dVar1 = (dVar2 * dVar2) / dVar1;\r\n  }\r\n  else {\r\n    dVar1 = FUN_1400013d0(param_1,param_2);\r\n  }\r\n  return dVar1;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x140001483",
+      "0x140004078"
+    ],
+    "decompile_latency_sec": 29.42,
+    "xrefs_latency_sec": 31.17
+  },
+  "0x140001790": {
+    "pseudocode": "\r\nulonglong FUN_140001790(longlong *param_1,double *param_2)\r\n\r\n{\r\n  double dVar1;\r\n  double dVar2;\r\n  double dVar3;\r\n  double dVar4;\r\n  double dVar5;\r\n  double dVar6;\r\n  ulonglong uVar7;\r\n  longlong lVar8;\r\n  bool bVar9;\r\n  bool bVar10;\r\n  ulonglong uVar11;\r\n  ulonglong uVar12;\r\n  ulonglong uVar13;\r\n  \r\n  if ((param_1 == (longlong *)0x0) || (uVar7 = param_1[1], uVar7 < 3)) {\r\n    return 0xfffffffe;\r\n  }\r\n  dVar1 = *param_2;\r\n  if ((((dVar1 < (double)param_1[2]) || ((double)param_1[4] <= dVar1 && dVar1 != (double)param_1[4])\r\n       ) || (dVar2 = param_2[1], dVar2 < (double)param_1[3])) ||\r\n     ((double)param_1[5] <= dVar2 && dVar2 != (double)param_1[5])) {\r\n    return 0;\r\n  }\r\n  lVar8 = *param_1;\r\n  uVar13 = uVar7 - 1;\r\n  bVar10 = false;\r\n  bVar9 = false;\r\n  uVar11 = 0;\r\n  if (3 < uVar7) {\r\n    do {\r\n      dVar3 = *(double *)(lVar8 + 8 + uVar13 * 0x10);\r\n      dVar4 = *(double *)(lVar8 + 8 + uVar11 * 0x10);\r\n      dVar5 = *(double *)(lVar8 + uVar11 * 0x10);\r\n      if ((dVar2 < dVar4 != dVar2 < dVar3) &&\r\n         (dVar1 < ((*(double *)(lVar8 + uVar13 * 0x10) - dVar5) * (dVar2 - dVar4)) / (dVar3 - dVar4)\r\n                  + dVar5)) {\r\n        bVar9 = !bVar9;\r\n        bVar10 = bVar9;\r\n      }\r\n      dVar3 = *(double *)(lVar8 + 0x18 + uVar11 * 0x10);\r\n      if ((dVar2 < dVar3 != dVar2 < dVar4) &&\r\n         (dVar6 = *(double *)(lVar8 + 0x10 + uVar11 * 0x10),\r\n         dVar1 < ((dVar5 - dVar6) * (dVar2 - dVar3)) / (dVar4 - dVar3) + dVar6)) {\r\n        bVar9 = !bVar9;\r\n        bVar10 = bVar9;\r\n      }\r\n      dVar3 = *(double *)(lVar8 + 0x28 + uVar11 * 0x10);\r\n      dVar4 = *(double *)(lVar8 + 0x20 + uVar11 * 0x10);\r\n      dVar5 = *(double *)(lVar8 + 8 + (uVar11 + 1) * 0x10);\r\n      if ((dVar2 < dVar3 != dVar2 < dVar5) &&\r\n         (dVar1 < ((*(double *)(lVar8 + (uVar11 + 1) * 0x10) - dVar4) * (dVar2 - dVar3)) /\r\n                  (dVar5 - dVar3) + dVar4)) {\r\n        bVar9 = !bVar9;\r\n        bVar10 = bVar9;\r\n      }\r\n      dVar3 = *(double *)(lVar8 + 0x38 + uVar11 * 0x10);\r\n      dVar5 = *(double *)(lVar8 + 8 + (uVar11 + 2) * 0x10);\r\n      if ((dVar2 < dVar3 != dVar2 < dVar5) &&\r\n         (dVar6 = *(double *)(lVar8 + 0x30 + uVar11 * 0x10),\r\n         dVar1 < ((dVar4 - dVar6) * (dVar2 - dVar3)) / (dVar5 - dVar3) + dVar6)) {\r\n        bVar9 = !bVar9;\r\n        bVar10 = bVar9;\r\n      }\r\n      uVar13 = uVar11 + 3;\r\n      uVar11 = uVar11 + 4;\r\n    } while (uVar11 < uVar7 - 3);\r\n    if (uVar7 <= uVar11) goto LAB_140001a09;\r\n  }\r\n  do {\r\n    uVar12 = uVar11;\r\n    dVar3 = *(double *)(lVar8 + 8 + uVar13 * 0x10);\r\n    dVar4 = *(double *)(lVar8 + 8 + uVar12 * 0x10);\r\n    if ((dVar2 < dVar4 != dVar2 < dVar3) &&\r\n       (dVar5 = *(double *)(lVar8 + uVar12 * 0x10),\r\n       dVar1 < ((*(double *)(lVar8 + uVar13 * 0x10) - dVar5) * (dVar2 - dVar4)) / (dVar3 - dVar4) +\r\n               dVar5)) {\r\n      bVar9 = !bVar10;\r\n      bVar10 = bVar9;\r\n    }\r\n    uVar11 = uVar12 + 1;\r\n    uVar13 = uVar12;\r\n  } while (uVar12 + 1 < uVar7);\r\nLAB_140001a09:\r\n  return (ulonglong)bVar9;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x14000169c",
+      "0x14000215c",
+      "0x140002194",
+      "0x1400021a4",
+      "0x140004084"
+    ],
+    "decompile_latency_sec": 33.3,
+    "xrefs_latency_sec": 33.99
+  },
+  "0x140001a40": {
+    "pseudocode": "\r\ndouble FUN_140001a40(longlong *param_1)\r\n\r\n{\r\n  ulonglong uVar1;\r\n  longlong lVar2;\r\n  ulonglong uVar3;\r\n  ulonglong uVar4;\r\n  ulonglong uVar5;\r\n  ulonglong uVar6;\r\n  ulonglong uVar7;\r\n  ulonglong uVar8;\r\n  double dVar9;\r\n  \r\n  if ((param_1 == (longlong *)0x0) || (uVar1 = param_1[1], uVar1 < 3)) {\r\n    return 0.0;\r\n  }\r\n  lVar2 = *param_1;\r\n  dVar9 = 0.0;\r\n  uVar8 = 0;\r\n  if (3 < uVar1) {\r\n    uVar7 = 0;\r\n    do {\r\n      uVar4 = 0;\r\n      if (uVar7 + 1 != uVar1) {\r\n        uVar4 = uVar7 + 1;\r\n      }\r\n      uVar5 = 0;\r\n      if (uVar7 + 2 != uVar1) {\r\n        uVar5 = uVar7 + 2;\r\n      }\r\n      uVar6 = 0;\r\n      if (uVar7 + 3 != uVar1) {\r\n        uVar6 = uVar7 + 3;\r\n      }\r\n      uVar8 = uVar7 + 4;\r\n      uVar3 = 0;\r\n      if (uVar8 != uVar1) {\r\n        uVar3 = uVar8;\r\n      }\r\n      dVar9 = (*(double *)(lVar2 + 0x30 + uVar7 * 0x10) * *(double *)(lVar2 + 8 + uVar3 * 0x10) -\r\n              *(double *)(lVar2 + 0x38 + uVar7 * 0x10) * *(double *)(lVar2 + uVar3 * 0x10)) +\r\n              (*(double *)(lVar2 + 0x20 + uVar7 * 0x10) * *(double *)(lVar2 + 8 + uVar6 * 0x10) -\r\n              *(double *)(lVar2 + 0x28 + uVar7 * 0x10) * *(double *)(lVar2 + uVar6 * 0x10)) +\r\n              (*(double *)(lVar2 + 8 + uVar5 * 0x10) * *(double *)(lVar2 + 0x10 + uVar7 * 0x10) -\r\n              *(double *)(lVar2 + 0x18 + uVar7 * 0x10) * *(double *)(lVar2 + uVar5 * 0x10)) +\r\n              (*(double *)(lVar2 + 8 + uVar4 * 0x10) * *(double *)(lVar2 + uVar7 * 0x10) -\r\n              *(double *)(lVar2 + uVar4 * 0x10) * *(double *)(lVar2 + 8 + uVar7 * 0x10)) + dVar9;\r\n      uVar7 = uVar8;\r\n    } while (uVar8 < uVar1 - 3);\r\n    if (uVar1 <= uVar8) goto LAB_140001ba2;\r\n  }\r\n  do {\r\n    uVar7 = uVar8 + 1;\r\n    uVar4 = 0;\r\n    if (uVar7 != uVar1) {\r\n      uVar4 = uVar7;\r\n    }\r\n    dVar9 = dVar9 + (*(double *)(lVar2 + 8 + uVar4 * 0x10) * *(double *)(lVar2 + uVar8 * 0x10) -\r\n                    *(double *)(lVar2 + 8 + uVar8 * 0x10) * *(double *)(lVar2 + uVar4 * 0x10));\r\n    uVar8 = uVar7;\r\n  } while (uVar7 < uVar1);\r\nLAB_140001ba2:\r\n  return dVar9 * 0.5;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x140001685",
+      "0x140002130",
+      "0x140002140",
+      "0x1400040cc"
+    ],
+    "decompile_latency_sec": 31.22,
+    "xrefs_latency_sec": 30.65
+  },
+  "0x140001bc0": {
+    "pseudocode": "\r\nvoid entry(void)\r\n\r\n{\r\n  undefined4 local_res8 [2];\r\n  longlong local_res10;\r\n  double local_res18 [2];\r\n  double local_68 [13];\r\n  \r\n  local_68[4] = 10.0;\r\n  local_68[5] = 0.0;\r\n  local_68[2] = 0.0;\r\n  local_68[3] = 0.0;\r\n  local_68[6] = 10.0;\r\n  local_68[7] = 10.0;\r\n  local_68[8] = 0.0;\r\n  local_68[9] = 10.0;\r\n  local_68[0] = 5.0;\r\n  local_68[1] = 5.0;\r\n  local_68[10] = 0.0;\r\n  local_68[0xb] = 0.0;\r\n  FUN_140001520((longlong)(local_68 + 2),5,0.5,local_68,local_res18,local_res8,&local_res10);\r\n  return;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x1400000e0",
+      "0x1400040f0"
+    ],
+    "decompile_latency_sec": 29.98,
+    "xrefs_latency_sec": 29.97
+  },
+  "0x140001c50": {
+    "pseudocode": "\r\nundefined1 * FUN_140001c50(undefined1 *param_1,undefined1 *param_2,longlong param_3)\r\n\r\n{\r\n  undefined1 *puVar1;\r\n  undefined1 uVar2;\r\n  \r\n  puVar1 = param_1;\r\n  for (; param_3 != 0; param_3 = param_3 + -1) {\r\n    uVar2 = *param_2;\r\n    param_2 = param_2 + 1;\r\n    *puVar1 = uVar2;\r\n    puVar1 = puVar1 + 1;\r\n  }\r\n  return param_1;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x1400010c8"
+    ],
+    "decompile_latency_sec": 32.06,
+    "xrefs_latency_sec": 28.87
+  },
+  "0x140001c80": {
+    "pseudocode": "\r\nundefined1 * FUN_140001c80(undefined1 *param_1,undefined1 param_2,longlong param_3)\r\n\r\n{\r\n  undefined1 *puVar1;\r\n  \r\n  puVar1 = param_1;\r\n  for (; param_3 != 0; param_3 = param_3 + -1) {\r\n    *puVar1 = param_2;\r\n    puVar1 = puVar1 + 1;\r\n  }\r\n  return param_1;\r\n}\r\n\r\n",
+    "xrefs": [
+      "0x1400015ba"
+    ],
+    "decompile_latency_sec": 33.13,
+    "xrefs_latency_sec": 25.97
+  }
+}

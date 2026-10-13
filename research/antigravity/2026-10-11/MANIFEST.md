@@ -624,7 +624,7 @@
 | `prior_investigations` | [`cadmind_toolpackage_reconstruction.md`](prior_investigations/cadmind_toolpackage_reconstruction.md) | Technical Report | `RESEARCH_ONLY` | `150070edbe90c0dd182757d2ac2b2b184dab12397307abdab672a451d8e84ac3` | CadMind external tool package clean-room reconstruction report |
 | `prior_investigations` | [`cadmind_technical_evidence_report.md`](prior_investigations/cadmind_technical_evidence_report.md) | Technical Report | `RESEARCH_ONLY` | `a2e0bbb683faf9c28edb607a4f74b97c02bb439d1d149437cd6e4003e661c55d` | CadMind technical evidence and binary analysis report |
 | `prior_investigations` | [`rea_evidence_driven_code_avoidance_investigation.md`](prior_investigations/rea_evidence_driven_code_avoidance_investigation.md) | Technical Report | `RESEARCH_ONLY` | `098af87a6b52096b83adab59768bff9313659e6f90b92b931cb242a8d16d871c` | REA evidence-driven code avoidance deep investigation report |
-| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `d654d836979b67e48cb85bd9ea0ec6fba34cab9638ae9831d2fb531f139a97e7` | Master REA knowledge base and anti-repeat lookup catalog (hardened) |
+| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `8efaf302a130c85a81b2fc88762ee742029b260f9d3d7dda0d7a924e20e8897f` | Master REA knowledge base and anti-repeat lookup catalog (hardened) |
 
 ## Verification and Non-Interference Guarantees
 
