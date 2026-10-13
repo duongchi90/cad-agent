@@ -36,6 +36,16 @@ def _is_valid_manual_scale(value: Any) -> bool:
         return False
 
 
+def _is_valid_resumed_manual_scale(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        scale = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(scale) and scale > 0
+
+
 def _stage(state: str = "pending", artifact: str | None = None, digest: str | None = None) -> dict[str, Any]:
     return {"state": state, "artifact": artifact, "sha256": digest, "details": None}
 
@@ -353,7 +363,7 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
                 raise ManifestError("Persisted no-candidate terminal diagnostics are invalid.")
             raise ManifestError(NO_CALIBRATION_CANDIDATE_RESULT)
         raise ManifestError("Auto-calibration candidate manifests cannot be resumed.")
-    if not _is_valid_manual_scale(manifest.get("configuration", {}).get("scale_mm_per_px")):
+    if not _is_valid_resumed_manual_scale(manifest.get("configuration", {}).get("scale_mm_per_px")):
         raise ManifestError("PDF manual scale must be a finite positive number.")
     approval = manifest.get("approvals", {}).get("calibration", {})
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):

@@ -235,12 +235,45 @@ def test_pdf_resume_rejects_changed_source() -> None:
             raise AssertionError("changed PDF was accepted")
 
 
+@pytest.mark.parametrize("scale", ["0.5", " 5e-1 ", 0.5])
+def test_pdf_manual_resume_preserves_finite_positive_numeric_scale_compatibility(
+    tmp_path: Path, scale: str | float
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    manifest_path = output / "pdf-run-manifest.json"
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = read_pdf_manifest(manifest_path)
+    persisted["configuration"]["scale_mm_per_px"] = scale
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+    before = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+
+    run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert {path: path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
+
+
 @pytest.mark.parametrize(
     ("scale", "label"),
-    [(float("nan"), "NaN"), (float("inf"), "+Infinity"), (True, "Boolean True")],
+    [
+        (float("nan"), "NaN"),
+        (float("inf"), "+Infinity"),
+        (True, "Boolean True"),
+        ("nan", "string NaN"),
+        ("inf", "string Infinity"),
+        ("0", "zero string"),
+        ("-0.5", "negative string"),
+        ("not a number", "malformed string"),
+        (None, "null"),
+        ([], "array"),
+        ({}, "object"),
+    ],
 )
 def test_pdf_resume_rejects_invalid_scale_before_cached_render_downstream_work(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scale: float | bool, label: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scale: object, label: str
 ) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "run"
