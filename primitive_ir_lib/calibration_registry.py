@@ -29,7 +29,7 @@ def add_record(
     cho các bản ghi đến từ auto_estimate_calibration() — get_verified_scale()
     sẽ TỪ CHỐI các bản ghi này cho tới khi ai đó đổi lại thành 'verified',
     đúng nguyên tắc không tự tin dùng calibration suy đoán cho DXF sản xuất."""
-    if not math.isfinite(scale_mm_per_px) or scale_mm_per_px <= 0:
+    if isinstance(scale_mm_per_px, bool) or not math.isfinite(scale_mm_per_px) or scale_mm_per_px <= 0:
         raise ValueError("scale_mm_per_px must be finite and positive")
     if not evidence.strip():
         raise ValueError("evidence is required")
@@ -50,7 +50,10 @@ def get_verified_scale(registry_path: Path, identifier: str, image_path: Path) -
         raise ValueError(f"No verified calibration record: {identifier}")
     if record.get("sha256") != file_sha256(image_path):
         raise ValueError("Calibration image hash does not match; recalibration is required")
-    scale_mm_per_px = float(record["scale_mm_per_px"])
+    raw_scale_mm_per_px = record["scale_mm_per_px"]
+    if isinstance(raw_scale_mm_per_px, bool):
+        raise ValueError("Verified calibration scale must be numeric, finite and positive")
+    scale_mm_per_px = float(raw_scale_mm_per_px)
     if not math.isfinite(scale_mm_per_px) or scale_mm_per_px <= 0:
         raise ValueError("Verified calibration scale must be finite and positive")
     return scale_mm_per_px

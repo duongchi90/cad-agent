@@ -162,6 +162,34 @@ def test_registry_with_nonfinite_verified_scale_is_rejected_before_image_staging
     stage_image.assert_not_called()
 
 
+@pytest.mark.parametrize("boolean_scale", [True, False], ids=["true", "false"])
+def test_registry_with_boolean_verified_scale_is_rejected_before_image_staging(
+    tmp_path, boolean_scale: bool,
+):
+    image_path = tmp_path / "drawing.png"
+    registry_path = tmp_path / "calibrations.json"
+    image_path.write_bytes(b"synthetic owned image")
+    add_record(registry_path, "fixture", image_path, 0.25, "Known synthetic reference")
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    payload["records"][0]["scale_mm_per_px"] = boolean_scale
+    registry_path.write_text(json.dumps(payload), encoding="utf-8")
+    argv = [
+        "run_image", "--image", str(image_path), "--output", str(tmp_path / "ir.json"),
+        "--calibration-registry", str(registry_path), "--calibration-id", "fixture",
+    ]
+
+    with (
+        patch("sys.argv", argv),
+        patch("primitive_ir_lib.run_image._configure_console_output"),
+        patch("primitive_ir_lib.run_image.run") as stage_image,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 2
+    stage_image.assert_not_called()
+
+
 def test_auto_candidate_stays_review_only_through_primitive_and_registry_outputs(tmp_path):
     image_path = tmp_path / "synthetic.png"
     output_path = tmp_path / "primitive_ir.json"
