@@ -251,6 +251,8 @@ def auto_estimate_calibration(
     for text in raw_texts:
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
+        if text.parsed_value <= 0:
+            continue
         line = find_nearest_line(
             text, raw_lines, max_distance_px=max_distance_px,
             angle_tolerance_deg=angle_tolerance_deg, image_bgr=image_bgr,
@@ -261,6 +263,8 @@ def auto_estimate_calibration(
         if pixel_length <= 0:
             continue
         scale = text.parsed_value / pixel_length
+        if round(scale, 6) <= 0:
+            continue
         candidates.append((text, line, scale))
         if not require_consensus:
             break  # hành vi cũ: dùng ngay ứng viên đầu tiên, không thu thập thêm
@@ -278,6 +282,7 @@ def auto_estimate_calibration(
                 f" (cần >= {min_consensus_candidates} để kiểm tra đồng thuận) —"
                 " CHƯA xác minh đồng thuận, dùng thận trọng.]"
             )
+        cal.status = "needs_verification"
         return cal
 
     scales = [c[2] for c in candidates]
@@ -294,6 +299,7 @@ def auto_estimate_calibration(
         agreeing, key=lambda c: abs(c[2] - median_scale)
     )
     cal = estimate_calibration_from_reference(best_text, best_line, image_height_px, unit=unit)
+    cal.status = "needs_verification"
     cal.reference_note = (
         (cal.reference_note or "")
         + f" [Đồng thuận: {len(agreeing)}/{len(candidates)} ứng viên dimension_value"
