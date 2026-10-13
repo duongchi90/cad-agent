@@ -392,6 +392,51 @@ def test_review_insert_passes_on_correctly_built_component():
     print("OK   test_review_insert_passes_on_correctly_built_component")
 
 
+@pytest.mark.parametrize(
+    ("field", "mismatch_field"),
+    [
+        ("xscale", "xscale"),
+        ("yscale", "yscale"),
+        ("zscale", "zscale"),
+        ("rotation", "rotation_deg"),
+    ],
+)
+def test_review_rejects_nonfinite_insert_transform_after_saved_roundtrip(
+    tmp_path, field, mismatch_field,
+):
+    if not _HAS_EZDXF:
+        pytest.skip("ezdxf is required for saved/reopened INSERT evidence")
+
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    written = build_result.written_component_by_part_id[part_id]
+    written_key = "rotation_deg" if field == "rotation" else field
+    expected_before = written[written_key]
+    assert math.isfinite(expected_before)
+
+    edit_doc = ezdxf.readfile(out_path)
+    entity = edit_doc.entitydb.get(build_result.component_handle_by_part_id[part_id])
+    setattr(entity.dxf, field, math.nan)
+    edit_doc.saveas(out_path)
+
+    reopened_doc = ezdxf.readfile(out_path)
+    reopened_entity = reopened_doc.entitydb.get(
+        build_result.component_handle_by_part_id[part_id]
+    )
+    actual_after_reopen = getattr(reopened_entity.dxf, field)
+    assert math.isnan(actual_after_reopen), "serialized DXF must retain the real NaN"
+    assert written[written_key] == expected_before, "builder evidence must remain frozen"
+
+    bytes_before_review = Path(out_path).read_bytes()
+    review_result = review_dxf(build_result)
+
+    assert not review_result.passed, review_result.format_report()
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == mismatch_field
+        for mismatch in review_result.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == bytes_before_review, "review must not mutate DXF"
+
+
 def test_review_flags_insert_handle_not_found_after_tamper():
     if not _HAS_EZDXF:
         print("SKIP test_review_flags_insert_handle_not_found_after_tamper — chưa cài ezdxf")
