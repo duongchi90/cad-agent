@@ -24,6 +24,10 @@ Verifies:
    yields identical placement results via canonical spec sorting.
 8. MF-07 Regression / R2.B (H20 Real Scoring Path Priority): A candidate with 0 hard collisions and multiple
    soft extension crossings strictly beats a candidate with >= 1 hard collision on the real scoring path.
+9. Residual R1 Regression (Unary Extension Crossing Semantic Parity): A non-measured geometry segment
+   intersecting both ext1 and ext2 of the same placed dimension contributes exactly two soft crossing
+   penalties in candidate scoring (300.0) and exactly two extension_unwanted_crossings in the scene evaluator,
+   while endpoint touches and measured-segment geometry are excluded by both.
 
 Evidence Tier: BOUNDED_SYNTHETIC_RESEARCH_ORACLE
 Note: Standalone prototype oracle; not a call through production builder owners or native DXF entity roundtrip.
@@ -47,6 +51,7 @@ from benchmark_dimension_placement import (
     create_fixtures,
     dimensions_match,
     score_candidate,
+    count_unary_extension_crossings,
     segments_intersect,
     bboxes_overlap,
     segment_intersects_bbox,
@@ -290,7 +295,70 @@ def run_oracle_tests():
     assert eval_h20.extension_unwanted_crossings >= 10, f"Expected >= 10 soft crossings, got {eval_h20.extension_unwanted_crossings}"
     print("Test 8 PASS: H20 hard collision priority verified on real scoring path (0 hard + 1500 soft strictly beats 1 hard + 1 soft).")
 
-    print("\nALL 8 ORACLE TESTS PASSED (100% Success). Oracle verified.")
+    # -----------------------------------------------------------------------
+    # Test 9 (Residual R1 Regression): Unary extension crossing semantic parity
+    # -----------------------------------------------------------------------
+    # Single geometry segment intersecting both ext1 and ext2 of a placed dimension
+    g_crosses_both = ((50.0, 104.0), (250.0, 104.0))
+    # Endpoint touch segment touching ext1 start at (100.0, 101.0)
+    g_touch_ext1 = ((100.0, 101.0), (90.0, 101.0))
+    # Measured segment itself present in geometry_segments
+    g_measured = ((100.0, 100.0), (200.0, 100.0))
+
+    geom_r1 = [g_measured, g_crosses_both, g_touch_ext1]
+    sc_r1 = Scene(
+        name="test_unary_extension_parity",
+        description="Focused test where one geometry segment intersects both ext1 and ext2",
+        measured_segments=[MeasuredSegment("D1", (100.0, 100.0), (200.0, 100.0))],
+        geometry_segments=geom_r1,
+        annotation_obstacles=[],
+    )
+
+    base_r1, dim_r1, ext1_r1, ext2_r1, tbox_r1, dim_len_r1 = compute_dimension_geometry(
+        (100.0, 100.0), (200.0, 100.0), 8.0, +1
+    )
+
+    # 1. Direct helper test on the single geometry segment
+    crossings_single = count_unary_extension_crossings(ext1_r1, ext2_r1, g_crosses_both, g_measured)
+    assert crossings_single == 2, f"count_unary_extension_crossings must report 2 for segment intersecting both witness lines, got {crossings_single}"
+
+    # 2. Endpoint touch and measured segment exclusions
+    assert count_unary_extension_crossings(ext1_r1, ext2_r1, g_touch_ext1, g_measured) == 0, "Endpoint touch must be excluded"
+    assert count_unary_extension_crossings(ext1_r1, ext2_r1, g_measured, g_measured) == 0, "Measured segment itself must be excluded"
+
+    # 3. Scorer execution: must observe 2 unary crossings -> 2 * 150.0 = 300.0 soft penalty
+    hard_r1, soft_r1 = score_candidate(
+        dim_r1, ext1_r1, ext2_r1, tbox_r1, +1, 0, sc_r1, [], g_measured
+    )
+    assert hard_r1 == 0, f"Expected 0 hard collisions, got {hard_r1}"
+    assert soft_r1 == 300.0, f"Expected soft penalty of 300.0 (2 * 150.0), got {soft_r1}"
+
+    # 4. Evaluator execution: must report extension_unwanted_crossings == 2 (not 1)
+    placed_r1 = [PlacedDimension(
+        spec_id="D1",
+        side=+1,
+        lane_index=0,
+        offset=8.0,
+        base=base_r1,
+        dim_line_start=dim_r1[0],
+        dim_line_end=dim_r1[1],
+        ext_line_1_start=ext1_r1[0],
+        ext_line_1_end=ext1_r1[1],
+        ext_line_2_start=ext2_r1[0],
+        ext_line_2_end=ext2_r1[1],
+        text_bbox=tbox_r1,
+        measured_length=100.0,
+        dimension_length=dim_len_r1,
+    )]
+    eval_r1 = evaluate_placement_scene(sc_r1, placed_r1, "Test_R1_Parity")
+    assert eval_r1.collision_count == 0, f"Expected 0 collisions, got {eval_r1.collision_count}"
+    assert eval_r1.dim_to_geometry_crossings == 0, f"Expected 0 dim_geom crossings, got {eval_r1.dim_to_geometry_crossings}"
+    assert eval_r1.dim_to_annotation_overlaps == 0, f"Expected 0 annotation overlaps, got {eval_r1.dim_to_annotation_overlaps}"
+    assert eval_r1.unresolved_dimensions == 0, f"Expected 0 unresolved dimensions, got {eval_r1.unresolved_dimensions}"
+    assert eval_r1.extension_unwanted_crossings == 2, f"Evaluator must report exactly 2 extension crossings, got {eval_r1.extension_unwanted_crossings}"
+    print("Test 9 PASS: Unary extension crossing semantic parity verified (single geometry segment crossing both ext1 and ext2 yields 2 scorer soft contributions and 2 evaluator crossings, with 0 hard collisions).")
+
+    print("\nALL 9 ORACLE TESTS PASSED (100% Success). Oracle verified.")
     print("PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE")
 
 

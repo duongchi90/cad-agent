@@ -35,7 +35,7 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 ├── FAILURE_MODES_AND_LIMITS.md                # Structural failure modes, boundary limits, and disclaimers
 ├── benchmark_dimension_placement.py           # 10-fixture automated benchmark runner & evaluation harness
 ├── benchmark_results.json                     # Complete quantitative benchmark results dataset
-└── TRANSFER_ORACLE.py                         # Standalone clean-room test oracle (8/8 tests PASS)
+└── TRANSFER_ORACLE.py                         # Standalone clean-room test oracle (9/9 tests PASS)
 ```
 
 ---
@@ -52,9 +52,9 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 3. **Formal Invariant vs Research Heuristic Scope:**
    - **`PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm`:** Definition point identity ($p_1, p_2$) is maintained algebraically in the prototype geometry model by construction.
    - **`PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE`:** Native DXF DIMENSION entity rendering and binary AutoCAD database roundtrip were not evaluated by this oracle.
-   - **`EXTENSION_UNWANTED_CROSSINGS = 12 (BASELINE) VS 4 (CANDIDATE)`:** Evaluated using unified pairwise dim/ext soft interaction semantics matching candidate scoring.
+   - **`EXTENSION_UNWANTED_CROSSINGS = 12 (BASELINE) VS 4 (CANDIDATE)`:** Evaluated using unified pairwise dim/ext soft interaction semantics and unary `count_unary_extension_crossings` matching candidate scoring.
    - **`PLACEMENT_DISPLACEMENT = NOT_MEASURED`:** Displacement relative to unguided baseline is not recorded as a quality metric.
-   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions full-field identical within 1e-9 tolerance) and 3 runs on Fixture 4.
+   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions full-field equal within 1e-9 tolerance) and 3 runs on Fixture 4.
    - **`BASE_FLOOR_HEURISTIC`:** Candidate base floor $\max(L \cdot 0.08, 6.0\text{ mm})$ vs baseline $\max(L \cdot 0.08, 5.0\text{ mm})$ and lane step increment $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ are empirical research heuristic model changes, not drafting standards.
    - **`SELECTION_PRIORITY_H20`:** Hard collisions strictly dominate candidate selection over soft extension crossings ($\text{Primary Key} = \text{hard\_collision\_count}$, $\text{Secondary Key} = \text{soft\_penalty\_score}$).
 4. **Anti-Bloat & Zero-Dependency Profile:**
@@ -83,8 +83,9 @@ Test 5 PASS: Fixture 9 baseline escaped top sheet border (out-of-bounds); candid
 Test 6 PASS: Evaluator pairwise symmetry verified on text-line crossing (order-invariant, both dimensions unresolved).
 Test 7 PASS: Input-list ordering independence verified on Fixture 8 (forward vs reversed specs yield identical placements).
 Test 8 PASS: H20 hard collision priority verified on real scoring path (0 hard + 1500 soft strictly beats 1 hard + 1 soft).
+Test 9 PASS: Unary extension crossing semantic parity verified (single geometry segment crossing both ext1 and ext2 yields 2 scorer soft contributions and 2 evaluator crossings, with 0 hard collisions).
 
-ALL 8 ORACLE TESTS PASSED (100% Success). Oracle verified.
+ALL 9 ORACLE TESTS PASSED (100% Success). Oracle verified.
 PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE
 ```
 

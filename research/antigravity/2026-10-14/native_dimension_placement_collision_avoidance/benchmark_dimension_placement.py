@@ -302,6 +302,35 @@ def place_dimensions_baseline(scene: Scene) -> List[PlacedDimension]:
 # Candidate Policy: Deterministic Multi-Lane Dual-Side Placement
 # ---------------------------------------------------------------------------
 
+def count_unary_extension_crossings(
+    ext1: Segment2D,
+    ext2: Segment2D,
+    g_seg: Segment2D,
+    measured_seg: Optional[Segment2D] = None,
+) -> int:
+    """
+    Count unwanted extension witness line crossings against a model geometry segment.
+    Excludes the measured segment itself and endpoint touches where witness lines start.
+    Evaluates ext1 and ext2 independently, returning 0, 1, or 2 crossings.
+    """
+    if measured_seg is not None:
+        if g_seg == measured_seg or (g_seg[1] == measured_seg[0] and g_seg[0] == measured_seg[1]):
+            return 0
+
+    crossings = 0
+    if segments_intersect(ext1, g_seg):
+        if math.hypot(g_seg[0][0] - ext1[0][0], g_seg[0][1] - ext1[0][1]) > 1e-4 and \
+           math.hypot(g_seg[1][0] - ext1[0][0], g_seg[1][1] - ext1[0][1]) > 1e-4:
+            crossings += 1
+
+    if segments_intersect(ext2, g_seg):
+        if math.hypot(g_seg[0][0] - ext2[0][0], g_seg[0][1] - ext2[0][1]) > 1e-4 and \
+           math.hypot(g_seg[1][0] - ext2[0][0], g_seg[1][1] - ext2[0][1]) > 1e-4:
+            crossings += 1
+
+    return crossings
+
+
 def score_candidate(
     dim_seg: Segment2D,
     ext1: Segment2D,
@@ -348,17 +377,8 @@ def score_candidate(
 
     # 5. Extension lines crossing model geometry (unwanted witness crossing: soft penalty)
     for g_seg in scene.geometry_segments:
-        if g_seg == measured_seg or (g_seg[1] == measured_seg[0] and g_seg[0] == measured_seg[1]):
-            continue
-        # Extension lines often touch adjacent geometry at p1 or p2; only penalize if intersecting other segments
-        if segments_intersect(ext1, g_seg):
-            if math.hypot(g_seg[0][0] - ext1[0][0], g_seg[0][1] - ext1[0][1]) > 1e-4 and \
-               math.hypot(g_seg[1][0] - ext1[0][0], g_seg[1][1] - ext1[0][1]) > 1e-4:
-                soft_penalty += 150.0
-        if segments_intersect(ext2, g_seg):
-            if math.hypot(g_seg[0][0] - ext2[0][0], g_seg[0][1] - ext2[0][1]) > 1e-4 and \
-               math.hypot(g_seg[1][0] - ext2[0][0], g_seg[1][1] - ext2[0][1]) > 1e-4:
-                soft_penalty += 150.0
+        crossings = count_unary_extension_crossings(ext1, ext2, g_seg, measured_seg)
+        soft_penalty += crossings * 150.0
 
     # 6. Interaction with already placed dimensions
     for p in already_placed:
@@ -507,11 +527,14 @@ def evaluate_placement_scene(
             max_proto_err = err
 
     # 1. Unary checks per placed dimension
+    spec_map = {s.spec_id: (s.start, s.end) for s in scene.measured_segments}
+
     for i, p in enumerate(placed):
         dim_seg = (p.dim_line_start, p.dim_line_end)
         ext1 = (p.ext_line_1_start, p.ext_line_1_end)
         ext2 = (p.ext_line_2_start, p.ext_line_2_end)
         t_box = p.text_bbox
+        measured_seg = spec_map.get(p.spec_id)
 
         # Out of bounds check
         sb = scene.sheet_boundary
@@ -527,8 +550,8 @@ def evaluate_placement_scene(
             if segment_intersects_bbox(g, t_box):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
-            if segments_intersect(ext1, g) or segments_intersect(ext2, g):
-                ext_crossings += 1
+
+            ext_crossings += count_unary_extension_crossings(ext1, ext2, g, measured_seg)
 
             # Clearance check
             d1 = point_segment_distance(p.base, g)
@@ -862,8 +885,8 @@ def run_benchmark() -> Tuple[List[PlacementEvaluation], Dict[str, Any]]:
     repeatability_pct = (repeat_matches / total_dims * 100.0) if total_dims > 0 else 0.0
     summary_stats["measured_repeatability_tested_fixtures_pct"] = repeatability_pct
     summary_stats["repeatability_scope"] = (
-        f"{repeat_matches}/{total_dims} dimensions full-field identical across 2 repeated runs on all "
-        f"{len(scenes)} synthetic fixtures (Fixture 4 tested across 3 runs in oracle)"
+        f"{repeat_matches}/{total_dims} dimensions full-field equal within 1e-9 across 2 repeated runs on all "
+        f"{len(scenes)} tested synthetic fixtures (Fixture 4 tested across 3 runs in oracle)"
     )
 
     return evaluations, summary_stats

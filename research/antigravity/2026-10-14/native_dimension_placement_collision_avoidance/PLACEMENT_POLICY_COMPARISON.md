@@ -67,7 +67,7 @@ All values in this table match `benchmark_results.json` exactly (regenerated fro
 3. **`DIMENSION_TO_ANNOTATION_OVERLAPS`:**
    Formally defined via axis-aligned bounding box and segment-box intersection.
 4. **`EXTENSION_UNWANTED_CROSSINGS`:**
-   Formally defined to match candidate scoring semantics: unary crossings (extension witness lines crossing non-measured model geometry) PLUS pairwise soft interactions for unordered pairs $i < j$ ($p_1.\text{ext1} \times p_2.\text{dim\_line}$, $p_1.\text{ext2} \times p_2.\text{dim\_line}$, $p_2.\text{ext1} \times p_1.\text{dim\_line}$, $p_2.\text{ext2} \times p_1.\text{dim\_line}$).
+   Formally defined to match candidate scoring semantics: unary crossings via `count_unary_extension_crossings` (evaluating ext1 and ext2 independently against non-measured model geometry, where a segment crossing both witness lines contributes 2 crossings, with measured-segment and endpoint-touch exclusions) PLUS pairwise soft interactions for unordered pairs $i < j$ ($p_1.\text{ext1} \times p_2.\text{dim\_line}$, $p_1.\text{ext2} \times p_2.\text{dim\_line}$, $p_2.\text{ext1} \times p_1.\text{dim\_line}$, $p_2.\text{ext2} \times p_1.\text{dim\_line}$). The 10 synthetic fixture totals remain 12 baseline / 4 candidate after semantic repair.
 5. **`DETERMINISTIC_REPEATABILITY (TESTED FIXTURES)`:**
    Formally verified as `FULL_FIELD_EQUAL_WITHIN_1E-9_ON_TESTED_FIXTURES` across all `PlacedDimension` fields across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions matching) and 3 runs on Fixture 4 in the oracle ($100.0\%$). Repeatability is bounded to tested synthetic fixtures under canonical spec sorting.
 6. **`PLACEMENT_DISPLACEMENT`:**
