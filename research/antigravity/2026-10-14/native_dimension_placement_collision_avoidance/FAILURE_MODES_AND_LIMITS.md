@@ -1,6 +1,6 @@
 # FAILURE_MODES_AND_LIMITS: Native Dimension Placement Hazards (REA-023)
 
-- **Document ID:** `REA_DIM_PLACEMENT_FAILURES_V1`
+- **Document ID:** `REA_DIM_PLACEMENT_FAILURES_V2`
 - **Role:** `ANTIGRAVITY_RESEARCH_EXECUTOR`
 - **Project:** `duongchi90/cad-agent`
 - **Date:** 2026-10-14
@@ -11,16 +11,16 @@
 
 ## 1. Overview of Placement Hazards
 
-While the discrete multi-lane dual-side candidate policy successfully resolves all collisions on the 10 evaluated synthetic fixtures, automated CAD dimension placement possesses inherent limitations. This document details each structural failure mode, boundary conditions, and explicit scope limits.
+While the discrete multi-lane dual-side candidate policy successfully avoids collisions on the 10 evaluated synthetic fixtures, automated CAD dimension placement possesses inherent limitations. 0 collisions is strictly an empirical outcome on these tested scenes, not a universal guarantee. This document details each structural failure mode, boundary conditions, and explicit scope limits.
 
 ---
 
 ## 2. Structural Failure Modes
 
-### Failure Mode 1: Both Sides Blocked (Symmetric Entrapment)
-- **Hazard:** When a measured segment lies inside a confined internal channel or slot where obstacles exist at distances $\le d_{\text{max}}$ on *both* normal sides $+n$ and $-n$.
+### Failure Mode 1: Both Sides Blocked (Symmetric Entrapment / Pocket Saturation)
+- **Hazard:** When a measured segment lies inside a confined internal channel or pocket where obstacles exist at distances $\le d_{\text{max}}$ on *both* normal sides $+n$ and $-n$.
 - **Behavior:** All 6 candidate positions accumulate collision penalties ($P \ge 1000$).
-- **Handling in Candidate Policy:** The policy selects the least-penalized candidate (e.g. extension crossing rather than dimension text overlap), but the scene remains strictly flagged as an `unresolved_dimension`.
+- **Handling in Candidate Policy:** The policy selects the least-penalized candidate (e.g. extension line crossing rather than dimension text overlap), but the dimension accumulates non-zero penalty and cannot be placed collision-free.
 - **Limitation:** In dense mechanical views, automated placement without leader lines or view clipping cannot eliminate all collisions when clearance is physically unavailable.
 
 ### Failure Mode 2: Lane Escape from Local Context (Excessive Offset)
@@ -49,7 +49,13 @@ While the discrete multi-lane dual-side candidate policy successfully resolves a
 
 > [!IMPORTANT]
 > **UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN.**
-> The lane step increment $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$ and base offset formula $d_0 = \max(L \cdot 0.08, 6.0\text{ mm})$ are **fixture-specific empirical heuristics** derived from drafting conventions. They do NOT constitute an all-scale universal drafting constant.
+> The lane step increment $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$ and base offset formula $d_0 = \max(L \cdot 0.08, 6.0\text{ mm})$ are **research heuristics** chosen for the synthetic benchmark. They do NOT constitute an all-scale universal drafting constant or AutoCAD vendor default.
+>
+> **COLLISION_FREE_GUARANTEE = NOT_PROVEN.**
+> Zero collisions is the measured result across the 10 synthetic fixtures evaluated. The discrete policy cannot guarantee collision-free placement when physical clearance is absent on both sides across all lanes.
+>
+> **PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE.**
+> Measurement error = 0.000 mm is verified strictly within the standalone prototype geometry model by algebraic construction. Native AutoCAD/ezdxf DIMENSION entity rendering and roundtrip were not executed by this research oracle.
 >
 > **SYNTHETIC_SUCCESS != PROFESSIONAL_DRAFTING_QUALITY.**
 > Zero collisions on the 10 synthetic fixtures demonstrates that dual-side search and multi-lane stepping eliminate trivial fixed-offset collisions. It does NOT prove that generated drawings meet full professional human drafting aesthetics across arbitrary multi-view complex assemblies.

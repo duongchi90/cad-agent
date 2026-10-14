@@ -1,11 +1,11 @@
 # Proactive Research Precompute: Native Dimension Placement Collision Avoidance (REA-023)
 
-- **Document ID:** `REA_DIM_PLACEMENT_PRECOMPUTE_V1`
+- **Document ID:** `REA_DIM_PLACEMENT_PRECOMPUTE_V2`
 - **Role:** `ANTIGRAVITY_RESEARCH_EXECUTOR`
 - **Workstation Role:** `ANTI_HOME_RESEARCH_MACHINE`
 - **Project:** `duongchi90/cad-agent`
 - **Date:** 2026-10-14
-- **Basis Commit:** `c8c34af074497aeaf24e53c57665a0f10170fab0` (`origin/research/antigravity-2026-10-11`)
+- **Basis Commit:** `473c1eb0de262e2b27cd007291d1b0d073f2e6e1` (`origin/research/antigravity-2026-10-11`)
 - **Capability:** `NATIVE_DIMENSION_PLACEMENT_COLLISION_AVOIDANCE`
 - **REA ID:** `REA-023`
 - **Disposition:** `RESEARCH_PRIOR`
@@ -18,9 +18,9 @@
 
 In native DXF dimension generation (`dxf_builder_lib/builder.py::_add_confirmed_dimensions`), linear dimensions are currently placed along a single deterministic left-hand outward normal at a fixed proportional offset:
 $$d = \max(L \cdot 0.08, 5.0\text{ mm})$$
-While this preserves exact physical measurement truth ($p_1, p_2$), it provides zero obstacle awareness, alternative side evaluation, or lane stacking. When measured features are near internal geometry pockets, annotation note blocks, adjacent parallel edges, or sheet borders, the baseline creates severe collisions and unreadable drawings.
+While this preserves physical measurement truth ($p_1, p_2$), it provides zero obstacle awareness, alternative side evaluation, or lane stacking. When measured features are near internal geometry pockets, annotation note blocks, adjacent parallel edges, or sheet borders, the baseline creates collisions and unreadable drawings.
 
-This research evaluates whether a bounded, lightweight clean-room algorithm transfer (evaluating discrete $\pm \mathbf{n}$ normal sides and discrete stacked offset lanes) can eliminate baseline drafting collisions while strictly preserving exact measurement truth ($|L_{\text{dim}} - L_{\text{true}}| \equiv 0.0$).
+This research evaluates whether a bounded, lightweight clean-room algorithm transfer (evaluating discrete $\pm \mathbf{n}$ normal sides and discrete stacked offset lanes) can avoid baseline drafting collisions on tested fixtures while preserving prototype measurement truth ($|L_{\text{dim}} - L_{\text{true}}| \equiv 0.0$).
 
 ---
 
@@ -46,12 +46,14 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
    - Across 10 canonical fixtures, the production baseline produced **16 collisions across 8 failed scenes**.
    - Primary failure causes: single-side blindness when $+n$ is blocked by geometry or notes (Fixtures 6, 7), identical lane stacking overlap on parallel edges (Fixtures 4, 5, 8, 10), and drawing sheet boundary escape (Fixture 9).
 2. **Candidate Policy Performance:**
-   - The multi-lane dual-side candidate policy achieved **0 collisions across all 10 fixtures** (100% collision elimination on tested synthetic scenes).
-   - Side-flipping ($s = -1$) cleanly avoided obstacles on Fixtures 6, 7, and 9.
+   - The multi-lane dual-side candidate policy achieved **0 collisions across all 10 fixtures** (collision avoidance across all tested synthetic scenes).
+   - Side-flipping ($s = -1$) avoided obstacles on Fixtures 6, 7, and 9.
    - Discrete lane stepping ($k \in \{0, 1, 2\}$) resolved all parallel dimension overlaps on Fixtures 4, 5, and 10.
-3. **Formal Invariant Guarantees:**
-   - **`MEASUREMENT_ERROR = 0.000000 mm`:** Exact definition point identity ($p_1, p_2$) is maintained; measurement length is strictly immutable.
-   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Identical floating-point coordinates across repeated runs.
+3. **Formal Invariant vs Research Heuristic Scope:**
+   - **`PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm`:** Definition point identity ($p_1, p_2$) is maintained algebraically in the prototype geometry model by construction.
+   - **`PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE`:** Native DXF DIMENSION entity rendering and binary AutoCAD database roundtrip were not evaluated by this oracle.
+   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions matching) and 3 runs on Fixture 4.
+   - **`UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN`:** The lane step increment $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ and base offset are empirical research heuristics, not universal standards.
 4. **Anti-Bloat & Zero-Dependency Profile:**
    - Pure Python 2D segment-box geometric primitives. Zero new libraries, zero global solver daemons, zero ML models. Evaluation time is under $25\ \mu\text{s}$ per dimension.
 
@@ -67,14 +69,15 @@ Execution command:
 Output:
 ```text
 === Running REA-023 Native Dimension Placement Collision Avoidance Transfer Oracle ===
-Test 1 PASS: Exact measurement length invariant verified across all 10 fixtures (max error = 0.000000 mm).
-Test 2 PASS: Deterministic repeatability verified across repeated runs on Fixture 4 (100.0% coordinate match).
+Test 1 PASS: Prototype geometric measurement length invariant verified across all 10 fixtures (max error = 0.000000 mm).
+Test 2 PASS: Deterministic repeatability verified across 3 repeated runs on Fixture 4 (100.0% coordinate match; bounded to tested synthetic fixtures).
 Test 3A PASS: Fixture 6 baseline had 2 collisions on +normal side; candidate selected side=-1 with 0 collisions.
 Test 3B PASS: Fixture 7 baseline had 2 collisions on +normal side; candidate selected side=-1 with 0 collisions.
 Test 4 PASS: Fixture 4 baseline had 1 collisions; candidate separated parallel dimensions into non-conflicting lanes/sides (0 collisions).
 Test 5 PASS: Fixture 9 baseline escaped top sheet border (out-of-bounds); candidate flipped inward to side=-1 with 0 boundary collisions.
 
 ALL 5 ORACLE TESTS PASSED (100% Success). Oracle verified.
+PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE
 ```
 
 ---
@@ -83,8 +86,11 @@ ALL 5 ORACLE TESTS PASSED (100% Success). Oracle verified.
 
 - **Identifier:** `REA-023`
 - **Capability:** `NATIVE_DIMENSION_PLACEMENT_COLLISION_AVOIDANCE`
-- **External Source:** ASME Y14.5 / ISO 129-1 drafting conventions, AutoCAD `DIMDLI` system variable contract, Christensen et al. (1995) PFLP discrete candidate model
-- **Reuse Class:** `ALGORITHM_TRANSFER` (clean-room candidate selection pattern using existing `ezdxf` geometry primitives)
+- **External Sources & Licenses:**
+  - ASME Y14.5 / ISO 129-1: `COPYRIGHTED_SPECIFICATION_OR_DOCUMENTATION_PRIOR`, `DIRECT_CODE_REUSE=NO`
+  - AutoCAD DIMDLI / DIMBASELINE: `PROPRIETARY_DOCUMENTATION_OR_BEHAVIORAL_PRIOR`, `DIRECT_CODE_REUSE=NO`
+  - ezdxf (1.4.4) LinearDimension API: `MIT`, `DEPENDENCY_REUSE`, `DIRECT_CODE_REUSE=YES`
+  - Christensen et al. (1995) PFLP: `ACADEMIC_ALGORITHMIC_PRIOR`, `ALGORITHM_TRANSFER`, `DIRECT_CODE_REUSE=NO` (clean-room transfer only)
 - **Current Owner:** `dxf_builder_lib/builder.py::_add_confirmed_dimensions`
 - **Condition for Future Transfer:** Only after measured product RED on real drawing comparisons
 - **Production Transfer Authorized:** `NO`

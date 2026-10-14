@@ -835,12 +835,12 @@
 ---
 
 ### REA-023: NATIVE_DIMENSION_PLACEMENT_COLLISION_AVOIDANCE
-- **CAPABILITY:** Deterministic, collision-free native dimension placement selecting non-overlapping offset lanes and sides while preserving exact measurement truth ($p_1, p_2$ definition points).
-- **EXTERNAL_SOURCE:** ASME Y14.5-2018 / ISO 129-1 / Christensen, Marks, Shieber (1995) Point Feature Label Placement (PFLP) discrete candidate model / AutoCAD `DIMDLI` spacing convention / `ezdxf` `add_linear_dim`.
-- **SOURCE_TYPE:** `ALGORITHM_PAPER` (PFLP discrete search) / `STANDARDS_DOC` (ASME Y14.5, ISO 129-1).
-- **EXACT_VERSION_COMMIT:** `ezdxf>=1.4.0` (`add_linear_dim`), ASME Y14.5-2018 Section 4.3, ISO 129-1:2018.
+- **CAPABILITY:** Deterministic candidate-evaluation native dimension placement collision avoidance (evaluating dual-side and multi-lane candidates on tested fixtures while preserving prototype measurement truth).
+- **EXTERNAL_SOURCE:** ASME Y14.5-2018 / ISO 129-1 / Christensen, Marks, Shieber (1995) Point Feature Label Placement (PFLP) discrete candidate model / AutoCAD baseline stepping behavioral contract / ezdxf LinearDimension API.
+- **SOURCE_TYPE:** `SPECIFICATION_ONLY` (ASME/ISO) / `COMMERCIAL_BEHAVIORAL_PRIOR` (AutoCAD) / `ALGORITHM_PAPER` (PFLP) / `DEPENDENCY_API_INSPECTION` (ezdxf).
+- **EXACT_VERSION_COMMIT:** `ezdxf==1.4.4` (`add_linear_dim` API), ASME Y14.5-2018 Section 4.3, ISO 129-1:2018.
 - **KNOWN_VERSION_FAMILY:** Computational Geometry Label Placement & CAD Dimensioning Standards.
-- **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`dxf_builder_lib/builder.py::_add_confirmed_dimensions`, `ezdxf/entities/dimension.py`) + `SYNTHETIC_ORACLE_TESTS` (`TRANSFER_ORACLE.py`) + `BENCHMARK_OBSERVED` (`benchmark_results.json`).
+- **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`dxf_builder_lib/builder.py::_add_confirmed_dimensions`) + `DEPENDENCY_API_INSPECTED` (`ezdxf>=1.4.0 LinearDimension API`) + `SYNTHETIC_ORACLE_TESTS` (`TRANSFER_ORACLE.py`) + `BENCHMARK_OBSERVED` (`benchmark_results.json`).
 - **REUSE_CLASS:** `ALGORITHM_TRANSFER`.
 - **CURRENT_CAD_AGENT_OWNER:** `dxf_builder_lib/builder.py` (`_add_confirmed_dimensions`).
 - **EXISTING_PLACEMENT_BEHAVIOR:** Single-side fixed offset `max(length * 0.08, 5.0)` along normal `(-dy/length, dx/length)` with zero obstacle awareness (16 collisions across 8/10 benchmark fixtures).
@@ -850,22 +850,23 @@
 - **DO_NOT_REPEAT_REA:** `YES`.
 - **RESEARCH_AGAIN_ONLY_IF:** A measured production defect demonstrates dimension placement failure on complex multi-view orthogonal drawing layouts or non-linear dimension entities (radial, angular).
 - **EVIDENCE_TIER:** `BOUNDED_SYNTHETIC_RESEARCH_ORACLE`.
-- **LICENSE:** Permissive / Open Standards (ASME/ISO public dimensioning principles; PFLP discrete evaluation is public-domain algorithmic literature; ezdxf is MIT).
-- **LICENSE_SOURCE:** `https://github.com/mozman/ezdxf/blob/master/LICENSE.md`.
-- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (`ezdxf` is already an established project dependency; discrete candidate generation algorithm requires no external solver).
-- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 10 synthetic fixtures / 20 scenes; candidate policy eliminated 16/16 collisions with 0.0 mm measurement error and 100% repeatability; PRODUCTION_TRANSFER_AUTHORIZED=NO).
-- **WHAT_WAS_INSPECTED:** `dxf_builder_lib/builder.py::_add_confirmed_dimensions`, `ezdxf.entities.dimension.LinearDimension`, ASME Y14.5-2018 spacing rules, AutoCAD `DIMDLI` / `DIMGAP` system variables, Christensen et al. (1995) discrete candidate evaluation applied to dimension lines and text annotation bounding boxes.
+- **LICENSE:** ASME/ISO: Copyrighted Standard (Specification Prior, DIRECT_CODE_REUSE=NO) / AutoCAD: Proprietary Commercial (Behavioral Prior, DIRECT_CODE_REUSE=NO) / ezdxf: MIT License (Dependency Reuse, DIRECT_CODE_REUSE=YES) / PFLP: Academic Algorithmic Prior (No licensed code identified, Clean-Room Transfer only).
+- **LICENSE_SOURCE:** ASME Y14.5-2018 Copyright Notice / Autodesk AutoCAD 2027 Documentation / `https://github.com/mozman/ezdxf/blob/master/LICENSE.md` / Christensen et al. (1995) JAIR publication.
+- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (ezdxf dependency reuse and clean-room algorithmic transfer of discrete scoring pattern; direct third-party code copying prohibited).
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 10 synthetic fixtures / 20 scenes; candidate policy avoided collisions across all 10 fixtures with 0.0 mm prototype measurement error and 100% repeatability on tested fixtures; PRODUCTION_TRANSFER_AUTHORIZED=NO).
+- **WHAT_WAS_INSPECTED:** `dxf_builder_lib/builder.py::_add_confirmed_dimensions`, `ezdxf.render.dim_linear.LinearDimension` API, ASME Y14.5-2018 spacing rules, AutoCAD `DIMDLI` system variable behavioral contract, Christensen et al. (1995) discrete candidate evaluation applied to dimension lines and text annotation bounding boxes.
 - **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
-  - `MEASUREMENT_ERROR = 0.000000 mm` (Mathematical invariant: definition points $p_1, p_2$ are immutable; offset and side selection only changes witness line length, never measurement).
-  - `DETERMINISTIC_REPEATABILITY = 100.0%` (Fixed candidate order and tie-breaking ensure identical output across runs).
-  - `UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN` (Offset step $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ and penalty weights are empirical heuristics derived from ASME/AutoCAD conventions, not physical laws).
-  - On 10 synthetic fixtures, baseline policy caused 16 collisions across 8 failed scenes (obstacle blindness, parallel stacking conflict, drawing boundary escape). Candidate discrete policy achieved 0 collisions across all 10 fixtures.
+  - `PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm` (Prototype geometric identity: definition points $p_1, p_2$ are immutable in `compute_dimension_geometry`; offset and side selection only change witness line length, never measurement).
+  - `PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE` (Native DXF DIMENSION entity rendering and AutoCAD binary database roundtrip were not evaluated by this oracle).
+  - `DETERMINISTIC_REPEATABILITY = 100.0%` (Verified across 2 repeated runs on all 10 synthetic fixtures and 3 runs on Fixture 4; bounded to tested synthetic fixtures under deterministic candidate ordering).
+  - `UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN` (Offset step $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ and base offset are empirical research heuristics, not universal physical constants or AutoCAD defaults).
+  - `COLLISION_AVOIDANCE_OUTCOME = TESTED_FIXTURE_BOUNDED` (On 10 synthetic fixtures, baseline policy caused 16 collisions across 8 failed scenes. Candidate discrete policy achieved 0 collisions across all 10 fixtures. Collision freedom is not guaranteed under severe geometry saturation or tight pockets where all candidates are blocked).
 - **FAILURE_MODES_AND_LIMITS:**
   - `TIGHT_POCKET_SATURATION`: In deeply recessed geometry where both normal directions and all offset lanes intersect obstacles, discrete policy exhausts candidates and selects least-bad option with non-zero penalty.
   - `DRAWING_BORDER_CLIPPING`: High offset lanes can escape the sheet border if the margin is smaller than candidate distance.
   - `NON_ORTHOGONAL_INTERFERENCE`: Oblique dimensions in dense clusters require rotated bounding box collision checks rather than axis-aligned bounding boxes.
 - **WHAT_NOT_TO_COPY_OR_INVENT:**
-  - Do NOT build an unconstrained global NP-hard optimization engine, spring embedder, or genetic layout algorithm when a discrete 6-candidate evaluation eliminates collisions deterministically.
+  - Do NOT build an unconstrained global NP-hard optimization engine, spring embedder, or genetic layout algorithm when a discrete 6-candidate evaluation avoids collisions deterministically on tested fixtures.
   - Do NOT modify underlying geometry endpoints ($p_1, p_2$) or scale factors to make dimensions "fit".
   - Do NOT add heavy third-party layout dependencies (e.g. Graphviz, Z3, or Shapely) for dimension placement.
 - **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/TRANSFER_ORACLE.py`.
@@ -901,7 +902,7 @@
 | `REA-020` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
 | `REA-021` | **YES** | **YES** (`primitive_ir_lib.cross_validation`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
 | `REA-022` | **YES** | **YES** (`primitive_ir_lib.geometry_comparator`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
-| `REA-023` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
+| `REA-023` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `DEPENDENCY_API_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
 
 
 ---

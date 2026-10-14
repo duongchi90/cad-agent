@@ -59,10 +59,11 @@ The current baseline implementation possesses the following exact invariants:
    - Sheet / view boundary limits
    - Other previously placed or simultaneously placed dimensions
 
-4. **Measurement Truth Preservation:**
+4. **Prototype Measurement Truth Preservation:**
    `p1=start` and `p2=end` are passed directly from the verified DXF `LINE` geometry.
-   $$\text{Measurement Error} = |L_{\text{dim}} - L_{\text{true}}| \equiv 0.0$$
-   This physical measurement truth is preserved completely.
+   $$\text{Prototype Measurement Error} = |L_{\text{dim}} - L_{\text{true}}| \equiv 0.0$$
+   This physical measurement truth is preserved algebraically by construction.
+   `PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE` (actual binary AutoCAD dimension entity readback is outside the scope of this standalone prototype research).
 
 ---
 

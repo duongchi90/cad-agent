@@ -2,10 +2,11 @@
 Standalone Clean-Room Transfer Oracle for REA-023: Native Dimension Placement Collision Avoidance.
 
 Verifies:
-1. Exact Measurement Invariant: In all tested synthetic fixtures, dimension line length
-   equals measured physical segment length exactly (measurement_error == 0.0).
+1. Exact Prototype Measurement Invariant: In all tested synthetic fixtures, dimension line length
+   equals measured physical segment length exactly (prototype measurement_error == 0.0).
+   PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE
 2. Deterministic Repeatability: Repeated execution of the multi-lane dual-side candidate policy
-   yields identical coordinates (repeatability == 100.0%).
+   yields identical coordinates on tested synthetic fixtures (3 runs on Fixture 4; 2 runs across all 10 scenes in benchmark).
 3. Obstacle Avoidance via Dual-Side Search: On Fixture 6 (geometry obstacle on +normal side)
    and Fixture 7 (annotation text note on +normal side), the candidate policy selects the
    unobstructed side (-normal, side=-1), resolving baseline collisions.
@@ -17,7 +18,7 @@ Verifies:
    the baseline fixed offset places text out-of-bounds.
 
 Evidence Tier: BOUNDED_SYNTHETIC_RESEARCH_ORACLE
-Note: Standalone prototype oracle; not a call through production builder owners.
+Note: Standalone prototype oracle; not a call through production builder owners or native DXF entity roundtrip.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def run_oracle_tests():
                 max_measurement_error = err
 
     assert max_measurement_error < 1e-9, f"Measurement error exceeded zero: {max_measurement_error}"
-    print(f"Test 1 PASS: Exact measurement length invariant verified across all 10 fixtures (max error = {max_measurement_error:.6f} mm).")
+    print(f"Test 1 PASS: Prototype geometric measurement length invariant verified across all 10 fixtures (max error = {max_measurement_error:.6f} mm).")
 
     # -----------------------------------------------------------------------
     # Test 2: Deterministic repeatability across multiple runs
@@ -71,7 +72,7 @@ def run_oracle_tests():
         assert p1.lane_index == p2.lane_index == p3.lane_index, "Lane selection non-deterministic!"
         assert abs(p1.base[0] - p2.base[0]) < 1e-9 and abs(p1.base[1] - p2.base[1]) < 1e-9, "Base coordinate non-deterministic!"
         assert abs(p1.base[0] - p3.base[0]) < 1e-9 and abs(p1.base[1] - p3.base[1]) < 1e-9, "Base coordinate non-deterministic!"
-    print("Test 2 PASS: Deterministic repeatability verified across repeated runs on Fixture 4 (100.0% coordinate match).")
+    print("Test 2 PASS: Deterministic repeatability verified across 3 repeated runs on Fixture 4 (100.0% coordinate match; bounded to tested synthetic fixtures).")
 
     # -----------------------------------------------------------------------
     # Test 3: Dual-side obstacle avoidance on Fixtures 6 and 7
@@ -131,6 +132,7 @@ def run_oracle_tests():
     print(f"Test 5 PASS: Fixture 9 baseline escaped top sheet border (out-of-bounds); candidate flipped inward to side=-1 with 0 boundary collisions.")
 
     print("\nALL 5 ORACLE TESTS PASSED (100% Success). Oracle verified.")
+    print("PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE")
 
 
 if __name__ == "__main__":

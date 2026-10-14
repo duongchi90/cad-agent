@@ -8,10 +8,11 @@ Compares:
    - No obstacle detection, no alternative side, no lane stacking.
 2. Candidate Policy: Deterministic Multi-Lane Dual-Side Placement (Clean-Room Algorithm Transfer)
    - Evaluates both normal directions (+n and -n)
-   - Evaluates bounded discrete offset lanes (d_0, d_1, d_2) based on DIMDLI baseline increment
+   - Evaluates bounded discrete offset lanes (d_0, d_1, d_2) based on research heuristic lane step increment
    - Deterministic penalty scoring against geometry segments and text/annotation bounding boxes
    - Lexicographic tie-breaking: prefer lowest collision penalty, then lowest lane index, then default normal side
-   - Immutable measurement truth: p1 and p2 are NEVER altered. Measurement error is strictly 0.0.
+   - Immutable prototype measurement truth: p1 and p2 are NEVER altered. Prototype measurement error is strictly 0.0.
+     (PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE).
 
 Evaluates across 10 canonical synthetic engineering fixtures:
 1. Isolated horizontal dimension
@@ -399,7 +400,7 @@ def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
     2. For each dimension, evaluate 6 discrete candidates:
        - 2 sides: +1 (left normal), -1 (right normal)
        - 3 lanes: lane 0 (base offset), lane 1 (base + delta), lane 2 (base + 2*delta)
-       where delta = max(8.0, text_height * 2.0) matching standard DIMDLI.
+       where delta = max(7.5, text_height * 2.0) is a research heuristic lane step.
     3. Score each candidate against obstacles and already placed dimensions.
     4. Select minimum penalty candidate.
     """
@@ -413,8 +414,8 @@ def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
         start, end = spec.start, spec.end
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
-        base_offset = max(length * 0.08, 6.0)
-        lane_step = max(7.5, 3.5 * 2.0)  # Standard ~8 mm spacing increment
+        base_offset = max(length * 0.08, 6.0)  # Research heuristic base offset
+        lane_step = max(7.5, 3.5 * 2.0)        # Research heuristic lane step increment
 
         best_score = float('inf')
         best_placed: Optional[PlacedDimension] = None
@@ -748,9 +749,15 @@ def run_benchmark() -> Tuple[List[PlacementEvaluation], Dict[str, Any]]:
         "candidate_total_collisions": 0,
         "baseline_unresolved_scenes": 0,
         "candidate_unresolved_scenes": 0,
-        "measurement_error": 0.0,
-        "deterministic_repeatability_pct": 100.0,
+        "prototype_measurement_error": 0.0,
+        "production_native_measurement_preservation": "NOT_VERIFIED_BY_THIS_ORACLE",
+        "measured_repeatability_tested_fixtures_pct": 0.0,
+        "repeatability_scope": "",
     }
+
+    max_proto_err = 0.0
+    total_dims = 0
+    repeat_matches = 0
 
     for sc in scenes:
         # Run Baseline
@@ -761,13 +768,35 @@ def run_benchmark() -> Tuple[List[PlacementEvaluation], Dict[str, Any]]:
         if base_eval.unresolved_dimensions > 0:
             summary_stats["baseline_unresolved_scenes"] += 1
 
-        # Run Candidate
+        # Run Candidate (Run 1)
         cand_placed = place_dimensions_candidate(sc)
         cand_eval = evaluate_placement_scene(sc, cand_placed, "Candidate_Deterministic_MultiLane")
         evaluations.append(cand_eval)
         summary_stats["candidate_total_collisions"] += cand_eval.collision_count
         if cand_eval.unresolved_dimensions > 0:
             summary_stats["candidate_unresolved_scenes"] += 1
+
+        for p in cand_placed:
+            err = abs(p.dimension_length - p.measured_length)
+            if err > max_proto_err:
+                max_proto_err = err
+
+        # Run Candidate (Run 2 - measured repeatability check)
+        cand_placed_run2 = place_dimensions_candidate(sc)
+        assert len(cand_placed) == len(cand_placed_run2), f"Dimension count mismatch on {sc.name}"
+        for p1, p2 in zip(cand_placed, cand_placed_run2):
+            total_dims += 1
+            if (p1.side == p2.side and p1.lane_index == p2.lane_index and
+                abs(p1.base[0] - p2.base[0]) < 1e-9 and abs(p1.base[1] - p2.base[1]) < 1e-9):
+                repeat_matches += 1
+
+    summary_stats["prototype_measurement_error"] = max_proto_err
+    repeatability_pct = (repeat_matches / total_dims * 100.0) if total_dims > 0 else 0.0
+    summary_stats["measured_repeatability_tested_fixtures_pct"] = repeatability_pct
+    summary_stats["repeatability_scope"] = (
+        f"{repeat_matches}/{total_dims} dimensions identical across 2 repeated runs on all "
+        f"{len(scenes)} synthetic fixtures (Fixture 4 tested across 3 runs in oracle)"
+    )
 
     return evaluations, summary_stats
 
@@ -789,8 +818,9 @@ def main():
     print(f"Benchmark complete! Evaluations saved to: {json_path}")
     print(f"Baseline Collisions: {summary['baseline_total_collisions']} across {summary['baseline_unresolved_scenes']} failed scenes")
     print(f"Candidate Collisions: {summary['candidate_total_collisions']} across {summary['candidate_unresolved_scenes']} failed scenes")
-    print(f"Measurement Error: {summary['measurement_error']}")
-    print(f"Repeatability: {summary['deterministic_repeatability_pct']}%")
+    print(f"Prototype Measurement Error: {summary['prototype_measurement_error']}")
+    print(f"Native Measurement Preservation: {summary['production_native_measurement_preservation']}")
+    print(f"Repeatability on Tested Fixtures: {summary['measured_repeatability_tested_fixtures_pct']}% ({summary['repeatability_scope']})")
 
 
 if __name__ == "__main__":
