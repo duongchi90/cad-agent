@@ -17,6 +17,11 @@ nhận).
 | `repair.py` | `repair_dxf()` — Repair #1: nhận `mismatches` từ `review_dxf()`, xoá entity bị lỗi theo handle và vẽ lại đúng từ `BuildResult.written_geometry_by_primitive_id`. Ghi đè vào đúng file gốc; caller chạy lại `review_dxf()` sau để xác nhận hết lỗi. |
 | `demo_pipeline.py` | Đọc `primitive_ir_demo_output.json` (Phase 1) + `semantic_ir_demo_output.json` (Phase 2) — 2 file độc lập, không cần chạy lại Phase 1/2 trong cùng tiến trình — tự chạy lại `prune_constraints()` + `solve_constraints()` để có toạ độ sạch, rồi build DXF → Reviewer #1 → Repair #1 (nếu có lỗi) → Reviewer #1 lần 2. |
 
+`build_dxf()` writes `$INSUNITS=4` (millimetres) and accepts only a verified
+Primitive IR calibration whose unit is exactly `mm`. Convert coordinates to
+canonical millimetres explicitly before calling the builder; `cm` and `m` are
+not converted by this sink.
+
 ## Cài đặt
 
 ```bash
