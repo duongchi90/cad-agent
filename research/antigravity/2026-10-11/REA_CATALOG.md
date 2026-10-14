@@ -755,34 +755,35 @@
 
 ### REA-021: DIMENSION_ARROWHEAD_WITNESS_ASSOCIATION
 - **CAPABILITY:** Geometric discrimination of dimension lines versus witness/extension lines and robust association with dimension text, preventing false conflict misbinding and establishing arrowhead outward flip thresholds.
-- **EXTERNAL_SOURCE:** ISO 129-1:2018 / ASME Y14.5-2018 / LibreCAD `RS_DimLinear` / Autodesk DXF Linear Dimension Specifications (Group Codes 10, 11, 13, 14, 50).
-- **SOURCE_TYPE:** `SPEC_PUBLIC` / `ALGORITHM_OPEN_SOURCE`.
+- **EXTERNAL_SOURCE:** ISO 129-1:2018 / ASME Y14.5-2018 / LibreCAD `RS_DimLinear` (GPLv2) / Autodesk DXF Linear Dimension Specifications (Group Codes 10, 11, 13, 14, 50).
+- **SOURCE_TYPE:** `COPYRIGHTED_SPECIFICATION_OR_DOCUMENTATION_PRIOR` (ISO/ASME) / `OPEN_SOURCE_REPO_GPLV2` (LibreCAD) / `COPYRIGHTED_SPECIFICATION_OR_DOCUMENTATION_PRIOR` (Autodesk DXF Reference).
 - **EXACT_VERSION_COMMIT:** `ISO 129-1:2018` / `ASME Y14.5-2018` / LibreCAD 2.2.x (`librecad/src/lib/engine/rs_dimlinear.cpp`).
 - **KNOWN_VERSION_FAMILY:** Standard Drafting & CAD Dimension Systems.
-- **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`rs_dimlinear.cpp`) + `DOCUMENTATION_ONLY` (ISO/ASME/Autodesk DXF Reference) + `TESTS_INSPECTED` (`TRANSFER_ORACLE.py`).
+- **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`rs_dimlinear.cpp` — behavioral algorithm only, no GPL expression copied) + `DOCUMENTATION_ONLY` (ISO/ASME/Autodesk DXF Reference — consulted for behavioral understanding only) + `SYNTHETIC_ORACLE_TESTS` (`TRANSFER_ORACLE.py` — standalone clean-room prototype, not wired to production owners).
 - **REUSE_CLASS:** `ALGORITHM_TRANSFER`.
-- **CURRENT_CAD_AGENT_OWNER:** `primitive_ir_lib/cross_validation.py` and `dxf_builder_lib/builder.py`.
-- **OWNER_MAPPING_STATUS:** `VALID` (Verified on current main).
+- **CURRENT_CAD_AGENT_OWNER:** `primitive_ir_lib/cross_validation.py` (nearest-line logic) and `dxf_builder_lib/builder.py` (DXF construction). Both require augmentation; see gap note below.
+- **OWNER_MAPPING_STATUS:** `VALID_WITH_GAP` — Current `CrossValidation` schema stores `text_primitive_id`, `geometry_primitive_id`, `status`, `text_value`, `geometry_measured_length`, `delta_percent`, `match_threshold_percent`. It does NOT store feature points $P_1$/$P_2$ or dimension-line offset. Current `cross_validate()` performs no angular discrimination. These are production schema gaps to be filled after a measured product RED.
 - **CURRENT_DISPOSITION:** `RESEARCH_PRIOR`.
 - **DO_NOT_REPEAT_REA:** `YES`.
 - **RESEARCH_AGAIN_ONLY_IF:** A current measured product boundary or customer holdout exhibits dimension text association failure on non-linear or curved dimensions and current owners do not already satisfy it.
-- **EVIDENCE_TIER:** `VERIFIED_ALGORITHM_AND_ORACLE`.
-- **LICENSE:** Open Specifications / GPL v2 (LibreCAD architecture inspected for clean-room algorithm formulation).
-- **LICENSE_SOURCE:** ISO / ASME Standards / LibreCAD open source repository.
-- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (Clean-room mathematical formulations and algorithms only; zero copying of GPL code).
-- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Clean-room discriminator algorithm and unit test oracle validated; do not implement in production until a measured product RED requires witness line filtering).
-- **WHAT_WAS_INSPECTED:** Relationship between dimension line orientation ($\theta_{\text{dim}}$), witness line orientation ($\theta_{\text{wit}}$), text orientation ($\theta_{\text{text}}$), arrowhead flip geometry ($L < 2 \cdot S_{\text{arrow}} + W_{\text{text}}$), and DXF definition points.
+- **EVIDENCE_TIER:** `BOUNDED_SYNTHETIC_RESEARCH_ORACLE` — `TRANSFER_ORACLE.py` is a standalone clean-room prototype with synthetic test inputs. It is NOT a call through current production `cross_validate()`, `find_nearest_line()`, or `builder.py`. Passing synthetic tests does NOT constitute a production transfer GREEN. Production transfer requires a `MEASURED_CURRENT_PRODUCT_RED` + integration into actual production owners.
+- **LICENSE:** ISO/ASME: `COPYRIGHTED_SPECIFICATION_OR_DOCUMENTATION_PRIOR` (no code-reuse authority). LibreCAD: `GPLv2` (`DIRECT_CODE_REUSE = NO`; Cad Agent is not GPL-licensed). DXF Reference: `COPYRIGHTED_SPECIFICATION_OR_DOCUMENTATION_PRIOR`.
+- **LICENSE_SOURCE:** ISO / ASME Standards / `https://github.com/LibreCAD/LibreCAD` / Autodesk DXF Reference.
+- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `NO` for source expression copying. `YES_BOUNDED` for clean-room mathematical algorithm transfer (independently derivable linear algebra, not GPL source).
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` — Clean-room discriminator algorithm and unit test oracle established; do not implement in production until a measured product RED requires witness line filtering.
+- **WHAT_WAS_INSPECTED:** Relationship between dimension line orientation ($\theta_{\text{dim}}$), witness line orientation ($\theta_{\text{wit}}$), text orientation ($\theta_{\text{text}}$), arrowhead flip geometry ($L < 2 \cdot S_{\text{arrow}} + W_{\text{text}}$ — `IMPLEMENTATION_HEURISTIC` from LibreCAD), and DXF definition points.
 - **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
-  - Dimension line is collinear/parallel to dimension text angle modulo $180^\circ$ ($\Delta\theta \le 10^\circ$).
-  - Extension/witness lines are orthogonal to dimension text angle modulo $180^\circ$ ($|\Delta\theta - 90^\circ| \le 10^\circ$).
-  - Arrowheads flip outward when feature span $L < 2 \cdot S_{\text{arrow}} + W_{\text{text}}$.
+  - Dimension line is collinear/parallel to dimension text angle modulo $180^\circ$ (`STANDARD_DEFINED_INVARIANT`, tolerance $\Delta\theta \le 10^\circ$ is `IMPLEMENTATION_HEURISTIC`).
+  - Standard extension/witness lines are perpendicular to dimension text angle modulo $180^\circ$ ($|\Delta\theta - 90^\circ| \le 10^\circ$ is `IMPLEMENTATION_HEURISTIC`). Oblique extension lines also exist normatively and are not covered by this discriminator.
+  - Arrowheads flip outward when feature span $L < 2 \cdot S_{\text{arrow}} + W_{\text{text}}$ (`IMPLEMENTATION_HEURISTIC` from LibreCAD; not a universal standard invariant).
   - Witness line misbinding trap (naive nearest line selection picking witness line) causes false positive 85% length conflict, avoided by angular pre-filtering.
 - **FAILURE_MODES_AND_LIMITS:**
   - Does not cover radial/diametral dimensions (`DIMRADIAL`, `DIMDIAMETER`) or ordinate dimensions (`DIMORDINATE`), which require separate radial ray/datum origin association logic.
+  - Does not handle oblique extension lines.
 - **WHAT_NOT_TO_COPY_OR_INVENT:**
-  - Do NOT copy LibreCAD C++ source code.
-  - Do NOT create a new subsystem or daemon for dimension association; existing owner `primitive_ir_lib/cross_validation.py` is sufficient.
-- **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-14/dimension_arrowhead_witness_association/TRANSFER_ORACLE.py`.
+  - Do NOT copy LibreCAD C++ source code (GPLv2 barrier).
+  - Do NOT create a new subsystem or daemon for dimension association; existing owner `primitive_ir_lib/cross_validation.py` is the correct home.
+- **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-14/dimension_arrowhead_witness_association/TRANSFER_ORACLE.py` (standalone synthetic oracle only; not wired to production).
 - **DURABLE_POINTERS:**
   - `research/antigravity/2026-10-14/dimension_arrowhead_witness_association/`
   - `primitive_ir_lib/cross_validation.py`
