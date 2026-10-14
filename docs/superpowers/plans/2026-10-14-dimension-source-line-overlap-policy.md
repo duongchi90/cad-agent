@@ -1,10 +1,10 @@
 # Dimension source LINE overlap builder policy
 
-Status: executing
+Status: completed
 Base SHA: 7da1ed42a2168b5c991fc389a4c8155b1e88a387
 Approved design: `docs/superpowers/specs/2026-10-14-dimension-source-line-overlap-policy.md`
 PO authority: #491 comment 6161127223; measured RED: #491 comment 6160919376.
-Completion Head SHA: pending.
+Completion Head SHA: 6a8b7db46724b671f5437a275620e0998affd191
 
 ## Scope
 
@@ -44,11 +44,11 @@ dependencies, PR #507 and native behavior remain unchanged.
    test-fixture/oracle issues (touch point was inside the actual rendered LINE;
    exception regex did not match “classified”); the fixture was corrected and
    the final complete focused selection passed.
-6. One implementation commit: pending.
-7. Canonical verification command:
-   `./scripts/verify.ps1 -PythonExe C:\cad-agent\.venv-py311\Scripts\python.exe -SkipAutoCADDotNet`;
-   result pending. Run exactly once on the new committed composition.
-8. Real-data/native gates: NOT RUN under this builder-only synthetic geometry change; record actual required gate disposition in the receipt.
+6. One implementation commit: `6a8b7db46724b671f5437a275620e0998affd191` (tree `77c5aecae9f517259cc4557804405375858e4e2c`).
+7. Canonical verification ran exactly once in the supervised private child on `6a8b7db46724b671f5437a275620e0998affd191`:
+   `scripts/verify.ps1 -PythonExe C:\cad-agent\.venv-py311\Scripts\python.exe -SkipAutoCADDotNet`
+   Result: exit 0; “All checks passed”; Python 3.11.9; OpenCV 5.0.0.93; Tesseract 5.4.0.20240606. HEAD/tree/status were identical and clean before/after. AutoCAD .NET was explicitly skipped.
+8. Real-data benchmark and AutoCAD/native gates: NOT RUN, consistent with PO authority. The implementation remains local/unpublished pending PO disposition.
 
 ## Stop boundaries
 
