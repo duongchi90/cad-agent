@@ -12,11 +12,11 @@
 
 ## Global Constraints
 
-- Status: executing.
+- Status: completed.
 - Base SHA: `7da1ed42a2168b5c991fc389a4c8155b1e88a387`.
-- Completion Head SHA: pending.
-- Verification command: `scripts/verify.ps1 -PythonExe 'C:\cad-agent\.venv-py311\Scripts\python.exe' -SkipAutoCADDotNet`; result pending.
-- Required native/private/live gates: AutoCAD and drawing gates are NOT RUN and out of scope.
+- Completion Head SHA: `6eef0f3f071255f2799f7dd2a3613c225a363232` (implementation/evidence commit before plan-only close).
+- Verification command: `scripts/verify.ps1 -PythonExe 'C:\cad-agent\.venv-py311\Scripts\python.exe' -SkipAutoCADDotNet`; PASS, exit 0, completed in 225.57 seconds.
+- Required native/private/live gates: AutoCAD .NET, AutoCAD live, M2, real-image, and fidelity private-data gates are NOT RUN/SKIPPED as unavailable and out of scope.
 - Preserve signature, default, result/schema, and existing finite comparison behavior; introduce no max tolerance or dependency.
 - Do not rerun the completed discriminator; no real/private drawing, AutoCAD/native action, push, PR, CI/review request, merge, or held-PR mutation.
 
@@ -51,8 +51,8 @@
 - Step 1: PASS. GitHub `origin/main` was `7da1ed42a2168b5c991fc389a4c8155b1e88a387`; exact tree was `de41dc0707f695c085f0e40218d240e78cebdb8a`; reviewer blob was `b2f78e7e207bb9586c7a837074f26775dd2fb5ab`. The isolated worktree was clean before the branch `codex/review-finite-tolerance-v1` was created. Authority was published/read back as Issue #491 comment 6164281750.
 - Step 2: RED observed. The new admission subset produced 9 failures because invalid values reached `ezdxf.readfile()` and raised `FileNotFoundError` instead of `ValueError`.
 - Steps 3–4: focused GREEN: `python -m pytest dxf_builder_lib/tests/test_review_tolerance_contract.py dxf_builder_lib/tests/test_reviewer.py dxf_builder_lib/tests/test_builder.py dxf_builder_lib/tests/test_repair.py agent_lib/tests/test_run.py tests/test_cad_agent_cli_staged_semantic_policy.py tests/test_dimension_pilot_contracts.py -q` — 137 passed. Touched Ruff and `git diff --check` passed.
-- Step 6 canonical verification: pending; not run yet.
-- Completion Head SHA: pending.
+- Step 6: PASS. Offline verifier reported 3,645 passed, 23 deselected, 77 subtests passed; JUnit 3,722 tests, zero failures/errors/skips. The verifier also ran its separate causal-RED negative oracle, which reported its expected single failing assertion. Unavailable-state probes recorded real-data 2 skipped and AutoCAD 18 skipped; AutoCAD .NET was explicitly NOT RUN. The script ended `Verification complete`, exit 0, with unchanged head/tree and clean status before/after.
+- Step 7: implementation commit `6eef0f3f071255f2799f7dd2a3613c225a363232`; plan-only close and GitHub receipt are the remaining actions.
 
 ## Stop conditions
 
