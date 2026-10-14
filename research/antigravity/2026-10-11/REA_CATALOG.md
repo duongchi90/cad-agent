@@ -63,6 +63,7 @@
 | **`REA-019`** | `OPEN_SOURCE_CAD_ENGINES` | FreeCAD, LibreCAD, LibreDWG, QCAD | `RESEARCH_PRIOR_ONLY` | *None* | `VALID` | `UNKNOWN` | `CONDITIONAL` |
 | **`REA-020`** | `POLYLINE_BULGE_AND_ARC_RECONSTRUCTION` | Autodesk DXF Spec Group 42 & `ezdxf.math.bulge` | `ALGORITHM_TRANSFER` | `dxf_builder_lib/builder.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
 | **`REA-021`** | `DIMENSION_ARROWHEAD_WITNESS_ASSOCIATION` | ISO 129-1, ASME Y14.5, LibreCAD `RS_DimLinear`, DXF Specs | `ALGORITHM_TRANSFER` | `primitive_ir_lib/cross_validation.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
+| **`REA-022`** | `IMAGE_TO_CAD_CONTOUR_SIMPLIFICATION` | OpenCV `cv2.approxPolyDP` (Ramer-Douglas-Peucker) | `DEPENDENCY_REUSE` | `primitive_ir_lib/geometry_comparator.py` | `VALID` | `RESEARCH_PRIOR` | `YES` |
 
 ---
 
@@ -791,6 +792,44 @@
 
 ---
 
+### REA-022: IMAGE_TO_CAD_CONTOUR_SIMPLIFICATION
+- **CAPABILITY:** Bounded polygon simplification of dense raster boundary contour chains into concise piecewise linear profiles, eliminating 1-pixel staircase aliasing while strictly preventing feature deletion and arc collapse.
+- **EXTERNAL_SOURCE:** OpenCV `cv2.approxPolyDP` / Urs Ramer (1972) & David Douglas & Thomas Peucker (1973) algorithm / Visvalingam & Whyatt (1993) algorithm.
+- **SOURCE_TYPE:** `OPEN_SOURCE_REPO` (OpenCV Apache 2.0) / `ALGORITHM_PAPER`.
+- **EXACT_VERSION_COMMIT:** OpenCV 4.x / 5.x (`cv2.approxPolyDP`).
+- **KNOWN_VERSION_FAMILY:** Standard Computational Geometry & Computer Vision.
+- **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`geometry_comparator.py::_contour_points`, `dimension_geometry.py::_contour_arrow_points`) + `SYNTHETIC_ORACLE_TESTS` (`TRANSFER_ORACLE.py`) + `BENCHMARK_OBSERVED` (`benchmark_results.json`).
+- **REUSE_CLASS:** `DEPENDENCY_REUSE`.
+- **CURRENT_CAD_AGENT_OWNER:** `primitive_ir_lib/geometry_comparator.py` (`_contour_points()`).
+- **OWNER_MAPPING_STATUS:** `VALID` (Smallest appropriate owner in current main).
+- **CURRENT_DISPOSITION:** `RESEARCH_PRIOR`.
+- **DO_NOT_REPEAT_REA:** `YES`.
+- **RESEARCH_AGAIN_ONLY_IF:** A measured production defect demonstrates contour alignment failure or benchmark discrepancy on complex non-manifold or self-intersecting drawing contours.
+- **EVIDENCE_TIER:** `BOUNDED_SYNTHETIC_RESEARCH_ORACLE`.
+- **LICENSE:** Apache 2.0 (OpenCV).
+- **LICENSE_SOURCE:** `https://github.com/opencv/opencv/blob/4.x/LICENSE`.
+- **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (OpenCV is already a core project dependency in `requirements/`).
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 7 fixtures / 98 configs; do not alter production `geometry_comparator.py` absent an active measured product RED).
+- **WHAT_WAS_INSPECTED:** OpenCV `cv2.approxPolyDP` across absolute ($\epsilon \in [0.75, 6.0]\text{ px}$) and relative ($\epsilon \in [0.002, 0.08] \times P$) tolerances, Visvalingam-Whyatt area-based vertex elimination, and failure modes across 7 canonical engineering fixtures.
+- **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
+  - RDP with absolute $\epsilon \in [0.75, 1.5]\text{ px}$ achieves 97.3%–99.7% point count reduction on noisy raster staircase contours while preserving 100% of sharp corners, chamfers, and small features ($H \le 1.34\text{ px}$, area error $< 0.01\%$).
+  - Visvalingam-Whyatt is fundamentally unsuitable for closed raster staircase loops, collapsing mechanical contours into 3-point triangles ($87\%\text{--}99\%$ area error).
+  - Relative epsilon ($\epsilon = k \cdot P$) triggers the Scale-Dependent Epsilon Trap on large part contours, completely obliterating keyway notches ($6 \times 8\text{ px}$) and small holes.
+- **FAILURE_MODES_AND_LIMITS:**
+  - `RELATIVE_EPSILON_UNSAFE = YES`: Never use $\epsilon \propto \text{perimeter}$ for complete part contours.
+  - `ARC_POLYGONIZATION_ERROR`: Large $\epsilon \ge 6.0\text{ px}$ reduces smooth circles to coarse octagons ($8.89\%$ area error).
+  - `HOLE_TOPOLOGY_COLLAPSE`: When $\epsilon \ge R_{\text{hole}}$, small pin holes collapse into 2-point line segments ($Area = 0$).
+- **WHAT_NOT_TO_COPY_OR_INVENT:**
+  - Do NOT implement custom line simplification algorithms or third-party cartography packages when OpenCV's native C++ `approxPolyDP` is already present.
+  - Do NOT create a new contour simplification subsystem or daemon.
+- **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-14/image_to_cad_contour_simplification/TRANSFER_ORACLE.py`.
+- **DURABLE_POINTERS:**
+  - `research/antigravity/2026-10-14/image_to_cad_contour_simplification/`
+  - `primitive_ir_lib/geometry_comparator.py`
+  - `primitive_ir_lib/dimension_geometry.py`
+
+---
+
 # QUALITY AUDIT SUMMARY TABLE
 
 | REA_ID | ENUM_VALID | OWNER_EXISTS | GITHUB_EVIDENCE_COMPLETE | PROVENANCE_CLEAR | DISPOSITION_FAIL_CLOSED | LOCAL_ONLY_GAP | ANTI_REPEAT_SAFE |
@@ -816,6 +855,7 @@
 | `REA-019` | **YES** | **YES** (*None*) | **YES** | **YES** (`UNKNOWN`) | **YES** (`UNKNOWN`) | **YES** | **YES** |
 | `REA-020` | **YES** | **YES** (`dxf_builder_lib.builder`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
 | `REA-021` | **YES** | **YES** (`primitive_ir_lib.cross_validation`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
+| `REA-022` | **YES** | **YES** (`primitive_ir_lib.geometry_comparator`) | **YES** | **YES** (`SOURCE_CODE_INSPECTED`, `TESTS_INSPECTED`) | **YES** (`RESEARCH_PRIOR`) | **NO** | **YES** |
 
 
 ---

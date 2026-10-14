@@ -627,7 +627,8 @@
 | `prior_investigations` | [`rea_ghidra_maximum_capability_correction`](../2026-10-13/rea_ghidra_maximum_capability_correction/README.md) | Technical Report | `RESEARCH_ONLY` | `f7767bd2b9d1b15e084845cc45a98be4736f876d84eb2253bcfe9f899805dcc2` | REA Ghidra benchmark claim correction and audit report |
 | `prior_investigations` | [`rea_ghidra_true_blind_benchmark`](../2026-10-13/rea_ghidra_true_blind_benchmark/README.md) | Technical Report | `RESEARCH_ONLY` | `8d7d5ad62a2084ac0d466fe8435dfe700bc63ddb0cf6b172cdca39c4bb6ffb32` | Independent blind Ghidra capability evaluation on Wallace target |
 | `prior_investigations` | [`dimension_arrowhead_witness_association`](../2026-10-14/dimension_arrowhead_witness_association/README.md) | Technical Specification | `RESEARCH_ONLY` | `5c17b034699be1398becdd34f29d6e5286c1daee68e9731d108ed4e9cfdafef5` | Proactive research precompute for REA-021 dimension line, witness line, and arrowhead association (corrected: oracle scope, owner gaps, invariant scope, provenance) |
-| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `d2cc04ddf21898c9925d97814d11c9da1c02d1cd71c02d420b8fbe119ef905cc` | Master REA knowledge base and anti-repeat lookup catalog (hardened, REA-001..REA-021, REA-021 claims corrected) |
+| `prior_investigations` | [`image_to_cad_contour_simplification`](../2026-10-14/image_to_cad_contour_simplification/README.md) | Technical Specification | `RESEARCH_ONLY` | `c8d844da0d7921e4291a3a0f9ccf19d3bdff81f2ea35f0b49983d8333866c0c4` | Proactive research precompute for REA-022 image-to-CAD contour simplification (RDP vs Visvalingam-Whyatt, safety bounds, owner map) |
+| `knowledge_base` | [`REA_CATALOG.md`](REA_CATALOG.md) | Knowledge Base | `RESEARCH_ONLY` | `ba3af1d60ed75aa1543da63625c7b88600ddd85aae8c39e6bba81bc1742a455b` | Master REA knowledge base and anti-repeat lookup catalog (hardened, REA-001..REA-022) |
 
 ## Verification and Non-Interference Guarantees
 
