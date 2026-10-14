@@ -19,7 +19,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import pytesseract
@@ -112,6 +112,7 @@ def run(
     calibration_source_sha256: Optional[str] = None,
     *,
     circle_strategy: str = "hough",
+    document_writer: Optional[Callable[[object, str], None]] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -122,6 +123,8 @@ def run(
     không nên dùng thẳng cho DXF sản xuất mà không kiểm tra lại.
     """
     circle_strategy = _validate_circle_strategy(circle_strategy)
+    if document_writer is not None and not callable(document_writer):
+        raise ValueError("document_writer must be callable")
     if scale_mm_per_px is not None and (
         isinstance(scale_mm_per_px, bool)
         or not math.isfinite(scale_mm_per_px)
@@ -250,8 +253,11 @@ def run(
             cross_validation.status = "unverified"
 
     output_dir = os.path.dirname(os.path.abspath(output_path))
-    os.makedirs(output_dir, exist_ok=True)
-    save_document(document, output_path)
+    if document_writer is None:
+        os.makedirs(output_dir, exist_ok=True)
+        save_document(document, output_path)
+    else:
+        document_writer(document, output_path)
     return output_path
 
 

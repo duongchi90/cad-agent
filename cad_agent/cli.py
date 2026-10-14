@@ -299,6 +299,9 @@ def _run_primitive_with_strategy(
     else:
         from primitive_ir_lib.run_image import run
 
+        run_kwargs: dict[str, Any] = {}
+        if circle_strategy == "closed_ring_identity_v1":
+            run_kwargs["document_writer"] = _write_contour_primitive_ir
         run(
             image_path=str(source),
             output_path=str(output),
@@ -307,7 +310,22 @@ def _run_primitive_with_strategy(
             merge_lines=True,
             auto_ocr_roi=auto_ocr_roi,
             circle_strategy=circle_strategy,
+            **run_kwargs,
         )
+
+
+def _write_contour_primitive_ir(document: object, output_path: str) -> None:
+    """Publish an opt-in contour Primitive IR through the existing safe writer."""
+    from .live import _write_json_artifact
+
+    if not callable(getattr(document, "to_dict", None)):
+        raise ManifestError("Contour Primitive IR document cannot be serialized safely.")
+    try:
+        _write_json_artifact(
+            Path(output_path), document.to_dict(), label="Contour Primitive IR"
+        )
+    except LiveSafetyError as exc:
+        raise ManifestError(f"Contour Primitive IR publication failed: {exc}") from exc
 
 
 _GEOMETRY_PROPOSALS_TERMINAL = "GEOMETRY_PROPOSALS_NEED_REVIEW"

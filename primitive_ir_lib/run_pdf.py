@@ -17,7 +17,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import fitz
 
@@ -47,6 +47,7 @@ def _materialize_view_children(
     merge_lines: bool,
     *,
     circle_strategy: str = "hough",
+    document_writer: Optional[Callable[[object, str], None]] = None,
 ) -> None:
     """Create review-only child IRs for non-overlapping evidenced candidates."""
     evidenced = [candidate for candidate in candidates if candidate.get("dimension_evidence")]
@@ -80,6 +81,8 @@ def _materialize_view_children(
         run_kwargs = {}
         if circle_strategy != "hough":
             run_kwargs["circle_strategy"] = circle_strategy
+        if document_writer is not None:
+            run_kwargs["document_writer"] = document_writer
         run(
             image_path=str(child_image),
             output_path=str(child_ir),
@@ -131,6 +134,7 @@ def run_pdf(
     calibration_id_prefix: Optional[str] = None,
     *,
     circle_strategy: str = "hough",
+    document_writer: Optional[Callable[[object, str], None]] = None,
 ) -> dict:
     """Render each PDF page locally and emit a validated Primitive IR JSON.
 
@@ -142,6 +146,8 @@ def run_pdf(
     cảnh báo an toàn trong run_image.run()/auto_estimate_calibration().
     """
     circle_strategy = _validate_circle_strategy(circle_strategy)
+    if document_writer is not None and not callable(document_writer):
+        raise ValueError("document_writer must be callable")
     if not pdf_path.is_file():
         raise FileNotFoundError(pdf_path)
     if dpi <= 0:
@@ -179,6 +185,8 @@ def run_pdf(
             run_kwargs = {}
             if circle_strategy != "hough":
                 run_kwargs["circle_strategy"] = circle_strategy
+            if document_writer is not None:
+                run_kwargs["document_writer"] = document_writer
             run(
                 image_path=str(image_path), output_path=str(output_path),
                 scale_mm_per_px=scale_mm_per_px, preset=preset,
@@ -201,6 +209,7 @@ def run_pdf(
                 preset,
                 merge_lines,
                 circle_strategy=circle_strategy,
+                **({"document_writer": document_writer} if document_writer is not None else {}),
             )
             view_candidates_path.write_text(
                 json.dumps(scale_label_candidates, indent=2) + "\n",

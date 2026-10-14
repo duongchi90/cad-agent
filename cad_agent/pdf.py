@@ -186,6 +186,11 @@ def _ensure_rendered(source: Path, output_dir: Path, manifest_path: Path, manife
     from primitive_ir_lib.run_pdf import run_pdf
 
     config = manifest["configuration"]
+    run_kwargs: dict[str, Any] = {}
+    if config.get("circle_strategy") == "closed_ring_identity_v1":
+        from .cli import _write_contour_primitive_ir
+
+        run_kwargs["document_writer"] = _write_contour_primitive_ir
     run_pdf(
         source,
         output_dir / "pdf",
@@ -196,6 +201,7 @@ def _ensure_rendered(source: Path, output_dir: Path, manifest_path: Path, manife
         auto_ocr_roi=bool(config.get("auto_ocr_roi", False)),
         **({"circle_strategy": config["circle_strategy"]}
            if "circle_strategy" in config else {}),
+        **run_kwargs,
     )
     rendered_manifest = output_dir / "pdf" / "manifest.json"
     if not rendered_manifest.is_file():

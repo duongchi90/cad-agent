@@ -40,6 +40,22 @@ def test_image_invalid_strategy_rejects_before_decode_or_output(
     assert not output_path.parent.exists()
 
 
+def test_image_invalid_document_writer_rejects_before_decode_or_output(
+    tmp_path: Path, monkeypatch,
+):
+    image_path = tmp_path / "input.png"
+    image_path.write_bytes(b"not decoded")
+    output_path = tmp_path / "new" / "ir.json"
+
+    monkeypatch.setattr(
+        cv2, "imread", lambda *_args, **_kwargs: pytest.fail("image was decoded")
+    )
+    with pytest.raises(ValueError, match="document_writer must be callable"):
+        run(str(image_path), str(output_path), scale_mm_per_px=1.0,
+            document_writer=object())
+    assert not output_path.parent.exists()
+
+
 @pytest.mark.parametrize("selector", ["closed_ring_identity_v1 ", None, ["hough"]])
 def test_pdf_invalid_strategy_rejects_before_open_or_output(
     tmp_path: Path, monkeypatch, selector,
@@ -58,6 +74,22 @@ def test_pdf_invalid_strategy_rejects_before_open_or_output(
     assert not output_dir.exists()
 
 
+def test_pdf_invalid_document_writer_rejects_before_open_or_output(
+    tmp_path: Path, monkeypatch,
+):
+    pdf_path = tmp_path / "input.pdf"
+    pdf_path.write_bytes(b"not opened")
+    output_dir = tmp_path / "new-output"
+
+    monkeypatch.setattr(
+        fitz, "open", lambda *_args, **_kwargs: pytest.fail("PDF was opened")
+    )
+    with pytest.raises(ValueError, match="document_writer must be callable"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0,
+                document_writer=object())
+    assert not output_dir.exists()
+
+
 @pytest.mark.parametrize("explicit", [False, True])
 def test_image_hough_default_and_explicit_selector_preserve_compatibility(
     tmp_path: Path, explicit: bool,
@@ -69,6 +101,26 @@ def test_image_hough_default_and_explicit_selector_preserve_compatibility(
         kwargs = {"circle_strategy": "hough"} if explicit else {}
         run(str(image_path), str(output_path), scale_mm_per_px=1.0, **kwargs)
     assert extract.call_args.kwargs["circle_strategy"] == "hough"
+
+
+def test_image_document_writer_failure_propagates_without_default_writer_fallback(
+    tmp_path: Path, monkeypatch,
+):
+    image_path = tmp_path / "input.png"
+    output_path = tmp_path / "out" / "ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 100, 3), 255, dtype=np.uint8))
+
+    def fail_writer(_document, _output_path):
+        raise RuntimeError("injected writer failure")
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.save_document",
+        lambda *_args, **_kwargs: pytest.fail("default writer fallback executed"),
+    )
+    with pytest.raises(RuntimeError, match="injected writer failure"):
+        run(str(image_path), str(output_path), scale_mm_per_px=1.0,
+            circle_strategy=CLOSED_RING, document_writer=fail_writer)
+    assert not output_path.exists()
 
 
 def test_image_serializes_actual_closed_ring_with_truthful_provenance(tmp_path: Path, monkeypatch):
@@ -122,9 +174,11 @@ def test_pdf_forwards_same_selector_to_every_page(tmp_path: Path):
     document.close()
     output_dir = tmp_path / "pdf-output"
     seen: list[str] = []
+    writers: list[object] = []
 
     def fake_run(image_path, output_path, scale_mm_per_px=None, **kwargs):
         seen.append(kwargs["circle_strategy"])
+        writers.append(kwargs.get("document_writer"))
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
             "primitives": [], "cross_validations": [],
@@ -133,10 +187,12 @@ def test_pdf_forwards_same_selector_to_every_page(tmp_path: Path):
         Path(kwargs["view_candidates_output_path"]).write_text("[]", encoding="utf-8")
         return output_path
 
+    writer = lambda _document, _path: None
     with patch("primitive_ir_lib.run_pdf.run", side_effect=fake_run):
         run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0,
-                circle_strategy=CLOSED_RING)
+                circle_strategy=CLOSED_RING, document_writer=writer)
     assert seen == [CLOSED_RING, CLOSED_RING]
+    assert writers == [writer, writer]
 
 
 def test_pdf_view_child_forwards_selector_and_keeps_unverified_calibration(tmp_path: Path):
@@ -157,8 +213,11 @@ def test_pdf_view_child_forwards_selector_and_keeps_unverified_calibration(tmp_p
         }), encoding="utf-8")
         return output_path
 
+    writer = lambda _document, _path: None
     with patch("primitive_ir_lib.run_pdf.run", side_effect=fake_run):
         _materialize_view_children([candidate], rendered, tmp_path / "out", 1,
-                                   "default", False, circle_strategy=CLOSED_RING)
+                                   "default", False, circle_strategy=CLOSED_RING,
+                                   document_writer=writer)
     assert captured["circle_strategy"] == CLOSED_RING
+    assert captured["document_writer"] is writer
     assert captured["calibration_status"] == "needs_verification"
