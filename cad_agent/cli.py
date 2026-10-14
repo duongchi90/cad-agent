@@ -410,7 +410,7 @@ def _resume_command(args: argparse.Namespace) -> int:
 
 
 def _run_pdf_command(args: argparse.Namespace) -> int:
-    from .pdf import PDF_MANIFEST_NAME, new_pdf_manifest, run_pdf_stages
+    from .pdf import PDF_MANIFEST_NAME, new_pdf_manifest, run_pdf_calibration_candidate, run_pdf_stages
 
     source = args.input.resolve()
     if not source.is_file():
@@ -421,6 +421,24 @@ def _run_pdf_command(args: argparse.Namespace) -> int:
     manifest_path = output_dir / PDF_MANIFEST_NAME
     if manifest_path.exists():
         raise CommandError(f"PDF run manifest already exists: {manifest_path}; use resume-pdf instead.")
+    if args.auto_calibrate:
+        if args.scale_mm_per_px is not None or args.calibration_approval is not None:
+            raise CommandError(
+                "run-pdf --auto-calibrate cannot be combined with manual scale or calibration approval."
+            )
+        candidate_manifest = run_pdf_calibration_candidate(
+            source,
+            output_dir,
+            manifest_path,
+            args.dpi,
+            auto_ocr_roi=args.auto_ocr_roi,
+        )
+        print(f"{candidate_manifest['result']}: {manifest_path}")
+        return 0 if candidate_manifest["result"] == "CALIBRATION_NEEDS_VERIFICATION" else 2
+    if args.scale_mm_per_px is None or args.calibration_approval is None:
+        raise CommandError(
+            "run-pdf requires --scale-mm-per-px and --calibration-approval unless --auto-calibrate is selected."
+        )
     manifest = new_pdf_manifest(
         source,
         args.scale_mm_per_px,
@@ -1030,8 +1048,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_pdf = subcommands.add_parser("run-pdf", help="Run every PDF page through staged DXF generation")
     run_pdf.add_argument("--input", type=Path, required=True)
     run_pdf.add_argument("--output-dir", type=Path, required=True)
-    run_pdf.add_argument("--scale-mm-per-px", type=float, required=True)
-    run_pdf.add_argument("--calibration-approval", required=True)
+    run_pdf.add_argument("--scale-mm-per-px", type=float)
+    run_pdf.add_argument("--calibration-approval")
+    run_pdf.add_argument(
+        "--auto-calibrate",
+        action="store_true",
+        help="Create only a needs_verification calibration candidate; stop before Semantic IR and DXF",
+    )
     run_pdf.add_argument("--dpi", type=int, default=144)
     run_pdf.add_argument(
         "--auto-ocr-roi",

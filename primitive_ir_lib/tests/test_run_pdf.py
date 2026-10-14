@@ -66,6 +66,56 @@ def test_run_pdf_requires_scale_or_auto_calibrate(tmp_path: Path):
         assert "auto_calibrate" in str(exc)
 
 
+@pytest.mark.parametrize(
+    ("scale", "label"),
+    [(float("nan"), "NaN"), (float("inf"), "+Infinity"), (True, "Boolean True")],
+)
+def test_run_pdf_rejects_invalid_manual_scale_before_render_or_output_staging(
+    tmp_path: Path, scale: float | bool, label: str
+) -> None:
+    pdf_path = tmp_path / "fixture.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+
+    extraction_calls: list[Path] = []
+
+    def fake_run(*, image_path: str, output_path: str, view_candidates_output_path: str, **kwargs: object) -> str:
+        extraction_calls.append(Path(image_path))
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text(
+            json.dumps({
+                "primitives": [],
+                "cross_validations": [],
+                "calibration": {"method": "manual_override", "pixel_to_unit_scale": scale},
+            }),
+            encoding="utf-8",
+        )
+        Path(view_candidates_output_path).write_text("[]", encoding="utf-8")
+        return output_path
+
+    caught: ValueError | None = None
+    with patch("primitive_ir_lib.run_pdf.run", side_effect=fake_run), patch(
+        "primitive_ir_lib.run_pdf.fitz.open", wraps=fitz.open
+    ) as open_document:
+        try:
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=scale, dpi=72, preset="default")
+        except ValueError as exc:
+            caught = exc
+
+    assert caught is not None, (
+        f"{label} manual scale was accepted; fitz.open calls={open_document.call_count}, "
+        f"extraction calls={len(extraction_calls)}, staged paths="
+        f"{sorted(str(path.relative_to(output_dir)) for path in output_dir.rglob('*')) if output_dir.exists() else []}"
+    )
+    assert open_document.call_count == 0
+    assert extraction_calls == []
+    assert not output_dir.exists()
+
+
 def test_run_pdf_auto_calibrate_requires_prefix_with_registry(tmp_path: Path):
     pdf_path = tmp_path / "fixture.pdf"
     _make_blank_pdf(pdf_path)
