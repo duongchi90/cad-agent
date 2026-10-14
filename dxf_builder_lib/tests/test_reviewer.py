@@ -642,6 +642,107 @@ def test_component_mismatch_is_structured_not_free_text():
     print("OK   test_component_mismatch_is_structured_not_free_text")
 
 
+
+@pytest.mark.parametrize("scale_field", ["xscale", "yscale", "zscale"])
+@pytest.mark.parametrize(
+    "scale_value",
+    [pytest.param(math.nan, id="nan"), pytest.param(math.inf, id="positive-infinity"), pytest.param(-math.inf, id="negative-infinity")],
+)
+def test_review_rejects_nonfinite_persisted_insert_scale(tmp_path, scale_field, scale_value):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    document = ezdxf.readfile(out_path)
+    handle = build_result.component_handle_by_part_id[part_id]
+    entity = document.entitydb.get(handle)
+    assert entity is not None
+    setattr(entity.dxf, scale_field, scale_value)
+    document.saveas(out_path)
+
+    reopened = ezdxf.readfile(out_path)
+    persisted = reopened.entitydb.get(handle)
+    assert persisted is not None
+    actual = getattr(persisted.dxf, scale_field)
+    if math.isnan(scale_value):
+        assert math.isnan(actual)
+    else:
+        assert actual == scale_value
+
+    candidate_before_review = Path(out_path).read_bytes()
+    report = review_dxf(build_result)
+
+    assert report.component_checked_count == 1
+    assert not report.passed
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == scale_field
+        for mismatch in report.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == candidate_before_review
+
+
+@pytest.mark.parametrize("scale_field", ["xscale", "yscale", "zscale"])
+@pytest.mark.parametrize(
+    "expected_value",
+    [pytest.param(math.nan, id="nan"), pytest.param(math.inf, id="positive-infinity"), pytest.param(-math.inf, id="negative-infinity")],
+)
+def test_review_rejects_nonfinite_expected_insert_scale(tmp_path, scale_field, expected_value):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    actual_entity = ezdxf.readfile(out_path).entitydb.get(
+        build_result.component_handle_by_part_id[part_id]
+    )
+    assert actual_entity is not None
+    assert math.isfinite(getattr(actual_entity.dxf, scale_field))
+    build_result.written_component_by_part_id[part_id][scale_field] = expected_value
+
+    candidate_before_review = Path(out_path).read_bytes()
+    report = review_dxf(build_result)
+
+    assert report.component_checked_count == 1
+    assert not report.passed
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == scale_field
+        for mismatch in report.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == candidate_before_review
+
+
+@pytest.mark.parametrize("scale_field", ["xscale", "yscale", "zscale"])
+@pytest.mark.parametrize(
+    "delta,want_pass",
+    [(0.0, True), (0.5e-6, True), (2e-6, False)],
+    ids=["equal", "within-default-tolerance", "outside-default-tolerance"],
+)
+def test_review_preserves_finite_insert_scale_tolerance(tmp_path, scale_field, delta, want_pass):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    expected = build_result.written_component_by_part_id[part_id][scale_field]
+    document = ezdxf.readfile(out_path)
+    handle = build_result.component_handle_by_part_id[part_id]
+    entity = document.entitydb.get(handle)
+    assert entity is not None
+    setattr(entity.dxf, scale_field, expected + delta)
+    document.saveas(out_path)
+
+    reopened = ezdxf.readfile(out_path)
+    persisted = reopened.entitydb.get(handle)
+    assert persisted is not None
+    actual = getattr(persisted.dxf, scale_field)
+    assert actual == pytest.approx(expected + delta, abs=1e-12)
+
+    candidate_before_review = Path(out_path).read_bytes()
+    report = review_dxf(build_result)
+
+    assert report.component_checked_count == 1
+    assert report.passed is want_pass
+    if want_pass:
+        assert not any(
+            mismatch.part_id == part_id and mismatch.field == scale_field
+            for mismatch in report.component_mismatches
+        )
+    else:
+        assert any(
+            mismatch.part_id == part_id and mismatch.field == scale_field
+            for mismatch in report.component_mismatches
+        )
+    assert Path(out_path).read_bytes() == candidate_before_review
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_review_passes_on_correctly_built_dxf,
