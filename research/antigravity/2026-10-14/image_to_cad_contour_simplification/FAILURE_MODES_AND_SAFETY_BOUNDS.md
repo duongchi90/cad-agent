@@ -10,7 +10,7 @@
 
 ## 1. Overview of Evaluated Hazards
 
-In converting raster engineering drawings into CAD vector boundaries, naive application of polyline simplification algorithms introduces five severe failure modes that corrupt downstream CAD geometry. This document details each failure mode, empirical proof from the 7 synthetic fixtures, and established safety bounds.
+In converting raster engineering drawings into CAD vector boundaries, naive application of polyline simplification algorithms introduces five severe failure modes that corrupt downstream CAD geometry. This document details each failure mode, empirical observations from the 7 synthetic fixtures, and geometric relation models.
 
 ---
 
@@ -60,11 +60,12 @@ When a sharp corner (e.g. $30^\circ$ acute apex, $45^\circ$ chamfer) has neighbo
   - For $\epsilon \le 3.0\text{ px}$, the apex survives with $100\%$ corner retention ($H = 0.72\text{ px}$).
   - At $\epsilon = 0.08 \times P = 80\text{ px}$, the apex is clipped, corner survival drops to $83.3\%$, and Hausdorff error spikes to $50.0\text{ px}$.
 
-### Safety Bound
-> [!IMPORTANT]
-> To prevent clipping sharp corners of included angle $\alpha$:
-> $$\epsilon < \frac{L_{\text{edge}}}{2} \tan\left(\frac{\alpha}{2}\right)$$
-> For acute $30^\circ$ corners, $\epsilon \le 1.5\text{ px}$ guarantees zero apex clipping.
+### Geometric Relation and Fixture 2 Observation
+> [!NOTE]
+> **Mathematical model (assuming planar straight flanking edges of length $L_{\text{edge}}$ joining at angle $\alpha$ without raster noise):**
+> A chord spanning flanking points at distance $L_{\text{edge}}/2$ deviates from the corner apex by $h = \frac{L_{\text{edge}}}{2} \tan\left(\frac{\alpha}{2}\right)$. For RDP not to clip the apex under this idealized model, $\epsilon < h$.
+>
+> **Fixture 2 Observation:** On the tested synthetic Chevron profile ($\alpha = 30^\circ$, flanking edges $\ge 200\text{ px}$), tested $\epsilon \le 3.0\text{ px}$ preserved the apex with 100% corner retention, while tested $\epsilon = 0.08 \times P = 80\text{ px}$ clipped the apex.
 
 ---
 
@@ -83,9 +84,14 @@ When $\epsilon$ is too large relative to radius $R$:
 - $\epsilon = 1.50\text{ px}$: 20 chords, radial error $1.49\text{ px}$, area error $1.02\%$.
 - $\epsilon = 6.00\text{ px}$: 8 chords, radial error $5.84\text{ px}$, area error $8.89\%$.
 
-### Safety Bound
+### Analytical Sagitta Model and Fixture 3 Observation
 > [!NOTE]
-> Polyline simplification is inherently an approximation for curved geometry. In Cad Agent's architecture, circular arcs should be extracted as true analytical `ARC` / `CIRCLE` primitives via Taubin SVD (`REA-002`) rather than simplified polylines. When polylines must represent curves, $\epsilon \le 1.0\text{ px}$ is required to keep chord error $< 1.0\text{ px}$.
+> **Mathematical model (idealized circle of radius $R$):**
+> The maximum sagitta between a circular arc of radius $R$ and a chord subtending angle $\theta$ is $h = R \left(1 - \cos\frac{\theta}{2}\right) \le \epsilon$.
+>
+> **Fixture 3 Observation:** On the tested synthetic circular disk ($R = 75\text{ px}$), tested $\epsilon = 0.75\text{ px}$ yielded 40 chord segments with measured radial error $0.69\text{ px}$ and area error $0.046\%$. At tested $\epsilon = 6.0\text{ px}$, radial error increased to $5.84\text{ px}$ with 8 chord segments.
+>
+> In Cad Agent's architecture, circular arcs should be extracted as true analytical `ARC` / `CIRCLE` primitives via Taubin SVD (`REA-002`) rather than simplified polylines.
 
 ---
 
@@ -103,11 +109,12 @@ A closed internal contour representing a pin hole or bolt hole (e.g. $R = 5\text
   - $\epsilon = 1.50\text{ px}$: 4 vertices, area error $24.2\%$, topology preserved.
   - $\epsilon = 6.00\text{ px}$: 2 vertices, **Area = 0.0 (100% loss), topology destroyed**.
 
-### Safety Bound
-> [!CAUTION]
-> For any closed hole contour of minimum enclosing radius $R_{\text{hole}}$:
-> $$\epsilon < 0.5 \cdot R_{\text{hole}}$$
-> Holes with $R \le 3\text{ px}$ must not be simplified with $\epsilon > 1.0\text{ px}$.
+### Geometric Collapse Model and Fixture 5 Observation
+> [!NOTE]
+> **Mathematical model (idealized convex loop of enclosing radius $R$):**
+> If $\epsilon \ge R$, diametrically opposed boundary points have chord distance $\le \epsilon$, allowing RDP to reduce the closed loop to a 2-point degenerate line segment ($Area = 0$).
+>
+> **Fixture 5 Observation:** On tested synthetic circular hole ($R = 5\text{ px}$, $P = 28\text{ px}$), tested $\epsilon \in \{0.75, 1.5\}\text{ px}$ retained 4–8 vertices with preserved closed topology ($Area > 20\text{ px}^2$), whereas tested $\epsilon = 6.0\text{ px} > R$ collapsed the loop into a degenerate 2-point line with 100% area loss.
 
 ---
 
@@ -131,4 +138,4 @@ On the tested pixel grid, a true $90^\circ$ CAD corner also has an initial local
 
 ### Benchmark Finding on Tested Variant
 > [!NOTE]
-> In the tested synthetic discrete raster fixtures, the `Clean_Room_Direct_Area_VW_Variant` (without monotonic hierarchy) collapsed closed raster loops at tested thresholds $\tau \ge 1.0\text{ px}^2$. For Cad Agent's candidate contour filtering, OpenCV's standard Ramer-Douglas-Peucker (`approxPolyDP`) is already present as an existing dependency and achieved the required corner preservation on tested fixtures. Canonical VW was not tested.
+> In the tested synthetic discrete raster fixtures, the `Clean_Room_Direct_Area_VW_Variant` (without monotonic hierarchy) collapsed closed raster loops at tested thresholds $\tau \ge 1.0\text{ px}^2$. For Cad Agent's candidate contour filtering, OpenCV's standard Ramer-Douglas-Peucker (`approxPolyDP`) is already present as an existing dependency and achieved 100% corner preservation on tested fixtures. Canonical VW was not tested.

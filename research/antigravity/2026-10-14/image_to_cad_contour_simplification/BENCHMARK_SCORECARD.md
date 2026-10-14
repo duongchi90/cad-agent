@@ -68,7 +68,7 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Abs)** | $\epsilon = 6.00\text{ px}$ | 8 | 98.1% | 5.84 px | 8.8930% | Severe (Octagon) |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.08 \times P$ | 4 | 99.1% | 21.92 px | 35.5375% | Catastrophic (Diamond/Square) |
 
-*Key finding:* Circular arcs require $\epsilon \le 1.0\text{ px}$ to maintain smooth circular fidelity ($H < 1.0\text{ px}$, area error $< 0.1\%$). When $\epsilon \ge 6.0\text{ px}$ or $\epsilon \ge 0.02 \times P$, arcs degenerate into coarse polygons.
+*Tested Fixture 3 finding:* On the tested synthetic circular disk ($R = 75\text{ px}$, 424 raw points), tested $\epsilon = 0.75\text{ px}$ maintained chord error $H = 0.69\text{ px}$ with area error $0.046\%$ (40 points, 90.6% reduction). Tested coarse settings ($\epsilon = 6.0\text{ px}$ or $\epsilon = 0.08 \times P$) produced large polygon chords (4–8 points) with $8.9\%\text{--}35.5\%$ area error.
 
 ---
 
@@ -114,7 +114,7 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Abs)** | $\epsilon = 1.50\text{ px}$ | 6 | 99.5% | **0.72 px** | **0.0557%** | **100.0%** |
 | **OpenCV RDP (Abs)** | $\epsilon = 3.00\text{ px}$ | **5** | **99.6%** | **1.68 px** | **0.1237%** | **100.0%** |
 
-*Key finding:* High-frequency raster staircase aliasing is completely smoothed out with $\epsilon = 0.75\text{--}1.5\text{ px}$, recovering clean straight edge segments with sub-pixel Hausdorff error ($0.72\text{ px}$).
+*Tested Fixture 6 finding:* On the tested multi-angled staircase polygon (1140 raw points, slopes 1:5, 1:2, 2:1, 5:1), tested $\epsilon \in [0.75, 1.5]\text{ px}$ reduced 99.5% of points (down to 6 vertices) with measured Hausdorff error $0.72\text{ px}$ and 100% corner survival.
 
 ---
 
@@ -138,7 +138,7 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 > The measured metrics are **fixture-specific synthetic observations** on tested binary shapes with 1-pixel steps:
 > - **Straight-edge & staircase polygons (Fixtures 1, 2, 6):** 99.4%–99.7% point count reduction under absolute $\epsilon \in [0.75, 1.5]\text{ px}$ with $H \le 0.72\text{ px}$ and 100% corner survival.
 > - **Composite stepped shaft (Fixture 7):** 97.3%–97.8% point count reduction (1104 to 24–30 points) under tested $\epsilon \in [0.75, 1.5]\text{ px}$ with $H \le 1.34\text{ px}$, area error $\le 0.0096\%$, notch intact, and 100% corner survival. At tested $\epsilon = 0.01 \times P$ ($11.04\text{ px}$) and $\epsilon = 6.0\text{ px}$, the keyway notch was erased.
-> - **Curved profiles (Fixture 3 arc, Fixture 5 hole):** Lower reduction rates (71.4%–95.3%) to maintain geometric fidelity; arcs require chord chains to avoid chord-flattening error ($H = 0.69\text{ px}$ at $\epsilon = 0.75\text{ px}$, $H = 1.49\text{ px}$ at $\epsilon = 1.5\text{ px}$).
+> - **Curved profiles (Fixture 3 arc, Fixture 5 hole):** Lower reduction rates (71.4%–95.3%) to maintain geometric fidelity; arcs rely on chord chains to avoid chord-flattening error ($H = 0.69\text{ px}$ at $\epsilon = 0.75\text{ px}$, $H = 1.49\text{ px}$ at $\epsilon = 1.5\text{ px}$).
 > - **Clean-Room Direct-Area VW Variant:** Without monotonic hierarchy, collapsed tested closed raster loops to 3–4 points at tested thresholds $\tau \ge 1.0\text{ px}^2$. Canonical VW was not tested.
 > - **Scale Limits:** Observations are strictly relative to tested synthetic pixel dimensions. No assertions are made for uncalibrated real-world scans or DPI invariance.
 > - **Architectural Boundary:** `FUTURE_FULL_CONTOUR_CANDIDATE_OWNER=geometry_comparator.py::_contour_points` under condition: **ONLY AFTER MEASURED PRODUCT RED**. `PRODUCTION_TRANSFER_AUTHORIZED=NO`.

@@ -70,10 +70,10 @@ Execution command:
 Output:
 ```text
 === Running REA-022 Image-to-CAD Contour Simplification Transfer Oracle ===
-Test 1 PASS: Staircase reduced from 1160 to 4 points (99.7% reduction). Exactly 4 corners retained.
-Test 2 PASS: Safe absolute epsilon preserves 6x8 px notch (8 vertices total); relative epsilon (0.02*perim) destroys notch (bridges to 4 vertices).
-Test 3 PASS: R=5 px hole retained with 8 vertices (area=70.0 px^2). Epsilon=6.0 px collapses hole to 2 points.
-Test 4 PASS: Stepped shaft simplified from 1104 to 26 vertices (area error 0.0478%). Chamfers and fillet chords preserved.
+Test 1 PASS: Fixture 1 staircase reduced from 1160 to 4 points (99.7% reduction). Exactly 4 corners retained.
+Test 2 PASS: Tested absolute epsilon=1.0 px preserves 6x8 px notch on Fixture 4 (8 vertices total); tested relative epsilon=0.02*P bridges notch to 4 vertices.
+Test 3 PASS: Fixture 5 R=5 px hole retained with 8 vertices (area=70.0 px^2) under tested eps=1.0 px; tested eps=6.0 px collapses hole to 2 points.
+Test 4 PASS: Fixture 7 stepped shaft simplified from 1104 to 26 vertices (area error 0.0478%) under tested eps=1.0 px. Chamfers and fillet chords preserved.
 
 ALL 4 ORACLE TESTS PASSED (100% Success). Oracle verified.
 ```
