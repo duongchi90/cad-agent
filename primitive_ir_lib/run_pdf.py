@@ -22,7 +22,7 @@ from typing import Optional
 import fitz
 
 from .calibration_registry import get_verified_scale
-from .run_image import run
+from .run_image import _validate_circle_strategy, run
 
 
 def _candidate_crop_bbox(candidate: dict, width: int, height: int, padding_px: int = 12) -> tuple[int, int, int, int]:
@@ -45,6 +45,8 @@ def _materialize_view_children(
     page_number: int,
     preset: str,
     merge_lines: bool,
+    *,
+    circle_strategy: str = "hough",
 ) -> None:
     """Create review-only child IRs for non-overlapping evidenced candidates."""
     evidenced = [candidate for candidate in candidates if candidate.get("dimension_evidence")]
@@ -75,6 +77,9 @@ def _materialize_view_children(
         if not cv2.imwrite(str(child_image), image[y0:y1, x0:x1]):
             raise ValueError(f"Cannot write view child image: {child_image}")
         child_image_sha256 = hashlib.sha256(child_image.read_bytes()).hexdigest()
+        run_kwargs = {}
+        if circle_strategy != "hough":
+            run_kwargs["circle_strategy"] = circle_strategy
         run(
             image_path=str(child_image),
             output_path=str(child_ir),
@@ -84,6 +89,7 @@ def _materialize_view_children(
             auto_ocr_roi=True,
             calibration_status="needs_verification",
             calibration_source_sha256=child_image_sha256,
+            **run_kwargs,
         )
         candidate["child_ir"] = str(child_ir.relative_to(output_dir)).replace("\\", "/")
         candidate["child_image"] = str(child_image.relative_to(output_dir)).replace("\\", "/")
@@ -123,6 +129,8 @@ def run_pdf(
     auto_calibrate: bool = False,
     calibration_registry_path: Optional[Path] = None,
     calibration_id_prefix: Optional[str] = None,
+    *,
+    circle_strategy: str = "hough",
 ) -> dict:
     """Render each PDF page locally and emit a validated Primitive IR JSON.
 
@@ -133,6 +141,7 @@ def run_pdf(
     "{calibration_id_prefix}_page{N:02d}", status=needs_verification — xem
     cảnh báo an toàn trong run_image.run()/auto_estimate_calibration().
     """
+    circle_strategy = _validate_circle_strategy(circle_strategy)
     if not pdf_path.is_file():
         raise FileNotFoundError(pdf_path)
     if dpi <= 0:
@@ -167,6 +176,9 @@ def run_pdf(
                 if (auto_calibrate and calibration_registry_path is not None)
                 else None
             )
+            run_kwargs = {}
+            if circle_strategy != "hough":
+                run_kwargs["circle_strategy"] = circle_strategy
             run(
                 image_path=str(image_path), output_path=str(output_path),
                 scale_mm_per_px=scale_mm_per_px, preset=preset,
@@ -177,6 +189,7 @@ def run_pdf(
                 calibration_id=page_calibration_id,
                 view_candidates_output_path=str(view_candidates_path),
                 view_candidates_dpi=dpi,
+                **run_kwargs,
             )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             scale_label_candidates = json.loads(view_candidates_path.read_text(encoding="utf-8"))
@@ -187,6 +200,7 @@ def run_pdf(
                 index,
                 preset,
                 merge_lines,
+                circle_strategy=circle_strategy,
             )
             view_candidates_path.write_text(
                 json.dumps(scale_label_candidates, indent=2) + "\n",

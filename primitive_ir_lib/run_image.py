@@ -35,6 +35,18 @@ from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
+_CIRCLE_STRATEGY_TO_TOOL = {
+    "hough": "opencv-canny-hough-v1",
+    "closed_ring_identity_v1": "opencv-contour-ring-identity-v1",
+}
+
+
+def _validate_circle_strategy(circle_strategy: str) -> str:
+    if not isinstance(circle_strategy, str) or circle_strategy not in _CIRCLE_STRATEGY_TO_TOOL:
+        raise ValueError(
+            "circle_strategy must be exactly 'hough' or 'closed_ring_identity_v1'"
+        )
+    return circle_strategy
 
 
 class CalibrationCandidateUnavailableError(ValueError):
@@ -98,6 +110,8 @@ def run(
     view_candidates_dpi: Optional[int] = None,
     calibration_status: str = "verified",
     calibration_source_sha256: Optional[str] = None,
+    *,
+    circle_strategy: str = "hough",
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -107,6 +121,7 @@ def run(
     toàn trong auto_estimate_calibration(): kết quả này CHƯA được verify,
     không nên dùng thẳng cho DXF sản xuất mà không kiểm tra lại.
     """
+    circle_strategy = _validate_circle_strategy(circle_strategy)
     if scale_mm_per_px is not None and (
         isinstance(scale_mm_per_px, bool)
         or not math.isfinite(scale_mm_per_px)
@@ -126,7 +141,9 @@ def run(
     if image is None:
         raise ValueError(f"Không đọc được ảnh bằng OpenCV: {image_path}")
 
-    raw_geometry = extract_raw_geometry(image, preset=preset)
+    raw_geometry = extract_raw_geometry(
+        image, preset=preset, circle_strategy=circle_strategy
+    )
 
     effective_rois = list(ocr_rois) if ocr_rois else []
     if auto_ocr_roi or (auto_calibrate and not effective_rois):
@@ -219,6 +236,7 @@ def run(
         raw_circles=raw_geometry.circles,
         raw_texts=raw_texts,
         sha256=_sha256(image_path),
+        circle_extraction_tool=_CIRCLE_STRATEGY_TO_TOOL[circle_strategy],
     )
     document.cross_validations = cross_validate(
         raw_texts,

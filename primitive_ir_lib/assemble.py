@@ -84,14 +84,25 @@ def build_document(
     raw_circles: List[RawCircle],
     raw_texts: List[RawText],
     sha256: Optional[str] = None,
+    *,
+    circle_extraction_tool: str = "opencv-canny-hough-v1",
 ) -> PrimitiveIRDocument:
     """Entry point chính: sinh PrimitiveIRDocument đầy đủ (chưa có
     cross_validations — gọi cross_validation.cross_validate() rồi gán vào
     doc.cross_validations sau, vì hàm đó cần raw_texts/raw_lines ở dạng
     pixel gốc, không phải Primitive đã quy đổi)."""
+    if not isinstance(circle_extraction_tool, str) or circle_extraction_tool not in {
+        "opencv-canny-hough-v1",
+        "opencv-contour-ring-identity-v1",
+    }:
+        raise ValueError(f"unsupported circle extraction tool: {circle_extraction_tool!r}")
+
     primitives: List[Primitive] = []
     primitives += [line_to_primitive(l, calibration) for l in raw_lines]
-    primitives += [circle_to_primitive(c, calibration) for c in raw_circles]
+    primitives += [
+        circle_to_primitive(c, calibration, tool=circle_extraction_tool)
+        for c in raw_circles
+    ]
     primitives += [text_to_primitive(t, calibration) for t in raw_texts]
 
     return PrimitiveIRDocument(
