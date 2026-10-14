@@ -17,6 +17,14 @@ nhận).
 | `repair.py` | `repair_dxf()` — Repair #1: nhận `mismatches` từ `review_dxf()`, xoá entity bị lỗi theo handle và vẽ lại đúng từ `BuildResult.written_geometry_by_primitive_id`. Ghi đè vào đúng file gốc; caller chạy lại `review_dxf()` sau để xác nhận hết lỗi. |
 | `demo_pipeline.py` | Đọc `primitive_ir_demo_output.json` (Phase 1) + `semantic_ir_demo_output.json` (Phase 2) — 2 file độc lập, không cần chạy lại Phase 1/2 trong cùng tiến trình — tự chạy lại `prune_constraints()` + `solve_constraints()` để có toạ độ sạch, rồi build DXF → Reviewer #1 → Repair #1 (nếu có lỗi) → Reviewer #1 lần 2. |
 
+For builder-tracked raw `LINE` primitives, `review_dxf()` requires the saved and
+reopened entity to remain owned by and present in that DXF's ModelSpace. A LINE
+found only in PaperSpace or another block layout is reported as a mismatch even
+when its handle and geometry still match. This does not change the default
+whole-inventory policy: unrelated extra ModelSpace entities remain allowed unless
+`strict_primitive_inventory=True` is requested. This is an offline candidate
+acceptance check, not native AutoCAD or live drawing acceptance.
+
 ## Cài đặt
 
 ```bash
