@@ -63,24 +63,24 @@
 
 ### Step 5 — implementation checkpoint and canonical verification
 
-- [ ] Commit the scoped implementation checkpoint and record parent/tree/status and source/test hashes.
-- [ ] Prove the existing qualified PowerShell Core launcher and Python executable before starting one supervised `scripts/verify.ps1 -SkipAutoCADDotNet` run.
-- [ ] Capture durable START/PID/elapsed/stdout/stderr/completion/exit/JUnit. Allow at most the package's bounded observations; no retry, cancellation, or termination.
-- [ ] Require actual exit 0, required offline coverage, and unchanged clean source/tree/status.
+- [x] Scoped implementation checkpoint: commit `ca018ea6c1a119f20d57dcfb5fb97d9046f161b8`, parent `c80303aa841980138c18b170162386f6d5eb3a5a`, tree `9b5fa4c5cbae605a94b46f81cb0a1dedcf1c577a`; clean status before verification. Reviewer SHA256 `fc92b04d0f2c6185cf38c755753d52de9a23924eac8f2b59303d4c79669b75fa`; test SHA256 `c07090d4edf2a7354aada2b5aecf6a3206e13acad4e9d6692db310df8558354f`; README SHA256 `95df04e4c016fe508226837e00ea9a53f3cf17931780c66878bb77b4bdae2102`.
+- [x] Qualified launcher `C:\Users\t3407d\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.exe` (PowerShell 7.6.5) and existing Python `C:\cad-agent\.venv-py311\Scripts\python.exe` (Python 3.11.9, ezdxf 1.4.4; lock SHA256 `d4739cc0c3b523ab11069178680f534fa436e4e64e30e07c30d1f07e652d784d`) admitted. One supervised `scripts/verify.ps1 -PythonExe <existing Python> -SkipAutoCADDotNet` run.
+- [x] Durable START/PID/elapsed/stdout/stderr/completion/exit captured under `D:\Cad agent temp\tracked-line-modelspace-owner-v1`; verifier PID 26740, actual exit 0, elapsed 152371 ms, stop requested NO, stdout SHA256 `b2bd881e67bd9ef2f723ce44ae1e69dcd334e03aaec1dbfc7024f495813bb7a5`, stderr SHA256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. No retry, cancellation, or termination.
+- [x] Canonical offline JUnit: 3721 tests, 0 failures, 0 errors, 0 skipped, SHA256 `fc92b04d0f2c6185cf38c755753d52de9a23924eac8f2b59303d4c79669b75fa`; verifier stdout reports 3644 passed, 23 deselected, 77 subtests, plus 128/128 dotnet_ipc checks. The separate causal RED negative oracle reported its expected failing assertion; the canonical verifier itself exited 0. Real-data unavailable-state probe: 2 skipped; AutoCAD probe: 18 skipped; AutoCAD .NET gate explicitly NOT RUN. Post-verification tracked status and source tree remained clean/unchanged.
 
 ### Step 6 — plan lifecycle close
 
-- [ ] Mark the plan completed in a separate plan-only local commit if needed, proving verified source/test/spec/README bytes are unchanged and the final tree is clean.
-- [ ] Record native/private/live/AutoCAD.NET gates as NOT RUN.
+- [x] Mark this plan completed in a separate plan-only local commit; verify reviewer/test/README/spec hashes remain unchanged from the canonical checkpoint and final status is clean. Completion Head SHA is `ca018ea6c1a119f20d57dcfb5fb97d9046f161b8`.
+- [x] Native/private/live and AutoCAD .NET gates are NOT RUN; this package does not authorize them.
 
 ### Step 7 — durable receipt and stop
 
 - [ ] Publish and read back one compact #491 receipt with exact identities, write set, RED/GREEN/static/canonical results, hashes, compatibility limits, and NOT RUN gates. If any step stopped, publish only bounded stop evidence.
-- [ ] Return to Local Sol before push, PR, review, or promotion.
+- [x] No push, PR, review request, or promotion occurred; return to Local Sol remains required before any such boundary.
 
 ## Package status
 
-- Status: executing
+- Status: completed
 - Base SHA: `c80303aa841980138c18b170162386f6d5eb3a5a`
-- Completion Head SHA: pending
+- Completion Head SHA: `ca018ea6c1a119f20d57dcfb5fb97d9046f161b8`
 - Required private/live gates: NOT RUN; not authorized by this package.
