@@ -3,26 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import cv2
 import fitz
-import numpy as np
 import pytest
 
 from cad_agent import cli, manifest as manifest_owner, pdf as pdf_owner
 from cad_agent.manifest import ManifestError, new_manifest, read_manifest, sha256_file
 from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
+from primitive_ir_lib.tests.closed_ring_test_fixtures import write_circle_fixture as _image
 from primitive_ir_lib.run_image import run as run_image
 
 
 CLOSED_RING = "closed_ring_identity_v1"
 RING_TOOL = "opencv-contour-ring-identity-v1"
 TERMINAL = "GEOMETRY_PROPOSALS_NEED_REVIEW"
-
-
-def _image(path: Path, center: tuple[int, int] = (64, 64)) -> None:
-    image = np.full((128, 160, 3), 255, dtype=np.uint8)
-    cv2.circle(image, center, 22, (0, 0, 0), 2, cv2.LINE_8)
-    assert cv2.imwrite(str(path), image)
 
 
 def _pdf(path: Path) -> None:
