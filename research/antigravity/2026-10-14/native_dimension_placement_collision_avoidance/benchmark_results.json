@@ -7,6 +7,7 @@
     "candidate_unresolved_scenes": 0,
     "prototype_measurement_error": 0.0,
     "production_native_measurement_preservation": "NOT_VERIFIED_BY_THIS_ORACLE",
+    "placement_displacement": "NOT_MEASURED",
     "measured_repeatability_tested_fixtures_pct": 100.0,
     "repeatability_scope": "15/15 dimensions full-field identical across 2 repeated runs on all 10 synthetic fixtures (Fixture 4 tested across 3 runs in oracle)"
   },
@@ -21,7 +22,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -34,7 +34,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -47,7 +46,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 6.4,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -60,7 +58,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 6.4,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -73,7 +70,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 5.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 1
     },
     {
@@ -86,7 +82,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 6.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -99,7 +94,6 @@
       "extension_unwanted_crossings": 2,
       "min_observed_clearance": 6.4,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 1
     },
     {
@@ -112,7 +106,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 6.4,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -122,10 +115,9 @@
       "collision_count": 1,
       "dim_to_geometry_crossings": 1,
       "dim_to_annotation_overlaps": 0,
-      "extension_unwanted_crossings": 0,
+      "extension_unwanted_crossings": 4,
       "min_observed_clearance": 5.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 2
     },
     {
@@ -135,10 +127,9 @@
       "collision_count": 0,
       "dim_to_geometry_crossings": 0,
       "dim_to_annotation_overlaps": 0,
-      "extension_unwanted_crossings": 0,
+      "extension_unwanted_crossings": 3,
       "min_observed_clearance": 6.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -151,7 +142,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 3.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 1
     },
     {
@@ -164,7 +154,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -177,7 +166,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 1
     },
     {
@@ -190,7 +178,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -200,10 +187,9 @@
       "collision_count": 7,
       "dim_to_geometry_crossings": 3,
       "dim_to_annotation_overlaps": 4,
-      "extension_unwanted_crossings": 2,
+      "extension_unwanted_crossings": 4,
       "min_observed_clearance": 5.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 2
     },
     {
@@ -216,7 +202,6 @@
       "extension_unwanted_crossings": 1,
       "min_observed_clearance": 6.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -229,7 +214,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 1
     },
     {
@@ -242,7 +226,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 8.0,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     },
     {
@@ -255,7 +238,6 @@
       "extension_unwanted_crossings": 2,
       "min_observed_clearance": 6.4,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 1
     },
     {
@@ -268,7 +250,6 @@
       "extension_unwanted_crossings": 0,
       "min_observed_clearance": 6.4,
       "prototype_measurement_error": 0.0,
-      "placement_displacement": 0.0,
       "unresolved_dimensions": 0
     }
   ]

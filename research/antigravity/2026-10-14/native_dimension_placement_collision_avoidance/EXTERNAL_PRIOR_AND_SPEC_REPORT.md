@@ -76,10 +76,18 @@
 - **REUSE_CLASS:** `ALGORITHM_TRANSFER` (Clean-room implementation of discrete candidate evaluation pattern).
 - **DIRECT_CODE_REUSE_ALLOWED:** `NO` (Clean-room algorithmic reimplementation only; no third-party code copied).
 - **BEHAVIORAL_PRIOR_ALLOWED:** `YES`.
-- **WHAT_IS_ACTUALLY_SUPPORTED:**
-  - Evaluates a small, finite set of discrete candidate positions ($S \times K$, e.g. 2 sides $\times$ 3 offset lanes).
-  - Penalizes collisions using a deterministic scoring function with strict priority: hard collisions for geometry crossings / text overlap, soft penalties for extension crossings, lane distance, and side preference.
-  - Selects the minimum penalty candidate via stable lexicographic tie-breaking.
+- **SOURCE_SUPPORTED_PRIOR (FROM PFLP):**
+  1. *Discrete candidate positions:* Evaluating a finite set of discrete pre-computed candidate positions per feature.
+  2. *Conflict/overlap objective component:* Evaluating collisions between placed annotations and obstacles/other features as an explicit objective penalty.
+  3. *Candidate prior preferences:* Weighting candidate positions according to a priori geometric preference (e.g., preferred side or distance).
+  4. *Heuristic search:* Selecting candidate positions using greedy or local heuristic search over candidate sets.
+- **CAD_AGENT_RESEARCH_HEURISTICS (NOT FROM PFLP):**
+  1. *2 sides $\times$ 3 lanes (6 candidates):* Symmetrical normal sides $\pm \mathbf{n}$ and 3 stacking offset lanes ($k \in \{0, 1, 2\}$) designed specifically for linear CAD dimensions.
+  2. *Dimension witness geometry:* Modeling extension lines, dimension lines, and text bounding box evaluation.
+  3. *Hard-vs-soft collision classification:* Partitioning conflicts into zero-tolerance hard collisions vs soft extension crossings / lane penalties.
+  4. *Hard-first lexicographic selection tuple:* $(\text{hard\_collision\_count}, \text{soft\_penalty\_score}, \text{lane\_idx}, \text{side\_preference})$.
+  5. *Penalty weights:* Specific numeric coefficients ($P_{\text{ext\_geom}} = 150.0$, $P_{\text{ext\_dim}} = 300.0$, $P_{\text{dim\_ext}} = 300.0$, $P_{\text{lane}} = 15.0 \cdot k$, $P_{\text{side}} = 1.0$).
+  6. *Lane spacing and base floor:* $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$ and base floor $d_0 = \max(L \cdot 0.08, 6.0\text{ mm})$.
 - **BENEFIT FOR CAD AGENT:** Bounded $O(1)$ search per dimension (6 candidates total), completely deterministic, zero graph optimizer overhead, zero machine learning models, zero new dependencies.
 
 ---

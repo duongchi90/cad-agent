@@ -6,7 +6,7 @@ Verifies:
    equals measured physical segment length exactly (prototype_measurement_error == 0.0).
    (Algebraic sanity check on prototype model; PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE).
 2. Full-Field Deterministic Repeatability: Repeated execution of the multi-lane dual-side candidate policy
-   yields identical coordinates across all PlacedDimension fields on tested synthetic fixtures
+   yields identical coordinates across all PlacedDimension fields within 1e-9 tolerance on tested synthetic fixtures
    (3 runs on Fixture 4; full-field check across all 10 scenes in benchmark).
 3. Obstacle Avoidance via Dual-Side Search: On Fixture 6 (geometry obstacle on +normal side)
    and Fixture 7 (annotation text note on +normal side), the candidate policy selects the
@@ -17,12 +17,13 @@ Verifies:
 5. Boundary Enclosure: On Fixture 9 (measured edge at y=495 near ymax=500 sheet border),
    the candidate policy flips side inward to keep dimension text within sheet bounds, whereas
    the baseline fixed offset places text out-of-bounds.
-6. MF-02 Regression (Evaluator Symmetry): Pairwise collisions mark both dimensions unresolved
+6. MF-02 Regression / R2.A (Evaluator Text-Line Symmetry): Pairwise collisions where dim1 line intersects
+   dim2 text (with no dim-dim line crossing or text-text overlap) mark both dimensions unresolved
    symmetrically and are invariant to placed dimension ordering.
 7. MF-03 Regression (Input Ordering Independence): Reversing measured segments on Fixture 8
    yields identical placement results via canonical spec sorting.
-8. MF-07 Regression (H20 Hard Collision Priority): A candidate with 0 hard collisions and multiple
-   soft extension crossings strictly beats any candidate with >= 1 hard collision.
+8. MF-07 Regression / R2.B (H20 Real Scoring Path Priority): A candidate with 0 hard collisions and multiple
+   soft extension crossings strictly beats a candidate with >= 1 hard collision on the real scoring path.
 
 Evidence Tier: BOUNDED_SYNTHETIC_RESEARCH_ORACLE
 Note: Standalone prototype oracle; not a call through production builder owners or native DXF entity roundtrip.
@@ -46,6 +47,9 @@ from benchmark_dimension_placement import (
     create_fixtures,
     dimensions_match,
     score_candidate,
+    segments_intersect,
+    bboxes_overlap,
+    segment_intersects_bbox,
 )
 
 
@@ -81,7 +85,7 @@ def run_oracle_tests():
     for p1, p2, p3 in zip(run1, run2, run3):
         assert dimensions_match(p1, p2), "Full-field dimension match failed between run 1 and run 2!"
         assert dimensions_match(p1, p3), "Full-field dimension match failed between run 1 and run 3!"
-    print("Test 2 PASS: Full-field deterministic repeatability verified across 3 repeated runs on Fixture 4 (all fields identical; bounded to tested synthetic fixtures).")
+    print("Test 2 PASS: Full-field deterministic repeatability verified across 3 repeated runs on Fixture 4 (all fields equal within 1e-9 on tested fixtures).")
 
     # -----------------------------------------------------------------------
     # Test 3: Dual-side obstacle avoidance on Fixtures 6 and 7
@@ -156,27 +160,56 @@ def run_oracle_tests():
     print(f"Test 5 PASS: Fixture 9 baseline escaped top sheet border (out-of-bounds); candidate flipped inward to side=-1 with 0 boundary collisions.")
 
     # -----------------------------------------------------------------------
-    # Test 6 (MF-02 Regression): Evaluator pairwise symmetry and mutual attribution
+    # Test 6 (MF-02 Regression / R2.A): Evaluator text-line pairwise symmetry
     # -----------------------------------------------------------------------
+    # Craft a synthetic case where:
+    # 1. NO dimension-line vs dimension-line crossing
+    # 2. NO text vs text overlap
+    # 3. Exactly one dimension line intersects the other dimension's text bbox
+    #    (exercising the direction missed by the old asymmetric evaluator)
+    # 4. Reversing placed list yields identical evaluation
+    # 5. Both dimensions are attributed as unresolved
+    p1_sym = PlacedDimension(
+        spec_id="D1", side=1, lane_index=0, offset=8.0, base=(50.0, 50.0),
+        dim_line_start=(10.0, 50.0), dim_line_end=(90.0, 50.0),
+        ext_line_1_start=(10.0, 42.0), ext_line_1_end=(10.0, 52.0),
+        ext_line_2_start=(90.0, 42.0), ext_line_2_end=(90.0, 52.0),
+        text_bbox=(44.0, 48.25, 56.0, 51.75),
+        measured_length=80.0, dimension_length=80.0
+    )
+    p2_sym = PlacedDimension(
+        spec_id="D2", side=1, lane_index=0, offset=8.0, base=(30.0, 50.0),
+        dim_line_start=(120.0, 10.0), dim_line_end=(120.0, 90.0),
+        ext_line_1_start=(112.0, 10.0), ext_line_1_end=(122.0, 10.0),
+        ext_line_2_start=(112.0, 90.0), ext_line_2_end=(122.0, 90.0),
+        text_bbox=(24.0, 48.25, 36.0, 51.75),
+        measured_length=80.0, dimension_length=80.0
+    )
+
+    p1_dim_seg = (p1_sym.dim_line_start, p1_sym.dim_line_end)
+    p2_dim_seg = (p2_sym.dim_line_start, p2_sym.dim_line_end)
+
+    assert not segments_intersect(p1_dim_seg, p2_dim_seg), "Precondition violated: dimension lines must not cross!"
+    assert not bboxes_overlap(p1_sym.text_bbox, p2_sym.text_bbox), "Precondition violated: text bboxes must not overlap!"
+    assert segment_intersects_bbox(p1_dim_seg, p2_sym.text_bbox), "Precondition violated: p1 dim line must cross p2 text bbox!"
+    assert not segment_intersects_bbox(p2_dim_seg, p1_sym.text_bbox), "Precondition violated: p2 dim line must NOT cross p1 text bbox!"
+
     scene_sym = Scene(
-        name="test_pairwise_symmetry",
-        description="Two crossing dimensions testing evaluator symmetry",
-        measured_segments=[
-            MeasuredSegment("D1", (10.0, 50.0), (90.0, 50.0)),
-            MeasuredSegment("D2", (50.0, 10.0), (50.0, 90.0)),
-        ],
+        name="test_text_line_symmetry",
+        description="Focused test where dim1 line intersects dim2 text, but dim2 line does not intersect dim1 text",
+        measured_segments=[],
         geometry_segments=[],
         annotation_obstacles=[],
     )
-    base_sym = place_dimensions_baseline(scene_sym)
-    eval_sym = evaluate_placement_scene(scene_sym, base_sym, "Baseline")
-    assert eval_sym.collision_count == 1, f"Expected 1 line-line collision pair, got {eval_sym.collision_count}"
-    assert eval_sym.unresolved_dimensions == 2, f"Both colliding dimensions must be marked unresolved, got {eval_sym.unresolved_dimensions}"
 
-    eval_sym_rev = evaluate_placement_scene(scene_sym, list(reversed(base_sym)), "Baseline_Reversed")
-    assert eval_sym_rev.collision_count == eval_sym.collision_count == 1
-    assert eval_sym_rev.unresolved_dimensions == eval_sym.unresolved_dimensions == 2
-    print("Test 6 PASS: Evaluator symmetry verified (both colliding dimensions attributed as unresolved; order-invariant).")
+    eval_fwd = evaluate_placement_scene(scene_sym, [p1_sym, p2_sym], "Forward")
+    eval_rev = evaluate_placement_scene(scene_sym, [p2_sym, p1_sym], "Reversed")
+
+    assert eval_fwd.collision_count == eval_rev.collision_count == 1, f"Collision count mismatch: {eval_fwd.collision_count} vs {eval_rev.collision_count}"
+    assert eval_fwd.dim_to_annotation_overlaps == eval_rev.dim_to_annotation_overlaps == 1
+    assert eval_fwd.dim_to_geometry_crossings == eval_rev.dim_to_geometry_crossings == 0
+    assert eval_fwd.unresolved_dimensions == eval_rev.unresolved_dimensions == 2, f"Both colliding dimensions must be marked unresolved, got {eval_fwd.unresolved_dimensions}"
+    print("Test 6 PASS: Evaluator pairwise symmetry verified on text-line crossing (order-invariant, both dimensions unresolved).")
 
     # -----------------------------------------------------------------------
     # Test 7 (MF-03 Regression): Input-list ordering independence (Fixture 8 reversed)
@@ -184,6 +217,7 @@ def run_oracle_tests():
     sc8 = scenes["fixture_8_crowded_short_segments"]
     cand8_fwd = place_dimensions_candidate(sc8)
 
+    # Reverse the input measured segments list
     sc8_rev = Scene(
         name=sc8.name,
         description=sc8.description,
@@ -200,25 +234,61 @@ def run_oracle_tests():
     print("Test 7 PASS: Input-list ordering independence verified on Fixture 8 (forward vs reversed specs yield identical placements).")
 
     # -----------------------------------------------------------------------
-    # Test 8 (MF-07 Regression / H20): Hard collision priority over soft penalties
+    # Test 8 (MF-07 Regression / R2.B / H20): Hard collision priority on real scoring path
     # -----------------------------------------------------------------------
-    cand_A_hard = 0
-    cand_A_soft = 1050.0  # 7 soft extension crossings @ 150 each
-    cand_A_key = (cand_A_hard, cand_A_soft, 0, 0)
-
-    cand_B_hard = 1       # 1 hard collision (e.g. text overlap / geom crossing)
-    cand_B_soft = 0.0     # 0 soft crossings
-    cand_B_key = (cand_B_hard, cand_B_soft, 0, 0)
-
-    assert cand_A_key < cand_B_key, f"H20 failure: Candidate A ({cand_A_key}) should beat Candidate B ({cand_B_key})"
-
-    candidates = [
-        ("Candidate_B_HardCollision", cand_B_key),
-        ("Candidate_A_SoftCrossingsOnly", cand_A_key),
+    # Craft scene where Candidate A (+1) has 0 hard collisions + 10 soft crossings (1500 penalty),
+    # while Candidate B (-1) has 1 hard collision + 0 soft crossings (1001 penalty).
+    geom_h20 = [
+        ((100.0, 100.0), (200.0, 100.0)),  # Measured segment
+        # 5 horizontal segments crossing ext1 on side +1
+        ((90.0, 102.0), (105.0, 102.0)),
+        ((90.0, 103.0), (105.0, 103.0)),
+        ((90.0, 104.0), (105.0, 104.0)),
+        ((90.0, 105.0), (105.0, 105.0)),
+        ((90.0, 106.0), (105.0, 106.0)),
+        # 5 horizontal segments crossing ext2 on side +1
+        ((195.0, 102.0), (210.0, 102.0)),
+        ((195.0, 103.0), (210.0, 103.0)),
+        ((195.0, 104.0), (210.0, 104.0)),
+        ((195.0, 105.0), (210.0, 105.0)),
+        ((195.0, 106.0), (210.0, 106.0)),
+        # 1 hard obstacle on side -1 blocking all lanes
+        ((140.0, 70.0), (160.0, 95.0)),
     ]
-    winner = min(candidates, key=lambda c: c[1])
-    assert winner[0] == "Candidate_A_SoftCrossingsOnly", f"Expected Candidate A to win, got {winner[0]}"
-    print("Test 8 PASS: H20 hard collision priority verified (0 hard + 1050 soft strictly beats 1 hard + 0 soft).")
+    sc_h20 = Scene(
+        name="test_h20_real_path",
+        description="Crafted scene where side +1 has 0 hard collisions and 10 soft crossings, while side -1 has 1 hard collision",
+        measured_segments=[MeasuredSegment("D1", (100.0, 100.0), (200.0, 100.0))],
+        geometry_segments=geom_h20,
+        annotation_obstacles=[],
+    )
+
+    # 1. Execute score_candidate on actual candidate geometry
+    base_p, dim_p, ext1_p, ext2_p, tbox_p, _ = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, +1)
+    hard_p, soft_p = score_candidate(dim_p, ext1_p, ext2_p, tbox_p, +1, 0, sc_h20, [], ((100.0, 100.0), (200.0, 100.0)))
+
+    base_m, dim_m, ext1_m, ext2_m, tbox_m, _ = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, -1)
+    hard_m, soft_m = score_candidate(dim_m, ext1_m, ext2_m, tbox_m, -1, 0, sc_h20, [], ((100.0, 100.0), (200.0, 100.0)))
+
+    assert hard_p == 0, f"Candidate A must have 0 hard collisions, got {hard_p}"
+    assert soft_p >= 1000.0, f"Candidate A must have large soft penalty, got {soft_p}"
+    assert hard_m >= 1, f"Candidate B must have >= 1 hard collision, got {hard_m}"
+    assert soft_m < soft_p, f"Candidate B should have lower soft penalty, got {soft_m} vs {soft_p}"
+
+    cand_key_A = (hard_p, soft_p, 0, 0)
+    cand_key_B = (hard_m, soft_m, 0, 1)
+    assert cand_key_A < cand_key_B, f"Candidate A ({cand_key_A}) must beat Candidate B ({cand_key_B})"
+
+    # 2. Execute real candidate selection path
+    placed_h20 = place_dimensions_candidate(sc_h20)
+    assert len(placed_h20) == 1
+    assert placed_h20[0].side == 1, f"place_dimensions_candidate must select Candidate A (side +1), got side {placed_h20[0].side}"
+
+    # 3. Execute evaluate_placement_scene on real result
+    eval_h20 = evaluate_placement_scene(sc_h20, placed_h20, "Candidate_H20")
+    assert eval_h20.collision_count == 0, f"Expected 0 hard collisions, got {eval_h20.collision_count}"
+    assert eval_h20.extension_unwanted_crossings >= 10, f"Expected >= 10 soft crossings, got {eval_h20.extension_unwanted_crossings}"
+    print("Test 8 PASS: H20 hard collision priority verified on real scoring path (0 hard + 1500 soft strictly beats 1 hard + 1 soft).")
 
     print("\nALL 8 ORACLE TESTS PASSED (100% Success). Oracle verified.")
     print("PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE")

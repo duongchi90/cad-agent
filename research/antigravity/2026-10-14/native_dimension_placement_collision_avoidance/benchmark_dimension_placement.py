@@ -199,7 +199,6 @@ class PlacementEvaluation:
     extension_unwanted_crossings: int
     min_observed_clearance: float
     prototype_measurement_error: float
-    placement_displacement: float
     unresolved_dimensions: int
 
 
@@ -575,6 +574,21 @@ def evaluate_placement_scene(
                 unresolved_indices.add(i)
                 unresolved_indices.add(j)
 
+            # Pairwise soft extension line interactions (R1)
+            p1_ext1 = (p1.ext_line_1_start, p1.ext_line_1_end)
+            p1_ext2 = (p1.ext_line_2_start, p1.ext_line_2_end)
+            p2_ext1 = (p2.ext_line_1_start, p2.ext_line_1_end)
+            p2_ext2 = (p2.ext_line_2_start, p2.ext_line_2_end)
+
+            if segments_intersect(p1_ext1, p2_dim):
+                ext_crossings += 1
+            if segments_intersect(p1_ext2, p2_dim):
+                ext_crossings += 1
+            if segments_intersect(p2_ext1, p1_dim):
+                ext_crossings += 1
+            if segments_intersect(p2_ext2, p1_dim):
+                ext_crossings += 1
+
     total_collisions = dim_geom_crossings + dim_annot_overlaps
 
     if min_clearance == float('inf'):
@@ -590,7 +604,6 @@ def evaluate_placement_scene(
         extension_unwanted_crossings=ext_crossings,
         min_observed_clearance=round(min_clearance, 3),
         prototype_measurement_error=round(max_proto_err, 6),
-        placement_displacement=0.0,
         unresolved_dimensions=len(unresolved_indices),
     )
 
@@ -806,6 +819,7 @@ def run_benchmark() -> Tuple[List[PlacementEvaluation], Dict[str, Any]]:
         "candidate_unresolved_scenes": 0,
         "prototype_measurement_error": 0.0,
         "production_native_measurement_preservation": "NOT_VERIFIED_BY_THIS_ORACLE",
+        "placement_displacement": "NOT_MEASURED",
         "measured_repeatability_tested_fixtures_pct": 0.0,
         "repeatability_scope": "",
     }

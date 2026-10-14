@@ -35,7 +35,7 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 ├── FAILURE_MODES_AND_LIMITS.md                # Structural failure modes, boundary limits, and disclaimers
 ├── benchmark_dimension_placement.py           # 10-fixture automated benchmark runner & evaluation harness
 ├── benchmark_results.json                     # Complete quantitative benchmark results dataset
-└── TRANSFER_ORACLE.py                         # Standalone clean-room test oracle (5/5 tests PASS)
+└── TRANSFER_ORACLE.py                         # Standalone clean-room test oracle (8/8 tests PASS)
 ```
 
 ---
@@ -43,16 +43,18 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 ## 3. Key Empirical Findings
 
 1. **Baseline Failure Rate on Synthetic Fixtures:**
-   - Across 10 canonical fixtures, the production baseline produced **17 collisions across 8 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, 6 unwanted extension crossings; 10 unresolved dimensions).
+   - Across 10 canonical fixtures, the production baseline produced **17 collisions across 8 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, 12 unwanted extension crossings; 10 unresolved dimensions).
    - Primary failure causes: single-side blindness when $+n$ is blocked by geometry or notes (Fixtures 6, 7), identical lane stacking overlap on parallel edges (Fixtures 4, 5, 8, 10), and drawing sheet boundary escape (Fixture 9).
 2. **Candidate Policy Performance:**
-   - The multi-lane dual-side candidate policy achieved **0 collisions across all 10 fixtures** (collision avoidance across all tested synthetic scenes).
+   - The multi-lane dual-side candidate policy achieved **0 collisions across all 10 fixtures** (0 dimension-to-geometry crossings, 0 dimension-to-annotation overlaps, 4 unwanted extension crossings; 0 unresolved dimensions).
    - Side-flipping ($s = -1$) avoided obstacles on Fixtures 6, 7, and 9.
    - Discrete lane stepping ($k \in \{0, 1, 2\}$) resolved all parallel dimension overlaps on Fixtures 4, 5, 8, and 10.
 3. **Formal Invariant vs Research Heuristic Scope:**
    - **`PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm`:** Definition point identity ($p_1, p_2$) is maintained algebraically in the prototype geometry model by construction.
    - **`PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE`:** Native DXF DIMENSION entity rendering and binary AutoCAD database roundtrip were not evaluated by this oracle.
-   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions full-field identical across all fields) and 3 runs on Fixture 4.
+   - **`EXTENSION_UNWANTED_CROSSINGS = 12 (BASELINE) VS 4 (CANDIDATE)`:** Evaluated using unified pairwise dim/ext soft interaction semantics matching candidate scoring.
+   - **`PLACEMENT_DISPLACEMENT = NOT_MEASURED`:** Displacement relative to unguided baseline is not recorded as a quality metric.
+   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions full-field identical within 1e-9 tolerance) and 3 runs on Fixture 4.
    - **`BASE_FLOOR_HEURISTIC`:** Candidate base floor $\max(L \cdot 0.08, 6.0\text{ mm})$ vs baseline $\max(L \cdot 0.08, 5.0\text{ mm})$ and lane step increment $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ are empirical research heuristic model changes, not drafting standards.
    - **`SELECTION_PRIORITY_H20`:** Hard collisions strictly dominate candidate selection over soft extension crossings ($\text{Primary Key} = \text{hard\_collision\_count}$, $\text{Secondary Key} = \text{soft\_penalty\_score}$).
 4. **Anti-Bloat & Zero-Dependency Profile:**
@@ -72,15 +74,15 @@ Output:
 === Running REA-023 Native Dimension Placement Collision Avoidance Transfer Oracle ===
 Test 1 PASS: Prototype geometric measurement length invariant verified across all 10 fixtures (max error = 0.000000 mm).
              (Note: Algebraic sanity check on prototype model; PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE).
-Test 2 PASS: Full-field deterministic repeatability verified across 3 repeated runs on Fixture 4 (all fields identical; bounded to tested synthetic fixtures).
+Test 2 PASS: Full-field deterministic repeatability verified across 3 repeated runs on Fixture 4 (all fields equal within 1e-9 on tested fixtures).
 Test 3A PASS: Fixture 6 baseline had 2 collisions on +normal side; candidate selected side=-1 with 0 collisions.
 Test 3B PASS: Fixture 7 baseline had 2 collisions on +normal side; candidate selected side=-1 with 0 collisions.
 Test 4A PASS: Fixture 5 baseline had 1 collisions; candidate used stacked multi-lanes [0, 1, 2] (lane_index > 0 verified) with 0 collisions.
 Test 4B PASS: Fixture 4 baseline had 1 collisions; candidate separated parallel dimensions into non-conflicting sides (-1 vs 1).
 Test 5 PASS: Fixture 9 baseline escaped top sheet border (out-of-bounds); candidate flipped inward to side=-1 with 0 boundary collisions.
-Test 6 PASS: Evaluator symmetry verified (both colliding dimensions attributed as unresolved; order-invariant).
+Test 6 PASS: Evaluator pairwise symmetry verified on text-line crossing (order-invariant, both dimensions unresolved).
 Test 7 PASS: Input-list ordering independence verified on Fixture 8 (forward vs reversed specs yield identical placements).
-Test 8 PASS: H20 hard collision priority verified (0 hard + 1050 soft strictly beats 1 hard + 0 soft).
+Test 8 PASS: H20 hard collision priority verified on real scoring path (0 hard + 1500 soft strictly beats 1 hard + 1 soft).
 
 ALL 8 ORACLE TESTS PASSED (100% Success). Oracle verified.
 PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE

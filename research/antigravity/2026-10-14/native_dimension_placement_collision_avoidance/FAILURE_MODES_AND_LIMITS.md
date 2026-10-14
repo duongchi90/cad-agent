@@ -19,8 +19,8 @@ While the discrete multi-lane dual-side candidate policy successfully avoids col
 
 ### Failure Mode 1: Both Sides Blocked (Symmetric Entrapment / Pocket Saturation)
 - **Hazard:** When a measured segment lies inside a confined internal channel or pocket where obstacles exist at distances $\le d_{\text{max}}$ on *both* normal sides $+n$ and $-n$.
-- **Behavior:** All 6 candidate positions accumulate collision penalties ($P \ge 1000$).
-- **Handling in Candidate Policy:** The policy selects the least-penalized candidate (e.g. extension line crossing rather than dimension text overlap), but the dimension accumulates non-zero penalty and cannot be placed collision-free.
+- **Behavior:** All 6 candidate positions accumulate hard collisions ($\text{hard\_collision\_count} \ge 1$).
+- **Handling in Candidate Policy:** The policy selects the least-penalized candidate using the lexicographic candidate key $(\text{hard\_collision\_count}, \text{soft\_penalty\_score}, \text{lane\_idx}, \text{side\_preference})$. Because every candidate incurs at least one hard collision ($\text{hard\_collision\_count} \ge 1$), the dimension is marked unresolved and cannot be placed collision-free.
 - **Limitation:** In dense mechanical views, automated placement without leader lines or view clipping cannot eliminate all collisions when clearance is physically unavailable.
 
 ### Failure Mode 2: Lane Escape from Local Context (Excessive Offset)
@@ -41,7 +41,7 @@ While the discrete multi-lane dual-side candidate policy successfully avoids col
 
 ### Failure Mode 5: Boundary Containment Failure in Narrow Sheet Margins
 - **Hazard:** A drawing sheet has small title block margins ($\le 5\text{ mm}$).
-- **Behavior:** If a measured line is $3\text{ mm}$ from the border, placing a dimension on the outer side causes out-of-bounds error ($P = 5000$). If the inner side is also blocked by part geometry, the dimension cannot be placed without clipping either the geometry or the sheet border.
+- **Behavior:** If a measured line is $3\text{ mm}$ from the border, placing a dimension on the outer side triggers a sheet out-of-bounds hard collision ($\text{hard\_collision\_count} \ge 1$). If the inner side is also blocked by part geometry, every candidate falls into the hard collision class, preventing collision-free placement.
 
 ---
 
