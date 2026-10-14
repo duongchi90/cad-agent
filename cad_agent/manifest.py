@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from collections.abc import Mapping
 from ctypes import wintypes
 from pathlib import Path
@@ -16,6 +16,14 @@ from typing import Any
 
 from cad_agent.source_bundle import SourceBundleError, source_bundle_sha256, validate_source_bundle
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent.file_integrity import (
+    FileIdentityError,
+    assert_path_identity,
+    is_single_link_regular_non_reparse,
+    open_bound_file,
+    pin_directory_chain,
+    write_bound_bytes,
+)
 from cad_agent.source_integrity import (
     R1C_EXPIRY_POLICY_VERSION,
     R1C_NUMERIC_POLICY_VERSION,
@@ -735,10 +743,23 @@ def _manifest_lock_owner_state(pid: int, start_filetime: int) -> bool | None:
         return None
 
 
-def _read_manifest_lock_identity(lock_path: Path) -> tuple[int, int] | None:
+def _read_manifest_lock_identity(
+    lock_path: Path,
+) -> tuple[int, int, os.stat_result] | None:
+    descriptor = -1
     try:
-        raw = lock_path.read_bytes()
-    except OSError:
+        descriptor, opened_stat = open_bound_file(
+            lock_path,
+            flags=os.O_RDONLY | getattr(os, "O_BINARY", 0),
+            label="manifest lock",
+        )
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            raw = stream.read(_MANIFEST_LOCK_MAX_BYTES + 1)
+        assert_path_identity(lock_path, opened_stat, label="manifest lock")
+    except (FileIdentityError, OSError):
+        if descriptor >= 0:
+            os.close(descriptor)
         return None
     if not raw or len(raw) > _MANIFEST_LOCK_MAX_BYTES:
         return None
@@ -756,18 +777,26 @@ def _read_manifest_lock_identity(lock_path: Path) -> tuple[int, int] | None:
         or payload["start_filetime"] <= 0
     ):
         return None
-    return payload["pid"], payload["start_filetime"]
+    return payload["pid"], payload["start_filetime"], opened_stat
 
 
 def _reclaim_dead_manifest_lock(lock_path: Path) -> bool:
-    identity = _read_manifest_lock_identity(lock_path)
-    if identity is None or _manifest_lock_owner_state(*identity) is not False:
+    record = _read_manifest_lock_identity(lock_path)
+    if record is None:
+        return False
+    pid, start_filetime, opened_stat = record
+    if _manifest_lock_owner_state(pid, start_filetime) is not False:
         return False
     try:
+        current_stat = os.stat(lock_path, follow_symlinks=False)
+        if not is_single_link_regular_non_reparse(current_stat) or not os.path.samestat(
+            opened_stat, current_stat
+        ):
+            return False
         lock_path.unlink()
     except FileNotFoundError:
         return True
-    except OSError:
+    except (FileIdentityError, OSError):
         return False
     return True
 
@@ -815,43 +844,91 @@ def _write_windows_manifest_lock_identity(handle: int) -> None:
 
 @contextmanager
 def _manifest_lock(path: Path):
+    if os.name == "nt":
+        path = Path(os.path.abspath(path))
+        parent_pin = pin_directory_chain(path.parent)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        parent_pin = nullcontext()
     lock_path = _manifest_lock_path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     descriptor: int | None = None
     acquired = False
+    acquired_stat: os.stat_result | None = None
     try:
-        while True:
+        with parent_pin:
             try:
-                if os.name == "nt":
-                    descriptor = _open_windows_manifest_lock(lock_path)
-                else:
-                    descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                acquired = True
-                if os.name == "nt":
-                    _write_windows_manifest_lock_identity(descriptor)
-                break
-            except FileExistsError as exc:
-                if _reclaim_dead_manifest_lock(lock_path):
-                    continue
-                raise _publication_error("PUBLICATION_MANIFEST_BUSY") from exc
-        yield
-    finally:
-        if acquired and descriptor is not None:
-            if os.name == "nt":
-                _windows_kernel32().CloseHandle(descriptor)
-            else:
-                os.close(descriptor)
-            try:
-                lock_path.unlink()
-            except FileNotFoundError:
-                pass
+                while True:
+                    try:
+                        if os.name == "nt":
+                            if os.path.lexists(lock_path):
+                                raise FileExistsError(
+                                    "manifest lock already exists", str(lock_path)
+                                )
+                            descriptor = _open_windows_manifest_lock(lock_path)
+                            acquired = True
+                            try:
+                                acquired_stat = os.stat(lock_path, follow_symlinks=False)
+                            except OSError as exc:
+                                raise FileIdentityError(
+                                    "Manifest lock identity could not be verified."
+                                ) from exc
+                            if not is_single_link_regular_non_reparse(acquired_stat):
+                                raise FileIdentityError("Manifest lock identity is not a single regular file.")
+                        else:
+                            descriptor = os.open(
+                                str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                            )
+                            acquired = True
+                        if os.name == "nt":
+                            _write_windows_manifest_lock_identity(descriptor)
+                        break
+                    except FileExistsError as exc:
+                        if _reclaim_dead_manifest_lock(lock_path):
+                            continue
+                        raise _publication_error("PUBLICATION_MANIFEST_BUSY") from exc
+                yield
+            finally:
+                if acquired and descriptor is not None:
+                    if os.name == "nt":
+                        _windows_kernel32().CloseHandle(descriptor)
+                        try:
+                            current_stat = os.stat(lock_path, follow_symlinks=False)
+                        except FileNotFoundError:
+                            current_stat = None
+                        if (
+                            acquired_stat is not None
+                            and current_stat is not None
+                            and is_single_link_regular_non_reparse(current_stat)
+                            and os.path.samestat(acquired_stat, current_stat)
+                        ):
+                            lock_path.unlink()
+                    else:
+                        os.close(descriptor)
+                        try:
+                            lock_path.unlink()
+                        except FileNotFoundError:
+                            pass
+    except FileIdentityError as exc:
+        raise _publication_error("PUBLICATION_MANIFEST_LOCK_IDENTITY_UNAVAILABLE") from exc
 
 
 def _write_manifest_unlocked(path: Path, manifest: dict[str, Any]) -> None:
+    serialized = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+    if os.name == "nt":
+        try:
+            write_bound_bytes(
+                path,
+                serialized.replace("\n", os.linesep).encode("utf-8"),
+                label="publication manifest",
+            )
+        except FileIdentityError as exc:
+            raise _publication_error("PUBLICATION_MANIFEST_WRITE_FAILED") from exc
+        return
+
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     try:
-        temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary.write_text(serialized, encoding="utf-8")
         os.replace(temporary, path)
     finally:
         try:
@@ -1003,7 +1080,9 @@ def transition_publication_lifecycle(
             current["publication_lifecycle"] = validate_publication_lifecycle(lifecycle)
             _write_manifest_unlocked(path, current)
             return copy.deepcopy(current)
-        except ManifestError:
+        except ManifestError as exc:
+            if str(exc) == "PUBLICATION_MANIFEST_WRITE_FAILED":
+                raise _publication_error("PUBLICATION_TRANSITION_INVALID") from exc
             raise
         except (OSError, TypeError, ValueError) as exc:
             raise _publication_error("PUBLICATION_TRANSITION_INVALID") from exc
