@@ -35,7 +35,7 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 ├── FAILURE_MODES_AND_LIMITS.md                # Structural failure modes, boundary limits, and disclaimers
 ├── benchmark_dimension_placement.py           # 10-fixture automated benchmark runner & evaluation harness
 ├── benchmark_results.json                     # Complete quantitative benchmark results dataset
-└── TRANSFER_ORACLE.py                         # Standalone clean-room test oracle (9/9 tests PASS)
+└── TRANSFER_ORACLE.py                         # Standalone clean-room test oracle (10/10 tests PASS)
 ```
 
 ---
@@ -43,13 +43,19 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 ## 3. Key Empirical Findings
 
 1. **Baseline Failure Rate on Synthetic Fixtures:**
-   - Across 10 canonical fixtures, the production baseline produced **17 collisions across 8 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, 12 unwanted extension crossings; 10 unresolved dimensions).
+   - Across 10 canonical fixtures, the production baseline produced **17 collisions across 7 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, 12 unwanted extension crossings; 10 unresolved dimensions).
    - Primary failure causes: single-side blindness when $+n$ is blocked by geometry or notes (Fixtures 6, 7), identical lane stacking overlap on parallel edges (Fixtures 4, 5, 8, 10), and drawing sheet boundary escape (Fixture 9).
 2. **Candidate Policy Performance:**
    - The multi-lane dual-side candidate policy achieved **0 collisions across all 10 fixtures** (0 dimension-to-geometry crossings, 0 dimension-to-annotation overlaps, 4 unwanted extension crossings; 0 unresolved dimensions).
    - Side-flipping ($s = -1$) avoided obstacles on Fixtures 6, 7, and 9.
    - Discrete lane stepping ($k \in \{0, 1, 2\}$) resolved all parallel dimension overlaps on Fixtures 4, 5, 8, and 10.
-3. **Formal Invariant vs Research Heuristic Scope:**
+3. **Orientation-Aware Text Footprint & Long-Text Validation:**
+   - **`CAUSAL_CLASSIFICATION = C_AABB_ORIENTATION_ARTIFACT`:** Causal discriminator proved that unrotated AABB text clearance models falsely reject long text on vertical/oblique dimensions by protruding perpendicular to the dimension line into measured features.
+   - Upgrading candidate scoring and scene evaluation to an **orientation-aware text rectangle** aligned with dimension unit vector $\mathbf{u} = (\Delta x/L, \Delta y/L)$ and unit normal $\mathbf{n}$ resolves false collisions completely:
+     - `CANONICAL_SYNTHETIC_RESULT`: 0 collisions, 0 unresolved scenes with default synthetic proxy text ($12.0\times 3.5\text{ mm}$).
+     - `ADVERSARIAL_LONG_TEXT_RESULT`: 0 collisions, 0 unresolved scenes across wide text ($19.5\text{ mm}$ and $52.0\text{ mm}$). Vertical dimensions with $52\text{ mm}$ text maintain $+6.25\text{ mm}$ clearance from measured features.
+     - `NATIVE_AUTOCAD_RESULT`: `NOT_EVALUATED_BY_THIS_RESEARCH` (native CAD font rendering / AutoCAD DIMSTYLE variables require live integration testing).
+4. **Formal Invariant vs Research Heuristic Scope:**
    - **`PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm`:** Definition point identity ($p_1, p_2$) is maintained algebraically in the prototype geometry model by construction.
    - **`PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE`:** Native DXF DIMENSION entity rendering and binary AutoCAD database roundtrip were not evaluated by this oracle.
    - **`EXTENSION_UNWANTED_CROSSINGS = 12 (BASELINE) VS 4 (CANDIDATE)`:** Evaluated using unified pairwise dim/ext soft interaction semantics and unary `count_unary_extension_crossings` matching candidate scoring.
@@ -57,8 +63,9 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
    - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions full-field equal within 1e-9 tolerance) and 3 runs on Fixture 4.
    - **`BASE_FLOOR_HEURISTIC`:** Candidate base floor $\max(L \cdot 0.08, 6.0\text{ mm})$ vs baseline $\max(L \cdot 0.08, 5.0\text{ mm})$ and lane step increment $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ are empirical research heuristic model changes, not drafting standards.
    - **`SELECTION_PRIORITY_H20`:** Hard collisions strictly dominate candidate selection over soft extension crossings ($\text{Primary Key} = \text{hard\_collision\_count}$, $\text{Secondary Key} = \text{soft\_penalty\_score}$).
-4. **Anti-Bloat & Zero-Dependency Profile:**
-   - Pure Python 2D segment-box geometric primitives. Zero new libraries, zero global solver daemons, zero ML models. Evaluation time is under $25\ \mu\text{s}$ per dimension.
+   - **`REPRESENTATION_CANONICALIZATION_GAP (H1)`:** Reversing segment definition points $(P_1, P_2) \to (P_2, P_1)$ flips the intrinsic normal; when side preference is correspondingly matched, physical text rectangle footprint is strictly identical modulo vertex ordering.
+5. **Anti-Bloat & Zero-Dependency Profile:**
+   - Pure Python 2D segment-box and SAT geometric primitives. Zero new libraries, zero global solver daemons, zero ML models. Evaluation time is under $25\ \mu\text{s}$ per dimension.
 
 ---
 
@@ -84,8 +91,12 @@ Test 6 PASS: Evaluator pairwise symmetry verified on text-line crossing (order-i
 Test 7 PASS: Input-list ordering independence verified on Fixture 8 (forward vs reversed specs yield identical placements).
 Test 8 PASS: H20 hard collision priority verified on real scoring path (0 hard + 1500 soft strictly beats 1 hard + 1 soft).
 Test 9 PASS: Unary extension crossing semantic parity verified (single geometry segment crossing both ext1 and ext2 yields 2 scorer soft contributions and 2 evaluator crossings, with 0 hard collisions).
+Test 10A PASS: Case A vertical dimension with 52 mm text extends along dimension line (clearance = 6.25 mm > 0).
+Test 10B PASS: Case B 45-deg oblique dimension text footprint is strictly orthogonal and aligned with dimension line.
+Test 10C PASS: Case C horizontal dimension reduces exactly to axis-aligned box.
+Test 10D PASS: Case D reversing start/end with corresponding side preserves exact physical text rectangle.
 
-ALL 9 ORACLE TESTS PASSED (100% Success). Oracle verified.
+ALL 10 ORACLE TESTS PASSED (100% Success). Oracle verified.
 PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE
 ```
 

@@ -28,6 +28,12 @@ Verifies:
    intersecting both ext1 and ext2 of the same placed dimension contributes exactly two soft crossing
    penalties in candidate scoring (300.0) and exactly two extension_unwanted_crossings in the scene evaluator,
    while endpoint touches and measured-segment geometry are excluded by both.
+10. Oriented Text Geometry and Long-Text Validation (Cases A, B, C, D): Verifies that dimension
+   text footprint is orientation-aware and aligned with the dimension line; long text (>= 52 mm) on
+   vertical dimensions extends along the dimension line with positive clearance from measured features,
+   eliminating unrotated AABB collision artifacts; 45-deg oblique dimensions maintain strict orthogonality
+   and alignment; horizontal dimensions reduce identically to axis-aligned boxes; and reversing start/end
+   with corresponding side preserves the exact physical text rectangle.
 
 Evidence Tier: BOUNDED_SYNTHETIC_RESEARCH_ORACLE
 Note: Standalone prototype oracle; not a call through production builder owners or native DXF entity roundtrip.
@@ -55,6 +61,10 @@ from benchmark_dimension_placement import (
     segments_intersect,
     bboxes_overlap,
     segment_intersects_bbox,
+    text_within_bounds,
+    text_intersects_segment,
+    text_intersects_bbox,
+    texts_intersect,
 )
 
 
@@ -180,7 +190,8 @@ def run_oracle_tests():
         ext_line_1_start=(10.0, 42.0), ext_line_1_end=(10.0, 52.0),
         ext_line_2_start=(90.0, 42.0), ext_line_2_end=(90.0, 52.0),
         text_bbox=(44.0, 48.25, 56.0, 51.75),
-        measured_length=80.0, dimension_length=80.0
+        measured_length=80.0, dimension_length=80.0,
+        text_corners=((56.0, 51.75), (44.0, 51.75), (44.0, 48.25), (56.0, 48.25)),
     )
     p2_sym = PlacedDimension(
         spec_id="D2", side=1, lane_index=0, offset=8.0, base=(30.0, 50.0),
@@ -188,16 +199,17 @@ def run_oracle_tests():
         ext_line_1_start=(112.0, 10.0), ext_line_1_end=(122.0, 10.0),
         ext_line_2_start=(112.0, 90.0), ext_line_2_end=(122.0, 90.0),
         text_bbox=(24.0, 48.25, 36.0, 51.75),
-        measured_length=80.0, dimension_length=80.0
+        measured_length=80.0, dimension_length=80.0,
+        text_corners=((36.0, 51.75), (24.0, 51.75), (24.0, 48.25), (36.0, 48.25)),
     )
 
     p1_dim_seg = (p1_sym.dim_line_start, p1_sym.dim_line_end)
     p2_dim_seg = (p2_sym.dim_line_start, p2_sym.dim_line_end)
 
     assert not segments_intersect(p1_dim_seg, p2_dim_seg), "Precondition violated: dimension lines must not cross!"
-    assert not bboxes_overlap(p1_sym.text_bbox, p2_sym.text_bbox), "Precondition violated: text bboxes must not overlap!"
-    assert segment_intersects_bbox(p1_dim_seg, p2_sym.text_bbox), "Precondition violated: p1 dim line must cross p2 text bbox!"
-    assert not segment_intersects_bbox(p2_dim_seg, p1_sym.text_bbox), "Precondition violated: p2 dim line must NOT cross p1 text bbox!"
+    assert not texts_intersect(p1_sym.text_corners, p2_sym.text_corners), "Precondition violated: text footprints must not overlap!"
+    assert text_intersects_segment(p2_sym.text_corners, p1_dim_seg), "Precondition violated: p1 dim line must cross p2 text rectangle!"
+    assert not text_intersects_segment(p1_sym.text_corners, p2_dim_seg), "Precondition violated: p2 dim line must NOT cross p1 text rectangle!"
 
     scene_sym = Scene(
         name="test_text_line_symmetry",
@@ -269,11 +281,11 @@ def run_oracle_tests():
     )
 
     # 1. Execute score_candidate on actual candidate geometry
-    base_p, dim_p, ext1_p, ext2_p, tbox_p, _ = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, +1)
-    hard_p, soft_p = score_candidate(dim_p, ext1_p, ext2_p, tbox_p, +1, 0, sc_h20, [], ((100.0, 100.0), (200.0, 100.0)))
+    base_p, dim_p, ext1_p, ext2_p, tbox_p, _, corners_p = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, +1)
+    hard_p, soft_p = score_candidate(dim_p, ext1_p, ext2_p, corners_p, +1, 0, sc_h20, [], ((100.0, 100.0), (200.0, 100.0)))
 
-    base_m, dim_m, ext1_m, ext2_m, tbox_m, _ = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, -1)
-    hard_m, soft_m = score_candidate(dim_m, ext1_m, ext2_m, tbox_m, -1, 0, sc_h20, [], ((100.0, 100.0), (200.0, 100.0)))
+    base_m, dim_m, ext1_m, ext2_m, tbox_m, _, corners_m = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, -1)
+    hard_m, soft_m = score_candidate(dim_m, ext1_m, ext2_m, corners_m, -1, 0, sc_h20, [], ((100.0, 100.0), (200.0, 100.0)))
 
     assert hard_p == 0, f"Candidate A must have 0 hard collisions, got {hard_p}"
     assert soft_p >= 1000.0, f"Candidate A must have large soft penalty, got {soft_p}"
@@ -314,7 +326,7 @@ def run_oracle_tests():
         annotation_obstacles=[],
     )
 
-    base_r1, dim_r1, ext1_r1, ext2_r1, tbox_r1, dim_len_r1 = compute_dimension_geometry(
+    base_r1, dim_r1, ext1_r1, ext2_r1, tbox_r1, dim_len_r1, corners_r1 = compute_dimension_geometry(
         (100.0, 100.0), (200.0, 100.0), 8.0, +1
     )
 
@@ -328,7 +340,7 @@ def run_oracle_tests():
 
     # 3. Scorer execution: must observe 2 unary crossings -> 2 * 150.0 = 300.0 soft penalty
     hard_r1, soft_r1 = score_candidate(
-        dim_r1, ext1_r1, ext2_r1, tbox_r1, +1, 0, sc_r1, [], g_measured
+        dim_r1, ext1_r1, ext2_r1, corners_r1, +1, 0, sc_r1, [], g_measured
     )
     assert hard_r1 == 0, f"Expected 0 hard collisions, got {hard_r1}"
     assert soft_r1 == 300.0, f"Expected soft penalty of 300.0 (2 * 150.0), got {soft_r1}"
@@ -349,6 +361,7 @@ def run_oracle_tests():
         text_bbox=tbox_r1,
         measured_length=100.0,
         dimension_length=dim_len_r1,
+        text_corners=corners_r1,
     )]
     eval_r1 = evaluate_placement_scene(sc_r1, placed_r1, "Test_R1_Parity")
     assert eval_r1.collision_count == 0, f"Expected 0 collisions, got {eval_r1.collision_count}"
@@ -358,7 +371,105 @@ def run_oracle_tests():
     assert eval_r1.extension_unwanted_crossings == 2, f"Evaluator must report exactly 2 extension crossings, got {eval_r1.extension_unwanted_crossings}"
     print("Test 9 PASS: Unary extension crossing semantic parity verified (single geometry segment crossing both ext1 and ext2 yields 2 scorer soft contributions and 2 evaluator crossings, with 0 hard collisions).")
 
-    print("\nALL 9 ORACLE TESTS PASSED (100% Success). Oracle verified.")
+    # -----------------------------------------------------------------------
+    # Test 10: Oriented text geometry and long-text validation (Cases A, B, C, D)
+    # -----------------------------------------------------------------------
+    # Case A: Vertical dimension with text >= 52 mm extends along dimension line,
+    #         maintaining positive clearance from measured geometry.
+    # Analytical ground truth:
+    # start=(100, 100), end=(100, 200), length=100 mm.
+    # offset=8.0, side=+1 -> base=(92, 150).
+    # text_w=52.0 (along dim line u=(0, 1)), text_h=3.5 (along normal n=(-1, 0)).
+    # hw = 26.0, hh = 1.75.
+    # Expected x range: [92.0 - 1.75, 92.0 + 1.75] = [90.25, 93.75].
+    # Expected y range: [150.0 - 26.0, 150.0 + 26.0] = [124.0, 176.0].
+    # Measured line is at x=100.0 from y=100.0 to y=200.0.
+    # Clearance in x = 100.0 - 93.75 = 6.25 mm.
+    base_10a, dim_10a, ext1_10a, ext2_10a, tbox_10a, dim_len_10a, corners_10a = compute_dimension_geometry(
+        (100.0, 100.0), (100.0, 200.0), 8.0, +1, text_w=52.0, text_h=3.5
+    )
+    # Analytical verification without using collision helper:
+    expected_corners_10a = {
+        (90.25, 176.0),
+        (90.25, 124.0),
+        (93.75, 124.0),
+        (93.75, 176.0),
+    }
+    actual_corners_10a = {(round(c[0], 6), round(c[1], 6)) for c in corners_10a}
+    assert actual_corners_10a == expected_corners_10a, f"Case A corner mismatch: {actual_corners_10a} vs {expected_corners_10a}"
+    max_x_text = max(c[0] for c in corners_10a)
+    assert max_x_text == 93.75, f"Case A max_x expected 93.75, got {max_x_text}"
+    clearance_to_geom = 100.0 - max_x_text
+    assert clearance_to_geom == 6.25, f"Case A clearance expected 6.25 mm, got {clearance_to_geom}"
+    # Contrast with unrotated AABB which would have had max_x = 92 + 26 = 118 > 100:
+    unrotated_aabb_xmax = 92.0 + 52.0 / 2.0
+    assert unrotated_aabb_xmax == 118.0
+    # Also verify collision function confirms no collision with measured geometry:
+    assert not text_intersects_segment(corners_10a, ((100.0, 100.0), (100.0, 200.0)))
+    print("Test 10A PASS: Case A vertical dimension with 52 mm text extends along dimension line (clearance = 6.25 mm > 0).")
+
+    # Case B: 45 deg dimension orientation transformation remains consistent.
+    # start=(100, 100), end=(200, 200), length = 100*sqrt(2).
+    # u = (1/sqrt(2), 1/sqrt(2)), side=+1 -> n = (-1/sqrt(2), 1/sqrt(2)).
+    # offset = 10.0 -> base = (150 - 10/sqrt(2), 150 + 10/sqrt(2)).
+    # text_w = 20.0, text_h = 4.0.
+    base_10b, dim_10b, ext1_10b, ext2_10b, tbox_10b, dim_len_10b, corners_10b = compute_dimension_geometry(
+        (100.0, 100.0), (200.0, 200.0), 10.0, +1, text_w=20.0, text_h=4.0
+    )
+    # Check rectangle edge lengths and orthogonality directly from corner coordinates:
+    c1, c2, c3, c4 = corners_10b
+    # Edge c2->c1 (width along u)
+    w_vec = (c1[0] - c2[0], c1[1] - c2[1])
+    w_len = math.hypot(w_vec[0], w_vec[1])
+    assert abs(w_len - 20.0) < 1e-9, f"Case B width expected 20.0, got {w_len}"
+    # Edge c4->c1 (height along n)
+    h_vec = (c1[0] - c4[0], c1[1] - c4[1])
+    h_len = math.hypot(h_vec[0], h_vec[1])
+    assert abs(h_len - 4.0) < 1e-9, f"Case B height expected 4.0, got {h_len}"
+    # Orthogonality: dot product of w_vec and h_vec must be 0
+    dot_prod = w_vec[0] * h_vec[0] + w_vec[1] * h_vec[1]
+    assert abs(dot_prod) < 1e-9, f"Case B non-orthogonal edges: dot product = {dot_prod}"
+    # Parallelism: w_vec must be parallel to dimension line
+    d_vec = (dim_10b[1][0] - dim_10b[0][0], dim_10b[1][1] - dim_10b[0][1])
+    d_len = math.hypot(d_vec[0], d_vec[1])
+    cross_prod = w_vec[0] * (d_vec[1] / d_len) - w_vec[1] * (d_vec[0] / d_len)
+    assert abs(cross_prod) < 1e-9, f"Case B text width not parallel to dimension line: cross product = {cross_prod}"
+    print("Test 10B PASS: Case B 45-deg oblique dimension text footprint is strictly orthogonal and aligned with dimension line.")
+
+    # Case C: Horizontal dimension reduces to axis-aligned case.
+    # start=(50, 100), end=(150, 100), offset=10.0, side=+1.
+    # text_w=12.0, text_h=3.5.
+    base_10c, dim_10c, ext1_10c, ext2_10c, tbox_10c, dim_len_10c, corners_10c = compute_dimension_geometry(
+        (50.0, 100.0), (150.0, 100.0), 10.0, +1, text_w=12.0, text_h=3.5
+    )
+    # Expected axis-aligned bbox:
+    # mid=(100, 100), base=(100, 110).
+    # x in [94.0, 106.0], y in [108.25, 111.75].
+    expected_aabb = (94.0, 108.25, 106.0, 111.75)
+    for b_act, b_exp in zip(tbox_10c, expected_aabb):
+        assert abs(b_act - b_exp) < 1e-9, f"Case C derived bbox mismatch: {tbox_10c} vs {expected_aabb}"
+    expected_corners_10c = {
+        (94.0, 108.25),
+        (106.0, 108.25),
+        (106.0, 111.75),
+        (94.0, 111.75),
+    }
+    actual_corners_10c = {(round(c[0], 6), round(c[1], 6)) for c in corners_10c}
+    assert actual_corners_10c == expected_corners_10c, f"Case C corner mismatch: {actual_corners_10c} vs {expected_corners_10c}"
+    print("Test 10C PASS: Case C horizontal dimension reduces exactly to axis-aligned box.")
+
+    # Case D: Reversing start/end preserves the exact same physical text rectangle points
+    #         modulo ordering when side/base are correspondingly fixed.
+    # S1: start=(100, 100), end=(200, 100), side=+1, offset=8.0 -> normal is (0, +1), base=(150, 108)
+    # S2: start=(200, 100), end=(100, 100), side=-1, offset=8.0 -> normal is (0, +1), base=(150, 108)
+    _, _, _, _, _, _, corners_10d_fwd = compute_dimension_geometry((100.0, 100.0), (200.0, 100.0), 8.0, +1)
+    _, _, _, _, _, _, corners_10d_rev = compute_dimension_geometry((200.0, 100.0), (100.0, 100.0), 8.0, -1)
+    set_fwd = {(round(c[0], 6), round(c[1], 6)) for c in corners_10d_fwd}
+    set_rev = {(round(c[0], 6), round(c[1], 6)) for c in corners_10d_rev}
+    assert set_fwd == set_rev, f"Case D physical point set mismatch: {set_fwd} vs {set_rev}"
+    print("Test 10D PASS: Case D reversing start/end with corresponding side preserves exact physical text rectangle.")
+
+    print("\nALL 10 ORACLE TESTS PASSED (100% Success). Oracle verified.")
     print("PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE")
 
 

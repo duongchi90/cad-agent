@@ -33,21 +33,35 @@ While the discrete multi-lane dual-side candidate policy successfully avoids col
 - **Behavior:** Dimension $A$ placed first consumes a preferred lane, forcing subsequent Dimension $B$ into an outer lane or opposite side, even if placing $B$ first would have yielded a lower overall composite penalty.
 - **Scope Limit:** Resolving order-dependence would require a global combinatorial search (NP-hard in general graph layout). The greedy heuristic was deliberately chosen to avoid complex solver bloat, accepting that globally optimal stacking is not achieved.
 
-### Failure Mode 4: Axis-Aligned Bounding Box (AABB) Approximation Uncertainty
-- **Hazard:** The candidate policy uses rectangular AABBs for text clearance evaluation.
-- **Behavior:**
-  - For rotated dimensions (e.g. 45° chamfers), an axis-aligned box overestimates the area swept by the rotated text string, potentially rejecting viable placements.
-  - In AutoCAD, exact text bounding extents depend on font metrics, style definitions (`STANDARD` vs `ROMANS`), and character kerning that cannot be determined with mathematical certainty outside a live CAD render engine.
+### Failure Mode 4: Text Footprint Geometry and Native Font Extents
+- **Hazard:** Approximation of dimension text clearance footprint.
+- **Orientation-Aware Resolution (REA-023 Upgrade):**
+  - REA-023 has resolved the unrotated AABB limitation (`C_AABB_ORIENTATION_ARTIFACT`).
+  - Candidate scoring and scene evaluation now use an **orientation-aware text rectangle** aligned with the dimension line vector $\mathbf{u} = (\Delta x/L, \Delta y/L)$ and unit normal $\mathbf{n} = ((-\Delta y/L)\cdot s, (\Delta x/L)\cdot s)$.
+  - This eliminates false collision artifacts for long dimension text on vertical and oblique dimensions (verified in Test 10 with 52 mm text maintaining 6.25 mm clearance from measured geometry).
+- **Residual Native Font Uncertainty:**
+  - In AutoCAD, exact text bounding extents depend on font metrics, style definitions (`STANDARD` vs `ROMANS`), character kerning, and DIMSTYLE variables (`DIMTXT`, `DIMSCALE`, `DIMGAP`) that require native CAD render evaluation (`NATIVE_AUTOCAD_RESULT = NOT_EVALUATED_BY_THIS_RESEARCH`).
+  - Synthetic benchmark uses `DEFAULT_SYNTHETIC_TEXT_WIDTH_MM = 12.0` and `DEFAULT_SYNTHETIC_TEXT_HEIGHT_MM = 3.5` explicitly labeled `SYNTHETIC_RESEARCH_STYLE_PROXY`.
 
 ### Failure Mode 5: Boundary Containment Failure in Narrow Sheet Margins
 - **Hazard:** A drawing sheet has small title block margins ($\le 5\text{ mm}$).
 - **Behavior:** If a measured line is $3\text{ mm}$ from the border, placing a dimension on the outer side triggers a sheet out-of-bounds hard collision ($\text{hard\_collision\_count} \ge 1$). If the inner side is also blocked by part geometry, every candidate falls into the hard collision class, preventing collision-free placement.
+
+### Failure Mode 6: Segment Orientation Canonicalization Gap (H1)
+- **Hazard:** Measured segments $(P_1, P_2)$ vs $(P_2, P_1)$ define opposite intrinsic normal directions.
+- **Classification:** `REPRESENTATION_CANONICALIZATION_GAP`.
+- **Property:** When side preference is correspondingly matched ($s = +1$ for $(P_1, P_2)$ vs $s = -1$ for $(P_2, P_1)$), the physical text rectangle corner points are strictly identical modulo cyclic vertex ordering (verified in Test 10.D).
 
 ---
 
 ## 3. Explicit Disclaimers and Non-Generalization
 
 > [!IMPORTANT]
+> **RESULT CLASSIFICATION TIERS:**
+> - **`CANONICAL_SYNTHETIC_RESULT`:** 0 collisions across 10 fixtures with default synthetic proxy text ($12.0\times 3.5\text{ mm}$).
+> - **`ADVERSARIAL_LONG_TEXT_RESULT`:** 0 collisions across all 10 fixtures under wide text ($19.5\text{ mm}$ and $52.0\text{ mm}$).
+> - **`NATIVE_AUTOCAD_RESULT`:** `NOT_EVALUATED_BY_THIS_RESEARCH` (native CAD rendering, font kerning, and binary DIMENSION roundtrip require future integration testing).
+>
 > **UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN.**
 > The lane step increment $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$ and candidate base offset formula $d_0 = \max(L \cdot 0.08, 6.0\text{ mm})$ (vs baseline $5.0\text{ mm}$) are **research heuristics** chosen for the synthetic benchmark. They do NOT constitute an all-scale universal drafting constant or AutoCAD vendor default.
 >

@@ -36,17 +36,17 @@ All values in this table match `benchmark_results.json` exactly (regenerated fro
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **F1: Isolated Horizontal** | 1 | **0** | **0** | 0 / 0 | 0 / 0 | 0 / 0 | 8.0 / 8.0 mm | **0.000 mm** | 0 / 0 |
 | **F2: Isolated Vertical** | 1 | **0** | **0** | 0 / 0 | 0 / 0 | 0 / 0 | 6.4 / 6.4 mm | **0.000 mm** | 0 / 0 |
-| **F3: Rotated Oblique (45°)** | 1 | **1** | **0** | 0 / 0 | 1 / 0 | 0 / 0 | 5.0 / 6.0 mm | **0.000 mm** | 1 / 0 |
+| **F3: Rotated Oblique (45°)** | 1 | **0** | **0** | 0 / 0 | 0 / 0 | 0 / 0 | 5.0 / 6.0 mm | **0.000 mm** | 0 / 0 |
 | **F4: Two Nearby Parallel** | 2 | **1** | **0** | 1 / 0 | 0 / 0 | 2 / 0 | 6.4 / 6.4 mm | **0.000 mm** | 1 / 0 |
 | **F5: Multiple Sharing Geometry** | 3 | **1** | **0** | 1 / 0 | 0 / 0 | 4 / 3 | 5.0 / 6.0 mm | **0.000 mm** | 2 / 0 |
 | **F6: One Side Blocked (Geometry)** | 1 | **2** | **0** | 2 / 0 | 0 / 0 | 0 / 0 | 3.0 / 8.0 mm | **0.000 mm** | 1 / 0 |
 | **F7: One Side Blocked (Text Note)** | 1 | **2** | **0** | 0 / 0 | 2 / 0 | 0 / 0 | 8.0 / 8.0 mm | **0.000 mm** | 1 / 0 |
-| **F8: Crowded Short Segments** | 2 | **7** | **0** | 3 / 0 | 4 / 0 | 4 / 1 | 5.0 / 6.0 mm | **0.000 mm** | 2 / 0 |
+| **F8: Crowded Short Segments** | 2 | **8** | **0** | 3 / 0 | 5 / 0 | 4 / 1 | 5.0 / 6.0 mm | **0.000 mm** | 2 / 0 |
 | **F9: Close to Sheet Boundary** | 1 | **1** | **0** | 0 / 0 | 1 / 0 | 0 / 0 | 8.0 / 8.0 mm | **0.000 mm** | 1 / 0 |
 | **F10: Mixed Local Orientations** | 2 | **2** | **0** | 2 / 0 | 0 / 0 | 2 / 0 | 6.4 / 6.4 mm | **0.000 mm** | 1 / 0 |
 | **TOTALS / SUMMARY** | **15** | **17** | **0** | **9 / 0** | **8 / 0** | **12 / 4** | **3.0 / 6.0 mm** | **0.000 mm** | **10 / 0** |
 
-- **Baseline Unresolved Scenes:** 8 / 10 failed (F3, F4, F5, F6, F7, F8, F9, F10).
+- **Baseline Unresolved Scenes:** 7 / 10 failed (F4, F5, F6, F7, F8, F9, F10).
 - **Candidate Unresolved Scenes:** 0 / 10 failed (all 10 synthetic scenes resolved with 0 hard collisions).
 - **Placement Displacement:** `PLACEMENT_DISPLACEMENT = NOT_MEASURED` (displacement between baseline placement and candidate placement is not evaluated as a quality metric; baseline placement is collision-prone and non-normative).
 

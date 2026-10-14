@@ -38,6 +38,14 @@ override = msp.add_linear_dim(
 override.render()
 ```
 
+### Owner Obstacle Trace Rectification
+Inspection of `dxf_builder_lib/builder.py::build_confirmed_dxf` confirms:
+- The argument `written_geometry_by_primitive_id` passed to `_add_confirmed_dimensions` **already contains text primitives** (`type="text"`, with `content`, `insert`, `height`, `rotation_deg`, and font style attributes).
+- Therefore:
+  - `TEXT_PRIMITIVES_AVAILABLE_AT_OWNER = YES`
+  - `GEOMETRY_AND_TEXT_OBSTACLE_TRANSFER_REQUIRES_CALLER_INTERFACE_CHANGE = NO`
+  - Any future candidate transfer would receive model geometry and text annotation obstacles directly through existing caller structures without schema changes.
+
 ---
 
 ## 2. Baseline Semantic Characterization
@@ -69,7 +77,7 @@ The current baseline implementation possesses the following exact invariants:
 
 ## 3. Systematic Baseline Failure Modes Across Synthetic Fixtures
 
-Empirical evaluation across the 10 canonical fixtures revealed **17 total collisions across 8 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, and 6 unwanted extension crossings, leaving 10 dimensions unresolved):
+Empirical evaluation across the 10 canonical fixtures revealed **17 total collisions across 7 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, and 12 unwanted extension crossings, leaving 10 dimensions unresolved):
 
 ### Failure 1: Single-Side Obstacle Collision (Fixtures 6 & 7)
 - **Scenario:** Measured edge has clear space on one side, but the default left-hand $+n$ side contains model geometry (Fixture 6, pocket cavity) or an annotation note box (Fixture 7).
@@ -86,8 +94,8 @@ Empirical evaluation across the 10 canonical fixtures revealed **17 total collis
 - **Baseline Behavior:** Default $+n$ pushes `base` to $y = 503\text{ mm}$, placing text outside the drawing sheet.
 - **Impact:** Critical dimension text is truncated or clipped during plotting.
 
-### Failure 4: Oblique, Crowded, and Perpendicular Crossing Hazards (Fixtures 3, 5, 8 & 10)
-- **Scenario:** 45° chamfer (Fixture 3), collinear shoulder (Fixture 5), crowded short segments (Fixture 8, 7 collisions), and L-bracket corner (Fixture 10) where horizontal and vertical lines meet.
+### Failure 4: Oblique, Crowded, and Perpendicular Crossing Hazards (Fixtures 5, 8 & 10)
+- **Scenario:** Collinear shoulder (Fixture 5, 1 collision, 2 unresolved), crowded short segments (Fixture 8, 8 collisions, 2 unresolved), and L-bracket corner (Fixture 10, 2 collisions, 1 unresolved) where horizontal and vertical lines meet.
 - **Baseline Behavior:** Fixed offset creates extension line crossings with flanking geometry corners, text overlaps on neighboring ribs, and dimension line crossings between collinear or intersecting features.
 
 ---

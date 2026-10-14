@@ -50,10 +50,14 @@ from typing import List, Tuple, Dict, Any, Optional
 Point2D = Tuple[float, float]
 Segment2D = Tuple[Point2D, Point2D]
 BBox2D = Tuple[float, float, float, float]  # (xmin, ymin, xmax, ymax)
+TextCorners = Tuple[Point2D, Point2D, Point2D, Point2D]  # (C1, C2, C3, C4) oriented rectangle
+
+DEFAULT_SYNTHETIC_TEXT_WIDTH_MM: float = 12.0   # SYNTHETIC_RESEARCH_STYLE_PROXY
+DEFAULT_SYNTHETIC_TEXT_HEIGHT_MM: float = 3.5  # SYNTHETIC_RESEARCH_STYLE_PROXY
 
 
 # ---------------------------------------------------------------------------
-# 2D Geometric Primitives
+# 2D Geometric Primitives & SAT Collision Routines
 # ---------------------------------------------------------------------------
 
 def ccw(a: Point2D, b: Point2D, c: Point2D) -> bool:
@@ -142,6 +146,162 @@ def point_segment_distance(pt: Point2D, seg: Segment2D) -> float:
     return math.hypot(pt[0] - proj_x, pt[1] - proj_y)
 
 
+def _project_points(points: Tuple[Point2D, ...] | List[Point2D], axis: Point2D) -> Tuple[float, float]:
+    """Project a sequence of 2D points onto an axis and return (min_proj, max_proj)."""
+    p0 = points[0][0] * axis[0] + points[0][1] * axis[1]
+    min_p = p0
+    max_p = p0
+    for p in points[1:]:
+        val = p[0] * axis[0] + p[1] * axis[1]
+        if val < min_p:
+            min_p = val
+        elif val > max_p:
+            max_p = val
+    return min_p, max_p
+
+
+def _intervals_overlap(min1: float, max1: float, min2: float, max2: float, tol: float = 1e-9) -> bool:
+    """Return True if 1D intervals [min1, max1] and [min2, max2] overlap (including touching)."""
+    return not (max1 < min2 - tol or max2 < min1 - tol)
+
+
+def text_within_bounds(text_corners: Tuple[Point2D, Point2D, Point2D, Point2D], sheet_boundary: BBox2D) -> bool:
+    """Return True if all 4 corners of text rectangle lie within the sheet boundary."""
+    xmin, ymin, xmax, ymax = sheet_boundary
+    for c in text_corners:
+        if not (xmin <= c[0] <= xmax and ymin <= c[1] <= ymax):
+            return False
+    return True
+
+
+def text_intersects_segment(text_corners: Tuple[Point2D, Point2D, Point2D, Point2D], seg: Segment2D) -> bool:
+    """
+    Return True if oriented text rectangle intersects segment seg using Separating Axis Theorem (SAT).
+    Tests 3 axes: the 2 edge normals of the text rectangle and the segment normal.
+    """
+    p1, p2 = seg
+    # Broad-phase AABB pre-filter
+    seg_min_x = min(p1[0], p2[0])
+    seg_max_x = max(p1[0], p2[0])
+    seg_min_y = min(p1[1], p2[1])
+    seg_max_y = max(p1[1], p2[1])
+
+    c_min_x = min(c[0] for c in text_corners)
+    c_max_x = max(c[0] for c in text_corners)
+    c_min_y = min(c[1] for c in text_corners)
+    c_max_y = max(c[1] for c in text_corners)
+
+    if c_max_x < seg_min_x - 1e-9 or seg_max_x < c_min_x - 1e-9 or \
+       c_max_y < seg_min_y - 1e-9 or seg_max_y < c_min_y - 1e-9:
+        return False
+
+    # Axis 1: Edge along rectangle width (c1 - c2)
+    axis_u = (text_corners[0][0] - text_corners[1][0], text_corners[0][1] - text_corners[1][1])
+    # Axis 2: Edge along rectangle height (c1 - c4)
+    axis_n = (text_corners[0][0] - text_corners[3][0], text_corners[0][1] - text_corners[3][1])
+
+    seg_pts = (p1, p2)
+
+    min_c, max_c = _project_points(text_corners, axis_u)
+    min_s, max_s = _project_points(seg_pts, axis_u)
+    if not _intervals_overlap(min_c, max_c, min_s, max_s):
+        return False
+
+    min_c, max_c = _project_points(text_corners, axis_n)
+    min_s, max_s = _project_points(seg_pts, axis_n)
+    if not _intervals_overlap(min_c, max_c, min_s, max_s):
+        return False
+
+    # Axis 3: Segment normal (-(p2.y - p1.y), p2.x - p1.x)
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    if abs(dx) > 1e-12 or abs(dy) > 1e-12:
+        axis_seg = (-dy, dx)
+        min_c, max_c = _project_points(text_corners, axis_seg)
+        min_s, max_s = _project_points(seg_pts, axis_seg)
+        if not _intervals_overlap(min_c, max_c, min_s, max_s):
+            return False
+
+    return True
+
+
+def text_intersects_bbox(text_corners: Tuple[Point2D, Point2D, Point2D, Point2D], bbox: BBox2D) -> bool:
+    """
+    Return True if oriented text rectangle intersects axis-aligned bounding box using SAT.
+    Tests 4 axes: axis_u, axis_n of text rectangle, and (1, 0), (0, 1) of bbox.
+    """
+    xmin, ymin, xmax, ymax = bbox
+
+    # Check axes (1, 0) and (0, 1) first (broad-phase AABB overlap)
+    c_min_x = min(c[0] for c in text_corners)
+    c_max_x = max(c[0] for c in text_corners)
+    if c_max_x < xmin - 1e-9 or xmax < c_min_x - 1e-9:
+        return False
+
+    c_min_y = min(c[1] for c in text_corners)
+    c_max_y = max(c[1] for c in text_corners)
+    if c_max_y < ymin - 1e-9 or ymax < c_min_y - 1e-9:
+        return False
+
+    bbox_corners = ((xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax))
+
+    # Axis u
+    axis_u = (text_corners[0][0] - text_corners[1][0], text_corners[0][1] - text_corners[1][1])
+    min_c, max_c = _project_points(text_corners, axis_u)
+    min_b, max_b = _project_points(bbox_corners, axis_u)
+    if not _intervals_overlap(min_c, max_c, min_b, max_b):
+        return False
+
+    # Axis n
+    axis_n = (text_corners[0][0] - text_corners[3][0], text_corners[0][1] - text_corners[3][1])
+    min_c, max_c = _project_points(text_corners, axis_n)
+    min_b, max_b = _project_points(bbox_corners, axis_n)
+    if not _intervals_overlap(min_c, max_c, min_b, max_b):
+        return False
+
+    return True
+
+
+def texts_intersect(
+    text1_corners: Tuple[Point2D, Point2D, Point2D, Point2D],
+    text2_corners: Tuple[Point2D, Point2D, Point2D, Point2D],
+) -> bool:
+    """
+    Return True if two oriented text rectangles intersect using SAT.
+    Tests 4 axes: 2 edge normals of text1 and 2 edge normals of text2.
+    """
+    # Broad-phase AABB check
+    min1_x = min(c[0] for c in text1_corners)
+    max1_x = max(c[0] for c in text1_corners)
+    min2_x = min(c[0] for c in text2_corners)
+    max2_x = max(c[0] for c in text2_corners)
+    if max1_x < min2_x - 1e-9 or max2_x < min1_x - 1e-9:
+        return False
+
+    min1_y = min(c[1] for c in text1_corners)
+    max1_y = max(c[1] for c in text1_corners)
+    min2_y = min(c[1] for c in text2_corners)
+    max2_y = max(c[1] for c in text2_corners)
+    if max1_y < min2_y - 1e-9 or max2_y < min1_y - 1e-9:
+        return False
+
+    # Axes of text1 and text2
+    axes = [
+        (text1_corners[0][0] - text1_corners[1][0], text1_corners[0][1] - text1_corners[1][1]),
+        (text1_corners[0][0] - text1_corners[3][0], text1_corners[0][1] - text1_corners[3][1]),
+        (text2_corners[0][0] - text2_corners[1][0], text2_corners[0][1] - text2_corners[1][1]),
+        (text2_corners[0][0] - text2_corners[3][0], text2_corners[0][1] - text2_corners[3][1]),
+    ]
+
+    for axis in axes:
+        min1, max1 = _project_points(text1_corners, axis)
+        min2, max2 = _project_points(text2_corners, axis)
+        if not _intervals_overlap(min1, max1, min2, max2):
+            return False
+
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Data Models
 # ---------------------------------------------------------------------------
@@ -186,6 +346,9 @@ class PlacedDimension:
     text_bbox: BBox2D
     measured_length: float
     dimension_length: float
+    text_corners: TextCorners = (
+        (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)
+    )
 
 
 @dataclass
@@ -211,23 +374,29 @@ def compute_dimension_geometry(
     end: Point2D,
     offset: float,
     side: int,
-    text_w: float = 12.0,
-    text_h: float = 3.5,
+    text_w: float = DEFAULT_SYNTHETIC_TEXT_WIDTH_MM,
+    text_h: float = DEFAULT_SYNTHETIC_TEXT_HEIGHT_MM,
     ext_gap: float = 1.0,
     ext_overshoot: float = 2.0,
-) -> Tuple[Point2D, Segment2D, Segment2D, Segment2D, BBox2D, float]:
+) -> Tuple[Point2D, Segment2D, Segment2D, Segment2D, BBox2D, float, TextCorners]:
     """
-    Compute dimension line, extension lines, and text bbox for a given side and offset.
+    Compute dimension line, extension lines, derived text bbox, dimension line length,
+    and oriented text rectangle corners for a given side and offset.
     p1 = start, p2 = end.
     Side +1 uses outward normal (-dy/L, dx/L).
     Side -1 uses inward normal (dy/L, -dx/L).
+    Text corners are aligned with dimension line unit vector u = (dx/L, dy/L)
+    and unit normal vector n = ((-dy/L)*side, (dx/L)*side).
     """
     dx, dy = end[0] - start[0], end[1] - start[1]
     L = math.hypot(dx, dy)
     if L < 1e-9:
         raise ValueError("Cannot dimension zero-length segment")
 
-    # Unit normal
+    # Unit vector along dimension line
+    ux, uy = dx / L, dy / L
+
+    # Unit normal vector
     nx, ny = (-dy / L) * side, (dx / L) * side
     mid_x, mid_y = (start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0
 
@@ -247,13 +416,25 @@ def compute_dimension_geometry(
     ext2_end: Point2D = (end[0] + nx * total_ext_reach, end[1] + ny * total_ext_reach)
     ext_seg2: Segment2D = (ext2_start, ext2_end)
 
-    # Text BBox centered at base
+    # Oriented text rectangle corners centered at base
     half_w, half_h = text_w / 2.0, text_h / 2.0
-    text_bbox: BBox2D = (base[0] - half_w, base[1] - half_h, base[0] + half_w, base[1] + half_h)
+    c1: Point2D = (base[0] + half_w * ux + half_h * nx, base[1] + half_w * uy + half_h * ny)
+    c2: Point2D = (base[0] - half_w * ux + half_h * nx, base[1] - half_w * uy + half_h * ny)
+    c3: Point2D = (base[0] - half_w * ux - half_h * nx, base[1] - half_w * uy - half_h * ny)
+    c4: Point2D = (base[0] + half_w * ux - half_h * nx, base[1] + half_w * uy - half_h * ny)
+    text_corners: TextCorners = (c1, c2, c3, c4)
+
+    # Derived enclosing axis-aligned bounding box (envelope / broad-phase)
+    text_bbox: BBox2D = (
+        min(c[0] for c in text_corners),
+        min(c[1] for c in text_corners),
+        max(c[0] for c in text_corners),
+        max(c[1] for c in text_corners),
+    )
 
     dim_line_len = math.hypot(dim_end[0] - dim_start[0], dim_end[1] - dim_start[1])
 
-    return base, dim_segment, ext_seg1, ext_seg2, text_bbox, dim_line_len
+    return base, dim_segment, ext_seg1, ext_seg2, text_bbox, dim_line_len, text_corners
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +456,7 @@ def place_dimensions_baseline(scene: Scene) -> List[PlacedDimension]:
         offset = max(length * 0.08, 5.0)
         side = +1
 
-        base, dim_seg, ext1, ext2, text_bbox, dim_len = compute_dimension_geometry(
+        base, dim_seg, ext1, ext2, text_bbox, dim_len, text_corners = compute_dimension_geometry(
             start, end, offset, side
         )
 
@@ -294,6 +475,7 @@ def place_dimensions_baseline(scene: Scene) -> List[PlacedDimension]:
             text_bbox=text_bbox,
             measured_length=length,
             dimension_length=dim_len,
+            text_corners=text_corners,
         ))
     return placed
 
@@ -335,7 +517,7 @@ def score_candidate(
     dim_seg: Segment2D,
     ext1: Segment2D,
     ext2: Segment2D,
-    text_bbox: BBox2D,
+    text_geometry: TextCorners | BBox2D,
     side: int,
     lane_idx: int,
     scene: Scene,
@@ -346,14 +528,21 @@ def score_candidate(
     Compute deterministic penalty score for a candidate dimension placement.
     Returns (hard_collision_count, soft_penalty_score).
     Zero hard collisions strictly beats any non-zero hard collisions (MF-07).
+    Uses orientation-aware text rectangle footprint (exact parity with evaluator).
     """
     hard_collisions = 0
     soft_penalty = 0.0
 
+    if isinstance(text_geometry[0], (int, float)):
+        xmin, ymin, xmax, ymax = text_geometry  # type: ignore[misc]
+        text_corners: TextCorners = (
+            (xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)
+        )
+    else:
+        text_corners = text_geometry  # type: ignore[assignment]
+
     # 1. Out of sheet bounds penalty (hardest rejection)
-    xmin, ymin, xmax, ymax = scene.sheet_boundary
-    if not (xmin <= text_bbox[0] and text_bbox[2] <= xmax and
-            ymin <= text_bbox[1] and text_bbox[3] <= ymax):
+    if not text_within_bounds(text_corners, scene.sheet_boundary):
         hard_collisions += 1
 
     # 2. Dimension line crossings with model geometry (excluding the measured segment itself)
@@ -363,16 +552,16 @@ def score_candidate(
         if segments_intersect(dim_seg, g_seg):
             hard_collisions += 1
 
-    # 3. Dimension text overlapping model geometry
+    # 3. Dimension text overlapping model geometry (orientation-aware SAT)
     for g_seg in scene.geometry_segments:
-        if segment_intersects_bbox(g_seg, text_bbox):
+        if text_intersects_segment(text_corners, g_seg):
             hard_collisions += 1
 
     # 4. Dimension line or text overlapping annotation obstacles (notes, labels, callouts)
     for obs in scene.annotation_obstacles:
         if segment_intersects_bbox(dim_seg, obs.bbox):
             hard_collisions += 1
-        if bboxes_overlap(text_bbox, obs.bbox):
+        if text_intersects_bbox(text_corners, obs.bbox):
             hard_collisions += 1
 
     # 5. Extension lines crossing model geometry (unwanted witness crossing: soft penalty)
@@ -386,14 +575,14 @@ def score_candidate(
         # Dimension lines crossing each other (severe drafting violation)
         if segments_intersect(dim_seg, p_dim_seg):
             hard_collisions += 1
-        # Text overlapping previously placed dimension text
-        if bboxes_overlap(text_bbox, p.text_bbox):
+        # Text overlapping previously placed dimension text (orientation-aware SAT)
+        if texts_intersect(text_corners, p.text_corners):
             hard_collisions += 1
-        # Text overlapping previously placed dimension line
-        if segment_intersects_bbox(p_dim_seg, text_bbox):
+        # Text overlapping previously placed dimension line (orientation-aware SAT)
+        if text_intersects_segment(text_corners, p_dim_seg):
             hard_collisions += 1
-        # Dimension line overlapping previously placed text
-        if segment_intersects_bbox(dim_seg, p.text_bbox):
+        # Dimension line overlapping previously placed text (orientation-aware SAT)
+        if text_intersects_segment(p.text_corners, dim_seg):
             hard_collisions += 1
 
         # Symmetric extension line crossing checks (soft penalties, 300.0 each)
@@ -467,11 +656,11 @@ def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
         ]
 
         for side, lane_idx, offset in candidate_options:
-            base, dim_seg, ext1, ext2, text_bbox, dim_len = compute_dimension_geometry(
+            base, dim_seg, ext1, ext2, text_bbox, dim_len, text_corners = compute_dimension_geometry(
                 start, end, offset, side
             )
             hard_count, soft_score = score_candidate(
-                dim_seg, ext1, ext2, text_bbox, side, lane_idx,
+                dim_seg, ext1, ext2, text_corners, side, lane_idx,
                 scene, placed, (start, end)
             )
 
@@ -495,6 +684,7 @@ def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
                     text_bbox=text_bbox,
                     measured_length=length,
                     dimension_length=dim_len,
+                    text_corners=text_corners,
                 )
 
         if best_placed is not None:
@@ -533,12 +723,10 @@ def evaluate_placement_scene(
         dim_seg = (p.dim_line_start, p.dim_line_end)
         ext1 = (p.ext_line_1_start, p.ext_line_1_end)
         ext2 = (p.ext_line_2_start, p.ext_line_2_end)
-        t_box = p.text_bbox
         measured_seg = spec_map.get(p.spec_id)
 
-        # Out of bounds check
-        sb = scene.sheet_boundary
-        if not (sb[0] <= t_box[0] and t_box[2] <= sb[2] and sb[1] <= t_box[1] and t_box[3] <= sb[3]):
+        # Out of bounds check (orientation-aware)
+        if not text_within_bounds(p.text_corners, scene.sheet_boundary):
             dim_annot_overlaps += 1
             unresolved_indices.add(i)
 
@@ -547,7 +735,7 @@ def evaluate_placement_scene(
             if segments_intersect(dim_seg, g):
                 dim_geom_crossings += 1
                 unresolved_indices.add(i)
-            if segment_intersects_bbox(g, t_box):
+            if text_intersects_segment(p.text_corners, g):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
 
@@ -563,11 +751,11 @@ def evaluate_placement_scene(
             if segment_intersects_bbox(dim_seg, obs.bbox):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
-            if bboxes_overlap(t_box, obs.bbox):
+            if text_intersects_bbox(p.text_corners, obs.bbox):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
 
-    # 2. Pairwise checks between placed dimensions (MF-02 evaluator symmetry)
+    # 2. Pairwise checks between placed dimensions (MF-02 evaluator symmetry, orientation-aware)
     for i in range(len(placed)):
         p1 = placed[i]
         p1_dim = (p1.dim_line_start, p1.dim_line_end)
@@ -581,18 +769,18 @@ def evaluate_placement_scene(
                 unresolved_indices.add(i)
                 unresolved_indices.add(j)
 
-            # Text bounding boxes overlapping each other
-            if bboxes_overlap(p1.text_bbox, p2.text_bbox):
+            # Text footprints overlapping each other (orientation-aware SAT)
+            if texts_intersect(p1.text_corners, p2.text_corners):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
                 unresolved_indices.add(j)
 
             # Text vs Dimension Line (symmetric: dim2 vs text1, and dim1 vs text2)
-            if segment_intersects_bbox(p2_dim, p1.text_bbox):
+            if text_intersects_segment(p1.text_corners, p2_dim):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
                 unresolved_indices.add(j)
-            if segment_intersects_bbox(p1_dim, p2.text_bbox):
+            if text_intersects_segment(p2.text_corners, p1_dim):
                 dim_annot_overlaps += 1
                 unresolved_indices.add(i)
                 unresolved_indices.add(j)
@@ -826,6 +1014,9 @@ def dimensions_match(p1: PlacedDimension, p2: PlacedDimension, tol: float = 1e-9
             return False
     for b1, b2 in zip(p1.text_bbox, p2.text_bbox):
         if abs(b1 - b2) > tol:
+            return False
+    for pt1, pt2 in zip(p1.text_corners, p2.text_corners):
+        if abs(pt1[0] - pt2[0]) > tol or abs(pt1[1] - pt2[1]) > tol:
             return False
     return True
 
