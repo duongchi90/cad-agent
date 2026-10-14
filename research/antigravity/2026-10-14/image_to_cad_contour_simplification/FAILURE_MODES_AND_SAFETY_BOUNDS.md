@@ -16,30 +16,37 @@ In converting raster engineering drawings into CAD vector boundaries, naive appl
 
 ## 2. Failure Mode 1: Small Feature / Notch Deletion (The Scale-Dependent Epsilon Trap)
 
-### Mechanism
-In existing codebase implementations (e.g. `primitive_ir_lib/dimension_geometry.py::_contour_arrow_points`), simplification epsilon is computed proportional to contour perimeter:
-$$\epsilon = k \cdot P_{\text{contour}}$$
-For small arrowheads ($P \approx 40\text{ px}$), $k = 0.08 \implies \epsilon \approx 3.2\text{ px}$, which appropriately collapses triangular arrowheads to 3–4 vertices.
+### Scope of Existing Reuse vs Full-Part Contours
+Current main contains:
+- **`EXISTING_SPECIALIZED_RDP_REUSE=dimension_geometry.py::_contour_arrow_points`**
+  - Implementation: `cv2.approxPolyDP(contour, 0.08 * perimeter, True)`
+  - Scope: Small bounded arrowhead contours ($P \approx 30\text{--}50\text{ px}$, yielding $\epsilon \approx 2.4\text{--}4.0\text{ px}$).
+  - Invariants: **Valid and not defective in its scope**. It appropriately simplifies small triangular arrowhead contours down to 3–4 vertices. It must NOT be judged defective based on full-part synthetic benchmarks.
 
-However, when applied to complete mechanical part contours:
-- A $250 \times 150\text{ mm}$ plate has perimeter $P = 816\text{ px}$.
-- At $k = 0.02$, $\epsilon = 0.02 \times 816 = 16.32\text{ px}$.
-- At $k = 0.01$, $\epsilon = 0.01 \times 816 = 8.16\text{ px}$.
-- A standard keyway notch of width $6\text{ px}$ and depth $8\text{ px}$ has perpendicular deviation from the outer edge of $8.0\text{ px}$.
-- Because $\epsilon \ge 8.0\text{ px}$, the RDP recursive chord test determines that the notch cavity deviates by less than $\epsilon$, and **discards all notch vertices**.
-- **Result:** The keyway notch is completely bridged over and erased from the CAD model.
+### Mechanism on Full-Part Contours
+While perimeter-relative epsilon works for isolated small arrowheads, applying perimeter-proportional epsilon to large whole-part mechanical contours creates a scale-dependent trap when $k \cdot P$ exceeds local feature dimensions:
+- In tested synthetic Fixture 4 ($250 \times 150\text{ px}$ block, perimeter $P = 816\text{ px}$):
+  - At tested setting $k = 0.02$, $\epsilon = 0.02 \times 816 = 16.32\text{ px}$.
+  - At tested setting $k = 0.01$, $\epsilon = 0.01 \times 816 = 8.16\text{ px}$.
+  - The tested keyway notch has width $6\text{ px}$ and depth $8\text{ px}$ (perpendicular deviation $8.0\text{ px}$).
+  - Because tested $\epsilon \ge 8.0\text{ px}$, the RDP recursive chord test determines that the notch cavity deviates by less than or equal to $\epsilon$, discarding the notch vertices.
+  - Result: The keyway notch is bridged over and erased.
+- Note: This does **not** prove that all perimeter-relative scaling is universally invalid under all possible formulations; it proves specifically that tested full-part $k \cdot P$ settings ($k \ge 0.01$) erased tested small features when $\epsilon$ exceeded feature deviation.
 
 ### Empirical Evidence (Fixture 4 & Fixture 7)
-- Fixture 4 ($6 \times 8\text{ px}$ notch on $250 \times 150$ block):
-  - At $\epsilon = 0.02 \times P$, `small_feature_survived = False`, Hausdorff error = $9.00\text{ px}$, corner survival drops from 100% to 50.0%.
-- Fixture 7 (stepped shaft with $8 \times 6\text{ px}$ keyway):
-  - At $\epsilon = 0.01 \times P$, `small_feature_survived = False`, corner survival drops to 50.0%.
+- Fixture 4 ($6 \times 8\text{ px}$ notch on $250 \times 150\text{ px}$ block, $P = 816\text{ px}$):
+  - At tested $\epsilon = 0.02 \times P$ ($\epsilon \approx 16.32\text{ px}$), `small_feature_survived = False`, Hausdorff error = $9.00\text{ px}$, corner survival drops from 100% to 50.0%.
+  - At tested $\epsilon = 0.005 \times P$ ($\epsilon \approx 4.08\text{ px}$), notch survived with 8 points.
+- Fixture 7 (stepped shaft with $8 \times 6\text{ px}$ keyway notch, $P = 1104\text{ px}$):
+  - At tested $\epsilon = 0.01 \times P$ ($\epsilon \approx 11.04\text{ px}$), `small_feature_survived = False`, corner survival drops to 50.0%.
 
-### Safety Bound & Rule
-> [!CAUTION]
-> **RULE:** NEVER use global perimeter-relative epsilon ($\epsilon = k \cdot P$) for mechanical part boundary simplification. Epsilon MUST be bounded by an absolute physical tolerance:
-> $$\epsilon_{\text{safe}} \le \min\left(1.5\text{ px}, \frac{1}{3} d_{\text{min\_notch}}\right)$$
-> For standard scans ($\ge 300\text{ DPI}$), $\epsilon \in [0.75, 1.25]\text{ px}$ eliminates 98%+ of staircase raster noise while strictly preserving features $\ge 4\text{ px}$.
+### Fixture-Specific Synthetic Observations & Limits
+> [!IMPORTANT]
+> **UNIVERSAL_EPSILON=NOT_PROVEN.**
+> Numerical ranges $\epsilon \in [0.75, 1.5]\text{ px}$ are **fixture-specific synthetic observations** on tested binary raster shapes with 1-pixel steps. They do NOT constitute an all-scale or universal production claim.
+>
+> - **Scale Generalization:** No assertion is made regarding DPI invariance (e.g. "standard scans >= 300 DPI") or universal preservation of real-world features without explicit calibration. All observations are strictly relative to tested synthetic pixel dimensions ($6 \times 8\text{ px}$ notch, $R = 5\text{ px}$ hole, $R = 15\text{ px}$ fillet).
+> - **Production Rule:** `FUTURE_FULL_CONTOUR_CANDIDATE_OWNER=geometry_comparator.py::_contour_points` under condition: **ONLY AFTER MEASURED PRODUCT RED**. `PRODUCTION_TRANSFER_AUTHORIZED=NO`.
 
 ---
 
@@ -104,18 +111,24 @@ A closed internal contour representing a pin hole or bolt hole (e.g. $R = 5\text
 
 ---
 
-## 6. Failure Mode 5: Visvalingam-Whyatt Area Collapse on Raster Staircase Loops
+## 6. Failure Mode 5: Clean-Room Direct-Area VW Variant Behavior on Raster Staircase Loops
 
-### Mechanism
-Visvalingam-Whyatt prioritizes vertices by the area of the triangle formed with their immediate neighbors:
+### Implementation Scope & Qualification
+The evaluated implementation is a **`Clean_Room_Direct_Area_VW_Variant`**:
+- It recomputes local triangle areas directly without standard monotonic effective-area hierarchy propagation (canonical Visvalingam-Whyatt maintains an ascending ladder where each vertex effective area is bounded below by the previously removed vertex area).
+- The findings below report strictly on this direct-area variant on the tested synthetic discretized contours.
+- Canonical Visvalingam-Whyatt with monotonic hierarchy was not benchmarked, and no claims of general unsuitability are made regarding canonical VW or algorithms outside this tested variant.
+
+### Mechanism of Direct-Area Variant on Tested Fixtures
+The direct-area variant prioritizes vertices by the area of the triangle formed with their immediate active neighbors:
 $$A_i = \frac{1}{2} |(x_p - x_n)(y_i - y_p) - (x_i - x_p)(y_p - y_n)|$$
 In a raw 1-pixel raster staircase chain (`cv2.CHAIN_APPROX_NONE`), every step has $(\Delta x, \Delta y) \in \{(\pm 1, 0), (0, \pm 1)\}$. The triangle area of any step is at most $0.5\text{ px}^2$.
 
-Critically, a true $90^\circ$ CAD corner on a pixel grid also has an initial local triangle area of only $0.5\text{ px}^2$. Because VW uses *area* rather than *distance from chord* as its metric:
-1. VW treats true corners as equally "unimportant" as 1-pixel staircase steps on straight edges.
-2. Once points on adjacent edges are removed, the area updates dynamically. As the loop shrinks, VW progressively cuts off corners, rounding the shape inward.
-3. VW terminates at the hardcoded minimum vertex count ($N = 3$) for almost all area thresholds $\tau \ge 1.0\text{ px}^2$, collapsing full mechanical profiles into arbitrary triangles with $87\%\text{--}99\%$ area error.
+On the tested pixel grid, a true $90^\circ$ CAD corner also has an initial local triangle area of only $0.5\text{ px}^2$. In this direct-area variant:
+1. True discrete corners have the same initial local area ($0.5\text{ px}^2$) as 1-pixel staircase steps on straight edges.
+2. Once points on adjacent edges are removed, local triangle areas update directly without monotonic filtering.
+3. For tested area thresholds $\tau_{\text{area}} \ge 1.0\text{ px}^2$, this direct-area variant progressively eliminated corner points, stopping at the minimal vertex limit ($N = 3$) on closed loops with $87\%\text{--}99\%$ area error on the tested shapes.
 
-### Conclusion on Visvalingam-Whyatt for CAD Contours
-> [!WARNING]
-> **REJECTION:** Visvalingam-Whyatt is **fundamentally unsuitable** for raw raster engineering contour chains. While effective for geographic cartography (natural coastlines), it fails completely on discretized raster CAD boundaries. **Ramer-Douglas-Peucker (OpenCV approxPolyDP) is strictly superior for CAD geometry.**
+### Benchmark Finding on Tested Variant
+> [!NOTE]
+> In the tested synthetic discrete raster fixtures, the `Clean_Room_Direct_Area_VW_Variant` (without monotonic hierarchy) collapsed closed raster loops at tested thresholds $\tau \ge 1.0\text{ px}^2$. For Cad Agent's candidate contour filtering, OpenCV's standard Ramer-Douglas-Peucker (`approxPolyDP`) is already present as an existing dependency and achieved the required corner preservation on tested fixtures. Canonical VW was not tested.

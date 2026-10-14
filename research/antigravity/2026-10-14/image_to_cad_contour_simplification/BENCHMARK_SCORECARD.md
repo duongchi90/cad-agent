@@ -17,7 +17,7 @@ This benchmark evaluated:
 1. **Baseline:** Unsimplified raster contour (`cv2.CHAIN_APPROX_NONE`)
 2. **RDP (OpenCV approxPolyDP) Absolute Epsilon:** $\epsilon \in \{0.75, 1.5, 3.0, 6.0\}\text{ px}$
 3. **RDP (OpenCV approxPolyDP) Relative Epsilon:** $\epsilon \in \{0.002, 0.005, 0.01, 0.02, 0.08\} \times \text{perimeter}$
-4. **Visvalingam-Whyatt (VW):** Minimum triangle effective area threshold $\tau_{\text{area}} \in \{1.0, 4.0, 16.0, 64.0\}\text{ px}^2$
+4. **Clean-Room Direct-Area Visvalingam-Whyatt Variant:** Minimum triangle effective area threshold $\tau_{\text{area}} \in \{1.0, 4.0, 16.0, 64.0\}\text{ px}^2$ (direct area recomputation without monotonic ladder)
 
 Across 7 synthetic engineering fixtures (98 total configurations).
 
@@ -35,9 +35,9 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Abs)** | $\epsilon = 1.50\text{ px}$ | **4** | **99.7%** | **0.48 px** | **0.0000%** | 6.83% | **100.0%** |
 | **OpenCV RDP (Abs)** | $\epsilon = 3.00\text{ px}$ | **4** | **99.7%** | **0.48 px** | **0.0000%** | 6.83% | **100.0%** |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.005 \times P$ | **4** | **99.7%** | **0.48 px** | **0.0000%** | 6.83% | **100.0%** |
-| **Visvalingam-Whyatt** | Area $= 1.0\text{ px}^2$ | 3 | 99.7% | 441.89 px | 99.9981% | 99.34% | 25.0% |
+| **Clean-Room VW (Direct-Area)** | Area $= 1.0\text{ px}^2$ | 3 | 99.7% | 441.89 px | 99.9981% | 99.34% | 25.0% |
 
-*Key finding:* RDP absolute $\epsilon = 0.75\text{--}3.0\text{ px}$ perfectly eliminates all 1156 staircase points, recovering exactly the 4 true CAD rectangle corners ($H = 0.48\text{ px}$, area error = 0.0000%). Visvalingam-Whyatt catastrophically collapses closed loops because 1-pixel steps have tiny area (see Failure Modes).
+*Tested Fixture 1 finding:* On this 400x200 rotated rectangle (1160 raw points), RDP absolute $\epsilon = 0.75\text{--}3.0\text{ px}$ reduces 99.7% of points (down to exactly 4 CAD corners, $H = 0.48\text{ px}$, area error = 0.0000%). The clean-room direct-area VW variant (without monotonic ladder) collapsed the loop to 3 points at tested $\tau \ge 1.0\text{ px}^2$ because individual 1-pixel steps have triangle area $\le 0.5\text{ px}^2$.
 
 ---
 
@@ -51,9 +51,9 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Abs)** | $\epsilon = 1.50\text{ px}$ | **6** | **99.4%** | **0.72 px** | **0.0000%** | **100.0%** |
 | **OpenCV RDP (Abs)** | $\epsilon = 3.00\text{ px}$ | **6** | **99.4%** | **0.72 px** | **0.0000%** | **100.0%** |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.08 \times P$ | 5 | 99.5% | 50.00 px | 16.6667% | 83.3% (Apex clipped!) |
-| **Visvalingam-Whyatt** | Area $= 1.0\text{ px}^2$ | 3 | 99.7% | 198.65 px | 87.6667% | 50.0% |
+| **Clean-Room VW (Direct-Area)** | Area $= 1.0\text{ px}^2$ | 3 | 99.7% | 198.65 px | 87.6667% | 50.0% |
 
-*Key finding:* Sharp acute corners ($30^\circ$ apex) survive completely at absolute $\epsilon \le 3.0\text{ px}$. Aggressive relative $\epsilon = 0.08 \times P$ clips the $30^\circ$ apex.
+*Tested Fixture 2 finding:* On tested chevron profile (1000 raw points), sharp acute corners ($30^\circ$ apex) survive completely at tested absolute $\epsilon \le 3.0\text{ px}$ (100% survival, $H = 0.72\text{ px}$). Tested relative $\epsilon = 0.08 \times P = 80\text{ px}$ clipped the $30^\circ$ apex ($H = 50.0\text{ px}$).
 
 ---
 
@@ -85,7 +85,7 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Rel)** | $\epsilon = 0.02 \times P$ | 4 | 99.5% | **NO (Obliterated!)** | 50.0% | 9.00 px |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.08 \times P$ | 4 | 99.5% | **NO (Obliterated!)** | 50.0% | 9.00 px |
 
-*Key finding:* Relative epsilon scaling $\epsilon = \text{fraction} \times P$ is **catastrophically unsafe** on large parts. For a perimeter of $816\text{ px}$, $0.02 \times P = 16.3\text{ px} > \text{notch depth } (8\text{ px})$, completely erasing the keyway notch. Safe boundary requires absolute $\epsilon \le 1.5\text{ px}$.
+*Tested Fixture 4 finding:* On tested Fixture 4 ($250 \times 150\text{ px}$ block, $P = 816\text{ px}$, $6 \times 8\text{ px}$ notch), tested settings $0.02 \times P$ ($16.32\text{ px}$) and $0.08 \times P$ ($65.28\text{ px}$) exceeded the $8.0\text{ px}$ notch depth, completely erasing the keyway notch. Tested settings where $\epsilon$ remained bounded below notch depth (e.g. $0.005 \times P = 4.08\text{ px}$ or absolute $\epsilon \le 1.5\text{ px}$) preserved the notch. Note: Existing arrowhead extraction in `dimension_geometry.py::_contour_arrow_points` uses $0.08 \times P$ on small bounded contours ($P \approx 30\text{--}50\text{ px}$, $\epsilon \approx 2.4\text{--}4.0\text{ px}$), which is effective in that scope and not defective.
 
 ---
 
@@ -100,7 +100,7 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Abs)** | $\epsilon = 6.00\text{ px}$ | 2 | 92.9% | **NO (Collapsed to line!)** | **100.0000%** |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.02 \times P$ | 8 | 71.4% | **YES** | 6.0606% |
 
-*Key finding:* If absolute $\epsilon \ge \text{radius} = 5.0\text{ px}$, the closed circular loop collapses to 2 points ($Area = 0$), destroying topology. Safe boundary requires $\epsilon \le 1.5\text{ px}$.
+*Tested Fixture 5 finding:* On tested small pin hole ($R = 5\text{ px}$, $P = 28\text{ px}$), tested setting $\epsilon = 6.0\text{ px} > R$ collapsed the loop into a degenerate 2-point line ($Area = 0$), destroying closed topology. For this small circular fixture, point reduction was 71.4% ($\epsilon = 0.75\text{ px}$) and 85.7% ($\epsilon = 1.50\text{ px}$) with preserved topology.
 
 ---
 
@@ -130,12 +130,15 @@ Across 7 synthetic engineering fixtures (98 total configurations).
 | **OpenCV RDP (Abs)** | $\epsilon = 6.00\text{ px}$ | 16 | 98.5% | 6.00 px | 0.2249% | **NO (Erased!)** | 66.7% |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.01 \times P$ | 14 | 98.7% | 9.54 px | 3.3346% | **NO (Erased!)** | 50.0% |
 | **OpenCV RDP (Rel)** | $\epsilon = 0.08 \times P$ | 3 | 99.7% | 57.75 px | 44.7421% | **NO (Erased!)** | 25.0% |
-| **Visvalingam-Whyatt** | Area $= 1.0\text{ px}^2$ | 4 | 99.6% | 235.00 px | 96.9859% | **NO (Erased!)** | 0.0% |
+| **Clean-Room VW (Direct-Area)** | Area $= 1.0\text{ px}^2$ | 4 | 99.6% | 235.00 px | 96.9859% | **NO (Erased!)** | 0.0% |
 
-*Key finding:* For composite mechanical parts, absolute $\epsilon \in [0.75, 1.5]\text{ px}$ is the **only safe operating window**:
-- 97.3%–97.8% point reduction (1104 points down to 24–30 points)
-- Hausdorff error $\le 1.34\text{ px}$
-- Area error $\le 0.0096\%$
-- 100% corner survival (including 45° chamfers)
-- 100% small feature survival (keyway notch intact)
-- Fillet transition polygonized with smooth chord spacing.
+### Summary of Fixture-Specific Synthetic Observations
+> [!IMPORTANT]
+> **UNIVERSAL_EPSILON=NOT_PROVEN.**
+> The measured metrics are **fixture-specific synthetic observations** on tested binary shapes with 1-pixel steps:
+> - **Straight-edge & staircase polygons (Fixtures 1, 2, 6):** 99.4%–99.7% point count reduction under absolute $\epsilon \in [0.75, 1.5]\text{ px}$ with $H \le 0.72\text{ px}$ and 100% corner survival.
+> - **Composite stepped shaft (Fixture 7):** 97.3%–97.8% point count reduction (1104 to 24–30 points) under tested $\epsilon \in [0.75, 1.5]\text{ px}$ with $H \le 1.34\text{ px}$, area error $\le 0.0096\%$, notch intact, and 100% corner survival. At tested $\epsilon = 0.01 \times P$ ($11.04\text{ px}$) and $\epsilon = 6.0\text{ px}$, the keyway notch was erased.
+> - **Curved profiles (Fixture 3 arc, Fixture 5 hole):** Lower reduction rates (71.4%–95.3%) to maintain geometric fidelity; arcs require chord chains to avoid chord-flattening error ($H = 0.69\text{ px}$ at $\epsilon = 0.75\text{ px}$, $H = 1.49\text{ px}$ at $\epsilon = 1.5\text{ px}$).
+> - **Clean-Room Direct-Area VW Variant:** Without monotonic hierarchy, collapsed tested closed raster loops to 3–4 points at tested thresholds $\tau \ge 1.0\text{ px}^2$. Canonical VW was not tested.
+> - **Scale Limits:** Observations are strictly relative to tested synthetic pixel dimensions. No assertions are made for uncalibrated real-world scans or DPI invariance.
+> - **Architectural Boundary:** `FUTURE_FULL_CONTOUR_CANDIDATE_OWNER=geometry_comparator.py::_contour_points` under condition: **ONLY AFTER MEASURED PRODUCT RED**. `PRODUCTION_TRANSFER_AUTHORIZED=NO`.

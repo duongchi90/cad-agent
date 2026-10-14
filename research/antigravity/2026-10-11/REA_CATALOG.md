@@ -801,6 +801,8 @@
 - **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`geometry_comparator.py::_contour_points`, `dimension_geometry.py::_contour_arrow_points`) + `SYNTHETIC_ORACLE_TESTS` (`TRANSFER_ORACLE.py`) + `BENCHMARK_OBSERVED` (`benchmark_results.json`).
 - **REUSE_CLASS:** `DEPENDENCY_REUSE`.
 - **CURRENT_CAD_AGENT_OWNER:** `primitive_ir_lib/geometry_comparator.py` (`_contour_points()`).
+- **EXISTING_SPECIALIZED_RDP_REUSE:** `primitive_ir_lib/dimension_geometry.py::_contour_arrow_points` (SCOPE: small bounded arrowhead contours).
+- **FUTURE_FULL_CONTOUR_CANDIDATE_OWNER:** `primitive_ir_lib/geometry_comparator.py::_contour_points` (CONDITION: only after measured product RED).
 - **OWNER_MAPPING_STATUS:** `VALID` (Smallest appropriate owner in current main).
 - **CURRENT_DISPOSITION:** `RESEARCH_PRIOR`.
 - **DO_NOT_REPEAT_REA:** `YES`.
@@ -809,14 +811,15 @@
 - **LICENSE:** Apache 2.0 (OpenCV).
 - **LICENSE_SOURCE:** `https://github.com/opencv/opencv/blob/4.x/LICENSE`.
 - **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (OpenCV is already a core project dependency in `requirements/`).
-- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 7 fixtures / 98 configs; do not alter production `geometry_comparator.py` absent an active measured product RED).
-- **WHAT_WAS_INSPECTED:** OpenCV `cv2.approxPolyDP` across absolute ($\epsilon \in [0.75, 6.0]\text{ px}$) and relative ($\epsilon \in [0.002, 0.08] \times P$) tolerances, Visvalingam-Whyatt area-based vertex elimination, and failure modes across 7 canonical engineering fixtures.
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 7 fixtures / 98 configs; do not alter production `geometry_comparator.py` absent an active measured product RED. PRODUCTION_TRANSFER_AUTHORIZED=NO).
+- **WHAT_WAS_INSPECTED:** OpenCV `cv2.approxPolyDP` across absolute ($\epsilon \in [0.75, 6.0]\text{ px}$) and relative ($\epsilon \in [0.002, 0.08] \times P$) tolerances, Clean-Room Direct-Area Visvalingam-Whyatt Variant (direct area without monotonic ladder), and failure modes across 7 canonical engineering fixtures.
 - **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
-  - RDP with absolute $\epsilon \in [0.75, 1.5]\text{ px}$ achieves 97.3%–99.7% point count reduction on noisy raster staircase contours while preserving 100% of sharp corners, chamfers, and small features ($H \le 1.34\text{ px}$, area error $< 0.01\%$).
-  - Visvalingam-Whyatt is fundamentally unsuitable for closed raster staircase loops, collapsing mechanical contours into 3-point triangles ($87\%\text{--}99\%$ area error).
-  - Relative epsilon ($\epsilon = k \cdot P$) triggers the Scale-Dependent Epsilon Trap on large part contours, completely obliterating keyway notches ($6 \times 8\text{ px}$) and small holes.
+  - `UNIVERSAL_EPSILON=NOT_PROVEN`. Numerical metrics are fixture-specific synthetic observations.
+  - On tested straight/staircase polygons (Fixtures 1, 2, 6, 7), RDP with tested absolute $\epsilon \in [0.75, 1.5]\text{ px}$ achieves 97.3%–99.7% point count reduction ($H \le 1.34\text{ px}$, area error $< 0.01\%$, 100% corner survival). Arcs and holes achieve lower reduction (71.4%–95.3%) to maintain chord fidelity.
+  - The evaluated Clean-Room Direct-Area VW Variant (without monotonic hierarchy) collapsed tested discrete raster loops to 3–4 points at tested thresholds $\tau \ge 1.0\text{ px}^2$. Canonical VW with monotonic ladder was not benchmarked.
+  - On tested full-part shapes, tested relative settings ($k \ge 0.01$) where $\epsilon = k \cdot P$ exceeded feature depth erased tested keyway notches. Existing arrowhead reuse (`0.08 * P` on $P \approx 30\text{--}50\text{ px}$) is effective in its scope and not defective.
 - **FAILURE_MODES_AND_LIMITS:**
-  - `RELATIVE_EPSILON_UNSAFE = YES`: Never use $\epsilon \propto \text{perimeter}$ for complete part contours.
+  - `FULL_PART_RELATIVE_EPSILON_HAZARD`: Tested $k \cdot P$ settings on full-part contours erased small features when $\epsilon$ exceeded feature depth.
   - `ARC_POLYGONIZATION_ERROR`: Large $\epsilon \ge 6.0\text{ px}$ reduces smooth circles to coarse octagons ($8.89\%$ area error).
   - `HOLE_TOPOLOGY_COLLAPSE`: When $\epsilon \ge R_{\text{hole}}$, small pin holes collapse into 2-point line segments ($Area = 0$).
 - **WHAT_NOT_TO_COPY_OR_INVENT:**

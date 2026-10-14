@@ -141,7 +141,7 @@
   },
   {
     "fixture_name": "fixture_1_long_straight_edges",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 1160,
     "simp_point_count": 3,
@@ -155,7 +155,7 @@
   },
   {
     "fixture_name": "fixture_1_long_straight_edges",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 1160,
     "simp_point_count": 3,
@@ -169,7 +169,7 @@
   },
   {
     "fixture_name": "fixture_1_long_straight_edges",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 1160,
     "simp_point_count": 3,
@@ -183,7 +183,7 @@
   },
   {
     "fixture_name": "fixture_1_long_straight_edges",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 1160,
     "simp_point_count": 3,
@@ -337,7 +337,7 @@
   },
   {
     "fixture_name": "fixture_2_sharp_corners",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 1000,
     "simp_point_count": 3,
@@ -351,7 +351,7 @@
   },
   {
     "fixture_name": "fixture_2_sharp_corners",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 1000,
     "simp_point_count": 3,
@@ -365,7 +365,7 @@
   },
   {
     "fixture_name": "fixture_2_sharp_corners",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 1000,
     "simp_point_count": 3,
@@ -379,7 +379,7 @@
   },
   {
     "fixture_name": "fixture_2_sharp_corners",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 1000,
     "simp_point_count": 3,
@@ -533,7 +533,7 @@
   },
   {
     "fixture_name": "fixture_3_circular_arcs",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 424,
     "simp_point_count": 4,
@@ -547,7 +547,7 @@
   },
   {
     "fixture_name": "fixture_3_circular_arcs",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 424,
     "simp_point_count": 3,
@@ -561,7 +561,7 @@
   },
   {
     "fixture_name": "fixture_3_circular_arcs",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 424,
     "simp_point_count": 3,
@@ -575,7 +575,7 @@
   },
   {
     "fixture_name": "fixture_3_circular_arcs",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 424,
     "simp_point_count": 3,
@@ -729,7 +729,7 @@
   },
   {
     "fixture_name": "fixture_4_tiny_notch",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 816,
     "simp_point_count": 3,
@@ -743,7 +743,7 @@
   },
   {
     "fixture_name": "fixture_4_tiny_notch",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 816,
     "simp_point_count": 3,
@@ -757,7 +757,7 @@
   },
   {
     "fixture_name": "fixture_4_tiny_notch",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 816,
     "simp_point_count": 3,
@@ -771,7 +771,7 @@
   },
   {
     "fixture_name": "fixture_4_tiny_notch",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 816,
     "simp_point_count": 3,
@@ -925,7 +925,7 @@
   },
   {
     "fixture_name": "fixture_5_small_hole",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 28,
     "simp_point_count": 4,
@@ -939,7 +939,7 @@
   },
   {
     "fixture_name": "fixture_5_small_hole",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 28,
     "simp_point_count": 3,
@@ -953,7 +953,7 @@
   },
   {
     "fixture_name": "fixture_5_small_hole",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 28,
     "simp_point_count": 3,
@@ -967,7 +967,7 @@
   },
   {
     "fixture_name": "fixture_5_small_hole",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 28,
     "simp_point_count": 3,
@@ -1121,7 +1121,7 @@
   },
   {
     "fixture_name": "fixture_6_noisy_staircase_multiangle",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 1140,
     "simp_point_count": 3,
@@ -1135,7 +1135,7 @@
   },
   {
     "fixture_name": "fixture_6_noisy_staircase_multiangle",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 1140,
     "simp_point_count": 3,
@@ -1149,7 +1149,7 @@
   },
   {
     "fixture_name": "fixture_6_noisy_staircase_multiangle",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 1140,
     "simp_point_count": 3,
@@ -1163,7 +1163,7 @@
   },
   {
     "fixture_name": "fixture_6_noisy_staircase_multiangle",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 1140,
     "simp_point_count": 3,
@@ -1317,7 +1317,7 @@
   },
   {
     "fixture_name": "fixture_7_mixed_stepped_shaft",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_1.0px2",
     "orig_point_count": 1104,
     "simp_point_count": 4,
@@ -1331,7 +1331,7 @@
   },
   {
     "fixture_name": "fixture_7_mixed_stepped_shaft",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_4.0px2",
     "orig_point_count": 1104,
     "simp_point_count": 3,
@@ -1345,7 +1345,7 @@
   },
   {
     "fixture_name": "fixture_7_mixed_stepped_shaft",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_16.0px2",
     "orig_point_count": 1104,
     "simp_point_count": 3,
@@ -1359,7 +1359,7 @@
   },
   {
     "fixture_name": "fixture_7_mixed_stepped_shaft",
-    "algorithm": "Visvalingam_Whyatt",
+    "algorithm": "Clean_Room_Direct_Area_VW_Variant",
     "parameter_label": "area_64.0px2",
     "orig_point_count": 1104,
     "simp_point_count": 3,

@@ -4,7 +4,7 @@ Benchmark and empirical evaluation of image-to-CAD contour simplification algori
 Compares:
 1. Baseline: Unsimplified pixel contour (cv2.CHAIN_APPROX_NONE)
 2. Ramer-Douglas-Peucker (RDP / OpenCV approxPolyDP) at varying epsilon (absolute and relative)
-3. Visvalingam-Whyatt (VW) area-based simplification at varying area thresholds
+3. Clean-Room Direct-Area Visvalingam-Whyatt Variant (direct area without monotonic hierarchy) at varying area thresholds
 
 Evaluates across 7 canonical engineering contour fixtures:
 1. Long straight edges with raster staircase
@@ -49,10 +49,13 @@ def triangle_area(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> float:
 
 def visvalingam_whyatt_closed(points: np.ndarray, min_area_threshold: float) -> np.ndarray:
     """
-    Visvalingam-Whyatt simplification for closed 2D polygons.
+    Clean-room direct-area Visvalingam-Whyatt variant for closed 2D polygons.
     Points: (N, 2) numpy array.
     Repeatedly removes vertex with minimum effective area until all remaining
     effective areas >= min_area_threshold, or only 3 vertices remain.
+
+    Note: This variant recomputes local triangle areas directly without standard
+    monotonic effective-area hierarchy propagation (canonical VW ascending ladder).
     """
     n = len(points)
     if n <= 3:
@@ -522,10 +525,10 @@ def run_full_benchmark() -> List[EvaluationResult]:
             res = evaluate_candidate(f, approx, "OpenCV_RDP_Relative", f"eps_{frac}xPerim")
             results.append(res)
 
-        # 4. Visvalingam-Whyatt (VW) - Area thresholds
+        # 4. Clean-Room Direct-Area Visvalingam-Whyatt Variant - Area thresholds
         for area_thresh in [1.0, 4.0, 16.0, 64.0]:
             vw_pts = visvalingam_whyatt_closed(raw, area_thresh)
-            res = evaluate_candidate(f, vw_pts, "Visvalingam_Whyatt", f"area_{area_thresh}px2")
+            res = evaluate_candidate(f, vw_pts, "Clean_Room_Direct_Area_VW_Variant", f"area_{area_thresh}px2")
             results.append(res)
 
     return results
