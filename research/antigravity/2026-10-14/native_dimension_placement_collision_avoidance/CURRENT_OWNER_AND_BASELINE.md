@@ -69,7 +69,7 @@ The current baseline implementation possesses the following exact invariants:
 
 ## 3. Systematic Baseline Failure Modes Across Synthetic Fixtures
 
-Empirical evaluation across the 10 canonical fixtures revealed **16 total collisions across 8 failed scenes**:
+Empirical evaluation across the 10 canonical fixtures revealed **17 total collisions across 8 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, and 6 unwanted extension crossings, leaving 10 dimensions unresolved):
 
 ### Failure 1: Single-Side Obstacle Collision (Fixtures 6 & 7)
 - **Scenario:** Measured edge has clear space on one side, but the default left-hand $+n$ side contains model geometry (Fixture 6, pocket cavity) or an annotation note box (Fixture 7).
@@ -78,7 +78,7 @@ Empirical evaluation across the 10 canonical fixtures revealed **16 total collis
 
 ### Failure 2: Parallel Dimension Stacking Conflict (Fixture 4)
 - **Scenario:** Two parallel stepped edges separated by 8 mm (e.g. keyway or shaft shoulder).
-- **Baseline Behavior:** Both dimensions evaluate to nearly identical offsets along $+n$, placing Line 1's dimension line at $y = 206.4$ and Line 2's dimension line at $y = 217.6$, with text bounding boxes directly overlapping.
+- **Baseline Behavior:** Both dimensions evaluate to proportional offsets along $+n$, placing Line 1's dimension line at $y = 206.4$ and Line 2's dimension line at $y = 217.6$, with text bounding boxes directly overlapping or crossing adjacent witness geometry.
 - **Impact:** Cluttered overlapping text violating drafting standards.
 
 ### Failure 3: Drawing Boundary Escape (Fixture 9)
@@ -86,9 +86,9 @@ Empirical evaluation across the 10 canonical fixtures revealed **16 total collis
 - **Baseline Behavior:** Default $+n$ pushes `base` to $y = 503\text{ mm}$, placing text outside the drawing sheet.
 - **Impact:** Critical dimension text is truncated or clipped during plotting.
 
-### Failure 4: Oblique and Perpendicular Crossing Hazards (Fixtures 3 & 10)
-- **Scenario:** 45° chamfer (Fixture 3) and L-bracket corner (Fixture 10) where horizontal and vertical lines meet.
-- **Baseline Behavior:** Fixed offset creates extension line crossings with flanking geometry corners.
+### Failure 4: Oblique, Crowded, and Perpendicular Crossing Hazards (Fixtures 3, 5, 8 & 10)
+- **Scenario:** 45° chamfer (Fixture 3), collinear shoulder (Fixture 5), crowded short segments (Fixture 8, 7 collisions), and L-bracket corner (Fixture 10) where horizontal and vertical lines meet.
+- **Baseline Behavior:** Fixed offset creates extension line crossings with flanking geometry corners, text overlaps on neighboring ribs, and dimension line crossings between collinear or intersecting features.
 
 ---
 

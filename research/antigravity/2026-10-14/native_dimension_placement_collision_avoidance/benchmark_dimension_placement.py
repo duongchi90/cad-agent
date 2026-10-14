@@ -198,9 +198,8 @@ class PlacementEvaluation:
     dim_to_annotation_overlaps: int
     extension_unwanted_crossings: int
     min_observed_clearance: float
-    measurement_error: float
+    prototype_measurement_error: float
     placement_displacement: float
-    deterministic_repeatability: float
     unresolved_dimensions: int
 
 
@@ -314,101 +313,122 @@ def score_candidate(
     scene: Scene,
     already_placed: List[PlacedDimension],
     measured_seg: Segment2D,
-) -> float:
+) -> Tuple[int, float]:
     """
     Compute deterministic penalty score for a candidate dimension placement.
-    Lower score = better. 0.0 = completely collision-free.
+    Returns (hard_collision_count, soft_penalty_score).
+    Zero hard collisions strictly beats any non-zero hard collisions (MF-07).
     """
-    penalty = 0.0
+    hard_collisions = 0
+    soft_penalty = 0.0
 
     # 1. Out of sheet bounds penalty (hardest rejection)
     xmin, ymin, xmax, ymax = scene.sheet_boundary
     if not (xmin <= text_bbox[0] and text_bbox[2] <= xmax and
             ymin <= text_bbox[1] and text_bbox[3] <= ymax):
-        penalty += 5000.0
+        hard_collisions += 1
 
     # 2. Dimension line crossings with model geometry (excluding the measured segment itself)
     for g_seg in scene.geometry_segments:
         if g_seg == measured_seg or (g_seg[1] == measured_seg[0] and g_seg[0] == measured_seg[1]):
             continue
         if segments_intersect(dim_seg, g_seg):
-            penalty += 1000.0
+            hard_collisions += 1
 
     # 3. Dimension text overlapping model geometry
     for g_seg in scene.geometry_segments:
         if segment_intersects_bbox(g_seg, text_bbox):
-            penalty += 1500.0
+            hard_collisions += 1
 
     # 4. Dimension line or text overlapping annotation obstacles (notes, labels, callouts)
     for obs in scene.annotation_obstacles:
         if segment_intersects_bbox(dim_seg, obs.bbox):
-            penalty += 1200.0
+            hard_collisions += 1
         if bboxes_overlap(text_bbox, obs.bbox):
-            penalty += 2000.0
+            hard_collisions += 1
 
-    # 5. Extension lines crossing model geometry (unwanted witness crossing)
+    # 5. Extension lines crossing model geometry (unwanted witness crossing: soft penalty)
     for g_seg in scene.geometry_segments:
         if g_seg == measured_seg or (g_seg[1] == measured_seg[0] and g_seg[0] == measured_seg[1]):
             continue
         # Extension lines often touch adjacent geometry at p1 or p2; only penalize if intersecting other segments
         if segments_intersect(ext1, g_seg):
-            # Check if intersection is strictly at the start point
             if math.hypot(g_seg[0][0] - ext1[0][0], g_seg[0][1] - ext1[0][1]) > 1e-4 and \
                math.hypot(g_seg[1][0] - ext1[0][0], g_seg[1][1] - ext1[0][1]) > 1e-4:
-                penalty += 150.0
+                soft_penalty += 150.0
         if segments_intersect(ext2, g_seg):
             if math.hypot(g_seg[0][0] - ext2[0][0], g_seg[0][1] - ext2[0][1]) > 1e-4 and \
                math.hypot(g_seg[1][0] - ext2[0][0], g_seg[1][1] - ext2[0][1]) > 1e-4:
-                penalty += 150.0
+                soft_penalty += 150.0
 
     # 6. Interaction with already placed dimensions
     for p in already_placed:
         p_dim_seg = (p.dim_line_start, p.dim_line_end)
         # Dimension lines crossing each other (severe drafting violation)
         if segments_intersect(dim_seg, p_dim_seg):
-            penalty += 2500.0
+            hard_collisions += 1
         # Text overlapping previously placed dimension text
         if bboxes_overlap(text_bbox, p.text_bbox):
-            penalty += 3000.0
+            hard_collisions += 1
         # Text overlapping previously placed dimension line
         if segment_intersects_bbox(p_dim_seg, text_bbox):
-            penalty += 2000.0
+            hard_collisions += 1
         # Dimension line overlapping previously placed text
         if segment_intersects_bbox(dim_seg, p.text_bbox):
-            penalty += 2000.0
+            hard_collisions += 1
+
+        # Symmetric extension line crossing checks (soft penalties, 300.0 each)
         # Extension lines crossing previously placed dimension line
         if segments_intersect(ext1, p_dim_seg):
-            penalty += 300.0
+            soft_penalty += 300.0
         if segments_intersect(ext2, p_dim_seg):
-            penalty += 300.0
+            soft_penalty += 300.0
+
+        # Dimension line crossing previously placed extension lines (MF-07 symmetric check)
+        p_ext1 = (p.ext_line_1_start, p.ext_line_1_end)
+        p_ext2 = (p.ext_line_2_start, p.ext_line_2_end)
+        if segments_intersect(dim_seg, p_ext1):
+            soft_penalty += 300.0
+        if segments_intersect(dim_seg, p_ext2):
+            soft_penalty += 300.0
 
     # 7. Soft lane penalty: prefer lower lanes (closer to measured feature, standard drafting nesting)
-    penalty += lane_idx * 15.0
+    soft_penalty += lane_idx * 15.0
 
     # 8. Soft side tie-breaker: prefer default Side +1 over Side -1 when all else is equal
     if side == -1:
-        penalty += 1.0
+        soft_penalty += 1.0
 
-    return penalty
+    return hard_collisions, soft_penalty
+
+
+def _spec_sort_key(s: MeasuredSegment) -> Tuple[float, Tuple[float, float], Tuple[float, float], str]:
+    """Canonical tie-break sort key ensuring benchmark execution is independent of input-list order (MF-03)."""
+    dx = s.end[0] - s.start[0]
+    dy = s.end[1] - s.start[1]
+    length = round(math.hypot(dx, dy), 6)
+    p_min = min(s.start, s.end)
+    p_max = max(s.start, s.end)
+    return (length, p_min, p_max, s.spec_id)
 
 
 def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
     """
     Deterministic Multi-Lane Dual-Side Placement Policy:
-    1. Order dimensions: longer dimensions first, or preserve specification sequence.
+    1. Order dimensions canonically by length ascending, tie-breaking by endpoints and spec_id (MF-03).
        (Standard drafting rule: overall dimensions placed further out, smaller inside).
     2. For each dimension, evaluate 6 discrete candidates:
        - 2 sides: +1 (left normal), -1 (right normal)
        - 3 lanes: lane 0 (base offset), lane 1 (base + delta), lane 2 (base + 2*delta)
        where delta = max(7.5, text_height * 2.0) is a research heuristic lane step.
-    3. Score each candidate against obstacles and already placed dimensions.
-    4. Select minimum penalty candidate.
+    3. Score each candidate: primary key = hard_collision_count, secondary key = soft_penalty_score (MF-07).
+    4. Select minimum penalty candidate with lexicographic tie-breaking:
+       (hard_collisions, soft_penalty, lane_idx, side_preference).
     """
     placed: List[PlacedDimension] = []
 
-    # Sort specs by length ascending to place inner dimensions first, then outer overall dimensions
-    # (or preserve deterministic order)
-    specs = sorted(scene.measured_segments, key=lambda s: math.hypot(s.end[0] - s.start[0], s.end[1] - s.start[1]))
+    # Sort specs canonically to be independent of input list ordering
+    specs = sorted(scene.measured_segments, key=_spec_sort_key)
 
     for spec in specs:
         start, end = spec.start, spec.end
@@ -417,7 +437,7 @@ def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
         base_offset = max(length * 0.08, 6.0)  # Research heuristic base offset
         lane_step = max(7.5, 3.5 * 2.0)        # Research heuristic lane step increment
 
-        best_score = float('inf')
+        best_key: Tuple[int, float, int, int] = (999999, float('inf'), 999, 999)
         best_placed: Optional[PlacedDimension] = None
 
         # Candidate grid: 2 sides x 3 lanes = 6 candidates
@@ -431,13 +451,16 @@ def place_dimensions_candidate(scene: Scene) -> List[PlacedDimension]:
             base, dim_seg, ext1, ext2, text_bbox, dim_len = compute_dimension_geometry(
                 start, end, offset, side
             )
-            score = score_candidate(
+            hard_count, soft_score = score_candidate(
                 dim_seg, ext1, ext2, text_bbox, side, lane_idx,
                 scene, placed, (start, end)
             )
 
-            if score < best_score:
-                best_score = score
+            side_pref = 0 if side == 1 else 1
+            cand_key = (hard_count, soft_score, lane_idx, side_pref)
+
+            if cand_key < best_key:
+                best_key = cand_key
                 best_placed = PlacedDimension(
                     spec_id=spec.spec_id,
                     side=side,
@@ -475,38 +498,36 @@ def evaluate_placement_scene(
     dim_annot_overlaps = 0
     ext_crossings = 0
     min_clearance = float('inf')
-    max_measurement_err = 0.0
-    unresolved_dims = 0
+    max_proto_err = 0.0
+    unresolved_indices: set[int] = set()
 
     # Calculate measurement error
     for p in placed:
         err = abs(p.dimension_length - p.measured_length)
-        if err > max_measurement_err:
-            max_measurement_err = err
+        if err > max_proto_err:
+            max_proto_err = err
 
-    # Evaluate collisions
+    # 1. Unary checks per placed dimension
     for i, p in enumerate(placed):
         dim_seg = (p.dim_line_start, p.dim_line_end)
         ext1 = (p.ext_line_1_start, p.ext_line_1_end)
         ext2 = (p.ext_line_2_start, p.ext_line_2_end)
         t_box = p.text_bbox
 
-        has_hard_collision = False
-
         # Out of bounds check
         sb = scene.sheet_boundary
         if not (sb[0] <= t_box[0] and t_box[2] <= sb[2] and sb[1] <= t_box[1] and t_box[3] <= sb[3]):
             dim_annot_overlaps += 1
-            has_hard_collision = True
+            unresolved_indices.add(i)
 
         # Check vs geometry segments
         for g in scene.geometry_segments:
             if segments_intersect(dim_seg, g):
                 dim_geom_crossings += 1
-                has_hard_collision = True
+                unresolved_indices.add(i)
             if segment_intersects_bbox(g, t_box):
                 dim_annot_overlaps += 1
-                has_hard_collision = True
+                unresolved_indices.add(i)
             if segments_intersect(ext1, g) or segments_intersect(ext2, g):
                 ext_crossings += 1
 
@@ -519,28 +540,40 @@ def evaluate_placement_scene(
         for obs in scene.annotation_obstacles:
             if segment_intersects_bbox(dim_seg, obs.bbox):
                 dim_annot_overlaps += 1
-                has_hard_collision = True
+                unresolved_indices.add(i)
             if bboxes_overlap(t_box, obs.bbox):
                 dim_annot_overlaps += 1
-                has_hard_collision = True
+                unresolved_indices.add(i)
 
-        # Check vs other placed dimensions
-        for j, p2 in enumerate(placed):
-            if i >= j:
-                continue
+    # 2. Pairwise checks between placed dimensions (MF-02 evaluator symmetry)
+    for i in range(len(placed)):
+        p1 = placed[i]
+        p1_dim = (p1.dim_line_start, p1.dim_line_end)
+        for j in range(i + 1, len(placed)):
+            p2 = placed[j]
             p2_dim = (p2.dim_line_start, p2.dim_line_end)
-            if segments_intersect(dim_seg, p2_dim):
-                dim_geom_crossings += 1
-                has_hard_collision = True
-            if bboxes_overlap(t_box, p2.text_bbox):
-                dim_annot_overlaps += 1
-                has_hard_collision = True
-            if segment_intersects_bbox(p2_dim, t_box):
-                dim_annot_overlaps += 1
-                has_hard_collision = True
 
-        if has_hard_collision:
-            unresolved_dims += 1
+            # Dimension lines intersecting each other
+            if segments_intersect(p1_dim, p2_dim):
+                dim_geom_crossings += 1
+                unresolved_indices.add(i)
+                unresolved_indices.add(j)
+
+            # Text bounding boxes overlapping each other
+            if bboxes_overlap(p1.text_bbox, p2.text_bbox):
+                dim_annot_overlaps += 1
+                unresolved_indices.add(i)
+                unresolved_indices.add(j)
+
+            # Text vs Dimension Line (symmetric: dim2 vs text1, and dim1 vs text2)
+            if segment_intersects_bbox(p2_dim, p1.text_bbox):
+                dim_annot_overlaps += 1
+                unresolved_indices.add(i)
+                unresolved_indices.add(j)
+            if segment_intersects_bbox(p1_dim, p2.text_bbox):
+                dim_annot_overlaps += 1
+                unresolved_indices.add(i)
+                unresolved_indices.add(j)
 
     total_collisions = dim_geom_crossings + dim_annot_overlaps
 
@@ -556,10 +589,9 @@ def evaluate_placement_scene(
         dim_to_annotation_overlaps=dim_annot_overlaps,
         extension_unwanted_crossings=ext_crossings,
         min_observed_clearance=round(min_clearance, 3),
-        measurement_error=round(max_measurement_err, 6),
+        prototype_measurement_error=round(max_proto_err, 6),
         placement_displacement=0.0,
-        deterministic_repeatability=100.0,
-        unresolved_dimensions=unresolved_dims,
+        unresolved_dimensions=len(unresolved_indices),
     )
 
 
@@ -739,6 +771,29 @@ def create_fixtures() -> List[Scene]:
 # Benchmark Runner
 # ---------------------------------------------------------------------------
 
+def dimensions_match(p1: PlacedDimension, p2: PlacedDimension, tol: float = 1e-9) -> bool:
+    """Verify full-field repeatability across all PlacedDimension fields (MF-03)."""
+    if p1.spec_id != p2.spec_id or p1.side != p2.side or p1.lane_index != p2.lane_index:
+        return False
+    if abs(p1.offset - p2.offset) > tol or abs(p1.measured_length - p2.measured_length) > tol or abs(p1.dimension_length - p2.dimension_length) > tol:
+        return False
+    for pt1, pt2 in [
+        (p1.base, p2.base),
+        (p1.dim_line_start, p2.dim_line_start),
+        (p1.dim_line_end, p2.dim_line_end),
+        (p1.ext_line_1_start, p2.ext_line_1_start),
+        (p1.ext_line_1_end, p2.ext_line_1_end),
+        (p1.ext_line_2_start, p2.ext_line_2_start),
+        (p1.ext_line_2_end, p2.ext_line_2_end),
+    ]:
+        if abs(pt1[0] - pt2[0]) > tol or abs(pt1[1] - pt2[1]) > tol:
+            return False
+    for b1, b2 in zip(p1.text_bbox, p2.text_bbox):
+        if abs(b1 - b2) > tol:
+            return False
+    return True
+
+
 def run_benchmark() -> Tuple[List[PlacementEvaluation], Dict[str, Any]]:
     scenes = create_fixtures()
     evaluations: List[PlacementEvaluation] = []
@@ -781,20 +836,19 @@ def run_benchmark() -> Tuple[List[PlacementEvaluation], Dict[str, Any]]:
             if err > max_proto_err:
                 max_proto_err = err
 
-        # Run Candidate (Run 2 - measured repeatability check)
+        # Run Candidate (Run 2 - measured full-field repeatability check)
         cand_placed_run2 = place_dimensions_candidate(sc)
         assert len(cand_placed) == len(cand_placed_run2), f"Dimension count mismatch on {sc.name}"
         for p1, p2 in zip(cand_placed, cand_placed_run2):
             total_dims += 1
-            if (p1.side == p2.side and p1.lane_index == p2.lane_index and
-                abs(p1.base[0] - p2.base[0]) < 1e-9 and abs(p1.base[1] - p2.base[1]) < 1e-9):
+            if dimensions_match(p1, p2):
                 repeat_matches += 1
 
     summary_stats["prototype_measurement_error"] = max_proto_err
     repeatability_pct = (repeat_matches / total_dims * 100.0) if total_dims > 0 else 0.0
     summary_stats["measured_repeatability_tested_fixtures_pct"] = repeatability_pct
     summary_stats["repeatability_scope"] = (
-        f"{repeat_matches}/{total_dims} dimensions identical across 2 repeated runs on all "
+        f"{repeat_matches}/{total_dims} dimensions full-field identical across 2 repeated runs on all "
         f"{len(scenes)} synthetic fixtures (Fixture 4 tested across 3 runs in oracle)"
     )
 

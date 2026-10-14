@@ -49,13 +49,13 @@ While the discrete multi-lane dual-side candidate policy successfully avoids col
 
 > [!IMPORTANT]
 > **UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN.**
-> The lane step increment $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$ and base offset formula $d_0 = \max(L \cdot 0.08, 6.0\text{ mm})$ are **research heuristics** chosen for the synthetic benchmark. They do NOT constitute an all-scale universal drafting constant or AutoCAD vendor default.
+> The lane step increment $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$ and candidate base offset formula $d_0 = \max(L \cdot 0.08, 6.0\text{ mm})$ (vs baseline $5.0\text{ mm}$) are **research heuristics** chosen for the synthetic benchmark. They do NOT constitute an all-scale universal drafting constant or AutoCAD vendor default.
 >
 > **COLLISION_FREE_GUARANTEE = NOT_PROVEN.**
 > Zero collisions is the measured result across the 10 synthetic fixtures evaluated. The discrete policy cannot guarantee collision-free placement when physical clearance is absent on both sides across all lanes.
 >
 > **PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE.**
-> Measurement error = 0.000 mm is verified strictly within the standalone prototype geometry model by algebraic construction. Native AutoCAD/ezdxf DIMENSION entity rendering and roundtrip were not executed by this research oracle.
+> Prototype measurement error = 0.000 mm is verified strictly within the standalone prototype geometry model by algebraic construction. Native AutoCAD/ezdxf DIMENSION entity rendering and roundtrip were not executed by this research oracle.
 >
 > **SYNTHETIC_SUCCESS != PROFESSIONAL_DRAFTING_QUALITY.**
 > Zero collisions on the 10 synthetic fixtures demonstrates that dual-side search and multi-lane stepping eliminate trivial fixed-offset collisions. It does NOT prove that generated drawings meet full professional human drafting aesthetics across arbitrary multi-view complex assemblies.

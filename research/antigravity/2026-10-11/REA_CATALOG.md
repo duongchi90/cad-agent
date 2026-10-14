@@ -843,7 +843,7 @@
 - **PROVENANCE:** `SOURCE_CODE_INSPECTED` (`dxf_builder_lib/builder.py::_add_confirmed_dimensions`) + `DEPENDENCY_API_INSPECTED` (`ezdxf>=1.4.0 LinearDimension API`) + `SYNTHETIC_ORACLE_TESTS` (`TRANSFER_ORACLE.py`) + `BENCHMARK_OBSERVED` (`benchmark_results.json`).
 - **REUSE_CLASS:** `ALGORITHM_TRANSFER`.
 - **CURRENT_CAD_AGENT_OWNER:** `dxf_builder_lib/builder.py` (`_add_confirmed_dimensions`).
-- **EXISTING_PLACEMENT_BEHAVIOR:** Single-side fixed offset `max(length * 0.08, 5.0)` along normal `(-dy/length, dx/length)` with zero obstacle awareness (16 collisions across 8/10 benchmark fixtures).
+- **EXISTING_PLACEMENT_BEHAVIOR:** Single-side fixed offset `max(length * 0.08, 5.0)` along normal `(-dy/length, dx/length)` with zero obstacle awareness (17 collisions across 8/10 benchmark fixtures).
 - **FUTURE_CANDIDATE_OWNER:** `dxf_builder_lib/builder.py` (`_add_confirmed_dimensions`, condition: bounded transfer upon approved production RED).
 - **OWNER_MAPPING_STATUS:** `VALID` (Smallest appropriate owner in current main).
 - **CURRENT_DISPOSITION:** `RESEARCH_PRIOR`.
@@ -851,16 +851,16 @@
 - **RESEARCH_AGAIN_ONLY_IF:** A measured production defect demonstrates dimension placement failure on complex multi-view orthogonal drawing layouts or non-linear dimension entities (radial, angular).
 - **EVIDENCE_TIER:** `BOUNDED_SYNTHETIC_RESEARCH_ORACLE`.
 - **LICENSE:** ASME/ISO: Copyrighted Standard (Specification Prior, DIRECT_CODE_REUSE=NO) / AutoCAD: Proprietary Commercial (Behavioral Prior, DIRECT_CODE_REUSE=NO) / ezdxf: MIT License (Dependency Reuse, DIRECT_CODE_REUSE=YES) / PFLP: Academic Algorithmic Prior (No licensed code identified, Clean-Room Transfer only).
-- **LICENSE_SOURCE:** ASME Y14.5-2018 Copyright Notice / Autodesk AutoCAD 2027 Documentation / `https://github.com/mozman/ezdxf/blob/master/LICENSE.md` / Christensen et al. (1995) JAIR publication.
+- **LICENSE_SOURCE:** ASME Y14.5-2018 Copyright Notice / Autodesk AutoCAD 2027 Documentation / `https://github.com/mozman/ezdxf/blob/master/LICENSE.md` / Jon Christensen, Joe Marks, Stuart M. Shieber (1995), ACM Transactions on Graphics (TOG), 14(3), pp. 203–232.
 - **DIRECT_REUSE_ALLOWED_BY_PROJECT_POLICY:** `YES` (ezdxf dependency reuse and clean-room algorithmic transfer of discrete scoring pattern; direct third-party code copying prohibited).
-- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 10 synthetic fixtures / 20 scenes; candidate policy avoided collisions across all 10 fixtures with 0.0 mm prototype measurement error and 100% repeatability on tested fixtures; PRODUCTION_TRANSFER_AUTHORIZED=NO).
+- **PROJECT_INTEGRATION_DECISION:** `RETAIN_AS_RESEARCH_PRIOR` (Evaluated across 10 synthetic fixtures / 20 scenes; candidate policy avoided collisions across all 10 fixtures with 0.0 mm prototype measurement error and 100% full-field repeatability on tested fixtures; PRODUCTION_TRANSFER_AUTHORIZED=NO).
 - **WHAT_WAS_INSPECTED:** `dxf_builder_lib/builder.py::_add_confirmed_dimensions`, `ezdxf.render.dim_linear.LinearDimension` API, ASME Y14.5-2018 spacing rules, AutoCAD `DIMDLI` system variable behavioral contract, Christensen et al. (1995) discrete candidate evaluation applied to dimension lines and text annotation bounding boxes.
 - **VERIFIED_BEHAVIOR_AND_INVARIANTS:**
   - `PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm` (Prototype geometric identity: definition points $p_1, p_2$ are immutable in `compute_dimension_geometry`; offset and side selection only change witness line length, never measurement).
   - `PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE` (Native DXF DIMENSION entity rendering and AutoCAD binary database roundtrip were not evaluated by this oracle).
-  - `DETERMINISTIC_REPEATABILITY = 100.0%` (Verified across 2 repeated runs on all 10 synthetic fixtures and 3 runs on Fixture 4; bounded to tested synthetic fixtures under deterministic candidate ordering).
-  - `UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN` (Offset step $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ and base offset are empirical research heuristics, not universal physical constants or AutoCAD defaults).
-  - `COLLISION_AVOIDANCE_OUTCOME = TESTED_FIXTURE_BOUNDED` (On 10 synthetic fixtures, baseline policy caused 16 collisions across 8 failed scenes. Candidate discrete policy achieved 0 collisions across all 10 fixtures. Collision freedom is not guaranteed under severe geometry saturation or tight pockets where all candidates are blocked).
+  - `DETERMINISTIC_REPEATABILITY = 100.0%` (Verified across 2 repeated runs on all 10 synthetic fixtures and 3 runs on Fixture 4; bounded to tested synthetic fixtures under canonical spec sorting).
+  - `UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN` (Offset step $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ and candidate base floor $\max(L \cdot 0.08, 6.0\text{ mm})$ vs baseline $5.0\text{ mm}$ are empirical research heuristics, not universal physical constants or AutoCAD defaults).
+  - `COLLISION_AVOIDANCE_OUTCOME = TESTED_FIXTURE_BOUNDED` (On 10 synthetic fixtures, baseline policy caused 17 collisions across 8 failed scenes. Candidate discrete policy achieved 0 collisions across all 10 fixtures. Collision freedom is not guaranteed under severe geometry saturation or tight pockets where all candidates are blocked).
 - **FAILURE_MODES_AND_LIMITS:**
   - `TIGHT_POCKET_SATURATION`: In deeply recessed geometry where both normal directions and all offset lanes intersect obstacles, discrete policy exhausts candidates and selects least-bad option with non-zero penalty.
   - `DRAWING_BORDER_CLIPPING`: High offset lanes can escape the sheet border if the margin is smaller than candidate distance.

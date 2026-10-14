@@ -70,7 +70,7 @@
 ---
 
 ### PRIOR-4: Discrete Candidate Model for Annotation Placement (PFLP)
-- **SOURCE:** Christensen, Marks & Shieber (1995), "An Empirical Evaluation of Algorithms for Point-Feature Label Placement", Journal of Artificial Intelligence Research.
+- **SOURCE:** Jon Christensen, Joe Marks, Stuart M. Shieber (1995), "An Empirical Study of Algorithms for Point-Feature Label Placement", ACM Transactions on Graphics (TOG), 14(3), 1995, pp. 203–232.
 - **SOURCE_TYPE:** `ALGORITHM_PAPER` (Academic algorithmic literature).
 - **LICENSE:** Academic paper (algorithmic principles; no licensed source code artifact identified or inspected).
 - **REUSE_CLASS:** `ALGORITHM_TRANSFER` (Clean-room implementation of discrete candidate evaluation pattern).
@@ -78,14 +78,14 @@
 - **BEHAVIORAL_PRIOR_ALLOWED:** `YES`.
 - **WHAT_IS_ACTUALLY_SUPPORTED:**
   - Evaluates a small, finite set of discrete candidate positions ($S \times K$, e.g. 2 sides $\times$ 3 offset lanes).
-  - Penalizes collisions using a deterministic scoring function (hard collisions for geometry crossings / text overlap, soft penalties for lane distance and side preference).
+  - Penalizes collisions using a deterministic scoring function with strict priority: hard collisions for geometry crossings / text overlap, soft penalties for extension crossings, lane distance, and side preference.
   - Selects the minimum penalty candidate via stable lexicographic tie-breaking.
 - **BENEFIT FOR CAD AGENT:** Bounded $O(1)$ search per dimension (6 candidates total), completely deterministic, zero graph optimizer overhead, zero machine learning models, zero new dependencies.
 
 ---
 
-### Background Reference: Open-Source CAD Engines (LibreCAD, FreeCAD)
-- **NOTE ON SCOPE:** Open-source CAD engines (LibreCAD, FreeCAD, QCAD) were surveyed as general background only. Neither implements an autonomous obstacle-avoiding multi-lane layout solver for batch dimension generation (both rely on interactive user-clicked definition points in the GUI). No code was inspected or reused from these projects, and they were not required for this causal research investigation.
+### Background Reference: Open-Source CAD Engines (LibreCAD, FreeCAD, QCAD)
+- **NOTE ON SCOPE:** Open-source CAD engines (FreeCAD, QCAD) were not inspected in this investigation. In REA-021, LibreCAD's `RS_DimLinear` was inspected and verified to position linear dimension entities based on explicit caller-provided definition points without autonomous obstacle-avoidance search. No code from LibreCAD, FreeCAD, or QCAD is reused in REA-023.
 
 ---
 
@@ -93,4 +93,9 @@
 
 1. **NO Third-Party Layout Solver:** Commercial layout engines or external cartographic packages must not be adopted.
 2. **Minimal Clean-Room Algorithm Transfer:** The discrete candidate model (evaluating $\pm \mathbf{n}$ and heuristic discrete lanes $d_0 + k \cdot \Delta d$) combined with ezdxf's existing `add_linear_dim` API provides bounded collision avoidance capability without introducing new dependencies or subsystems.
-3. **Research Heuristic Attribution:** The numeric lane spacing step $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$, base offset $\max(\text{length} \cdot 0.08, 6.0)$, and scoring weights (100.0, 50.0, 2.0, 1.0) are empirical research heuristics chosen for the synthetic benchmark, not standard constants.
+3. **Research Heuristic Attribution:**
+   - **Actual scoring penalties from code:**
+     - Hard collisions (out-of-bounds, geometry line/text crossings, obstacle overlaps, placed dimension line/text overlaps) strictly dominate candidate selection ($\text{Primary Key} = \text{hard\_collision\_count}$).
+     - Soft penalties: $P_{\text{ext\_geom}} = 150.0$ each, $P_{\text{ext\_dim}} = 300.0$ each, $P_{\text{dim\_ext}} = 300.0$ each, $P_{\text{lane}} = 15.0 \cdot k$, $P_{\text{side}} = 1.0$ (when $s = -1$).
+   - **Base floor model change:** The candidate prototype uses base offset floor $\max(\text{length} \cdot 0.08, 6.0\text{ mm})$ and lane step increment $\Delta d = \max(7.5\text{ mm}, 2 \cdot H_{\text{text}})$. The increase from the production baseline floor of $5.0\text{ mm}$ to $6.0\text{ mm}$ is an empirical research heuristic model change, not an external drafting standard.
+   - **Input-order independence:** Specs are sorted canonically by $\text{spec\_sort\_key} = (\text{length}, \min(p_1, p_2), \max(p_1, p_2), \text{spec\_id})$.

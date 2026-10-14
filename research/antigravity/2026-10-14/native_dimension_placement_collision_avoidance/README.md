@@ -43,17 +43,18 @@ research/antigravity/2026-10-14/native_dimension_placement_collision_avoidance/
 ## 3. Key Empirical Findings
 
 1. **Baseline Failure Rate on Synthetic Fixtures:**
-   - Across 10 canonical fixtures, the production baseline produced **16 collisions across 8 failed scenes**.
+   - Across 10 canonical fixtures, the production baseline produced **17 collisions across 8 failed scenes** (9 dimension-to-geometry crossings, 8 dimension-to-annotation overlaps, 6 unwanted extension crossings; 10 unresolved dimensions).
    - Primary failure causes: single-side blindness when $+n$ is blocked by geometry or notes (Fixtures 6, 7), identical lane stacking overlap on parallel edges (Fixtures 4, 5, 8, 10), and drawing sheet boundary escape (Fixture 9).
 2. **Candidate Policy Performance:**
    - The multi-lane dual-side candidate policy achieved **0 collisions across all 10 fixtures** (collision avoidance across all tested synthetic scenes).
    - Side-flipping ($s = -1$) avoided obstacles on Fixtures 6, 7, and 9.
-   - Discrete lane stepping ($k \in \{0, 1, 2\}$) resolved all parallel dimension overlaps on Fixtures 4, 5, and 10.
+   - Discrete lane stepping ($k \in \{0, 1, 2\}$) resolved all parallel dimension overlaps on Fixtures 4, 5, 8, and 10.
 3. **Formal Invariant vs Research Heuristic Scope:**
    - **`PROTOTYPE_MEASUREMENT_ERROR = 0.000000 mm`:** Definition point identity ($p_1, p_2$) is maintained algebraically in the prototype geometry model by construction.
    - **`PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION = NOT_VERIFIED_BY_THIS_ORACLE`:** Native DXF DIMENSION entity rendering and binary AutoCAD database roundtrip were not evaluated by this oracle.
-   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions matching) and 3 runs on Fixture 4.
-   - **`UNIVERSAL_SPACING_CONSTANT = NOT_PROVEN`:** The lane step increment $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ and base offset are empirical research heuristics, not universal standards.
+   - **`DETERMINISTIC_REPEATABILITY = 100.0%`:** Verified across 2 repeated runs on all 10 synthetic fixtures (15/15 dimensions full-field identical across all fields) and 3 runs on Fixture 4.
+   - **`BASE_FLOOR_HEURISTIC`:** Candidate base floor $\max(L \cdot 0.08, 6.0\text{ mm})$ vs baseline $\max(L \cdot 0.08, 5.0\text{ mm})$ and lane step increment $\Delta d = \max(7.5, 2 \cdot H_{\text{text}})$ are empirical research heuristic model changes, not drafting standards.
+   - **`SELECTION_PRIORITY_H20`:** Hard collisions strictly dominate candidate selection over soft extension crossings ($\text{Primary Key} = \text{hard\_collision\_count}$, $\text{Secondary Key} = \text{soft\_penalty\_score}$).
 4. **Anti-Bloat & Zero-Dependency Profile:**
    - Pure Python 2D segment-box geometric primitives. Zero new libraries, zero global solver daemons, zero ML models. Evaluation time is under $25\ \mu\text{s}$ per dimension.
 
@@ -70,13 +71,18 @@ Output:
 ```text
 === Running REA-023 Native Dimension Placement Collision Avoidance Transfer Oracle ===
 Test 1 PASS: Prototype geometric measurement length invariant verified across all 10 fixtures (max error = 0.000000 mm).
-Test 2 PASS: Deterministic repeatability verified across 3 repeated runs on Fixture 4 (100.0% coordinate match; bounded to tested synthetic fixtures).
+             (Note: Algebraic sanity check on prototype model; PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE).
+Test 2 PASS: Full-field deterministic repeatability verified across 3 repeated runs on Fixture 4 (all fields identical; bounded to tested synthetic fixtures).
 Test 3A PASS: Fixture 6 baseline had 2 collisions on +normal side; candidate selected side=-1 with 0 collisions.
 Test 3B PASS: Fixture 7 baseline had 2 collisions on +normal side; candidate selected side=-1 with 0 collisions.
-Test 4 PASS: Fixture 4 baseline had 1 collisions; candidate separated parallel dimensions into non-conflicting lanes/sides (0 collisions).
+Test 4A PASS: Fixture 5 baseline had 1 collisions; candidate used stacked multi-lanes [0, 1, 2] (lane_index > 0 verified) with 0 collisions.
+Test 4B PASS: Fixture 4 baseline had 1 collisions; candidate separated parallel dimensions into non-conflicting sides (-1 vs 1).
 Test 5 PASS: Fixture 9 baseline escaped top sheet border (out-of-bounds); candidate flipped inward to side=-1 with 0 boundary collisions.
+Test 6 PASS: Evaluator symmetry verified (both colliding dimensions attributed as unresolved; order-invariant).
+Test 7 PASS: Input-list ordering independence verified on Fixture 8 (forward vs reversed specs yield identical placements).
+Test 8 PASS: H20 hard collision priority verified (0 hard + 1050 soft strictly beats 1 hard + 0 soft).
 
-ALL 5 ORACLE TESTS PASSED (100% Success). Oracle verified.
+ALL 8 ORACLE TESTS PASSED (100% Success). Oracle verified.
 PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE
 ```
 
@@ -90,7 +96,7 @@ PRODUCTION_NATIVE_MEASUREMENT_PRESERVATION=NOT_VERIFIED_BY_THIS_ORACLE
   - ASME Y14.5 / ISO 129-1: `COPYRIGHTED_SPECIFICATION_OR_DOCUMENTATION_PRIOR`, `DIRECT_CODE_REUSE=NO`
   - AutoCAD DIMDLI / DIMBASELINE: `PROPRIETARY_DOCUMENTATION_OR_BEHAVIORAL_PRIOR`, `DIRECT_CODE_REUSE=NO`
   - ezdxf (1.4.4) LinearDimension API: `MIT`, `DEPENDENCY_REUSE`, `DIRECT_CODE_REUSE=YES`
-  - Christensen et al. (1995) PFLP: `ACADEMIC_ALGORITHMIC_PRIOR`, `ALGORITHM_TRANSFER`, `DIRECT_CODE_REUSE=NO` (clean-room transfer only)
+  - Jon Christensen, Joe Marks, Stuart M. Shieber (1995) PFLP (ACM Transactions on Graphics 14(3), 1995, pp. 203–232): `ACADEMIC_ALGORITHMIC_PRIOR`, `ALGORITHM_TRANSFER`, `DIRECT_CODE_REUSE=NO` (clean-room transfer only)
 - **Current Owner:** `dxf_builder_lib/builder.py::_add_confirmed_dimensions`
 - **Condition for Future Transfer:** Only after measured product RED on real drawing comparisons
 - **Production Transfer Authorized:** `NO`
