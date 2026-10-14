@@ -545,7 +545,7 @@ def review_dxf(
 
         actual_rotation = entity.dxf.rotation
         expected_rotation = written["rotation_deg"]
-        if abs(actual_rotation - expected_rotation) > _ROTATION_TOLERANCE_DEG:
+        if not _scalar_matches(actual_rotation, expected_rotation, _ROTATION_TOLERANCE_DEG):
             component_mismatches.append(ComponentMismatch(
                 part_id=part_id, field="rotation_deg",
                 expected=expected_rotation, actual=actual_rotation,
