@@ -25,6 +25,10 @@ from cad_agent.source_integrity import (
 
 STAGE_NAMES = ("primitive_ir", "semantic_ir", "dxf")
 MANIFEST_NAME = "run-manifest.json"
+IMAGE_MANIFEST_OPT_IN_VERSION = "1.1"
+PDF_MANIFEST_OPT_IN_VERSION = "pdf-run-1.1"
+_CIRCLE_STRATEGY_UNSET = object()
+_CIRCLE_STRATEGIES = {"hough", "closed_ring_identity_v1"}
 SOURCE_BUNDLE_REFERENCE_SCHEMA_VERSION = "source-bundle-reference-1.0"
 SOURCE_CUSTODY_REFERENCE_SCHEMA_VERSION = "source-custody-reference-1.0"
 SOURCE_FUSION_REFERENCE_SCHEMA_VERSION = "source-fusion-reference-1.0"
@@ -156,6 +160,38 @@ _PUBLICATION_ACTIONS = {
 
 class ManifestError(ValueError):
     """Raised when an on-disk run manifest cannot safely be used."""
+
+
+def validate_circle_strategy(value: object) -> str:
+    if type(value) is not str or value not in _CIRCLE_STRATEGIES:
+        raise ManifestError("circle_strategy must be exactly 'hough' or 'closed_ring_identity_v1'.")
+    return value
+
+
+def resolve_circle_strategy(
+    schema_version: object,
+    configuration: object,
+    *,
+    legacy_version: str,
+    opt_in_version: str,
+    manifest_label: str,
+) -> str | None:
+    if not isinstance(configuration, dict):
+        raise ManifestError(f"{manifest_label} configuration is invalid.")
+    present = "circle_strategy" in configuration
+    selector = configuration.get("circle_strategy")
+    if schema_version == legacy_version:
+        if not present:
+            return None
+        selector = validate_circle_strategy(selector)
+        if selector != "hough":
+            raise ManifestError(f"Legacy {manifest_label} manifests cannot select contour circles.")
+        return selector
+    if schema_version == opt_in_version:
+        if not present:
+            raise ManifestError(f"{manifest_label} {opt_in_version} requires circle_strategy.")
+        return validate_circle_strategy(selector)
+    raise ManifestError(f"Unsupported {manifest_label} schema version.")
 
 
 def validate_source_bundle_reference(value: object) -> dict[str, object]:
@@ -543,11 +579,22 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def new_manifest(source: Path, scale_mm_per_px: float, approval: str) -> dict[str, Any]:
+def new_manifest(
+    source: Path,
+    scale_mm_per_px: float,
+    approval: str,
+    *,
+    circle_strategy: object = _CIRCLE_STRATEGY_UNSET,
+) -> dict[str, Any]:
+    explicit = circle_strategy is not _CIRCLE_STRATEGY_UNSET
+    selector = validate_circle_strategy(circle_strategy) if explicit else None
+    configuration: dict[str, Any] = {"scale_mm_per_px": scale_mm_per_px}
+    if explicit:
+        configuration["circle_strategy"] = selector
     return classify_draft_reference({
-        "schema_version": "1.0",
+        "schema_version": IMAGE_MANIFEST_OPT_IN_VERSION if explicit else "1.0",
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "image"},
-        "configuration": {"scale_mm_per_px": scale_mm_per_px},
+        "configuration": configuration,
         "approvals": {"calibration": {"approved": True, "reference": approval}},
         "stages": {
             stage: {"state": "pending", "artifact": None, "sha256": None, "details": None}
@@ -561,8 +608,11 @@ def read_manifest(path: Path) -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ManifestError(f"Cannot read run manifest: {path}") from exc
-    if payload.get("schema_version") != "1.0":
-        raise ManifestError("Unsupported run manifest schema version.")
+    resolve_circle_strategy(
+        payload.get("schema_version"), payload.get("configuration"),
+        legacy_version="1.0", opt_in_version=IMAGE_MANIFEST_OPT_IN_VERSION,
+        manifest_label="run manifest",
+    )
     if not isinstance(payload.get("source"), dict) or not isinstance(payload.get("stages"), dict):
         raise ManifestError("Run manifest is missing source or stage records.")
     for stage in STAGE_NAMES:
