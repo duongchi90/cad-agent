@@ -45,6 +45,7 @@ python3 -m dxf_builder_lib.tests.test_repair     # 5 test — 1 luôn chạy đ�
 
 - `test_builder.py`: raise ImportError rõ ràng khi chưa cài ezdxf; build line/circle/text gán handle đúng + ghi ngược lên `Primitive.handle`; layer suy đúng theo `part_type`; `solved_primitives` ghi đè toạ độ thô; primitive thiếu geometry bị skip chứ không crash cả file.
 - `test_reviewer.py`: raise ImportError rõ ràng; review pass trên file build đúng; bắt được handle không tìm thấy, toạ độ lệch sau khi file bị sửa tay, và layer ghi nhận sai so với layer thật trong file.
+- INSERT rotation review requires finite actual and expected angles while preserving the existing absolute 1e-4-degree tolerance; review remains read-only.
 - `test_repair.py`: raise ImportError rõ ràng; repair với mismatches rỗng không làm gì; sửa đúng mismatch toạ độ LINE; sửa đúng mismatch layer CIRCLE; sửa nhiều entity độc lập — tất cả xác nhận bằng `review_dxf()` lần 2 sau repair (review pass = hết lỗi).
 
 ## Việc CHƯA làm
