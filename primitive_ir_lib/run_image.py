@@ -113,6 +113,7 @@ def run(
     *,
     circle_strategy: str = "hough",
     document_writer: Optional[Callable[[object, str], None]] = None,
+    artifact_writer: Optional[Callable[[str, bytes], None]] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -125,6 +126,10 @@ def run(
     circle_strategy = _validate_circle_strategy(circle_strategy)
     if document_writer is not None and not callable(document_writer):
         raise ValueError("document_writer must be callable")
+    if artifact_writer is not None and not callable(artifact_writer):
+        raise ValueError("artifact_writer must be callable")
+    if artifact_writer is not None and auto_calibrate:
+        raise ValueError("artifact_writer cannot be combined with auto_calibrate")
     if scale_mm_per_px is not None and (
         isinstance(scale_mm_per_px, bool)
         or not math.isfinite(scale_mm_per_px)
@@ -179,8 +184,15 @@ def run(
             raise ValueError("view_candidates_dpi is required with view_candidates_output_path")
         candidates = detect_view_candidates(raw_texts, raw_lines, image.shape[1], image.shape[0], dpi=view_candidates_dpi)
         candidates_path = Path(view_candidates_output_path)
-        candidates_path.parent.mkdir(parents=True, exist_ok=True)
-        candidates_path.write_text(json.dumps(candidates, indent=2) + "\n", encoding="utf-8")
+        serialized = json.dumps(candidates, indent=2) + "\n"
+        if artifact_writer is None:
+            candidates_path.parent.mkdir(parents=True, exist_ok=True)
+            candidates_path.write_text(serialized, encoding="utf-8")
+        else:
+            artifact_writer(
+                str(candidates_path),
+                serialized.replace("\n", os.linesep).encode("utf-8"),
+            )
 
     if scale_mm_per_px is not None:
         calibration = Calibration(

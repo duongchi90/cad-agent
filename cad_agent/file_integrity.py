@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 import sys
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -131,3 +132,66 @@ def pin_directory_chain(path: Path):
         closed = [bool(kernel.CloseHandle(handle)) for handle in reversed(handles)]
         if not all(closed) and not active_error:
             raise FileIdentityError("Directory handles could not be released.")
+
+
+def write_bound_bytes(path: Path, data: bytes, *, label: str) -> None:
+    """Atomically publish immutable bytes below a pinned Windows directory chain."""
+    if not isinstance(data, bytes):
+        raise TypeError("Bound artifact data must be bytes.")
+    path = Path(os.path.abspath(path))
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    owned_stat = None
+    try:
+        with pin_directory_chain(path.parent):
+            def destination_identity():
+                try:
+                    current = os.stat(path, follow_symlinks=False)
+                except FileNotFoundError:
+                    return None
+                if not is_single_link_regular_non_reparse(current):
+                    raise FileIdentityError(
+                        f"{label} destination must be a single-link regular non-reparse file."
+                    )
+                return current
+
+            before = destination_identity()
+            try:
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as stream:
+                    owned_stat = os.fstat(stream.fileno())
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                assert_path_identity(temporary, owned_stat, label=f"{label} temporary")
+                current = destination_identity()
+                if (before is None) != (current is None) or (
+                    before is not None and not os.path.samestat(before, current)
+                ):
+                    raise FileIdentityError(
+                        f"{label} destination identity changed before publication."
+                    )
+                os.replace(temporary, path)
+                descriptor, published_stat = open_bound_file(
+                    path,
+                    flags=os.O_RDONLY | getattr(os, "O_BINARY", 0),
+                    label=f"{label} destination",
+                )
+                with os.fdopen(descriptor, "rb") as stream:
+                    persisted = stream.read()
+                assert_path_identity(path, published_stat, label=f"{label} destination")
+                if not os.path.samestat(owned_stat, published_stat) or persisted != data:
+                    raise FileIdentityError(
+                        f"{label} persisted identity/bytes differ from publication."
+                    )
+            finally:
+                if owned_stat is not None and os.path.lexists(temporary):
+                    assert_path_identity(
+                        temporary, owned_stat, label=f"{label} temporary cleanup"
+                    )
+                    temporary.unlink()
+    except OSError as error:
+        raise FileIdentityError(str(error)) from error

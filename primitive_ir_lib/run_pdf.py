@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Callable, Optional
@@ -48,8 +49,11 @@ def _materialize_view_children(
     *,
     circle_strategy: str = "hough",
     document_writer: Optional[Callable[[object, str], None]] = None,
+    artifact_writer: Optional[Callable[[str, bytes], None]] = None,
 ) -> None:
     """Create review-only child IRs for non-overlapping evidenced candidates."""
+    if artifact_writer is not None and not callable(artifact_writer):
+        raise ValueError("artifact_writer must be callable")
     evidenced = [candidate for candidate in candidates if candidate.get("dimension_evidence")]
     if not evidenced:
         return
@@ -72,17 +76,26 @@ def _materialize_view_children(
             candidate["child_state"] = "skipped_invalid_bbox"
             continue
         accepted_boxes.append(bbox)
-        child_root.mkdir(parents=True, exist_ok=True)
         child_image = child_root / f"view_{index:02d}.png"
         child_ir = child_root / f"view_{index:02d}.json"
-        if not cv2.imwrite(str(child_image), image[y0:y1, x0:x1]):
-            raise ValueError(f"Cannot write view child image: {child_image}")
+        crop = image[y0:y1, x0:x1]
+        if artifact_writer is None:
+            child_root.mkdir(parents=True, exist_ok=True)
+            if not cv2.imwrite(str(child_image), crop):
+                raise ValueError(f"Cannot write view child image: {child_image}")
+        else:
+            encoded_ok, encoded = cv2.imencode(".png", crop)
+            if not encoded_ok:
+                raise ValueError(f"Cannot encode view child image: {child_image}")
+            artifact_writer(str(child_image), encoded.tobytes())
         child_image_sha256 = hashlib.sha256(child_image.read_bytes()).hexdigest()
         run_kwargs = {}
         if circle_strategy != "hough":
             run_kwargs["circle_strategy"] = circle_strategy
         if document_writer is not None:
             run_kwargs["document_writer"] = document_writer
+        if artifact_writer is not None:
+            run_kwargs["artifact_writer"] = artifact_writer
         run(
             image_path=str(child_image),
             output_path=str(child_ir),
@@ -135,6 +148,7 @@ def run_pdf(
     *,
     circle_strategy: str = "hough",
     document_writer: Optional[Callable[[object, str], None]] = None,
+    artifact_writer: Optional[Callable[[str, bytes], None]] = None,
 ) -> dict:
     """Render each PDF page locally and emit a validated Primitive IR JSON.
 
@@ -148,6 +162,10 @@ def run_pdf(
     circle_strategy = _validate_circle_strategy(circle_strategy)
     if document_writer is not None and not callable(document_writer):
         raise ValueError("document_writer must be callable")
+    if artifact_writer is not None and not callable(artifact_writer):
+        raise ValueError("artifact_writer must be callable")
+    if artifact_writer is not None and auto_calibrate:
+        raise ValueError("artifact_writer cannot be combined with auto_calibrate")
     if not pdf_path.is_file():
         raise FileNotFoundError(pdf_path)
     if dpi <= 0:
@@ -161,8 +179,9 @@ def run_pdf(
 
     render_dir = output_dir / "rendered"
     ir_dir = output_dir / "primitive_ir"
-    render_dir.mkdir(parents=True, exist_ok=True)
-    ir_dir.mkdir(parents=True, exist_ok=True)
+    if artifact_writer is None:
+        render_dir.mkdir(parents=True, exist_ok=True)
+        ir_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0
     manifest = {
         "source_pdf": pdf_path.name,
@@ -174,7 +193,11 @@ def run_pdf(
     try:
         for index, page in enumerate(document, start=1):
             image_path = render_dir / f"page_{index:02d}.png"
-            page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(str(image_path))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            if artifact_writer is None:
+                pixmap.save(str(image_path))
+            else:
+                artifact_writer(str(image_path), pixmap.tobytes("png"))
             output_path = ir_dir / f"page_{index:02d}.json"
             view_candidates_path = ir_dir / f"page_{index:02d}.view_candidates.json"
             page_calibration_id = (
@@ -187,6 +210,8 @@ def run_pdf(
                 run_kwargs["circle_strategy"] = circle_strategy
             if document_writer is not None:
                 run_kwargs["document_writer"] = document_writer
+            if artifact_writer is not None:
+                run_kwargs["artifact_writer"] = artifact_writer
             run(
                 image_path=str(image_path), output_path=str(output_path),
                 scale_mm_per_px=scale_mm_per_px, preset=preset,
@@ -210,11 +235,16 @@ def run_pdf(
                 merge_lines,
                 circle_strategy=circle_strategy,
                 **({"document_writer": document_writer} if document_writer is not None else {}),
+                **({"artifact_writer": artifact_writer} if artifact_writer is not None else {}),
             )
-            view_candidates_path.write_text(
-                json.dumps(scale_label_candidates, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            serialized_candidates = json.dumps(scale_label_candidates, indent=2) + "\n"
+            if artifact_writer is None:
+                view_candidates_path.write_text(serialized_candidates, encoding="utf-8")
+            else:
+                artifact_writer(
+                    str(view_candidates_path),
+                    serialized_candidates.replace("\n", os.linesep).encode("utf-8"),
+                )
             manifest["pages"].append({
                 "page": index,
                 "rendered_png": str(image_path.relative_to(output_dir)),
@@ -228,7 +258,14 @@ def run_pdf(
     finally:
         document.close()
     manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    serialized_manifest = json.dumps(manifest, indent=2) + "\n"
+    if artifact_writer is None:
+        manifest_path.write_text(serialized_manifest, encoding="utf-8")
+    else:
+        artifact_writer(
+            str(manifest_path),
+            serialized_manifest.replace("\n", os.linesep).encode("utf-8"),
+        )
     return manifest
 
 

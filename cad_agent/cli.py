@@ -302,6 +302,7 @@ def _run_primitive_with_strategy(
         run_kwargs: dict[str, Any] = {}
         if circle_strategy == "closed_ring_identity_v1":
             run_kwargs["document_writer"] = _write_contour_primitive_ir
+            run_kwargs["artifact_writer"] = _write_contour_auxiliary_artifact
         run(
             image_path=str(source),
             output_path=str(output),
@@ -326,6 +327,18 @@ def _write_contour_primitive_ir(document: object, output_path: str) -> None:
         )
     except LiveSafetyError as exc:
         raise ManifestError(f"Contour Primitive IR publication failed: {exc}") from exc
+
+
+def _write_contour_auxiliary_artifact(output_path: str, data: bytes) -> None:
+    """Publish contour-run auxiliary bytes through the shared bound-file owner."""
+    from .file_integrity import FileIdentityError, write_bound_bytes
+
+    try:
+        write_bound_bytes(
+            Path(output_path), data, label="Contour auxiliary artifact"
+        )
+    except FileIdentityError as exc:
+        raise ManifestError(f"Contour auxiliary publication failed: {exc}") from exc
 
 
 _GEOMETRY_PROPOSALS_TERMINAL = "GEOMETRY_PROPOSALS_NEED_REVIEW"
