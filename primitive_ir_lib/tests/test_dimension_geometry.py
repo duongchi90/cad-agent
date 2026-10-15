@@ -69,33 +69,76 @@ def test_dimension_selector_preserves_longest_candidate_after_quarter_turn() -> 
     assert kind == "HORIZONTAL_DISTANCE"
 
 
-def test_dimension_region_discovers_two_source_supported_flanks() -> None:
+@pytest.mark.parametrize("quarter_turns", [0, 1], ids=["vertical", "horizontal"])
+def test_dimension_region_discovers_two_source_supported_flanks(
+    quarter_turns: int,
+) -> None:
     page = _source_supported_arrow_page()
+    for _ in range(quarter_turns):
+        page = cv2.rotate(page, cv2.ROTATE_90_CLOCKWISE)
 
     regions = detect_dimension_geometry_regions(page)
 
-    assert any(left <= 70 <= right and top <= 32 and bottom >= 108
-               for left, top, right, bottom in regions), regions
+    observations = []
+    for left, top, right, bottom in regions:
+        geometry = detect_dimension_geometry(page[top:bottom, left:right])
+        if geometry.dimension_line is None or len(geometry.arrow_points) != 2:
+            continue
+        line = tuple((x + left, y + top) for x, y in geometry.dimension_line)
+        arrows = tuple((x + left, y + top) for x, y in geometry.arrow_points)
+        if quarter_turns == 0:
+            assert all(abs(x - 70) <= 2 for x, _ in line)
+            assert all(abs(x - 70) <= 2 for x, _ in arrows)
+            assert np.allclose(sorted(y for _, y in arrows), [38.6, 101.4], atol=1.0)
+        else:
+            assert all(abs(y - 70) <= 2 for _, y in line)
+            assert all(abs(y - 70) <= 2 for _, y in arrows)
+            assert np.allclose(sorted(x for x, _ in arrows), [37.6, 100.4], atol=1.0)
+        assert left <= min(x for x, _ in arrows)
+        assert right >= max(x for x, _ in arrows)
+        assert top <= min(y for _, y in arrows)
+        assert bottom >= max(y for _, y in arrows)
+        observations.append((line, arrows, (left, top, right, bottom)))
+
+    assert observations, regions
 
 
 @pytest.mark.parametrize(
-    "page",
+    ("page", "quarter_turns"),
     [
-        _source_supported_arrow_page(include_upper=False),
-        _source_supported_arrow_page(lower_x=82),
+        (_source_supported_arrow_page(include_upper=False), 0),
+        (_source_supported_arrow_page(include_upper=False), 1),
+        (_source_supported_arrow_page(lower_x=82), 0),
+        (_source_supported_arrow_page(lower_x=82), 1),
     ],
-    ids=["missing-witness", "split-off-axis-witnesses"],
+    ids=[
+        "vertical-missing-witness",
+        "horizontal-missing-witness",
+        "vertical-split-off-axis-witnesses",
+        "horizontal-split-off-axis-witnesses",
+    ],
 )
-def test_dimension_region_rejects_incomplete_or_split_flank_pairs(page: np.ndarray) -> None:
+def test_dimension_region_rejects_incomplete_or_split_flank_pairs(
+    page: np.ndarray,
+    quarter_turns: int,
+) -> None:
+    for _ in range(quarter_turns):
+        page = cv2.rotate(page, cv2.ROTATE_90_CLOCKWISE)
+
     regions = detect_dimension_geometry_regions(page)
 
     assert regions == ()
 
 
-def test_dimension_region_rejects_frame_corner_without_opposing_flanks() -> None:
+@pytest.mark.parametrize("quarter_turns", [0, 1], ids=["vertical", "horizontal"])
+def test_dimension_region_rejects_frame_corner_without_opposing_flanks(
+    quarter_turns: int,
+) -> None:
     page = np.full((180, 180, 3), 255, dtype=np.uint8)
     cv2.line(page, (70, 25), (70, 155), (0, 0, 0), 2)
     cv2.line(page, (20, 25), (70, 25), (0, 0, 0), 2)
+    for _ in range(quarter_turns):
+        page = cv2.rotate(page, cv2.ROTATE_90_CLOCKWISE)
 
     assert detect_dimension_geometry_regions(page) == ()
 
