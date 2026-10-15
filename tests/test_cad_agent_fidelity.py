@@ -1114,6 +1114,53 @@ def test_native_pdf_text_rejects_invalid_audit_dimensions(tmp_path: Path, field:
         run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
 
 
+@pytest.mark.parametrize("field", ["render_width_px", "render_height_px"])
+def test_native_pdf_text_rejects_positive_but_incorrect_audit_dimensions(
+    tmp_path: Path, field: str,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _native_text_pdf(source, [("LABEL", (80, 100))])
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page_record = manifest["pages"][0]
+
+    def make_wrong_but_positive(source_page: dict) -> None:
+        source_page[field] += 1
+
+    _rewrite_layout_audit(output, page_record, make_wrong_but_positive)
+
+    with pytest.raises(FidelityError, match="dimension|render|page"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+@pytest.mark.parametrize(
+    "location,value",
+    [("manifest", True), ("audit", True), ("audit", 1.0)],
+)
+def test_native_pdf_text_rejects_boolean_or_float_page_numbers(
+    tmp_path: Path, location: str, value: object,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _native_text_pdf(source, [("LABEL", (80, 100))])
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page_record = manifest["pages"][0]
+
+    if location == "manifest":
+        page_record["page"] = value
+    else:
+        _rewrite_layout_audit(
+            output,
+            page_record,
+            lambda source_page: source_page.__setitem__("page", value),
+        )
+
+    with pytest.raises(FidelityError, match="page"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
 def test_text_observation_uses_hash_bound_approved_region_for_single_component_dimension_roi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
