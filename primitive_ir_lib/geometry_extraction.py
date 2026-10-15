@@ -104,6 +104,13 @@ def _extend_line_endpoints_along_ink(
         for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):
             x = endpoint[0] + direction * ux * distance
             y = endpoint[1] + direction * uy * distance
+            center_x = int(round(x))
+            center_y = int(round(y))
+            if not (0 <= center_x < width and 0 <= center_y < height):
+                break
+            if gray[center_y, center_x] > _LINE_ENDPOINT_DARK_THRESHOLD:
+                break
+
             sample_positions = set()
             for offset in range(-_LINE_ENDPOINT_PERP_HALF_WIDTH_PX, _LINE_ENDPOINT_PERP_HALF_WIDTH_PX + 1):
                 px = int(round(x + nx * offset))

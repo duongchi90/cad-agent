@@ -82,6 +82,39 @@ def test_ray_march_does_not_follow_an_adjacent_connected_glyph_stroke() -> None:
     assert extended_end[0] <= 84.0, f"adjacent one-pixel glyph stem caused a long extension: {extended_end}"
 
 
+def test_ray_march_does_not_borrow_support_from_a_parallel_two_pixel_stroke() -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:51, 20:81] = 0
+    gray[51:53, 81:116] = 0
+
+    assert np.all(gray[50, 81:116] == 255), "the candidate centerline must stay white past x=80"
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 50.0), (80.0, 50.0), gray)
+
+    assert extended_end == (80.0, 50.0), (
+        "a separate two-pixel parallel stroke must not sponsor endpoint extension: "
+        f"{extended_end}"
+    )
+
+
+def test_extract_lines_does_not_extend_along_a_parallel_two_pixel_stroke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:51, 20:81] = 0
+    gray[51:53, 81:116] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 50, 80, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 50.0)
+    assert lines[0].bbox_px[2] == 80.0
+
+
 def test_ray_march_preserves_white_paper_between_separated_collinear_segments() -> None:
     image = np.full((120, 220, 3), 255, dtype=np.uint8)
     cv2.line(image, (20, 60), (80, 60), (0, 0, 0), 2)
