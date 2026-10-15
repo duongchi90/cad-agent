@@ -48,15 +48,20 @@ def test_extract_circles_translates_and_deduplicates_overlap_results(monkeypatch
 
     monkeypatch.setattr(geometry_extraction.cv2, "HoughCircles", record_hough_circles)
 
+    image = np.zeros((1000, 4500, 3), dtype=np.uint8)
+    # The extractor now requires a source-supported closed contour; the Hough
+    # mock supplies only proposals, so keep a matching raster circle in-frame.
+    geometry_extraction.cv2.circle(image, (1590, 500), 40, (255, 255, 255), 3)
     circles = geometry_extraction.extract_circles(
-        np.zeros((1000, 4500, 3), dtype=np.uint8),
+        image,
         min_dist=20,
     )
 
     assert len(calls) > 1
     assert len(circles) == 1
-    assert circles[0].center_px == (1590.0, 500.0)
-    assert circles[0].radius_px == 40.0
+    assert abs(circles[0].center_px[0] - 1590.0) <= 1.0
+    assert abs(circles[0].center_px[1] - 500.0) <= 1.0
+    assert 40.0 <= circles[0].radius_px <= 44.0
 
 
 def test_extract_circles_finds_large_image_circle_with_tiled_hough():

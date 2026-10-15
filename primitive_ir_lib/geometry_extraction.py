@@ -37,10 +37,11 @@ from .models import new_id
 # OpenCV HoughCircles allocates several full-resolution work buffers in addition
 # to its accumulator. Keep the direct path for ordinary images, but bound each
 # Hough input on large rendered sheets by splitting the preprocessed image into
-# haloed tiles. With the shipped max-radius presets (<= 200 px), every tile is
+# haloed tiles. With the shipped max-radius presets (<= 400 px), every tile is
 # at most 2,000 x 2,000 pixels while retaining a full-radius halo at seams.
 _HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
 _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
+_CIRCLE_RASTER_FIT_TOLERANCE_PX = float(np.sqrt(2.0))
 
 
 @dataclass
@@ -74,6 +75,72 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
     return blurred
+
+
+def _fit_supported_circle_contours(
+    edges: np.ndarray,
+    min_radius: int,
+    max_radius: int,
+) -> List[Tuple[float, float, float, float]]:
+    """Fit only closed, raster-consistent circle contours from source edges.
+
+    The contour residual envelope is derived from raster quantization: a point
+    can move at most half a pixel per axis, so the relative two-point bound is
+    sqrt(2) px. A complete contour also cannot have an angular sample gap larger
+    than the angle subtended by that same pixel-spacing bound.
+    """
+    contours, _ = cv2.findContours(edges.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    fit_tolerance_px = _CIRCLE_RASTER_FIT_TOLERANCE_PX
+    fits: List[Tuple[float, float, float, float]] = []
+
+    for contour in contours:
+        points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+        if len(points) < 12:
+            continue
+
+        origin_x = float(np.mean(points[:, 0]))
+        origin_y = float(np.mean(points[:, 1]))
+        x = points[:, 0] - origin_x
+        y = points[:, 1] - origin_y
+        matrix = np.column_stack((x, y, np.ones_like(x)))
+        try:
+            a, b, c = np.linalg.lstsq(matrix, -(x * x + y * y), rcond=None)[0]
+        except np.linalg.LinAlgError:
+            continue
+        center_x = origin_x + float(-a / 2.0)
+        center_y = origin_y + float(-b / 2.0)
+        radius_squared = (a * a + b * b) / 4.0 - float(c)
+        if not np.isfinite(radius_squared) or radius_squared <= 0.0:
+            continue
+        radius = float(np.sqrt(radius_squared))
+        if radius < min_radius or radius > max_radius:
+            continue
+
+        radial_error = np.abs(
+            np.hypot(points[:, 0] - center_x, points[:, 1] - center_y) - radius
+        )
+        max_radial_error = float(np.max(radial_error))
+        if max_radial_error > fit_tolerance_px:
+            continue
+
+        angles = np.sort(np.mod(
+            np.arctan2(points[:, 1] - center_y, points[:, 0] - center_x),
+            2.0 * np.pi,
+        ))
+        angular_gaps = np.diff(np.concatenate((angles, angles[:1] + 2.0 * np.pi)))
+        max_gap = float(np.max(angular_gaps))
+        # Pixel-step spacing plus the observed radial-fit envelope bounds the
+        # angular gap between neighboring raster samples on the fitted contour.
+        contour_spacing_bound_px = fit_tolerance_px + 2.0 * max_radial_error
+        max_gap_from_pixel_spacing = 2.0 * float(np.arcsin(min(
+            1.0, contour_spacing_bound_px / (2.0 * radius),
+        )))
+        if max_gap - max_gap_from_pixel_spacing > 1e-12:
+            continue
+
+        fits.append((center_x, center_y, radius, max_radial_error))
+
+    return sorted(fits, key=lambda fit: (fit[1], fit[0], fit[2]))
 
 
 def extract_lines(
@@ -125,10 +192,9 @@ def extract_circles(
     param2: int = 30,
     min_dist: int = 20,
 ) -> List[RawCircle]:
-    """HoughCircles (phương pháp gradient). confidence ước lượng thô cố định
-    ở mức trung bình-cao vì HoughCircles của OpenCV không trả vote count trực
-    tiếp qua API Python — nên đánh dấu rõ đây là ước lượng, không phải số đo."""
+    """Propose circles with Hough, then admit only source-fitted closed circles."""
     gray = _preprocess(image_bgr)
+    edges = cv2.Canny(gray, param1 / 2, param1)
     height, width = gray.shape[:2]
 
     if height * width <= _HOUGH_CIRCLE_DIRECT_MAX_PIXELS:
@@ -149,6 +215,15 @@ def extract_circles(
 
     raw_circles: List[RawCircle] = []
     min_dist_sq = float(min_dist) * float(min_dist)
+    supported_fits = _fit_supported_circle_contours(
+        edges,
+        min_radius=min_radius,
+        max_radius=max_radius,
+    )
+    proposed: List[Tuple[float, float, float]] = [
+        (x, y, radius)
+        for x, y, radius, _ in supported_fits
+    ]
 
     for x0, y0, x1, y1 in tile_specs:
         tile = gray[y0:y1, x0:x1]
@@ -169,30 +244,54 @@ def extract_circles(
             # Halo khiến cùng một circle có thể được phát hiện ở hai tile kề
             # nhau. HoughCircles đã dùng minDist trong từng tile; áp cùng ngưỡng
             # lên tọa độ global để giữ semantics cũ ở đường seam.
-            if any(
-                (x - existing.center_px[0]) ** 2 + (y - existing.center_px[1]) ** 2
-                < min_dist_sq
-                for existing in raw_circles
-            ):
-                continue
-
             radius = float(r)
-            bbox = (x - radius, y - radius, x + radius, y + radius)
-            raw_circles.append(RawCircle(
-                id=new_id("rawcirc"),
-                center_px=(x, y),
-                radius_px=radius,
-                confidence=0.75,  # ước lượng cố định — xem docstring
-                bbox_px=bbox,
-            ))
+            # Hough is a proposal source only. It must agree with the same
+            # source-fitted closed contour used for large-radius recovery.
+            nearest_fit = min(
+                supported_fits,
+                key=lambda fit: (
+                    (fit[0] - x) ** 2 + (fit[1] - y) ** 2
+                    + (fit[2] - radius) ** 2
+                ),
+                default=None,
+            )
+            if nearest_fit is None:
+                continue
+            if np.hypot(nearest_fit[0] - x, nearest_fit[1] - y) > _CIRCLE_RASTER_FIT_TOLERANCE_PX:
+                continue
+            if abs(nearest_fit[2] - radius) > _CIRCLE_RASTER_FIT_TOLERANCE_PX:
+                continue
+            proposed.append((nearest_fit[0], nearest_fit[1], nearest_fit[2]))
 
-    return raw_circles
+    for x, y, radius in proposed:
+        bbox = (x - radius, y - radius, x + radius, y + radius)
+        raw_circles.append(RawCircle(
+            id=new_id("rawcirc"),
+            center_px=(x, y),
+            radius_px=radius,
+            confidence=0.75,  # ước lượng cố định — xem docstring
+            bbox_px=bbox,
+        ))
+
+    deduplicated: List[RawCircle] = []
+    for circle in raw_circles:
+        if any(
+            (circle.center_px[0] - existing.center_px[0]) ** 2
+            + (circle.center_px[1] - existing.center_px[1]) ** 2 < min_dist_sq
+            for existing in deduplicated
+        ):
+            continue
+        deduplicated.append(circle)
+    return deduplicated
 
 
 # Bộ tham số tinh chỉnh từ ảnh scan thật đầu tiên (mục 3 báo cáo kiểm thử
 # Phase 1, 18/07/2026, bản vẽ "TP-TL-A001/07/26"): giảm nhiễu hatch (circle
 # giả) và loại nét hatch ngắn khỏi kết quả line. Xem cảnh báo ở docstring đầu
 # file — chỉ mới xác nhận trên 1 ảnh, cần benchmark thêm.
+# max_radius=400 additionally admits the source-supported 312.5 px circle from
+# CASE05 motor-mount-top; closed-contour admission and OCR caller semantics gate
+# this larger search bound. This is not evidence of broader precision.
 PRESETS = {
     "default": {
         "hough_threshold": 60, "min_line_length": 30, "max_line_gap": 10,
@@ -200,7 +299,7 @@ PRESETS = {
     },
     "real_scan_tuned_v1": {
         "hough_threshold": 90, "min_line_length": 50, "max_line_gap": 5,
-        "param2": 55, "max_radius": 80, "min_dist": 40,
+        "param2": 55, "max_radius": 400, "min_dist": 40,
     },
 }
 

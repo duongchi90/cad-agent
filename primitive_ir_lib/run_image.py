@@ -28,10 +28,10 @@ from .assemble import build_document
 from .calibration import Calibration, auto_estimate_calibration
 from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
-from .geometry_extraction import extract_raw_geometry
+from .geometry_extraction import RawCircle, extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
-from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
+from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
@@ -39,6 +39,15 @@ Bbox = Tuple[int, int, int, int]
 
 class CalibrationCandidateUnavailableError(ValueError):
     """Raised when auto-calibration finds no usable dimension/line pair."""
+
+
+def _boxes_overlap(first: Bbox, second: Bbox) -> bool:
+    return (
+        first[0] < second[2]
+        and second[0] < first[2]
+        and first[1] < second[3]
+        and second[1] < first[3]
+    )
 
 
 def _title_block_roi(image_width: int, image_height: int) -> Bbox:
@@ -71,6 +80,94 @@ def _configure_tesseract(command: Optional[str]) -> None:
     known_windows_path = r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
     if os.path.isfile(known_windows_path):
         pytesseract.pytesseract.tesseract_cmd = known_windows_path
+
+
+def _ocr_character_boxes(
+    image_bgr: cv2.Mat,
+    text: RawText,
+    lang: str,
+) -> List[Tuple[str, Bbox]]:
+    """Return Tesseract character boxes in image coordinates for one OCR line."""
+    x0, y0, x1, y1 = text.bbox_px
+    crop = image_bgr[y0:y1, x0:x1]
+    if crop.size == 0:
+        return []
+
+    try:
+        output = pytesseract.image_to_boxes(crop, lang=lang, config="--psm 7")
+    except pytesseract.TesseractNotFoundError:
+        return []
+
+    height = crop.shape[0]
+    boxes: List[Tuple[str, Bbox]] = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        character = parts[0]
+        try:
+            left, bottom, right, top = (int(value) for value in parts[1:5])
+        except ValueError:
+            continue
+        boxes.append((character, (
+            x0 + left,
+            y0 + height - top,
+            x0 + right,
+            y0 + height - bottom,
+        )))
+    return boxes
+
+
+def _circles_for_assembly(
+    circles: List[RawCircle],
+    texts: List[RawText],
+    character_boxes_by_text: dict[str, List[Tuple[str, Bbox]]],
+    text_candidate_boxes: List[Bbox] | None = None,
+) -> Tuple[List[RawCircle], List[RawCircle], List[RawCircle]]:
+    """Promote circles only when OCR does not associate them with text.
+
+    Character-level OCR association can positively identify a round glyph. A
+    circle intersecting a recognized text box or candidate OCR region without
+    that evidence is unresolved and is withheld from automatic Primitive IR
+    promotion. The input RawCircle evidence is left untouched for diagnostics.
+    """
+    candidate_boxes = text_candidate_boxes or []
+    promoted: List[RawCircle] = []
+    confirmed_glyphs: List[RawCircle] = []
+    unresolved: List[RawCircle] = []
+    for circle in circles:
+        x, y = circle.center_px
+        circle_box = circle.bbox_px
+        associated_texts = [
+            text for text in texts
+            if _boxes_overlap(circle_box, text.bbox_px)
+        ]
+        intersects_text_candidate = any(
+            _boxes_overlap(circle_box, box) for box in candidate_boxes
+        )
+        if not associated_texts and not intersects_text_candidate:
+            promoted.append(circle)
+            continue
+
+        glyph_match = False
+        for text in associated_texts:
+            for character, (x0, y0, x1, y1) in character_boxes_by_text.get(text.id, []):
+                if character.lower() not in {"o", "0"}:
+                    continue
+                if not (x0 <= x <= x1 and y0 <= y <= y1):
+                    continue
+                char_height = y1 - y0
+                if circle.radius_px <= char_height / 2.0 + 1.0:
+                    glyph_match = True
+                    break
+            if glyph_match:
+                break
+
+        if glyph_match:
+            confirmed_glyphs.append(circle)
+        else:
+            unresolved.append(circle)
+    return promoted, confirmed_glyphs, unresolved
 
 
 def _sha256(path: str) -> str:
@@ -150,6 +247,26 @@ def run(
         )
         raw_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
 
+    character_boxes_by_text: dict[str, List[Tuple[str, Bbox]]] = {}
+    for text in raw_texts:
+        if text.source != "text_tesseract":
+            continue
+        if any(_boxes_overlap(circle.bbox_px, text.bbox_px) for circle in raw_geometry.circles):
+            character_boxes_by_text[text.id] = _ocr_character_boxes(image, text, ocr_lang)
+    assembly_circles, glyph_circles, unresolved_circles = _circles_for_assembly(
+        raw_geometry.circles,
+        raw_texts,
+        character_boxes_by_text,
+        text_candidate_boxes=effective_rois,
+    )
+    if glyph_circles or unresolved_circles:
+        print(
+            "[run-image] withheld circle promotion: "
+            f"{len(glyph_circles)} OCR-confirmed glyph(s), "
+            f"{len(unresolved_circles)} unresolved text association(s); "
+            f"{len(raw_geometry.circles)} raw geometry candidate(s) remain unchanged."
+        )
+
     raw_lines = raw_geometry.lines
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=raw_texts, image_bgr=image)
@@ -216,7 +333,7 @@ def run(
         image_height_px=image.shape[0],
         calibration=calibration,
         raw_lines=raw_lines,
-        raw_circles=raw_geometry.circles,
+        raw_circles=assembly_circles,
         raw_texts=raw_texts,
         sha256=_sha256(image_path),
     )
