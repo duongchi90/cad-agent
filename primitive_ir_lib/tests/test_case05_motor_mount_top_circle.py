@@ -15,8 +15,6 @@ from primitive_ir_lib.run_image import run
 from primitive_ir_lib.text_extraction import RawText
 
 
-pytestmark = pytest.mark.real_data
-
 _IMAGE_ENV = "CAD_AGENT_CASE05_MOTOR_MOUNT_TOP_IMAGE"
 _IMAGE_SHA256 = "0e55e38823e4037aab03323c7988d33784ed1e345a5bc83827aeea2eec6394bf"
 _EXPECTED_CENTER_PX = (498.791, 820.279)
@@ -24,6 +22,7 @@ _EXPECTED_RADIUS_PX = 312.548
 _MATCH_TOLERANCE_PX = 5.0
 
 
+@pytest.mark.real_data
 def test_public_image_caller_promotes_engineering_circle_not_title_glyphs(tmp_path: Path) -> None:
     image_value = os.environ.get(_IMAGE_ENV)
     if not image_value:
