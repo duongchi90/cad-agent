@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from cad_agent.dimension_observer_run import run_dimension_observer
+from primitive_ir_lib.dimension_observer import ANCHOR_COORDINATE_MODES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tesseract-cmd")
     parser.add_argument("--semantic-anchors", type=Path)
     parser.add_argument("--profile", type=Path)
+    parser.add_argument(
+        "--anchor-coordinate-mode",
+        choices=ANCHOR_COORDINATE_MODES,
+        default="legacy",
+        help="Coordinate frame used by semantic anchor point_px values.",
+    )
     return parser
 
 
@@ -34,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         tesseract_cmd=args.tesseract_cmd,
         semantic_anchors_path=args.semantic_anchors,
         profile_path=args.profile,
+        anchor_coordinate_mode=args.anchor_coordinate_mode,
     )
     print(output)
     return 0
