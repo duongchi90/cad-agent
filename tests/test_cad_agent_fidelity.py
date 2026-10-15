@@ -47,6 +47,28 @@ from cad_agent.cli import (
 from mcp_integration_lib.mcp_client import FakeMCPClient
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_fidelity_ocr_uses_installed_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep synthetic PDF workflow tests independent of optional vie data.
+
+    These fixtures contain only English labels/numbers. The Tesseract guard
+    still checks the explicitly requested installed ``eng`` model before
+    real recognition; missing-language refusal is covered by its own tests.
+    """
+    from cad_agent import fidelity as fidelity_module
+
+    original = fidelity_module.extract_text_tesseract
+
+    def extract_english(image: np.ndarray, *args: object, **kwargs: object):
+        if kwargs.get("lang", "vie+eng") == "vie+eng":
+            kwargs["lang"] = "eng"
+        return original(image, *args, **kwargs)
+
+    monkeypatch.setattr(fidelity_module, "extract_text_tesseract", extract_english)
+
+
 def _pdf(path: Path) -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)
