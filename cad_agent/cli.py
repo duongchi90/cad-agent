@@ -21,6 +21,7 @@ from .manifest import (
     completed_artifact,
     new_manifest,
     read_manifest,
+    resolve_circle_strategy,
     sha256_file,
     verify_source,
     write_manifest,
@@ -285,6 +286,168 @@ def _run_primitive(source: Path, output: Path, scale: float, *, auto_ocr_roi: bo
     )
 
 
+def _run_primitive_with_strategy(
+    source: Path,
+    output: Path,
+    scale: float,
+    *,
+    auto_ocr_roi: bool = False,
+    circle_strategy: str | None = None,
+) -> None:
+    if circle_strategy is None:
+        _run_primitive(source, output, scale, auto_ocr_roi=auto_ocr_roi)
+    else:
+        from primitive_ir_lib.run_image import run
+
+        run_kwargs: dict[str, Any] = {}
+        if circle_strategy == "closed_ring_identity_v1":
+            run_kwargs["document_writer"] = _write_contour_primitive_ir
+            run_kwargs["artifact_writer"] = _write_contour_auxiliary_artifact
+        run(
+            image_path=str(source),
+            output_path=str(output),
+            scale_mm_per_px=scale,
+            preset="real_scan_tuned_v1",
+            merge_lines=True,
+            auto_ocr_roi=auto_ocr_roi,
+            circle_strategy=circle_strategy,
+            **run_kwargs,
+        )
+
+
+def _write_contour_primitive_ir(document: object, output_path: str) -> None:
+    """Publish an opt-in contour Primitive IR through the existing safe writer."""
+    from .live import _write_json_artifact
+
+    if not callable(getattr(document, "to_dict", None)):
+        raise ManifestError("Contour Primitive IR document cannot be serialized safely.")
+    try:
+        _write_json_artifact(
+            Path(output_path), document.to_dict(), label="Contour Primitive IR"
+        )
+    except LiveSafetyError as exc:
+        raise ManifestError(f"Contour Primitive IR publication failed: {exc}") from exc
+
+
+def _write_contour_auxiliary_artifact(output_path: str, data: bytes) -> None:
+    """Publish contour-run auxiliary bytes through the shared bound-file owner."""
+    from .file_integrity import FileIdentityError, write_bound_bytes
+
+    try:
+        write_bound_bytes(
+            Path(output_path), data, label="Contour auxiliary artifact"
+        )
+    except FileIdentityError as exc:
+        raise ManifestError(f"Contour auxiliary publication failed: {exc}") from exc
+
+
+_GEOMETRY_PROPOSALS_TERMINAL = "GEOMETRY_PROPOSALS_NEED_REVIEW"
+_CONTOUR_PROVENANCE = "opencv-contour-ring-identity-v1"
+
+
+def _confined_candidate_path(root: Path, value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ManifestError(f"{label} path is missing.")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ManifestError(f"{label} path must remain within the run output root.")
+    root_path = root.resolve()
+    candidate = (root_path / relative).resolve()
+    try:
+        candidate.relative_to(root_path)
+    except ValueError as exc:
+        raise ManifestError(f"{label} path resolves outside the run output root.") from exc
+    return candidate
+
+
+def _validated_contour_primitive(root: Path, record: object, label: str) -> Path:
+    if not isinstance(record, dict) or record.get("state") != "completed":
+        raise ManifestError(f"{label} Primitive IR checkpoint is not completed.")
+    path = _confined_candidate_path(root, record.get("artifact"), label)
+    digest = record.get("sha256")
+    if not isinstance(digest, str) or not path.is_file() or sha256_file(path) != digest:
+        raise ManifestError(f"{label} Primitive IR checkpoint hash is invalid.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        from primitive_ir_lib.validator import validate_document
+
+        primitives = payload.get("primitives") if isinstance(payload, dict) else None
+        if not isinstance(primitives, list) or any(not isinstance(item, dict) for item in primitives):
+            errors = ["primitives is not a list of objects"]
+        else:
+            errors = validate_document(payload)
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
+        raise ManifestError(f"{label} Primitive IR checkpoint cannot be validated.") from exc
+    if errors:
+        raise ManifestError(f"{label} Primitive IR schema is invalid: {errors[0]}")
+    for primitive in payload.get("primitives", []):
+        if primitive.get("type") == "circle":
+            trace = primitive.get("trace")
+            if not isinstance(trace, dict) or trace.get("extraction_tool") != _CONTOUR_PROVENANCE:
+                raise ManifestError(f"{label} circle provenance does not match the selected contour strategy.")
+    return path
+
+
+def _require_pending_downstream(manifest: dict[str, Any], output_dir: Path) -> None:
+    stages = manifest.get("stages")
+    if not isinstance(stages, dict):
+        raise ManifestError("Contour candidate manifest stages are invalid.")
+    for name in ("semantic_ir", "dxf"):
+        record = stages.get(name)
+        if not isinstance(record, dict) or any(
+            record.get(key) != expected
+            for key, expected in (("state", "pending"), ("artifact", None), ("sha256", None))
+        ):
+            raise ManifestError(f"Contour candidate cannot start with existing {name} state.")
+    for name in ("semantic_ir.json", "staged.dxf", "build-evidence.json"):
+        if (output_dir / name).exists():
+            raise ManifestError(f"Contour candidate refuses pre-existing downstream artifact: {name}")
+
+
+def _validate_image_contour_terminal(
+    source: Path, output_dir: Path, manifest: dict[str, Any], strategy: str | None
+) -> None:
+    if strategy != "closed_ring_identity_v1" or manifest.get("result") != _GEOMETRY_PROPOSALS_TERMINAL:
+        raise ManifestError("Persisted geometry proposal terminal does not match its selector.")
+    verify_source(manifest, source)
+    approval = manifest.get("approvals", {}).get("calibration", {})
+    if (
+        not isinstance(approval, dict)
+        or approval.get("approved") is not True
+        or not isinstance(approval.get("reference"), str)
+        or not approval["reference"].strip()
+    ):
+        raise ManifestError("Image geometry terminal has no recorded manual calibration approval.")
+    _require_pending_downstream(manifest, output_dir)
+    _validated_contour_primitive(output_dir, manifest.get("stages", {}).get("primitive_ir"), "image")
+
+
+def _run_image_contour_candidate(
+    source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any], scale: float,
+) -> None:
+    _require_pending_downstream(manifest, output_dir)
+    record = manifest["stages"]["primitive_ir"]
+    primitive: Path | None = None
+    if isinstance(record, dict) and record.get("state") == "completed":
+        try:
+            primitive = _validated_contour_primitive(output_dir, record, "image")
+        except ManifestError:
+            primitive = None
+    if primitive is None:
+        primitive = _artifact(output_dir, "primitive_ir")
+        _run_primitive_with_strategy(
+            source, primitive, scale, circle_strategy="closed_ring_identity_v1"
+        )
+        _write_stage(
+            manifest_path, manifest, "primitive_ir", "completed", primitive,
+            "Contour geometry proposals generated; review is required before Semantic IR.",
+        )
+    _validated_contour_primitive(output_dir, manifest["stages"]["primitive_ir"], "image")
+    manifest["result"] = _GEOMETRY_PROPOSALS_TERMINAL
+    _validate_image_contour_terminal(source, output_dir, manifest, "closed_ring_identity_v1")
+    write_manifest(manifest_path, manifest)
+
+
 def _run_semantic(primitive_path: Path, output: Path) -> None:
     from semantic_ir_lib.assemble import build_semantic_document
     from semantic_ir_lib.io_utils import load_primitive_ir_document, save_document
@@ -327,13 +490,26 @@ def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path, evidence_p
 
 
 def run_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: dict[str, Any]) -> None:
+    strategy = resolve_circle_strategy(
+        manifest.get("schema_version"), manifest.get("configuration"),
+        legacy_version="1.0", opt_in_version="1.1", manifest_label="run manifest",
+    )
     verify_source(manifest, source)
+    if manifest.get("result") is not None:
+        if manifest.get("result") == _GEOMETRY_PROPOSALS_TERMINAL:
+            _validate_image_contour_terminal(source, output_dir, manifest, strategy)
+            return
+        raise ManifestError("Persisted run result is unsupported by this executor.")
     scale = manifest["configuration"].get("scale_mm_per_px")
     approval = manifest.get("approvals", {}).get("calibration", {})
     if not isinstance(scale, (int, float)) or scale <= 0:
         raise ManifestError("Run manifest has no valid positive manual scale.")
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("Run manifest has no recorded calibration approval.")
+
+    if strategy == "closed_ring_identity_v1":
+        _run_image_contour_candidate(source, output_dir, manifest_path, manifest, float(scale))
+        return
 
     for stage in STAGE_NAMES:
         record = manifest["stages"][stage]
@@ -342,7 +518,7 @@ def run_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: di
         artifact = _artifact(output_dir, stage)
         try:
             if stage == "primitive_ir":
-                _run_primitive(source, artifact, float(scale))
+                _run_primitive_with_strategy(source, artifact, float(scale), circle_strategy=strategy)
                 details = "Primitive IR generated from the approved manual scale."
             elif stage == "semantic_ir":
                 _run_semantic(_artifact(output_dir, "primitive_ir"), artifact)
@@ -393,7 +569,12 @@ def _run_command(args: argparse.Namespace) -> int:
     manifest_path = output_dir / MANIFEST_NAME
     if manifest_path.exists():
         raise CommandError(f"Run manifest already exists: {manifest_path}; use resume instead.")
-    manifest = new_manifest(source, args.scale_mm_per_px, args.calibration_approval.strip())
+    manifest_kwargs = {}
+    if hasattr(args, "circle_strategy"):
+        manifest_kwargs["circle_strategy"] = args.circle_strategy
+    manifest = new_manifest(
+        source, args.scale_mm_per_px, args.calibration_approval.strip(), **manifest_kwargs
+    )
     write_manifest(manifest_path, manifest)
     run_stages(source, output_dir, manifest_path, manifest)
     print(manifest_path)
@@ -417,6 +598,9 @@ def _run_pdf_command(args: argparse.Namespace) -> int:
         raise CommandError(f"Input PDF does not exist: {source}")
     if source.suffix.lower() != ".pdf":
         raise CommandError("run-pdf accepts only a PDF input.")
+    selector_explicit = hasattr(args, "circle_strategy")
+    if args.auto_calibrate and selector_explicit:
+        raise CommandError("run-pdf --auto-calibrate cannot be combined with --circle-strategy.")
     output_dir = args.output_dir.resolve()
     manifest_path = output_dir / PDF_MANIFEST_NAME
     if manifest_path.exists():
@@ -439,12 +623,16 @@ def _run_pdf_command(args: argparse.Namespace) -> int:
         raise CommandError(
             "run-pdf requires --scale-mm-per-px and --calibration-approval unless --auto-calibrate is selected."
         )
+    manifest_kwargs = {}
+    if selector_explicit:
+        manifest_kwargs["circle_strategy"] = args.circle_strategy
     manifest = new_pdf_manifest(
         source,
         args.scale_mm_per_px,
         args.calibration_approval,
         args.dpi,
         auto_ocr_roi=args.auto_ocr_roi,
+        **manifest_kwargs,
     )
     write_manifest(manifest_path, manifest)
     run_pdf_stages(source, output_dir, manifest_path, manifest)
@@ -1042,6 +1230,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--scale-mm-per-px", type=float, required=True)
     run.add_argument("--calibration-approval", required=True)
+    run.add_argument(
+        "--circle-strategy", choices=("hough", "closed_ring_identity_v1"),
+        default=argparse.SUPPRESS,
+    )
     resume = subcommands.add_parser("resume", help="Resume a validated staged run")
     resume.add_argument("--manifest", type=Path, required=True)
     resume.add_argument("--input", type=Path, required=True)
@@ -1050,6 +1242,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_pdf.add_argument("--output-dir", type=Path, required=True)
     run_pdf.add_argument("--scale-mm-per-px", type=float)
     run_pdf.add_argument("--calibration-approval")
+    run_pdf.add_argument(
+        "--circle-strategy", choices=("hough", "closed_ring_identity_v1"),
+        default=argparse.SUPPRESS,
+    )
     run_pdf.add_argument(
         "--auto-calibrate",
         action="store_true",

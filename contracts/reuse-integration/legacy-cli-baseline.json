@@ -866,6 +866,11 @@
     },
     "run": {
       "options": {
+        "--circle-strategy": {
+          "dest": "circle_strategy",
+          "nargs": null,
+          "required": false
+        },
         "--calibration-approval": {
           "dest": "calibration_approval",
           "nargs": null,
@@ -890,6 +895,11 @@
     },
     "run-pdf": {
       "options": {
+        "--circle-strategy": {
+          "dest": "circle_strategy",
+          "nargs": null,
+          "required": false
+        },
         "--input": {
           "dest": "input",
           "required": true,
