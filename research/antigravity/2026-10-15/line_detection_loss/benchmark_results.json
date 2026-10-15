@@ -1,0 +1,128 @@
+{
+  "oracle": "TRANSFER_ORACLE__LINE_DETECTION_LOSS_ENDPOINT_INK_EXTENSION",
+  "synthetic_arrowhead": {
+    "status": "PASS",
+    "raw_endpoints": [
+      [
+        147.0,
+        71.0
+      ],
+      [
+        147.0,
+        219.0
+      ]
+    ],
+    "raw_span_px": 148.0,
+    "extended_endpoints": [
+      [
+        147.0,
+        49.0
+      ],
+      [
+        147.0,
+        241.0
+      ]
+    ],
+    "extended_span_px": 192.0,
+    "tip_recovery_px": 44.0
+  },
+  "synthetic_intentional_gap": {
+    "status": "PASS",
+    "stroke1_extended": [
+      [
+        49.0,
+        75.0
+      ],
+      [
+        181.0,
+        75.0
+      ]
+    ],
+    "stroke2_extended": [
+      [
+        219.0,
+        75.0
+      ],
+      [
+        351.0,
+        75.0
+      ]
+    ],
+    "gap_invasion_stroke1_px": 1.0,
+    "gap_invasion_stroke2_px": 1.0,
+    "intentional_gap_preserved": true
+  },
+  "synthetic_dashed_line": {
+    "status": "PASS",
+    "dash_original": [
+      [
+        90.0,
+        50.0
+      ],
+      [
+        110.0,
+        50.0
+      ]
+    ],
+    "dash_extended": [
+      [
+        89.0,
+        50.0
+      ],
+      [
+        111.0,
+        50.0
+      ]
+    ],
+    "bridged": false
+  },
+  "degenerate_controls": {
+    "status": "PASS",
+    "zero_length_safe": true,
+    "nonfinite_safe": true,
+    "oob_safe": true
+  },
+  "case01_real_data": {
+    "status": "PASS",
+    "witness_count": 2,
+    "witnesses": [
+      {
+        "raw": [
+          163,
+          364,
+          163,
+          224
+        ],
+        "extended": [
+          [
+            163.0,
+            379.0
+          ],
+          [
+            163.0,
+            208.0
+          ]
+        ]
+      },
+      {
+        "raw": [
+          160,
+          364,
+          160,
+          224
+        ],
+        "extended": [
+          [
+            160.0,
+            379.0
+          ],
+          [
+            160.0,
+            208.0
+          ]
+        ]
+      }
+    ],
+    "source_render_sha256": "5732b6014ec1c1d3b05e14c598b43ebec84a4d6198951264215a69fb7b0a0bc8"
+  }
+}

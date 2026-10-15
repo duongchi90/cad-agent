@@ -101,10 +101,15 @@
 - **WHAT_NOT_TO_COPY_OR_INVENT:**
   - Do NOT import full `scikit-image` package into production dependencies.
   - Do NOT invent custom morphological heuristics when standard Zhang-Suen lookup tables are mathematically complete.
-- **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-11/thick_line/test_causal_red_thick_line.py` (Asserts `len(merged) == 1` and `abs(merged[0].p1_px[1] - 250.0) <= 0.5`).
+- **SMALLEST_TRANSFER_ORACLE_OR_TEST:** `research/antigravity/2026-10-11/thick_line/test_causal_red_thick_line.py` (Asserts `len(merged) == 1` and `abs(merged[0].p1_px[1] - 250.0) <= 0.5`); and `research/antigravity/2026-10-15/line_detection_loss/TRANSFER_ORACLE.py` (Asserts endpoint witness recovery on arrowhead flare without invading intentional text gaps).
+- **2026-10-15_AMENDMENT:**
+  - **MEASURED_DEFECT:** Measured production RED on CASE01 (`test_case01_hough_witness.py`) under `real_scan_tuned_v1`: HoughLinesP terminates at $y=224\dots 364$ (missing upper/lower witness rectangles $y=198\dots 219$ and $y=369\dots 390$) because Canny edges flare outward around solid arrowheads, leaving a 9-pixel gap in Canny edges along $x=160$.
+  - **RULE_VALIDATION:** Increasing `maxLineGap=10` was falsified because it bridges 100% of the 192 px intentional text gap on NIST FTC-11. Endpoint Ink Ray-Marching (`_extend_line_along_ink`) traces along the Hough unit vector through continuous dark ink (recovering $y=208\dots 379$ on CASE01) while halting dead within 1–2 px of background paper (0.0 px invasion into FTC-11 intentional text gap).
+  - **STATUS:** `READY_TO_TRANSFER` (Unblocks Luna implementation on `primitive_ir_lib/geometry_extraction.py::extract_lines`).
 - **DURABLE_POINTERS:**
   - `research/antigravity/2026-10-11/thick_line/thick_line_centerline_normalization_empirical_specification.md`
   - `research/antigravity/2026-10-11/prior_investigations/raster_empirical_red_and_oss_mining.md`
+  - `research/antigravity/2026-10-15/line_detection_loss/`
 
 ---
 
