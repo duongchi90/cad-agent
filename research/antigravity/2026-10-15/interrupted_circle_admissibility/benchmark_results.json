@@ -1,0 +1,537 @@
+{
+  "campaign_id": "ANTI-INTERRUPTED-CIRCLE-ADMISSIBILITY-V1-20261015",
+  "matrix_sha256": "1fc7793f6dc11139b7cc077de2f0d48b659058a4b705dceabd96e4875d13f195",
+  "total_cases": 81,
+  "algorithms": [
+    "CURRENT_MAIN",
+    "FORMER_PR518",
+    "CANDIDATE_B_ANGULAR",
+    "CANDIDATE_C_NORMAL",
+    "CANDIDATE_F_OCCLUSION",
+    "CANDIDATE_F_HYBRID"
+  ],
+  "metrics": {
+    "CURRENT_MAIN": {
+      "true_positive": 18,
+      "false_negative": 6,
+      "false_positive": 12,
+      "true_negative": 45,
+      "hard_failures": 16,
+      "positive_recovered": [
+        "P01",
+        "P02",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P24"
+      ],
+      "positive_missed": [
+        "P03",
+        "P04",
+        "P12",
+        "P13",
+        "P22",
+        "P23"
+      ],
+      "false_admissions": [
+        [
+          "N05",
+          1
+        ],
+        [
+          "N06",
+          1
+        ],
+        [
+          "N07",
+          1
+        ],
+        [
+          "N08",
+          1
+        ],
+        [
+          "N09",
+          1
+        ],
+        [
+          "N14",
+          2
+        ],
+        [
+          "N17",
+          1
+        ],
+        [
+          "T07",
+          1
+        ],
+        [
+          "T09",
+          1
+        ],
+        [
+          "T10",
+          1
+        ],
+        [
+          "F07",
+          2
+        ],
+        [
+          "F12",
+          1
+        ]
+      ]
+    },
+    "FORMER_PR518": {
+      "true_positive": 22,
+      "false_negative": 2,
+      "false_positive": 6,
+      "true_negative": 51,
+      "hard_failures": 6,
+      "positive_recovered": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P23",
+        "P24"
+      ],
+      "positive_missed": [
+        "P08",
+        "P22"
+      ],
+      "false_admissions": [
+        [
+          "N17",
+          4
+        ],
+        [
+          "T07",
+          2
+        ],
+        [
+          "T09",
+          4
+        ],
+        [
+          "T10",
+          4
+        ],
+        [
+          "F07",
+          4
+        ],
+        [
+          "F12",
+          32
+        ]
+      ]
+    },
+    "CANDIDATE_B_ANGULAR": {
+      "true_positive": 22,
+      "false_negative": 2,
+      "false_positive": 16,
+      "true_negative": 41,
+      "hard_failures": 16,
+      "positive_recovered": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24"
+      ],
+      "positive_missed": [
+        "P12",
+        "P13"
+      ],
+      "false_admissions": [
+        [
+          "N08",
+          1
+        ],
+        [
+          "N09",
+          1
+        ],
+        [
+          "N17",
+          1
+        ],
+        [
+          "T01",
+          1
+        ],
+        [
+          "T02",
+          1
+        ],
+        [
+          "T03",
+          1
+        ],
+        [
+          "T04",
+          1
+        ],
+        [
+          "T06",
+          1
+        ],
+        [
+          "T07",
+          1
+        ],
+        [
+          "T08",
+          1
+        ],
+        [
+          "T09",
+          1
+        ],
+        [
+          "T10",
+          1
+        ],
+        [
+          "F01",
+          137
+        ],
+        [
+          "F03",
+          1
+        ],
+        [
+          "F07",
+          2
+        ],
+        [
+          "F12",
+          37
+        ]
+      ]
+    },
+    "CANDIDATE_C_NORMAL": {
+      "true_positive": 21,
+      "false_negative": 3,
+      "false_positive": 13,
+      "true_negative": 44,
+      "hard_failures": 14,
+      "positive_recovered": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24"
+      ],
+      "positive_missed": [
+        "P12",
+        "P13",
+        "P14"
+      ],
+      "false_admissions": [
+        [
+          "N04",
+          1
+        ],
+        [
+          "N05",
+          1
+        ],
+        [
+          "N06",
+          1
+        ],
+        [
+          "N07",
+          1
+        ],
+        [
+          "N08",
+          1
+        ],
+        [
+          "N09",
+          1
+        ],
+        [
+          "N10",
+          1
+        ],
+        [
+          "N17",
+          1
+        ],
+        [
+          "N18",
+          2
+        ],
+        [
+          "T07",
+          1
+        ],
+        [
+          "T09",
+          1
+        ],
+        [
+          "T10",
+          1
+        ],
+        [
+          "F07",
+          2
+        ]
+      ]
+    },
+    "CANDIDATE_F_OCCLUSION": {
+      "true_positive": 22,
+      "false_negative": 2,
+      "false_positive": 11,
+      "true_negative": 46,
+      "hard_failures": 11,
+      "positive_recovered": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24"
+      ],
+      "positive_missed": [
+        "P12",
+        "P13"
+      ],
+      "false_admissions": [
+        [
+          "N17",
+          1
+        ],
+        [
+          "T01",
+          1
+        ],
+        [
+          "T02",
+          1
+        ],
+        [
+          "T03",
+          1
+        ],
+        [
+          "T06",
+          1
+        ],
+        [
+          "T07",
+          1
+        ],
+        [
+          "T09",
+          1
+        ],
+        [
+          "T10",
+          1
+        ],
+        [
+          "F01",
+          16
+        ],
+        [
+          "F03",
+          1
+        ],
+        [
+          "F07",
+          2
+        ]
+      ]
+    },
+    "CANDIDATE_F_HYBRID": {
+      "true_positive": 22,
+      "false_negative": 2,
+      "false_positive": 9,
+      "true_negative": 48,
+      "hard_failures": 9,
+      "positive_recovered": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24"
+      ],
+      "positive_missed": [
+        "P12",
+        "P13"
+      ],
+      "false_admissions": [
+        [
+          "N17",
+          1
+        ],
+        [
+          "T01",
+          1
+        ],
+        [
+          "T03",
+          1
+        ],
+        [
+          "T07",
+          1
+        ],
+        [
+          "T09",
+          1
+        ],
+        [
+          "T10",
+          1
+        ],
+        [
+          "F01",
+          16
+        ],
+        [
+          "F03",
+          1
+        ],
+        [
+          "F07",
+          2
+        ]
+      ]
+    }
+  },
+  "pareto_summary": {
+    "CURRENT_MAIN": {
+      "recall_positive": "18/24 (75.0%)",
+      "false_positives": 12,
+      "hard_failures": 16
+    },
+    "FORMER_PR518": {
+      "recall_positive": "22/24 (91.7%)",
+      "false_positives": 6,
+      "hard_failures": 6
+    },
+    "CANDIDATE_B_ANGULAR": {
+      "recall_positive": "22/24 (91.7%)",
+      "false_positives": 16,
+      "hard_failures": 16
+    },
+    "CANDIDATE_C_NORMAL": {
+      "recall_positive": "21/24 (87.5%)",
+      "false_positives": 13,
+      "hard_failures": 14
+    },
+    "CANDIDATE_F_OCCLUSION": {
+      "recall_positive": "22/24 (91.7%)",
+      "false_positives": 11,
+      "hard_failures": 11
+    },
+    "CANDIDATE_F_HYBRID": {
+      "recall_positive": "22/24 (91.7%)",
+      "false_positives": 9,
+      "hard_failures": 9
+    }
+  }
+}

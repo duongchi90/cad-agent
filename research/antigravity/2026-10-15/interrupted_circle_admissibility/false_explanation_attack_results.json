@@ -1,0 +1,39 @@
+{
+  "campaign_id": "ANTI-INTERRUPTED-CIRCLE-ADMISSIBILITY-V1-20261015",
+  "phase_28_and_29": [
+    {
+      "test_id": "ATTACK_1_PARALLEL_NEARBY",
+      "true_semantic": "ARC",
+      "loose_nearby_rule_explained": true,
+      "loose_rule_admitted_circle": true,
+      "strict_crossing_rule_explained": false,
+      "strict_rule_admitted_circle": false,
+      "min_distance_to_circumference_px": 999.0,
+      "loose_rule_safe": false,
+      "strict_rule_safe": true
+    },
+    {
+      "test_id": "ATTACK_2_STOPPING_SHORT",
+      "true_semantic": "ARC",
+      "loose_nearby_rule_explained": true,
+      "loose_rule_admitted_circle": true,
+      "strict_crossing_rule_explained": false,
+      "strict_rule_admitted_circle": false,
+      "min_distance_to_circumference_px": 999.0,
+      "loose_rule_safe": false,
+      "strict_rule_safe": true
+    },
+    {
+      "test_id": "CONTROL_AUTHENTIC_CROSSING",
+      "true_semantic": "CIRCLE",
+      "loose_nearby_rule_explained": true,
+      "loose_rule_admitted_circle": true,
+      "strict_crossing_rule_explained": true,
+      "strict_rule_admitted_circle": true,
+      "min_distance_to_circumference_px": 2.993055890421232,
+      "loose_rule_safe": true,
+      "strict_rule_safe": true
+    }
+  ],
+  "invariant": "A gap is EXPLAINED if and only if an intersecting line or annotation polygon physically crosses the circle circumference within distance <= epsilon_position (<= 3.0px). Proximity alone (distance > epsilon_position) is FALSIFIED by Attack 1 and Attack 2, which falsely promote 300-deg open arcs."
+}

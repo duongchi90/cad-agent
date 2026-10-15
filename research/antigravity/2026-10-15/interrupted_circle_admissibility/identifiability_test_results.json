@@ -1,0 +1,34 @@
+{
+  "campaign_id": "ANTI-INTERRUPTED-CIRCLE-ADMISSIBILITY-V1-20261015",
+  "phase_12_and_13": {
+    "white_occlusion_test": {
+      "experiment": "circle_plus_white_box_vs_arc_plus_white_box",
+      "image_size": [
+        400,
+        400
+      ],
+      "circle_center": [
+        200.0,
+        200.0
+      ],
+      "circle_radius": 75.0,
+      "max_pixel_difference": 0,
+      "l1_pixel_difference": 0,
+      "edge_map_mismatched_pixels": 0,
+      "are_raster_images_identical": true,
+      "information_theoretic_identifiability": "IMPOSSIBLE_RASTER_ONLY"
+    },
+    "line_crossing_test": {
+      "experiment": "line_circle_crossing_x_vs_t_junction",
+      "junction_coord": [
+        200,
+        125
+      ],
+      "left_branch_ink_circle_crossing_a": 23,
+      "left_branch_ink_arc_termination_b": 11,
+      "topology_discriminator": "TOPOLOGICAL_CONTINUATION_ON_BOTH_SIDES",
+      "can_separate_crossing_from_termination": false
+    },
+    "fundamental_conclusion": "1. If a circle and an arc terminate at a void/white mask without occluder ink, the raster representations are INFORMATION-THEORETICALLY OBSERVATIONALLY EQUIVALENT. No raster-only classifier can separate an open arc from an occluded circle without making assumptions.\n2. If an intersecting linework (dimension, witness, centerline) causes the interruption, topological continuation on BOTH sides of the intersection separates true circles from terminating arcs.\n3. Therefore, safe interrupted-circle admission is ONLY possible when either:\n   a) Every gap is geometrically explained by an intersecting occluder with continuation; OR\n   b) An upstream semantic/role witness (e.g. OCR text bounding box) explains the gap."
+  }
+}
