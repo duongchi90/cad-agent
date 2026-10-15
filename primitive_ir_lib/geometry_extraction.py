@@ -48,6 +48,8 @@ _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 _LINE_ENDPOINT_MAX_EXTENSION_PX = 30
 _LINE_ENDPOINT_DARK_THRESHOLD = 180
 _LINE_ENDPOINT_PERP_HALF_WIDTH_PX = 2
+_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX = 8
+_LINE_ENDPOINT_PROFILE_MAX_MULTIPLIER = 4
 
 
 @dataclass
@@ -99,8 +101,35 @@ def _extend_line_endpoints_along_ink(
     ux, uy = dx / length, dy / length
     nx, ny = -uy, ux
 
+    def profile_ink_count(point: Tuple[float, float]) -> int:
+        sample_positions = set()
+        for offset in range(
+            -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
+            _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX + 1,
+        ):
+            px = int(round(point[0] + nx * offset))
+            py = int(round(point[1] + ny * offset))
+            if 0 <= px < width and 0 <= py < height:
+                sample_positions.add((px, py))
+        return sum(
+            gray[py, px] <= _LINE_ENDPOINT_DARK_THRESHOLD
+            for px, py in sample_positions
+        )
+
     def march(endpoint: Tuple[float, float], direction: float) -> Tuple[float, float]:
         best = endpoint
+        if length < 2:
+            return best
+        baseline_counts = [
+            profile_ink_count(
+                (
+                    endpoint[0] - direction * ux * length * fraction,
+                    endpoint[1] - direction * uy * length * fraction,
+                )
+            )
+            for fraction in (0.2, 0.35, 0.5, 0.65, 0.8)
+        ]
+        profile_limit = max(1, int(np.median(baseline_counts))) * _LINE_ENDPOINT_PROFILE_MAX_MULTIPLIER
         for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):
             x = endpoint[0] + direction * ux * distance
             y = endpoint[1] + direction * uy * distance
@@ -109,6 +138,8 @@ def _extend_line_endpoints_along_ink(
             if not (0 <= center_x < width and 0 <= center_y < height):
                 break
             if gray[center_y, center_x] > _LINE_ENDPOINT_DARK_THRESHOLD:
+                break
+            if profile_ink_count((x, y)) > profile_limit:
                 break
 
             sample_positions = set()
