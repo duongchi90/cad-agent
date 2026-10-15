@@ -44,6 +44,7 @@ from cad_agent.cli import (
     _refuse_fidelity_dxf,
     main,
 )
+from cad_agent.manifest import ManifestError
 from mcp_integration_lib.mcp_client import FakeMCPClient
 
 
@@ -52,6 +53,25 @@ def _pdf(path: Path) -> None:
     page = document.new_page(width=400, height=300)
     page.draw_line((20, 20), (380, 20))
     page.insert_text((50, 100), "DRAWING LABEL", fontsize=20)
+    document.save(path)
+    document.close()
+
+
+def _native_text_pdf(
+    path: Path,
+    entries: list[tuple[str, tuple[float, float]]],
+    *,
+    rotation: int = 0,
+    cropbox: fitz.Rect | None = None,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    for content, origin in entries:
+        page.insert_text(origin, content, fontsize=12)
+    if cropbox is not None:
+        page.set_cropbox(cropbox)
+    if rotation:
+        page.set_rotation(rotation)
     document.save(path)
     document.close()
 
@@ -899,6 +919,109 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         text_dxf = run_fidelity_text_reconstruct(source, output, manifest, output / "fidelity_text_approvals" / "page_01.json", workspace_root=Path.cwd())
         assert {entity.dxftype() for entity in ezdxf.readfile(text_dxf).modelspace()} == {"TEXT"}
         assert json.loads((text_dxf.parent / "report.json").read_text(encoding="utf-8"))["output_dxf_sha256"] == __import__("hashlib").sha256(text_dxf.read_bytes()).hexdigest()
+
+
+def test_native_pdf_text_observations_are_separate_hash_bound_and_coordinate_mapped(tmp_path: Path) -> None:
+    source = tmp_path / "native-text.pdf"
+    output = tmp_path / "private-staging"
+    _native_text_pdf(
+        source,
+        [("REPEAT", (100, 120)), ("REPEAT", (100, 180))],
+        rotation=90,
+        cropbox=fitz.Rect(50, 30, 350, 250),
+    )
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page_record = manifest["pages"][0]
+    rendered = output / page_record["artifacts"]["rendered_png"]["artifact"]
+    rendered_hash = __import__("hashlib").sha256(rendered.read_bytes()).hexdigest()
+    source_hash = manifest["source"]["sha256"]
+
+    original_source = source.read_bytes()
+    source.write_bytes(original_source + b"changed")
+    with pytest.raises(ManifestError, match="SHA-256"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    source.write_bytes(original_source)
+
+    original_render = rendered.read_bytes()
+    rendered.write_bytes(original_render + b"changed")
+    with pytest.raises(FidelityError, match="manifest hash"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    rendered.write_bytes(original_render)
+
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_text"]
+    assert observation["source_layout_audit"]["sha256"]
+    assert native["source_pdf_sha256"] == source_hash
+    assert native["source_render_sha256"] == rendered_hash
+    assert native["coordinate_space"] == "displayed_page_points_top_left"
+    assert native["page_rotation_deg"] == 90
+    assert [span["content"] for span in native["spans"]] == ["REPEAT", "REPEAT"]
+    assert native["spans"][0]["id"] != native["spans"][1]["id"]
+    assert all(span["visibility"] == "unverified" for span in native["spans"])
+    assert all(span["block_index"] is not None and span["line_index"] is not None for span in native["spans"])
+    assert all("native_pdf_text" not in candidate for candidate in observation["candidates"])
+    assert {span["id"] for span in native["spans"]}.isdisjoint(
+        candidate["id"] for candidate in observation["candidates"]
+    )
+    approval_probe = output / "fidelity_text_observations" / "approval-probe.json"
+    approval_payload = dict(observation)
+    approval_payload["state"] = "needs_human_approval"
+    approval_probe.write_text(json.dumps(approval_payload), encoding="utf-8")
+    with pytest.raises(FidelityError, match="unknown OCR candidate"):
+        write_fidelity_text_approval(
+            source,
+            output,
+            manifest,
+            1,
+            approval_probe,
+            [native["spans"][0]["id"]],
+            "approved-test",
+            workspace_root=Path.cwd(),
+        )
+    assert native["unresolved"] == "native PDF spans are source observations only; visibility is unverified"
+
+    source_document = fitz.open(source)
+    source_page = source_document[0]
+    source_spans = [
+        span
+        for block in source_page.get_text("dict")["blocks"]
+        if "lines" in block
+        for line in block["lines"]
+        for span in line["spans"]
+        if span["text"] == "REPEAT"
+    ]
+    displayed_rects = [fitz.Rect(span["bbox"]) * source_page.rotation_matrix for span in source_spans]
+    source_document.close()
+    assert len(displayed_rects) == 2
+    for observed, expected in zip(native["spans"], displayed_rects, strict=True):
+        assert observed["bbox_displayed_pt"] == pytest.approx(list(expected))
+        expected_px = [
+            expected.x0 * 2,
+            expected.y0 * 2,
+            expected.x1 * 2,
+            expected.y1 * 2,
+        ]
+        assert observed["bbox_render_px"] == pytest.approx(expected_px)
+
+
+def test_scan_only_pdf_keeps_native_text_observation_empty(tmp_path: Path) -> None:
+    source = tmp_path / "scan-only.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    document.new_page(width=400, height=300)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["native_pdf_text"]["spans"] == []
+    assert observation["candidates"] == []
+    assert observation["state"] == "not_evaluated"
 
 
 def test_text_observation_uses_hash_bound_approved_region_for_single_component_dimension_roi(

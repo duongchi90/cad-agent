@@ -145,6 +145,104 @@ def _page_size_mm(page: fitz.Page) -> tuple[float, float]:
     return page.rect.width * 25.4 / 72.0, page.rect.height * 25.4 / 72.0
 
 
+def _native_pdf_text_spans(
+    page: fitz.Page,
+    *,
+    render_width_px: int,
+    render_height_px: int,
+) -> list[dict[str, Any]]:
+    """Collect native PDF text as unverified, displayed-page observation evidence."""
+    displayed_page = fitz.Rect(page.rect)
+    if displayed_page.width <= 0 or displayed_page.height <= 0:
+        raise FidelityError("PDF page has an invalid displayed coordinate frame.")
+    scale_x = render_width_px / displayed_page.width
+    scale_y = render_height_px / displayed_page.height
+    spans: list[dict[str, Any]] = []
+    page_dict = page.get_text("dict")
+    for block_index, block in enumerate(page_dict.get("blocks", [])):
+        for line_index, line in enumerate(block.get("lines", [])):
+            for span_index, span in enumerate(line.get("spans", [])):
+                content = span.get("text")
+                bbox = span.get("bbox")
+                if not isinstance(content, str) or not content.strip() or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    continue
+                try:
+                    source_bbox = fitz.Rect(*(float(value) for value in bbox))
+                except (TypeError, ValueError):
+                    continue
+                if not all(math.isfinite(value) for value in source_bbox):
+                    continue
+                displayed_bbox = source_bbox * page.rotation_matrix
+                bbox_displayed_pt = [float(value) for value in displayed_bbox]
+                bbox_render_px = [
+                    displayed_bbox.x0 * scale_x,
+                    displayed_bbox.y0 * scale_y,
+                    displayed_bbox.x1 * scale_x,
+                    displayed_bbox.y1 * scale_y,
+                ]
+                spans.append({
+                    "id": f"native-pdf-page-{page.number + 1:02d}-block-{block_index}-line-{line_index}-span-{span_index}",
+                    "content": content,
+                    "bbox_displayed_pt": bbox_displayed_pt,
+                    "bbox_render_px": bbox_render_px,
+                    "block_index": block_index,
+                    "line_index": line_index,
+                    "span_index": span_index,
+                    "font_name": span.get("font"),
+                    "font_size_pt": span.get("size"),
+                    "visibility": "unverified",
+                    "intersects_displayed_page": displayed_bbox.intersects(displayed_page),
+                })
+    return spans
+
+
+def _native_pdf_text_observations(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+) -> dict[int, dict[str, Any]]:
+    observations: dict[int, dict[str, Any]] = {}
+    with fitz.open(str(source)) as document:
+        for page_record in manifest.get("pages", []):
+            page_number = page_record.get("page")
+            if not isinstance(page_number, int) or page_number < 1 or page_number > document.page_count:
+                raise FidelityError("Fidelity page is outside the source PDF.")
+            artifacts = page_record.get("artifacts", {})
+            rendered_record = artifacts.get("rendered_png")
+            audit_record = artifacts.get("layout_audit")
+            if not isinstance(rendered_record, dict) or not isinstance(audit_record, dict):
+                raise FidelityError("Fidelity page is missing its rendered or layout-audit artifact.")
+            rendered = _safe_artifact_path(output_root, rendered_record)
+            rendered_sha256 = sha256_file(rendered)
+            if rendered_sha256 != rendered_record.get("sha256"):
+                raise FidelityError("Rendered page hash no longer matches the fidelity manifest.")
+            audit_path = _safe_artifact_path(output_root, audit_record)
+            if sha256_file(audit_path) != audit_record.get("sha256"):
+                raise FidelityError("Layout audit hash no longer matches the fidelity manifest.")
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            source_page = audit.get("source_page", {})
+            render_width_px = source_page.get("render_width_px")
+            render_height_px = source_page.get("render_height_px")
+            if not isinstance(render_width_px, int) or not isinstance(render_height_px, int):
+                raise FidelityError("Layout audit is missing rendered page dimensions.")
+            page = document[page_number - 1]
+            observations[page_number] = {
+                "source_pdf_sha256": manifest["source"]["sha256"],
+                "source_render_sha256": rendered_sha256,
+                "coordinate_space": "displayed_page_points_top_left",
+                "page_rotation_deg": page.rotation,
+                "displayed_page_rect_pt": [float(value) for value in page.rect],
+                "cropbox_pt": [float(value) for value in page.cropbox],
+                "unresolved": "native PDF spans are source observations only; visibility is unverified",
+                "spans": _native_pdf_text_spans(
+                    page,
+                    render_width_px=render_width_px,
+                    render_height_px=render_height_px,
+                ),
+            }
+    return observations
+
+
 def new_fidelity_manifest(
     source: Path,
     output_root: Path,
@@ -1287,6 +1385,7 @@ def run_fidelity_text_observations(
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
+    native_pdf_observations = _native_pdf_text_observations(source, output_root, manifest)
     approved_regions_by_page: dict[int, list[dict[str, Any]]] = {}
     region_approval_record: dict[str, str] | None = None
     if region_approval_path is not None:
@@ -1384,6 +1483,7 @@ def run_fidelity_text_observations(
             "page": page["page"],
             "source_layout_audit": audit_record,
             "candidates": candidates,
+            "native_pdf_text": native_pdf_observations[page["page"]],
             "unresolved": ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"],
         }
         if region_approval_record is not None and page["page"] in approved_regions_by_page:
