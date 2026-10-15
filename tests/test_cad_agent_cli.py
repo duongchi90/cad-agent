@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from cad_agent.cli import CommandError, _live_client, doctor_payload, main
-from cad_agent.manifest import ManifestError, new_manifest, read_manifest
+from cad_agent.manifest import ManifestError, new_manifest, read_manifest, write_manifest
 
 
 def _drawing(path: Path, offset: int = 0) -> None:
@@ -35,6 +35,97 @@ def test_new_image_manifest_is_draft_reference_only(tmp_path: Path) -> None:
     assert manifest["release_profile"] == "DRAFT_REFERENCE"
     assert manifest["authoritative_release_eligible"] is False
     assert manifest["drawing_setup_evidence"] is None
+
+
+@pytest.mark.parametrize("scale", [0.0, -0.5, float("nan"), float("inf"), True, False])
+def test_new_image_manifest_rejects_non_positive_non_finite_or_boolean_scale(
+    tmp_path: Path, scale: float | bool
+) -> None:
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"synthetic image")
+
+    with pytest.raises(ManifestError, match="scale"):
+        new_manifest(source, scale, "ticket-123")
+
+
+@pytest.mark.parametrize("scale", ["0", "-0.5", "nan", "inf"])
+def test_run_rejects_invalid_scale_before_manifest_or_primitive_work(
+    tmp_path: Path, monkeypatch, capsys, scale: str
+) -> None:
+    from cad_agent import cli
+
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"synthetic image")
+    output = tmp_path / "run"
+    calls: list[float] = []
+
+    def unexpected_primitive(_source: Path, _output: Path, value: float) -> None:
+        calls.append(value)
+        raise RuntimeError("invalid scale reached primitive stage")
+
+    monkeypatch.setattr(cli, "_run_primitive", unexpected_primitive)
+
+    assert main([
+        "run", "--input", str(source), "--output-dir", str(output),
+        "--scale-mm-per-px", scale, "--calibration-approval", "ticket-123",
+    ]) == 2
+    assert not (output / "run-manifest.json").exists()
+    assert calls == []
+    assert "scale" in capsys.readouterr().err.lower()
+
+
+@pytest.mark.parametrize("scale", [0.0, -0.5, True, float("nan"), float("inf")])
+def test_resume_rejects_invalid_persisted_scale_before_conversion_or_staging(
+    tmp_path: Path, monkeypatch, capsys, scale: float | bool
+) -> None:
+    from cad_agent import cli
+
+    source = tmp_path / "drawing.png"
+    source.write_bytes(b"synthetic image")
+    output = tmp_path / "run"
+    output.mkdir()
+    manifest_path = output / "run-manifest.json"
+    manifest = new_manifest(source, 0.5, "ticket-123")
+    manifest["configuration"]["scale_mm_per_px"] = scale
+    write_manifest(manifest_path, manifest)
+    before = manifest_path.read_bytes()
+    calls: list[float] = []
+
+    def unexpected_primitive(_source: Path, _output: Path, value: float) -> None:
+        calls.append(value)
+        raise RuntimeError("invalid scale reached primitive stage")
+
+    monkeypatch.setattr(cli, "_run_primitive", unexpected_primitive)
+
+    assert main(["resume", "--manifest", str(manifest_path), "--input", str(source)]) == 2
+    assert calls == []
+    assert manifest_path.read_bytes() == before
+    assert "scale" in capsys.readouterr().err.lower()
+
+
+def test_resume_source_mismatch_precedes_invalid_scale_admission(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    from cad_agent import cli
+
+    source = tmp_path / "drawing.png"
+    changed = tmp_path / "changed.png"
+    source.write_bytes(b"synthetic image")
+    changed.write_bytes(b"different synthetic image")
+    output = tmp_path / "run"
+    output.mkdir()
+    manifest_path = output / "run-manifest.json"
+    manifest = new_manifest(source, 0.5, "ticket-123")
+    manifest["configuration"]["scale_mm_per_px"] = float("nan")
+    write_manifest(manifest_path, manifest)
+    before = manifest_path.read_bytes()
+    calls: list[float] = []
+    monkeypatch.setattr(cli, "_run_primitive", lambda *args: calls.append(args[-1]))
+
+    assert main(["resume", "--manifest", str(manifest_path), "--input", str(changed)]) == 2
+    assert calls == []
+    assert manifest_path.read_bytes() == before
+    assert "SHA-256 does not match" in capsys.readouterr().err
 
 
 def test_historical_image_manifest_reads_as_draft_reference(tmp_path: Path) -> None:
