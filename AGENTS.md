@@ -1,34 +1,37 @@
 # CAD Agent Working Agreement
 
-## Canonical sources
+## Authority and currentness
 
-Fresh-read GitHub before material decisions: #291 product roadmap, latest #305/#429
-operating contract/overlay, #392 material review gates, and #461 accepted product.
-GitHub wins. SOLO_CODEX is the current executor; subagents are disabled. The five
-scheduled Web SOLs are independent radar/review only. Then read these local routers:
+- GitHub is canonical for mutable product, issue, PR, CI, and runtime state. Before a material decision, verify current `main` SHA/tree and the relevant issue or PR identity, checks, and evidence. Fresh GitHub evidence supersedes chat history, cached state, and stale local checkouts. Inspect recent commits when they bear on the task’s ownership, provenance, or changed boundary.
+- Use current #429 as the ordinary operating overlay when its role, authority, currentness, execution, or review rules apply.
+- #305 is a predecessor operating record. Read it only when its still-unique semantics matter. #392 is the specialized material-review owner. Read it when its review or V7 procedure applies. Neither is a routine bootstrap read.
+- Read #291 when product direction or scope matters; read #461 when relying on accepted-product evidence.
+- For an active issue event log, read its body and metadata, then the newest relevant authoritative checkpoint, then only explicit pointer targets. Expand further only to resolve a contradiction. Do not scan the full history by default.
+- `docs/STATUS.md` routes durable acceptance; mutable frontier and transient status belong in current GitHub evidence. Historical plans, ledgers, and unchecked boxes are not an active queue.
 
-- Product and scope: `docs/PROJECT.md`
-- Current architecture: `docs/ARCHITECTURE.md`
-- Verified status: `docs/STATUS.md`
-- Quality and release gates: `docs/QUALITY.md`
-- AI roles and authority: `docs/AI_OPERATING_MODEL.md`
-- Historical accelerated reuse-first program: `docs/superpowers/specs/2026-08-06-accelerated-reuse-first-program-design.md` and `docs/superpowers/plans/2026-08-06-accelerated-reuse-first-program.md`
-- Design/plan record policy: `docs/superpowers/README.md`
+## Task routing
 
-`HANDOFF.md` and `CAD-Agent-Kien-Truc-v1_3.md` are historical evidence. Do not
-use a historical status claim when it conflicts with `docs/STATUS.md` or fresh
-command output.
+Read only the current source needed for the task:
 
-## Supported environment
+- Product scope or mode: `docs/PROJECT.md` and, when needed, #291.
+- Existing owner, package boundary, or architecture choice: relevant sections of `docs/ARCHITECTURE.md`.
+- Accepted baseline or durable evidence: `docs/STATUS.md` and, when applicable, #461.
+- Test classes, benchmark, or release gate: `docs/QUALITY.md`.
+- Role authority, escalation, or live-operation procedure: relevant sections of `docs/AI_OPERATING_MODEL.md` and current #429.
+- Design/plan record lifecycle: `docs/superpowers/README.md`.
+- Historical provenance or regression question: the specific historical record needed; do not load historical design/plan files for routine work.
 
-- Windows
-- Python 3.11
-- AutoCAD Mechanical 2027
-- Tesseract 5.4.0.20240606
+## Product and implementation rules
 
-Do not expand platform, deployment, or AutoCAD scope without an approved design.
+- Reuse existing owners and APIs first. For new production behavior, identify the current reachable causal RED, use a failing regression test or benchmark before implementation, and prefer the smallest repair or thin adapter. Obtain design approval before changing behavior.
+- Complete the task’s internal/external reuse review before adding production behavior. Stop for product-owner review when licensing, reproducibility, architecture ownership, or benchmark benefit is unclear.
+- Do not create a custom production Codex transport; use the approved official SDK/App Server/fallback order in `docs/AI_OPERATING_MODEL.md`.
+- Keep one writer for overlapping files. Keep changes scoped; run focused checks after each task.
+- Use the authoritative commands below. Do not copy pytest selection into another script or workflow; add test roots or lint targets through `scripts/verify.ps1` and its contract test.
 
-## Authoritative commands
+## Supported environment and commands
+
+Supported environment: Windows, Python 3.11, AutoCAD Mechanical 2027, and Tesseract 5.4.0.20240606. Do not expand platform, deployment, or AutoCAD scope without an approved design.
 
 ```powershell
 $python311 = py -3.11 -c "import sys; print(sys.executable)"
@@ -36,100 +39,44 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 .\scripts\verify.ps1
 ```
 
-The authoritative scripts are `scripts/bootstrap.ps1` and `scripts/verify.ps1`.
+`scripts/bootstrap.ps1` and `scripts/verify.ps1` are authoritative.
 
-Do not copy the pytest selection into another script or workflow. Add a test
-root or lint target to `scripts/verify.ps1` and its contract test.
+## Evidence and specialized gates
 
-## Change workflow
+- Report `SKIP` or `NOT RUN` when a prerequisite is absent; neither state is PASS.
+- Calibration, OCR, geometry, line merging, pattern recognition, or constraints: run the affected `real_data` benchmark using approved private input.
+- File IPC, handles, components, live review, or live repair: run the affected `autocad_mechanical` smoke test when prerequisites are available.
+- Automatic calibration’s production gate is at least two independent candidates with median relative error at most 3 percent.
+- Run the canonical verifier before claiming completion or committing a release candidate. Verification must not silently change repository status.
 
-1. Inspect current status, relevant contracts, and recent commits.
-2. For new behavior, obtain design approval before implementation.
-3. Before new production behavior, complete the Issue's internal/external reuse dossier and prefer existing APIs or a thin adapter; stop for PO review when licensing, reproducibility, architecture ownership, or benchmark benefit is unclear.
-4. Do not build a custom production Codex transport: use the approved official SDK/App Server/fallback order from the operating model.
-5. Use a failing regression test or benchmark before changing production logic.
-6. Keep one writer for a branch or overlapping file set. Follow the latest #429
-   actor/delegation overlay; do not revive historical parallel-agent instructions.
-7. Keep commits scoped and run focused checks after each task.
-8. Run `scripts/verify.ps1` before claiming completion or committing a release
-   candidate.
+## Safety and native/live custody
 
-## Specialized gates
+- Never commit API keys, `.env`, customer drawings, private annotations, or unapproved generated DXF files.
+- Within the active package’s explicit authority, routine actions—including APPLOAD, file-picker, AutoCAD, tests, Git, PR, CI, save, close, reopen, and mutation of explicitly authorized disposable candidates—require no additional human confirmation. This does not broaden authority beyond that package or authorize source, customer, accepted-drawing, or other production mutation.
+- Human approval remains required for unverified calibration; ambiguous recognition requiring product judgment; credentials, billing, or private-data authority; unknown executable or trust expansion; source/customer/accepted-drawing mutation; destructive or irreversible high-cost action; and genuinely ambiguous product requirements. Production DXF mutation outside the active package’s explicit disposable-candidate authority remains subject to human approval.
+- Preserve the original DXF and establish rollback before AutoCAD Mechanical repair. Keep live AutoCAD/FileIPC work exclusive; bind actions to the verified process, document, and configured IPC path. Do not infer that FileIPC moved from `C:\temp`; verify `CAD_AGENT_DOTNET_IPC_DIR` and current process configuration.
+- Prefer `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when the owning tool allows it. On repository refresh, verify the current scratch and IPC locations before use.
+- Do not alter architecture, public schemas, or package boundaries outside the approved task.
 
-- Calibration, OCR, geometry, line merging, pattern recognition, or constraints:
-  run the affected `real_data` benchmark using the approved private input.
-- File IPC, handles, components, live review, or live repair: run the affected
-  `autocad_mechanical` smoke test.
-- If a prerequisite is absent, report `SKIP` or `NOT RUN`; never report a pass.
-- Automatic calibration's production gate is at least two independent
-  candidates with median relative error at most 3 percent.
+## Executor and hard-reasoning consultation
 
-## Safety
+- Luna Medium is the sole production executor and remains responsible for repository, workstation, native-CAD, and Git mutations.
+- Use `ONE_ACTIVE_PO_SOL_CONSULTATION_PER_BOUNDED_HARD_DECISION_PACKET=YES`. Reconsult only if PO_SOL explicitly requests discriminating evidence and Luna returns with that evidence, or a materially new contradiction or decision boundary appears.
+- `NO_DESCENDANT_SWARM=YES`; `NO_PARALLEL_PO_SOL=YES`; `NO_CONSULTATION_FOR_ROUTINE_WORK=YES`. PO_SOL is advisory and has no production mutation authority, descendant-spawning authority, control-plane role, or independent product-approval authority. Return to Luna for execution and end the consultation after its result.
+- Hard-reasoning triggers include a material architecture fork, unclear owner, unresolved root cause after bounded debugging, a falsified hypothesis with multiple plausible paths, native/live safety ambiguity, or a difficult material review. A topic’s complexity alone does not authorize consultation.
+- The five scheduled Web SOLs remain independent radar/review only. There is no mandatory all-role execution quorum or wait for optional review.
 
-- Never commit API keys, `.env`, customer drawings, private annotations, or
-  unapproved generated DXF files.
-- Human approval is required for unverified calibration, ambiguous recognition,
-  and production DXF mutation.
-- Preserve the original DXF and establish rollback before AutoCAD Mechanical repair.
-- Avoid destructive Git/filesystem operations. Resolve and verify exact targets
-  before any approved deletion or recursive move.
-- Do not alter architecture, public schemas, or package boundaries outside the
-  approved task.
+## Review and merge
 
-## Primary executor routine execution authority
+- Follow current #429. Material runtime, safety, currentness, live-promotion, persistence, or acceptance merges require independent `SECURITY_REDTEAM` and `INTEGRATION_CI` clearance bound to the exact merge head, current base/head/main, terminal PASS hosted checks, and PASS causal/focused evidence. Resolve current material specialist findings.
+- Before requesting or consuming mandatory independent reviews for a material PR, perform one cheap self-check. This is not independent acceptance and does not replace either required reviewer.
+- `SKIP`, `NOT RUN`, stale evidence, mock-only evidence, cleanup-only evidence, submission/enqueue, or ambiguous live completion is never PASS. Execution and merge gates are distinct; optional reviews must not block execution. Routine documentation changes do not require five-role ceremony.
+- Additional specialist review is task-triggered. When external review is needed, use a compact packet from `docs/templates/`; keep first-pass reports independent. Findings should state scope, impact, evidence, and verification; do not use numeric quality scores. Include or upload referenced evidence rather than relying on workstation-local paths.
 
-- Within this project's existing authority, the primary executor may perform routine APPLOAD,
-  file-picker, AutoCAD, test, Git, PR, CI, disposable-candidate mutation,
-  save, close, and reopen actions without an additional human confirmation.
-- This includes loading the known repository dispatcher for local FileIPC
-  tests and closing disposable candidate drawings without saving.
-- Keep the human gate for credentials, billing, private-data authority,
-  unknown executable or trust expansion, source/customer/accepted-drawing
-  mutation, destructive or irreversible high-cost external actions, and
-  genuinely ambiguous product requirements.
+## Completion
 
-## Workstation temp location (updated 2026-09-26)
-
-- On every repository refresh/update, the primary executor should read this note. Prefer
-  `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when
-  the owning tool allows it.
-- `C:\temp` was emptied on 2026-09-26 and the directory was left in place for
-  compatibility. The ordinary files copied during cleanup are archived at
-  `D:\Cad agent temp\c-temp-archive-20260926-000018`. Reparse-point link objects
-  were not recreated there; their paths/types/targets are recorded in
-  `D:\Cad agent temp\c-temp-archive-20260926-000018\reparse-points-manifest.json`.
-  Their targets were not followed or deleted.
-- Keeping the `C:\temp` directory does not automatically move FileIPC. Its
-  default remains `C:\temp`; use `CAD_AGENT_DOTNET_IPC_DIR` only when an existing
-  workflow explicitly configures another root. Do not assume IPC requests,
-  results, or other active files are redirected to D without checking the
-  current process configuration.
-
-## Review allocation
-
-Latest #305/#392/#429 govern applicable review. Material runtime, safety,
-currentness, live-promotion or persistence merges require independent exact-head
-SECURITY_REDTEAM and INTEGRATION_CI clearance. Routine documentation changes do
-not require five-role ceremony. Historical reviewer examples below do not
-authorize subagent execution or supersede the current SOLO overlay.
-
-- Small: Codex plus one bounded independent review.
-- Medium: requirements/architecture plus correctness/test reviews.
-- Calibration, geometry, File IPC, AutoCAD Mechanical, architecture, or release:
-  requirements/architecture, correctness/test, and security/operations reviews.
-
-Give Claude Free reviewers a compact packet from `docs/templates/`, not the full
-repository. Keep first-pass reports independent. Accept findings only when they
-name scope, impact, evidence, and verification; do not use numeric quality
-scores. Upload or inline every referenced artifact; a workstation-local path is
-not review evidence for an external session.
-
-## Definition of done
-
-- Acceptance criteria are satisfied with fresh evidence.
-- Focused tests and `scripts/verify.ps1` pass.
-- Required private/live gates ran, or their missing state is explicitly recorded.
-- `git diff --check` is clean and verification did not change repository status.
-- No unresolved P0/P1 finding remains; deferred P2 has a reason and owner.
-- `docs/STATUS.md` routes durable acceptance; transient state stays on GitHub.
-- Historical plans/ledgers are evidence, not an active queue after #461 closure.
+- Satisfy acceptance criteria with fresh evidence. Run focused checks and `scripts/verify.ps1`.
+- Run required private/live gates or explicitly record why they are `SKIP` or `NOT RUN`.
+- Confirm `git diff --check` is clean and verification did not change repository status.
+- Leave no unresolved P0/P1 finding; give deferred P2 findings a reason and owner.
+- Route durable acceptance through `docs/STATUS.md`; keep transient state on GitHub.
