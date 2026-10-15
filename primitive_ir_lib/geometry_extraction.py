@@ -49,7 +49,6 @@ _LINE_ENDPOINT_MAX_EXTENSION_PX = 30
 _LINE_ENDPOINT_DARK_THRESHOLD = 180
 _LINE_ENDPOINT_PERP_HALF_WIDTH_PX = 2
 _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX = 8
-_LINE_ENDPOINT_PROFILE_MAX_MULTIPLIER = 4
 
 
 @dataclass
@@ -129,8 +128,10 @@ def _extend_line_endpoints_along_ink(
             )
             for fraction in (0.2, 0.35, 0.5, 0.65, 0.8)
         ]
+        # Keep the allowance near the candidate's observed width so partial
+        # perpendicular junctions cannot hide just below the finite window.
         profile_limit = min(
-            max(1, int(np.median(baseline_counts))) * _LINE_ENDPOINT_PROFILE_MAX_MULTIPLIER,
+            max(baseline_counts) + 1,
             2 * _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
         )
         for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):

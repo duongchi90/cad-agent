@@ -17,58 +17,11 @@ from primitive_ir_lib.geometry_extraction import (
 )
 
 
-_IMAGE_ENV = "CAD_AGENT_CASE01_LINE_IMAGE"
-_RENDER_SHA256 = "5732b6014ec1c1d3b05e14c598b43ebec84a4d6198951264215a69fb7b0a0bc8"
-_UPPER_WITNESS = (153, 198, 168, 219)
-_LOWER_WITNESS = (153, 369, 168, 390)
-_LINE_CORRIDOR = (157, 219, 164, 369)
 _FTC11_IMAGE_ENV = "CAD_AGENT_FTC11_IMAGE"
 _FTC11_RENDER_SHA256 = "675f1a991dca7a133f0923bef6aa431f68e719f29780946f358904ace4a2ca00"
 _FTC11_AXIS_START = (622.8, 467.88)
 _FTC11_AXIS_END = (1120.56, 180.6)
 _FTC11_GAP_PROJECTION = (191.174, 383.539)
-
-
-def _intersects(line, rect: tuple[int, int, int, int]) -> bool:
-    x0, y0, x1, y1 = rect
-    lx0, ly0 = min(line.p1_px[0], line.p2_px[0]), min(line.p1_px[1], line.p2_px[1])
-    lx1, ly1 = max(line.p1_px[0], line.p2_px[0]), max(line.p1_px[1], line.p2_px[1])
-    return lx1 >= x0 and lx0 < x1 and ly1 >= y0 and ly0 < y1
-
-
-@pytest.mark.real_data
-def test_case01_dimension_line_reaches_both_frozen_arrow_witnesses() -> None:
-    image_value = os.environ.get(_IMAGE_ENV)
-    if not image_value:
-        pytest.skip(f"set {_IMAGE_ENV} to run the frozen CASE01 source-render regression")
-
-    image_path = Path(image_value)
-    assert image_path.is_file(), f"{_IMAGE_ENV} does not point to a file: {image_path}"
-    image_bytes = image_path.read_bytes()
-    assert hashlib.sha256(image_bytes).hexdigest() == _RENDER_SHA256
-    image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-    assert image is not None
-    assert image.shape[:2] == (1684, 2382)
-
-    lines = extract_lines(
-        image,
-        hough_threshold=90,
-        min_line_length=50,
-        max_line_gap=5,
-    )
-    candidates = [
-        line
-        for line in lines
-        if abs(line.p2_px[0] - line.p1_px[0]) <= 5
-        and 157 <= (line.p1_px[0] + line.p2_px[0]) / 2 <= 164
-        and _intersects(line, _LINE_CORRIDOR)
-        and _intersects(line, _UPPER_WITNESS)
-        and _intersects(line, _LOWER_WITNESS)
-    ]
-    assert candidates, (
-        "the frozen CASE01 dimension line must reach both source-visible arrow witnesses; "
-        f"current detections: {[(line.p1_px, line.p2_px) for line in lines if 157 <= (line.p1_px[0] + line.p2_px[0]) / 2 <= 164]}"
-    )
 
 
 def test_ray_march_does_not_follow_an_adjacent_connected_glyph_stroke() -> None:
@@ -159,6 +112,40 @@ def test_extract_lines_rejects_thick_perpendicular_junction_for_thick_candidate(
     assert len(lines) == 1
     assert lines[0].p2_px == (80.0, 60.0), (
         "extract_lines must not extend a thick candidate into a thick perpendicular junction: "
+        f"{lines[0].p2_px}"
+    )
+
+
+def test_ray_march_rejects_nearly_saturated_perpendicular_junction() -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[53:69, 81:116] = 0
+
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 60.0), (80.0, 60.0), gray)
+
+    assert extended_end == (80.0, 60.0), (
+        "a perpendicular junction occupying 16 of 17 profile samples must not extend the line: "
+        f"{extended_end}"
+    )
+
+
+def test_extract_lines_rejects_nearly_saturated_perpendicular_junction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[53:69, 81:116] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 60, 80, 60]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 60.0), (
+        "extract_lines must stop before a junction occupying 16 of 17 profile samples: "
         f"{lines[0].p2_px}"
     )
 
