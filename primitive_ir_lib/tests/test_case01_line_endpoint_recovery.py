@@ -129,6 +129,40 @@ def test_ray_march_does_not_follow_a_perpendicular_stem_past_the_line_endpoint()
     )
 
 
+def test_ray_march_rejects_thick_perpendicular_junction_for_thick_candidate() -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[30:101, 81:116] = 0
+
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 60.0), (80.0, 60.0), gray)
+
+    assert extended_end == (80.0, 60.0), (
+        "a thick perpendicular junction must not sponsor extension of a thick candidate: "
+        f"{extended_end}"
+    )
+
+
+def test_extract_lines_rejects_thick_perpendicular_junction_for_thick_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[30:101, 81:116] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 60, 80, 60]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 60.0), (
+        "extract_lines must not extend a thick candidate into a thick perpendicular junction: "
+        f"{lines[0].p2_px}"
+    )
+
+
 def test_extract_lines_does_not_extend_through_a_perpendicular_stem(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

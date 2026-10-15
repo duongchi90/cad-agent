@@ -129,7 +129,10 @@ def _extend_line_endpoints_along_ink(
             )
             for fraction in (0.2, 0.35, 0.5, 0.65, 0.8)
         ]
-        profile_limit = max(1, int(np.median(baseline_counts))) * _LINE_ENDPOINT_PROFILE_MAX_MULTIPLIER
+        profile_limit = min(
+            max(1, int(np.median(baseline_counts))) * _LINE_ENDPOINT_PROFILE_MAX_MULTIPLIER,
+            2 * _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
+        )
         for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):
             x = endpoint[0] + direction * ux * distance
             y = endpoint[1] + direction * uy * distance
