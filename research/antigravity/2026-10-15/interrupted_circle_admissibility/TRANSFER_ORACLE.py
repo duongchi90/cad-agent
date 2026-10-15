@@ -24,12 +24,14 @@ CORE THEORETICAL INVARIANTS:
 
 from __future__ import annotations
 
+import importlib
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
+
+cv2 = importlib.import_module("cv2")
 
 
 @dataclass(frozen=True)

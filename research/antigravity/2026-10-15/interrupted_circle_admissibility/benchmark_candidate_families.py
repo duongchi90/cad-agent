@@ -14,14 +14,16 @@ Outputs detailed metrics per case, confusion matrices, and Pareto frontier.
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
+
+cv2 = importlib.import_module("cv2")
 
 
 BASE_DIR = Path(__file__).parent

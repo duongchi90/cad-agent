@@ -8,14 +8,16 @@ and emits BLIND_CIRCLE_MATRIX.json frozen before rule tuning.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import math
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import cv2
 import numpy as np
+
+cv2 = importlib.import_module("cv2")
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"

@@ -10,13 +10,15 @@ Tests whether gap explanation rules can be fooled by nearby non-intersecting geo
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import cv2
 import numpy as np
+
+cv2 = importlib.import_module("cv2")
 
 
 OUT_DIR = Path(__file__).parent
