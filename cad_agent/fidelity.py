@@ -220,11 +220,22 @@ def _native_pdf_text_observations(
             if sha256_file(audit_path) != audit_record.get("sha256"):
                 raise FidelityError("Layout audit hash no longer matches the fidelity manifest.")
             audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            if not isinstance(audit, dict):
+                raise FidelityError("Layout audit is malformed.")
             source_page = audit.get("source_page", {})
+            if not isinstance(source_page, dict):
+                raise FidelityError("Layout audit is missing source page metadata.")
+            if source_page.get("page") != page_number or source_page.get("render_sha256") != rendered_sha256:
+                raise FidelityError("Layout audit page or render hash does not match the manifest artifact.")
             render_width_px = source_page.get("render_width_px")
             render_height_px = source_page.get("render_height_px")
-            if not isinstance(render_width_px, int) or not isinstance(render_height_px, int):
-                raise FidelityError("Layout audit is missing rendered page dimensions.")
+            if (
+                type(render_width_px) is not int
+                or type(render_height_px) is not int
+                or render_width_px <= 0
+                or render_height_px <= 0
+            ):
+                raise FidelityError("Layout audit is missing valid rendered page dimensions.")
             page = document[page_number - 1]
             observations[page_number] = {
                 "source_pdf_sha256": manifest["source"]["sha256"],

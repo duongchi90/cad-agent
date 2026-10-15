@@ -1024,6 +1024,96 @@ def test_scan_only_pdf_keeps_native_text_observation_empty(tmp_path: Path) -> No
     assert observation["state"] == "not_evaluated"
 
 
+def _two_page_native_text_pdf(path: Path) -> None:
+    document = fitz.open()
+    first = document.new_page(width=400, height=300)
+    first.insert_text((40, 100), "PAGE ONE", fontsize=16)
+    second = document.new_page(width=500, height=350)
+    second.insert_text((60, 120), "PAGE TWO", fontsize=16)
+    document.save(path)
+    document.close()
+
+
+def _rewrite_layout_audit(output: Path, page_record: dict, mutate) -> None:
+    audit_record = page_record["artifacts"]["layout_audit"]
+    audit_path = output / audit_record["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    mutate(audit["source_page"])
+    audit_bytes = json.dumps(audit, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+    audit_path.write_bytes(audit_bytes)
+    audit_record["sha256"] = __import__("hashlib").sha256(audit_bytes).hexdigest()
+
+
+def test_native_pdf_text_rejects_cross_swapped_page_artifacts(tmp_path: Path) -> None:
+    source = tmp_path / "two-pages.pdf"
+    output = tmp_path / "private-staging"
+    _two_page_native_text_pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    first_artifacts = manifest["pages"][0]["artifacts"]
+    second_artifacts = manifest["pages"][1]["artifacts"]
+    second_artifacts["rendered_png"] = dict(first_artifacts["rendered_png"])
+    second_artifacts["layout_audit"] = dict(first_artifacts["layout_audit"])
+
+    with pytest.raises(FidelityError, match="page|render"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+def test_native_pdf_text_rejects_audit_bound_to_another_render(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _native_text_pdf(source, [("LABEL", (80, 100))])
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page_record = manifest["pages"][0]
+    _rewrite_layout_audit(
+        output,
+        page_record,
+        lambda source_page: source_page.__setitem__("render_sha256", "0" * 64),
+    )
+
+    with pytest.raises(FidelityError, match="page|render"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+def test_native_pdf_text_rejects_malformed_source_page_audit(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _native_text_pdf(source, [("LABEL", (80, 100))])
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    audit_record = manifest["pages"][0]["artifacts"]["layout_audit"]
+    audit_path = output / audit_record["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["source_page"] = []
+    audit_bytes = json.dumps(audit, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
+    audit_path.write_bytes(audit_bytes)
+    audit_record["sha256"] = __import__("hashlib").sha256(audit_bytes).hexdigest()
+
+    with pytest.raises(FidelityError, match="source page"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("render_width_px", 0), ("render_height_px", 0), ("render_width_px", True), ("render_height_px", True)],
+)
+def test_native_pdf_text_rejects_invalid_audit_dimensions(tmp_path: Path, field: str, value: int) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _native_text_pdf(source, [("LABEL", (80, 100))])
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    _rewrite_layout_audit(
+        output,
+        manifest["pages"][0],
+        lambda source_page: source_page.__setitem__(field, value),
+    )
+
+    with pytest.raises(FidelityError, match="dimension|page"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
 def test_text_observation_uses_hash_bound_approved_region_for_single_component_dimension_roi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
