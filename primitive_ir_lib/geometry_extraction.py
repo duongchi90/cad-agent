@@ -42,6 +42,14 @@ from .models import new_id
 _HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
 _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 
+# Bound source-raster endpoint recovery for the tuned line detector. The
+# CASE01 render has dark line ink (grayscale <= 31) against paper (>= 220);
+# focused interruption and adjacency controls guard this operating range.
+_LINE_ENDPOINT_MAX_EXTENSION_PX = 30
+_LINE_ENDPOINT_MAX_WHITE_RUN_PX = 3
+_LINE_ENDPOINT_DARK_THRESHOLD = 180
+_LINE_ENDPOINT_PERP_HALF_WIDTH_PX = 2
+
 
 @dataclass
 class RawLine:
@@ -76,6 +84,51 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     return blurred
 
 
+def _extend_line_endpoints_along_ink(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    gray: np.ndarray,
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Extend Hough endpoints only while a narrow source-ink corridor continues."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    length = float(np.hypot(dx, dy))
+    if not np.isfinite(length) or length == 0 or gray.ndim != 2:
+        return p1, p2
+
+    height, width = gray.shape
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux
+
+    def march(endpoint: Tuple[float, float], direction: float) -> Tuple[float, float]:
+        best = endpoint
+        unsupported_run = 0
+        for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):
+            x = endpoint[0] + direction * ux * distance
+            y = endpoint[1] + direction * uy * distance
+            sample_positions = set()
+            for offset in range(-_LINE_ENDPOINT_PERP_HALF_WIDTH_PX, _LINE_ENDPOINT_PERP_HALF_WIDTH_PX + 1):
+                px = int(round(x + nx * offset))
+                py = int(round(y + ny * offset))
+                if 0 <= px < width and 0 <= py < height:
+                    sample_positions.add((px, py))
+            dark_samples = sum(
+                gray[py, px] <= _LINE_ENDPOINT_DARK_THRESHOLD
+                for px, py in sample_positions
+            )
+
+            if dark_samples >= 2:
+                best = (x, y)
+                unsupported_run = 0
+            else:
+                unsupported_run += 1
+                if unsupported_run >= _LINE_ENDPOINT_MAX_WHITE_RUN_PX:
+                    break
+        return best
+
+    return march(p1, -1.0), march(p2, 1.0)
+
+
 def extract_lines(
     image_bgr: np.ndarray,
     canny_low: int = 50,
@@ -86,8 +139,9 @@ def extract_lines(
 ) -> List[RawLine]:
     """HoughLinesP trên ảnh sau Canny. confidence ước lượng thô từ độ dài
     đoạn so với min_line_length (đoạn càng dài, vote Hough càng chắc)."""
-    gray = _preprocess(image_bgr)
-    edges = cv2.Canny(gray, canny_low, canny_high)
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blurred, canny_low, canny_high)
     segments = cv2.HoughLinesP(
         edges, rho=1, theta=np.pi / 180, threshold=hough_threshold,
         minLineLength=min_line_length, maxLineGap=max_line_gap,
@@ -106,11 +160,14 @@ def extract_lines(
 
     for (x1, y1, x2, y2), length in zip(seg, lengths):
         confidence = min(1.0, 0.5 + 0.5 * (length / max_len))
-        bbox = (float(min(x1, x2)), float(min(y1, y2)), float(max(x1, x2)), float(max(y1, y2)))
+        p1, p2 = _extend_line_endpoints_along_ink(
+            (float(x1), float(y1)), (float(x2), float(y2)), gray,
+        )
+        bbox = (float(min(p1[0], p2[0])), float(min(p1[1], p2[1])), float(max(p1[0], p2[0])), float(max(p1[1], p2[1])))
         raw_lines.append(RawLine(
             id=new_id("rawline"),
-            p1_px=(float(x1), float(y1)),
-            p2_px=(float(x2), float(y2)),
+            p1_px=p1,
+            p2_px=p2,
             confidence=round(confidence, 3),
             bbox_px=bbox,
         ))
