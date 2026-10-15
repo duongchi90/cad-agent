@@ -46,7 +46,6 @@ _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 # CASE01 render has dark line ink (grayscale <= 31) against paper (>= 220);
 # focused interruption and adjacency controls guard this operating range.
 _LINE_ENDPOINT_MAX_EXTENSION_PX = 30
-_LINE_ENDPOINT_MAX_WHITE_RUN_PX = 3
 _LINE_ENDPOINT_DARK_THRESHOLD = 180
 _LINE_ENDPOINT_PERP_HALF_WIDTH_PX = 2
 
@@ -102,7 +101,6 @@ def _extend_line_endpoints_along_ink(
 
     def march(endpoint: Tuple[float, float], direction: float) -> Tuple[float, float]:
         best = endpoint
-        unsupported_run = 0
         for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):
             x = endpoint[0] + direction * ux * distance
             y = endpoint[1] + direction * uy * distance
@@ -119,11 +117,8 @@ def _extend_line_endpoints_along_ink(
 
             if dark_samples >= 2:
                 best = (x, y)
-                unsupported_run = 0
             else:
-                unsupported_run += 1
-                if unsupported_run >= _LINE_ENDPOINT_MAX_WHITE_RUN_PX:
-                    break
+                break
         return best
 
     return march(p1, -1.0), march(p2, 1.0)

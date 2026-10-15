@@ -97,6 +97,24 @@ def test_ray_march_preserves_white_paper_between_separated_collinear_segments() 
     ), f"white-paper gap was bridged: {[(line.p1_px, line.p2_px) for line in lines]}"
 
 
+@pytest.mark.parametrize(("gap_pixels", "second_start_x"), [(1, 72), (2, 73)])
+def test_ray_march_does_not_reconnect_short_unsupported_white_gaps(
+    gap_pixels: int, second_start_x: int
+) -> None:
+    gray = np.full((80, 140), 255, dtype=np.uint8)
+    cv2.line(gray, (20, 40), (70, 40), 0, 2)
+    cv2.line(gray, (second_start_x, 40), (110, 40), 0, 2)
+
+    _, first_end = _extend_line_endpoints_along_ink((20.0, 40.0), (70.0, 40.0), gray)
+    second_start, _ = _extend_line_endpoints_along_ink(
+        (float(second_start_x), 40.0), (110.0, 40.0), gray
+    )
+
+    # Collinearity and gap width alone are not an independent geometric witness.
+    assert first_end == (70.0, 40.0)
+    assert second_start == (float(second_start_x), 40.0)
+
+
 def test_ray_march_does_not_solidify_a_dashed_line() -> None:
     image = np.full((100, 240, 3), 255, dtype=np.uint8)
     for x_start in (20, 50, 80, 110, 140):
