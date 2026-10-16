@@ -97,7 +97,7 @@
 - [x] Run those regressions and observe failures at the affected admission boundary.
 - [x] Add unique PDF paint-trace binding; exclude invisible, ambiguous, layered, later-obscured, or unsupported-writing-mode spans; persist paint and writing-mode evidence for fresh revalidation.
 - [x] Run the complete focused fidelity test module: 97 passed.
-- [ ] Run canonical `scripts/verify.ps1 -SkipAutoCADDotNet`, `git diff --check`, and inspect the final diff/write set.
-- [ ] Commit and push the correction as a new commit; do not rewrite the reviewed branch history.
+- [x] Run canonical `scripts/verify.ps1 -SkipAutoCADDotNet`: PASS; offline suite 3,672 passed, 23 deselected, 77 subtests; offline .NET IPC 128 passed; causal-RED oracle produced the expected marked failure; real-data probe skipped 2 and AutoCAD probe skipped 18. A first full attempt had one transient M2 hash-seed subprocess error; seed-0/seed-4 direct reproductions and the focused test passed, then the second full canonical run passed.
+- [x] Commit the correction as new commit `280cf61bd26e9f02b547f05ec2e6a6f0163a497b`; history was not rewritten. Push is pending.
 - [ ] Rerun terminal hosted checks and obtain new independent exact-head Security and Integration reviews.
 - [ ] Apply the current #392 V7 procedure only after hosted checks are terminal and the new review head is stable; keep the PR draft and unmerged.
