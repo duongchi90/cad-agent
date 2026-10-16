@@ -536,13 +536,13 @@ def _attest_saved_candidate(
             "POST_SAVE_EVIDENCE_READ_FAILED: persisted build evidence could not be loaded."
         ) from exc
     persisted_review = review_dxf_live(persisted_build, client, open_drawing=False)
-    if not persisted_review.passed:
-        raise LiveSafetyError(
-            "POST_SAVE_REVIEW_FAILED: persisted candidate did not pass fresh live review."
-        )
     if persisted_review.geometry_degraded:
         raise LiveSafetyError(
             "POST_SAVE_REVIEW_DEGRADED: persisted candidate geometry was not freshly revalidated."
+        )
+    if not persisted_review.passed:
+        raise LiveSafetyError(
+            "POST_SAVE_REVIEW_FAILED: persisted candidate did not pass fresh live review."
         )
     return {
         "closed_without_save": True,

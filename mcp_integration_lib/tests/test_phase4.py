@@ -27,11 +27,12 @@ def _pair(kind="line", entity_get=False):
 class Phase4Tests(unittest.TestCase):
     def test_geometry_comparison_accepts_autocad_z_zero(self):
         self.assertTrue(_same((10.0, 0.0), (10.0, 0.0, 0.0)))
-    def test_structural_review_passes_when_entity_get_times_out(self):
+    def test_live_review_fails_when_entity_get_times_out(self):
         build, client = _pair()
         result = review_dxf_live(build, client)
-        self.assertTrue(result.passed)
+        self.assertFalse(result.passed)
         self.assertTrue(result.geometry_degraded)
+        self.assertTrue(any("geometry readback unavailable" in item for item in result.mismatches))
 
     def test_geometry_mismatch_fails(self):
         build, client = _pair(entity_get=True)
@@ -61,7 +62,7 @@ class Phase4Tests(unittest.TestCase):
         self.assertTrue(any("measurement" in item for item in failed.mismatches))
 
     def test_repair_restores_review_and_updates_handle(self):
-        build, client = _pair()
+        build, client = _pair(entity_get=True)
         client._entities["10"].layer = "BAD"
         repair = repair_dxf_live(build, review_dxf_live(build, client).mismatches, client)
         self.assertEqual(repair.repaired_count, 1)
