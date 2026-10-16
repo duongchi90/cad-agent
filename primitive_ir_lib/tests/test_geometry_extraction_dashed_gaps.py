@@ -9,11 +9,94 @@ import json
 from pathlib import Path
 
 import cv2
+import numpy as np
+import pytest
 
 from primitive_ir_lib.geometry_extraction import PRESETS, extract_raw_geometry
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _vertical_control(runs: list[tuple[int, int]]) -> np.ndarray:
+    image = np.full((300, 300, 3), 255, dtype=np.uint8)
+    for start, end in runs:
+        cv2.line(image, (150, start), (150, end), (0, 0, 0), 2)
+    return image
+
+
+def _vertical_lines(image: np.ndarray, preset: str):
+    return [
+        line
+        for line in extract_raw_geometry(image, preset=preset).lines
+        if abs(line.p2_px[0] - line.p1_px[0]) <= 3
+        and abs((line.p1_px[0] + line.p2_px[0]) / 2 - 150) <= 5
+    ]
+
+
+@pytest.mark.parametrize("preset", list(PRESETS))
+@pytest.mark.parametrize(
+    ("name", "runs", "gaps"),
+    [
+        ("three_runs", [(20, 89), (94, 163), (168, 237)], [(91, 92), (165, 166)]),
+        ("irregular_gaps", [(20, 89), (94, 163), (173, 242)], [(91, 92), (165, 171)]),
+        ("image_truncated_run", [(0, 69), (74, 143), (148, 217)], [(71, 72), (145, 146)]),
+    ],
+)
+def test_insufficient_or_irregular_source_runs_never_bridge_white_gaps(
+    preset: str,
+    name: str,
+    runs: list[tuple[int, int]],
+    gaps: list[tuple[int, int]],
+) -> None:
+    image = _vertical_control(runs)
+    lines = _vertical_lines(image, preset)
+
+    for gap_start, gap_end in gaps:
+        assert not any(
+            min(line.p1_px[1], line.p2_px[1]) <= gap_start
+            and max(line.p1_px[1], line.p2_px[1]) >= gap_end
+            for line in lines
+        ), f"{preset} bridged {name} white gap {gap_start}:{gap_end}"
+
+    for run_start, run_end in runs:
+        assert any(
+            max(0, min(run_end, max(line.p1_px[1], line.p2_px[1]))
+                - max(run_start, min(line.p1_px[1], line.p2_px[1]))) >= 30
+            for line in lines
+        ), f"{preset} lost independently supported {name} segment {run_start}:{run_end}"
+
+
+@pytest.mark.parametrize("preset", list(PRESETS))
+def test_genuine_solid_source_line_remains_continuous(preset: str) -> None:
+    image = _vertical_control([(20, 235)])
+    lines = _vertical_lines(image, preset)
+
+    assert any(
+        min(line.p1_px[1], line.p2_px[1]) <= 25
+        and max(line.p1_px[1], line.p2_px[1]) >= 230
+        for line in lines
+    ), f"{preset} split a genuinely solid source line"
+
+
+@pytest.mark.parametrize("preset", list(PRESETS))
+def test_independently_supported_short_run_survives_gap_splitting(preset: str) -> None:
+    runs = [(20, 89), (94, 109), (114, 183)]
+    image = _vertical_control(runs)
+    lines = _vertical_lines(image, preset)
+
+    for gap_start, gap_end in [(91, 92), (111, 112)]:
+        assert not any(
+            min(line.p1_px[1], line.p2_px[1]) <= gap_start
+            and max(line.p1_px[1], line.p2_px[1]) >= gap_end
+            for line in lines
+        ), f"{preset} bridged short-run control gap {gap_start}:{gap_end}"
+
+    assert any(
+        max(0, min(109, max(line.p1_px[1], line.p2_px[1]))
+            - max(94, min(line.p1_px[1], line.p2_px[1]))) >= 10
+        for line in lines
+    ), f"{preset} discarded independently supported short source run"
 
 
 def test_extract_lines_preserves_visible_gaps_in_dashed_control() -> None:

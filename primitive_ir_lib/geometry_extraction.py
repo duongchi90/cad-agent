@@ -76,14 +76,14 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     return blurred
 
 
-def _split_line_at_repeated_source_gaps(
-    edges: np.ndarray,
+def _split_line_at_source_gaps(
+    source_gray: np.ndarray,
     x1: int,
     y1: int,
     x2: int,
     y2: int,
 ) -> List[Tuple[int, int, int, int]]:
-    """Split Hough candidates only when source support shows a repeated dash pattern."""
+    """Keep Hough output from spanning intervals with no dark source pixels."""
     dx = float(x2 - x1)
     dy = float(y2 - y1)
     length = float(np.hypot(dx, dy))
@@ -95,8 +95,8 @@ def _split_line_at_repeated_source_gaps(
     xs = np.rint(x1 + dx * distances / length).astype(int)
     ys = np.rint(y1 + dy * distances / length).astype(int)
 
-    # Probe the detected centerline and one source pixel on either side. This
-    # tolerates rasterized thickness while leaving a fully white gap unsupported.
+    # Probe the detected centerline and one source pixel on either side. Use the
+    # unblurred source: Gaussian/Canny edges can leak into narrow white gaps.
     normal_x = -dy / length
     normal_y = dx / length
     supported = np.zeros(xs.shape, dtype=bool)
@@ -105,30 +105,20 @@ def _split_line_at_repeated_source_gaps(
         probe_y = np.rint(ys + normal_y * offset).astype(int)
         inside = (
             (probe_x >= 0)
-            & (probe_x < edges.shape[1])
+            & (probe_x < source_gray.shape[1])
             & (probe_y >= 0)
-            & (probe_y < edges.shape[0])
+            & (probe_y < source_gray.shape[0])
         )
-        supported[inside] |= edges[probe_y[inside], probe_x[inside]] != 0
+        supported[inside] |= source_gray[probe_y[inside], probe_x[inside]] < 250
 
     transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
     starts = np.flatnonzero(transitions == 1)
     ends = np.flatnonzero(transitions == -1) - 1
-    if len(starts) < 4:
+    if len(starts) < 2:
         return [(x1, y1, x2, y2)]
 
-    run_lengths = ends - starts + 1
     gap_lengths = starts[1:] - ends[:-1] - 1
-    periods = run_lengths[:-1] + gap_lengths
-    median_gap = float(np.median(gap_lengths))
-    median_run = float(np.median(run_lengths))
-    median_period = float(np.median(periods))
-    if (
-        median_gap < 2
-        or float(np.ptp(gap_lengths)) > max(2.0, median_gap * 0.35)
-        or float(np.ptp(run_lengths)) > max(4.0, median_run * 0.3)
-        or float(np.ptp(periods)) > max(2.0, median_period * 0.1)
-    ):
+    if not np.any(gap_lengths >= 2):
         return [(x1, y1, x2, y2)]
 
     return [
@@ -148,6 +138,7 @@ def extract_lines(
     """HoughLinesP trên ảnh sau Canny. confidence ước lượng thô từ độ dài
     đoạn so với min_line_length (đoạn càng dài, vote Hough càng chắc)."""
     gray = _preprocess(image_bgr)
+    source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, canny_low, canny_high)
     segments = cv2.HoughLinesP(
         edges, rho=1, theta=np.pi / 180, threshold=hough_threshold,
@@ -165,8 +156,8 @@ def extract_lines(
     source_intervals = [
         interval
         for x1, y1, x2, y2 in seg
-        for interval in _split_line_at_repeated_source_gaps(
-            edges, int(x1), int(y1), int(x2), int(y2)
+        for interval in _split_line_at_source_gaps(
+            source_gray, int(x1), int(y1), int(x2), int(y2)
         )
     ]
     lengths = [float(np.hypot(x2 - x1, y2 - y1)) for x1, y1, x2, y2 in source_intervals]
