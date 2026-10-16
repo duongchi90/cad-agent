@@ -959,7 +959,7 @@ def test_native_pdf_text_observation_fails_closed_for_unsupported_page_frames(
     manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
     run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
 
-    with pytest.raises(FidelityError, match="native PDF text mapping"):
+    with pytest.raises(FidelityError, match="[Nn]ative PDF text mapping"):
         run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
 
 
@@ -988,6 +988,43 @@ def test_native_pdf_text_observation_rejects_stale_source_or_render_hash(
 
         expected_error = ManifestError
     with pytest.raises(expected_error):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+@pytest.mark.parametrize("tamper", ["page_bool", "page_float", "page_wrong", "render_hash", "width_positive_wrong", "height_positive_wrong"])
+def test_native_pdf_text_observation_rejects_mismatched_audit_frame_metadata(
+    tmp_path: Path, tamper: str,
+) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    record = manifest["pages"][0]["artifacts"]["layout_audit"]
+    audit_path = output / record["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    source_page = audit["source_page"]
+    if tamper == "page_bool":
+        source_page["page"] = True
+    elif tamper == "page_float":
+        source_page["page"] = 1.0
+    elif tamper == "page_wrong":
+        source_page["page"] = 2
+    elif tamper == "render_hash":
+        source_page["render_sha256"] = "0" * 64
+    elif tamper == "width_positive_wrong":
+        source_page["render_width_px"] += 1
+    else:
+        source_page["render_height_px"] += 1
+    audit_path.write_text(json.dumps(audit, indent=2) + "\n", encoding="utf-8")
+    record["sha256"] = __import__("hashlib").sha256(audit_path.read_bytes()).hexdigest()
+
+    with pytest.raises(FidelityError, match="[Nn]ative PDF text mapping"):
         run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
 
 

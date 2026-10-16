@@ -1360,7 +1360,10 @@ def run_fidelity_text_observations(
         native_candidates: list[dict[str, Any]] = []
         source_document = fitz.open(source)
         try:
-            source_page = source_document[page["page"] - 1]
+            page_number = page.get("page")
+            if type(page_number) is not int or page_number < 1 or page_number > len(source_document):
+                raise FidelityError("Native PDF text mapping has invalid manifest page metadata.")
+            source_page = source_document[page_number - 1]
             cropbox = source_page.cropbox
             mediabox = source_page.mediabox
             displayed = source_page.rect
@@ -1374,13 +1377,20 @@ def run_fidelity_text_observations(
                     raise FidelityError("Unsupported native PDF text mapping frame.")
                 source_page_audit = audit.get("source_page", {})
                 rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+                rendered_image = cv2.imread(str(rendered_path))
+                if rendered_image is None:
+                    raise FidelityError("Native PDF text mapping cannot read the rendered page.")
                 render_sha256 = sha256_file(rendered_path)
                 render_width = source_page_audit.get("render_width_px")
                 render_height = source_page_audit.get("render_height_px")
                 if (
-                    source_page_audit.get("render_sha256") != render_sha256
-                    or not isinstance(render_width, int) or not isinstance(render_height, int)
+                    type(source_page_audit.get("page")) is not int
+                    or source_page_audit.get("page") != page_number
+                    or source_page_audit.get("render_sha256") != render_sha256
+                    or type(render_width) is not int or type(render_height) is not int
                     or render_width <= 0 or render_height <= 0
+                    or rendered_image.shape[1] != render_width
+                    or rendered_image.shape[0] != render_height
                 ):
                     raise FidelityError("Native PDF text mapping is missing current render provenance.")
                 scale_x = render_width / displayed.width
