@@ -924,6 +924,10 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert len(native) == 1
     assert native[0]["content"] == "NATIVE 123"
     assert native[0]["visibility"] == "unverified"
+    assert native[0]["source_wmode"] == 0
+    assert native[0]["source_paint_evidence"]["wmode"] == 0
+    assert native[0]["source_paint_evidence"]["type"] == 0
+    assert native[0]["source_paint_evidence"]["opacity"] == 1.0
     assert native[0]["source_sha256"] == manifest["source"]["sha256"]
     audit_path = output / observation["source_layout_audit"]["artifact"]
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
@@ -965,6 +969,159 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
             source, output, manifest, approval_path, workspace_root=Path.cwd(),
         )
     assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_native_pdf_observation_excludes_hidden_ocr_over_visible_raster_text(tmp_path: Path) -> None:
+    source = tmp_path / "visible-raster-hidden-ocr.pdf"
+    output = tmp_path / "private-staging"
+    image = np.full((48, 240, 3), 255, dtype=np.uint8)
+    cv2.putText(image, "OCR NOTE", (3, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 2)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_image(fitz.Rect(40, 45, 280, 93), stream=encoded.tobytes())
+    page.insert_text((48, 80), "OCR NOTE", fontsize=18, render_mode=3)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    rendered = cv2.imread(output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"])
+    assert rendered is not None and np.any(cv2.cvtColor(rendered, cv2.COLOR_BGR2GRAY) < 100)
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_zero_opacity_text(tmp_path: Path) -> None:
+    source = tmp_path / "transparent-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "TRANSPARENT", fontsize=18, fill_opacity=0)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_text_used_only_as_a_clipping_path(tmp_path: Path) -> None:
+    source = tmp_path / "clip-only-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "CLIP ONLY", fontsize=18, render_mode=7)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_partially_clipped_text(tmp_path: Path) -> None:
+    source = tmp_path / "partially-clipped-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "PARTIALLY CLIPPED", fontsize=18)
+    content_xrefs = page.get_contents()
+    assert len(content_xrefs) == 1
+    stream = document.xref_stream(content_xrefs[0])
+    document.update_stream(content_xrefs[0], b"q 40 210 45 30 re W n\n" + stream + b"\nQ\n")
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_text_covered_by_later_paint(tmp_path: Path) -> None:
+    source = tmp_path / "covered-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "PARTIALLY COVERED", fontsize=18)
+    page.draw_rect(fitz.Rect(90, 65, 125, 85), color=None, fill=(1, 1, 1))
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_text_on_disabled_optional_content_layer(tmp_path: Path) -> None:
+    source = tmp_path / "disabled-layer-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    ocg = document.add_ocg("Hidden annotations", on=0)
+    page.insert_text((40, 80), "HIDDEN LAYER", fontsize=18, oc=ocg)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_rejects_vertical_writing_mode(tmp_path: Path) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "VERTICAL", fontsize=18)
+
+    class VerticalWritingModePage:
+        def __init__(self, wrapped: fitz.Page) -> None:
+            self._wrapped = wrapped
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._wrapped, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = self._wrapped.get_text(option, *args, **kwargs)
+            if option == "dict":
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        line["wmode"] = 1
+            return result
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            result = self._wrapped.get_texttrace()
+            for span in result:
+                span["wmode"] = 1
+            return result
+
+    with document:
+        records = fidelity_module._native_pdf_text_span_records(
+            VerticalWritingModePage(page), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+
+    assert records == []
 
 
 def test_native_pdf_text_review_shows_source_bound_visibility_choices(tmp_path: Path) -> None:
@@ -1041,7 +1198,7 @@ def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_pat
     page.insert_text((40, 80), "REPEATED NOTE", fontsize=18)
     page.insert_text((40, 150), "REPEATED NOTE", fontsize=18)
     page.insert_text((40, 220), "UNSELECTED", fontsize=18)
-    page.insert_text((200, 100), "ROTATED", fontsize=14, rotate=90)
+    page.insert_text((230, 100), "ROTATED", fontsize=14, rotate=90)
     document.save(source)
     document.close()
     manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
@@ -1247,12 +1404,12 @@ def test_text_reconstruction_rejects_rewritten_observation_and_matching_crafted_
     )[0]
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     assert observation["candidates"] == []
-    native = observation["native_pdf_spans"][0]
+    assert observation["native_pdf_spans"] == []
     forged_candidate = {
         "id": "forged-ocr-native-span",
-        "content": native["content"],
-        "bbox_px": native["bbox_px"],
-        "rotation_deg": native["rotation_deg"],
+        "content": "NATIVE ONLY",
+        "bbox_px": [80, 121, 300, 170],
+        "rotation_deg": 0.0,
         "confidence": 1.0,
         "source": "text_tesseract",
         "semantic_role": "unknown",

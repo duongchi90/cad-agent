@@ -17,13 +17,15 @@ The approval action is the existing explicit per-item approval operation. Identi
 ## Review and approval
 
 - The review page presents the source render and visibly marks native span bboxes, with each exact span's content, stable ID, bbox, source font metadata, and separate selection control.
+- A span enters that selectable collection only when normalized text and bbox overlap of at least 90% uniquely match one PDF paint trace that is actually painted, has nonzero opacity, uses horizontal writing mode, is not tied to an optional-content layer, and is not overlapped by later page paint. Unmatched or ambiguous traces remain excluded.
 - Exported selection keeps OCR candidate IDs and native span IDs in distinct typed fields. Native selections carry the reviewed source/render identity and exact span snapshot.
 - The approval writer rebinds each selected native span to the canonical current observation. It rejects an absent ID, duplicate ID, changed content/bbox/frame, stale source/render, or selection from another source/page.
+- The exact span snapshot includes source writing mode and paint-trace type, opacity, layer, sequence number, and bbox. Fresh reconstruction re-extraction must reproduce that evidence.
 - OCR approvals retain their current format and behavior. A mixed approval can contain both typed lists without treating native text as OCR.
 
 ## Reconstruction and mapping
 
-Before output staging, reconstruction verifies the canonical observation and approval, freshly renders the hash-verified source page, checks the render pixels and audit frame, re-extracts native spans, and requires each approved span to match the exact reviewed snapshot. Selection records the review of visibility for that exact source/render/span; bbox intersection, raster ink, or re-extraction alone cannot promote visibility.
+Before output staging, reconstruction verifies the canonical observation and approval, freshly renders the hash-verified source page, checks the render pixels and audit frame, re-extracts native spans, and requires each approved span to match the exact reviewed snapshot. Selection records the human review of visibility for that exact source/render/span; bbox intersection and raster ink alone cannot promote visibility. The PDF paint trace is an independent eligibility check, so a hidden OCR text layer over visible raster lettering is not selectable as native text.
 
 Map the PDF text baseline origin and direction into paper coordinates using the existing displayed-page transform and page scale. Map source font size through the same page scale and use the existing fidelity Unicode style/glyph-check owner. Record source font metadata and the deterministic output mapping in the reconstruction report. Reject invalid or unsupported values before creating the output directory. Do not claim source CAD style equivalence.
 
@@ -31,11 +33,11 @@ Emit one `TEXT` per approved span. Keep equal strings at distinct source positio
 
 ## Failure behavior
 
-Fail closed before output creation for stale or substituted source/render/span evidence; unselected or duplicate span IDs; missing explicit item approval; hidden, clipped, off-page, zero-area, or invalid spans; unsupported page transforms; invalid coordinate/font-size values; unsupported glyphs; or mismatched audit frame. Do not infer visibility from pixel content. Preserve existing output-root containment and no-overwrite checks.
+Fail closed before output creation for stale or substituted source/render/span/paint evidence; unselected or duplicate span IDs; missing explicit item approval; hidden, ambiguous, optionally layered, later-obscured, clipped, off-page, zero-area, or invalid spans; vertical writing mode; unsupported page transforms; invalid coordinate/font-size values; unsupported glyphs; or mismatched audit frame. Do not infer visibility from pixel content. Preserve existing output-root containment and no-overwrite checks.
 
 ## Verification
 
-Focused regressions cover separate selection/approval provenance, selected-only native `TEXT` emission, baseline/direction/height mapping, duplicate strings at distinct positions, stale/forged/hidden/clipped/unselected evidence, invalid transform and glyph failures before output creation, and unchanged OCR behavior. Use synthetic private fixtures for tests; CASE06 emission remains unavailable until an authorized per-item source review occurs. AutoCAD/.NET and the context A/B benchmark are not prerequisites for this bounded private DXF owner change and must not be reported as run unless they are.
+Focused regressions cover separate selection/approval provenance, selected-only native `TEXT` emission, baseline/direction/height mapping, duplicate strings at distinct positions, stale/forged/hidden/clipped/unselected evidence, zero opacity, invisible and clipping-only render modes, disabled optional-content layers where supported, later paint overlap, vertical writing mode, invalid transforms and glyph failures before output creation, and unchanged OCR behavior. Use synthetic private fixtures for tests; CASE06 emission remains unavailable until an authorized per-item source review occurs. AutoCAD/.NET and the context A/B benchmark are not prerequisites for this bounded private DXF owner change and must not be reported as run unless they are.
 
 ## Explicit exclusions
 

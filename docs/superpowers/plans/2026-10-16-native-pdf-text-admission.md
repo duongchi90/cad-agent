@@ -29,9 +29,9 @@
 
 **Status:** awaiting exact-head review and applicable gates
 
-**Base SHA:** `ef8c7eee1c778d19957a0c7ba9bb2e9e6362f49e`
+**Base SHA:** `6c50a4b6a8690692b9d77d1401329ebe44ebac28`
 
-**Implementation Head SHA:** `3c51012150e3ade2e8407042e3718072ea94199c` (tree `3da307d31ad4194d4e0c0453c806c654fa4693ca`).
+**Implementation Head SHA before security correction:** `b083815ba5c46a332b7f1c3dbe584ace7c357a50` (tree `893a5e37fa35387caefc9e646c53f25a16f24bfa`).
 
 **Verification:** `scripts/verify.ps1 -SkipAutoCADDotNet` passed at the implementation head; 3,665 Python tests passed, 23 deselected, 77 subtests passed; .NET IPC offline set 128 passed; required causal-RED negative oracle reported its expected marked failure; unavailable real-data probe skipped 2 and AutoCAD live probe skipped 18. Focused fidelity module: 90 passed. `git diff --check` passed.
 **Required private/live gates:** CASE06 source span emission `NOT RUN` pending per-item approval; AutoCAD/.NET `NOT RUN`; no reference DWG access; exact-head Security/Integration and #392 V7 required before any merge; context A/B benchmark `NOT RUN`.
@@ -81,3 +81,23 @@
 - [ ] Apply current #392 V7 procedure only after hosted required checks are terminal and the review head is stable.
 - [ ] Record completion head, exact verification results, and live gates in this plan; route durable acceptance to `docs/STATUS.md` only after product acceptance.
 - [ ] Do not mark the PR ready or merge it until all current merge gates pass.
+
+### Task 4: Close exact-head Security findings
+
+**Files:**
+- Modify: `cad_agent/fidelity.py`
+- Test: `tests/test_cad_agent_fidelity.py`
+- Update: this approved design spec and plan to record the paint-visibility boundary.
+
+**Security findings at prior exact head `b083815ba5c46a332b7f1c3dbe584ace7c357a50`:**
+- Hidden/native OCR-layer spans could enter the separately reviewed native collection and be emitted over coincident visible raster text.
+- Vertical PDF writing mode was not recorded and could be emitted as ordinary rotated DXF `TEXT`.
+
+- [x] Add failing regressions for hidden OCR over visible raster text, zero opacity, clipping-only text, later paint overlap, disabled optional-content text, and nonzero writing mode.
+- [x] Run those regressions and observe failures at the affected admission boundary.
+- [x] Add unique PDF paint-trace binding; exclude invisible, ambiguous, layered, later-obscured, or unsupported-writing-mode spans; persist paint and writing-mode evidence for fresh revalidation.
+- [x] Run the complete focused fidelity test module: 97 passed.
+- [ ] Run canonical `scripts/verify.ps1 -SkipAutoCADDotNet`, `git diff --check`, and inspect the final diff/write set.
+- [ ] Commit and push the correction as a new commit; do not rewrite the reviewed branch history.
+- [ ] Rerun terminal hosted checks and obtain new independent exact-head Security and Integration reviews.
+- [ ] Apply the current #392 V7 procedure only after hosted checks are terminal and the new review head is stable; keep the PR draft and unmerged.

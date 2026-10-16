@@ -1406,12 +1406,54 @@ def _native_pdf_text_span_records(
     if not source_page.get_text("text").strip():
         return []
 
+    try:
+        paint_traces = source_page.get_texttrace()
+        paint_log = source_page.get_bboxlog()
+    except (AttributeError, RuntimeError, ValueError):
+        # Native text is selectable only when the PDF backend can establish
+        # that the extracted span has a corresponding visible paint operation.
+        return []
+    if not isinstance(paint_traces, (list, tuple)) or not isinstance(paint_log, (list, tuple)):
+        return []
+
+    def compact_text(value: str) -> str:
+        return "".join(value.split())
+
+    def overlap_ratio(left: fitz.Rect, right: fitz.Rect) -> float:
+        intersection = left & right
+        if intersection.is_empty:
+            return 0.0
+        smaller_area = min(left.get_area(), right.get_area())
+        return intersection.get_area() / smaller_area if smaller_area > 0 else 0.0
+
+    def has_later_paint_overlap(trace: dict[str, Any]) -> bool:
+        sequence_number = trace.get("seqno")
+        trace_bbox = trace.get("bbox")
+        if type(sequence_number) is not int or not isinstance(trace_bbox, (tuple, list)) or len(trace_bbox) != 4:
+            return True
+        trace_rect = fitz.Rect(trace_bbox)
+        try:
+            for index, paint_item in enumerate(paint_log):
+                if not isinstance(paint_item, (tuple, list)) or len(paint_item) != 2:
+                    return True
+                paint_type, paint_bbox = paint_item
+                if index <= sequence_number or paint_type == "ignore-text":
+                    continue
+                if overlap_ratio(trace_rect, fitz.Rect(paint_bbox)) > 0:
+                    return True
+        except (TypeError, ValueError, RuntimeError):
+            return True
+        return False
+
     scale_x = render_width / displayed.width
     scale_y = render_height / displayed.height
     records: list[dict[str, Any]] = []
     for block_index, block in enumerate(source_page.get_text("dict").get("blocks", [])):
         for line_index, line in enumerate(block.get("lines", [])):
             direction = line.get("dir", (1.0, 0.0))
+            writing_mode = line.get("wmode")
+            if writing_mode != 0:
+                continue
             for span_index, span in enumerate(line.get("spans", [])):
                 content = span.get("text")
                 bbox = span.get("bbox")
@@ -1419,6 +1461,40 @@ def _native_pdf_text_span_records(
                     continue
                 rect = fitz.Rect(bbox)
                 if rect.is_empty or not rect.is_valid:
+                    continue
+                compact_content = compact_text(content)
+                matching_traces = []
+                for trace in paint_traces:
+                    chars = trace.get("chars")
+                    trace_text = "".join(
+                        chr(char[0]) for char in chars
+                        if isinstance(char, (tuple, list)) and char and type(char[0]) is int
+                    ) if isinstance(chars, (tuple, list)) else ""
+                    trace_bbox = trace.get("bbox")
+                    if (
+                        compact_content
+                        and compact_text(trace_text) == compact_content
+                        and isinstance(trace_bbox, (tuple, list))
+                        and len(trace_bbox) == 4
+                        and overlap_ratio(rect, fitz.Rect(trace_bbox)) >= 0.9
+                    ):
+                        matching_traces.append(trace)
+                if len(matching_traces) != 1:
+                    continue
+                paint_trace = matching_traces[0]
+                paint_type = paint_trace.get("type")
+                paint_opacity = paint_trace.get("opacity")
+                paint_wmode = paint_trace.get("wmode")
+                paint_layer = paint_trace.get("layer")
+                if (
+                    paint_type not in (0, 1)
+                    or not isinstance(paint_opacity, (int, float))
+                    or not math.isfinite(float(paint_opacity))
+                    or paint_opacity <= 0
+                    or paint_wmode != 0
+                    or paint_layer not in (None, "")
+                    or has_later_paint_overlap(paint_trace)
+                ):
                     continue
                 corners = [
                     fitz.Point(rect.x0, rect.y0), fitz.Point(rect.x1, rect.y0),
@@ -1445,9 +1521,18 @@ def _native_pdf_text_span_records(
                     "content": content,
                     "bbox_px": [x0, y0, x1, y1],
                     "rotation_deg": math.degrees(math.atan2(float(direction[1]), float(direction[0]))),
+                    "source_wmode": writing_mode,
                     "evidence_kind": "native_pdf",
                     "visibility": "unverified",
                     "source_span_bbox_pt": [float(value) for value in bbox],
+                    "source_paint_evidence": {
+                        "type": paint_type,
+                        "opacity": float(paint_opacity),
+                        "wmode": paint_wmode,
+                        "layer": paint_layer or None,
+                        "sequence_number": paint_trace.get("seqno"),
+                        "bbox_pt": [float(value) for value in paint_trace["bbox"]],
+                    },
                     "source_origin_pt": source_origin,
                     "source_font_name": str(font_name) if isinstance(font_name, str) else None,
                     "source_font_size_pt": source_font_size,
