@@ -42,6 +42,8 @@ from .models import new_id
 _HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
 _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 _HOUGH_LINE_RHO_RESOLUTION_PX = 1.0
+# Containment bound reused from the clean #519 endpoint-growth implementation.
+_LINE_ENDPOINT_MAX_EXTENSION_PX = 30
 
 
 @dataclass
@@ -71,6 +73,7 @@ class RawGeometry:
     circles: List[RawCircle] = field(default_factory=list)
 
 
+
 def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -81,63 +84,57 @@ def _refine_hough_segment_with_edge_support(
     segment: np.ndarray,
     edge_x: np.ndarray,
     edge_y: np.ndarray,
-    min_line_length: int,
+    edge_component_labels: np.ndarray,
     max_line_gap: int,
 ) -> List[Tuple[float, float, float, float]]:
-    """Refine one Hough seed to contiguous Canny-supported intervals.
-
-    Hough may clip a line where its vote threshold is not met even though the
-    same collinear edge continues nearby. Projecting Canny pixels onto the seed
-    recovers that support; gaps longer than the configured Hough gap remain
-    separate intervals. The perpendicular support band is the existing rho
-    resolution, not a separately tuned tolerance.
-    """
+    """Extend a seed only through its unique connected Canny component."""
     x1, y1, x2, y2 = (float(value) for value in segment)
-    dx = x2 - x1
-    dy = y2 - y1
+    dx, dy = x2 - x1, y2 - y1
     seed_length = float(np.hypot(dx, dy))
     if seed_length == 0.0:
-        return []
+        return [(x1, y1, x2, y2)]
 
-    ux = dx / seed_length
-    uy = dy / seed_length
-    nx = -uy
-    ny = ux
-
+    ux, uy = dx / seed_length, dy / seed_length
+    nx, ny = -uy, ux
     relative_x = edge_x.astype(np.float32) - x1
     relative_y = edge_y.astype(np.float32) - y1
     along = relative_x * ux + relative_y * uy
     perpendicular = np.abs(relative_x * nx + relative_y * ny)
-    supported = np.rint(along[perpendicular <= _HOUGH_LINE_RHO_RESOLUTION_PX]).astype(np.int32)
-    if supported.size == 0:
-        return []
+    labels = edge_component_labels[edge_y, edge_x]
+    on_seed = (perpendicular <= _HOUGH_LINE_RHO_RESOLUTION_PX) & (along >= 0) & (along <= seed_length)
+    anchored_components = np.unique(labels[on_seed & (labels > 0)])
+    if anchored_components.size != 1:
+        return [(x1, y1, x2, y2)]
 
-    stations = np.unique(supported)
-    intervals: List[Tuple[int, int]] = []
-    interval_start = previous = int(stations[0])
-    for station_value in stations[1:]:
-        station = int(station_value)
-        if station - previous > max_line_gap + 1:
-            intervals.append((interval_start, previous))
-            interval_start = station
-        previous = station
-    intervals.append((interval_start, previous))
+    connected = (labels == anchored_components[0]) & (perpendicular <= _HOUGH_LINE_RHO_RESOLUTION_PX)
+    stations = np.unique(np.rint(along[connected]).astype(np.int32))
+    max_step = max_line_gap + 1
+    start_station = 0
+    start_anchors = stations[(stations >= 0) & (stations <= max_step)]
+    if start_anchors.size:
+        previous = int(start_anchors[0])
+        outside = stations[(stations < 0) & (stations >= -_LINE_ENDPOINT_MAX_EXTENSION_PX)][::-1]
+        for value in outside:
+            station = int(value)
+            if previous - station > max_step:
+                break
+            start_station = station
+            previous = station
 
-    refined: List[Tuple[float, float, float, float]] = []
-    for start, end in intervals:
-        if end - start < min_line_length:
-            continue
-        # Keep only support intervals associated with this Hough seed; nearby
-        # parallel geometry elsewhere in the image is not a continuation.
-        if end < -max_line_gap or start > seed_length + max_line_gap:
-            continue
-        refined.append((
-            x1 + start * ux,
-            y1 + start * uy,
-            x1 + end * ux,
-            y1 + end * uy,
-        ))
-    return refined
+    end_station = seed_length
+    end_anchors = stations[(stations <= seed_length) & (stations >= seed_length - max_step)]
+    if end_anchors.size:
+        previous = int(end_anchors[-1])
+        outside = stations[(stations > seed_length) & (stations <= seed_length + _LINE_ENDPOINT_MAX_EXTENSION_PX)]
+        for value in outside:
+            station = int(value)
+            if station - previous > max_step:
+                break
+            end_station = station
+            previous = station
+
+    return [(x1 + start_station * ux, y1 + start_station * uy,
+             x1 + end_station * ux, y1 + end_station * uy)]
 
 
 def extract_lines(
@@ -165,11 +162,12 @@ def extract_lines(
     # luôn chuẩn hoá về mảng 2D (N,4), mỗi hàng là [x1,y1,x2,y2].
     seg = np.asarray(segments).reshape(-1, 4)
     edge_y, edge_x = np.nonzero(edges)
+    _, edge_component_labels = cv2.connectedComponents(edges, connectivity=8)
     refined_segments = [
         refined
         for segment in seg
         for refined in _refine_hough_segment_with_edge_support(
-            segment, edge_x, edge_y, min_line_length, max_line_gap,
+            segment, edge_x, edge_y, edge_component_labels, max_line_gap,
         )
     ]
     if not refined_segments:
@@ -303,7 +301,8 @@ def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwarg
         "canny_low", "canny_high", "hough_threshold", "min_line_length", "max_line_gap")}
     circle_kwargs = {k: v for k, v in merged.items() if k in (
         "min_radius", "max_radius", "param1", "param2", "min_dist")}
+    lines = extract_lines(image_bgr, **line_kwargs)
     return RawGeometry(
-        lines=extract_lines(image_bgr, **line_kwargs),
+        lines=lines,
         circles=extract_circles(image_bgr, **circle_kwargs),
     )
