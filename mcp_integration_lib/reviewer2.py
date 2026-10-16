@@ -104,6 +104,7 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
         except (MCPTimeoutError, MCPToolError) as exc:
             result.geometry_degraded = True
             result.warnings.append(f"{pid}: bỏ qua geometry check ({exc})")
+            result.mismatch(f"{pid}: geometry readback unavailable")
         else:
             result.geometry_checked += 1
             _check_geometry(pid, written, actual, result)
@@ -175,6 +176,10 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
                 result.mismatch(
                     f"{validation_id}: DIMENSION measurement unavailable for "
                     "approved_value_mm"
+                )
+            else:
+                result.mismatch(
+                    f"{validation_id}: DIMENSION measurement readback unavailable"
                 )
             if expected.get("geometry_primitive_id") is not None:
                 result.dimension_feature_mismatch(f"{validation_id}: DIMENSION feature binding readback unavailable")
