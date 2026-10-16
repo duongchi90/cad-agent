@@ -5,6 +5,7 @@ adjudication package. The raster SHA256 is
 9ae9b1fa4f56abc5b7147899555df99c4a56144856f0e057421b74afe69d9b2b.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -32,6 +33,88 @@ def _vertical_lines(image: np.ndarray, preset: str):
         if abs(line.p2_px[0] - line.p1_px[0]) <= 3
         and abs((line.p1_px[0] + line.p2_px[0]) / 2 - 150) <= 5
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "preset", "target_x", "intervals", "sha256"),
+    [
+        (
+            "CASE01_PRIMARY_ASYMMETRIC_WITNESS",
+            "default",
+            150,
+            ((40, 76), (86, 140)),
+            "1eed0a6c6172377d15f142460e32b4f3269fd16c8299bd729d515bacc8780219",
+        ),
+        (
+            "F05_NEARBY_TEXT_AND_EXTENSION",
+            "real_scan_tuned_v1",
+            150,
+            ((50, 93), (100, 145)),
+            "44761f6f41e382f07909d3f21bc15da693f9b3ac05a6a100c2cd2ba5aaa8aedb",
+        ),
+        (
+            "F05_NEARBY_TEXT_AND_EXTENSION",
+            "default",
+            150,
+            ((50, 93), (100, 145)),
+            "44761f6f41e382f07909d3f21bc15da693f9b3ac05a6a100c2cd2ba5aaa8aedb",
+        ),
+        (
+            "F06_DIMENSION_WITNESS_PAIR",
+            "real_scan_tuned_v1",
+            100,
+            ((50, 88), (95, 146)),
+            "572a86a7320b859e275279078bea74cf8c0d2c85c101ad75815288df545b984a",
+        ),
+        (
+            "F06_DIMENSION_WITNESS_PAIR",
+            "default",
+            100,
+            ((50, 88), (95, 146)),
+            "572a86a7320b859e275279078bea74cf8c0d2c85c101ad75815288df545b984a",
+        ),
+    ],
+)
+def test_raw_extraction_keeps_source_fragments_without_joining_their_gap(
+    name: str,
+    preset: str,
+    target_x: int,
+    intervals: tuple[tuple[int, int], tuple[int, int]],
+    sha256: str,
+) -> None:
+    image_path = FIXTURES / f"{name}.png"
+    image_bytes = image_path.read_bytes()
+    assert hashlib.sha256(image_bytes).hexdigest() == sha256
+    image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert image is not None
+    # These frozen source spans are raw geometry controls. A fixture's
+    # must_recover annotation concerns downstream logical association and
+    # cannot authorize raw extraction to bridge unsupported pixels.
+
+    lines = [
+        line
+        for line in extract_raw_geometry(image, preset=preset).lines
+        if abs(line.p2_px[0] - line.p1_px[0]) <= 3
+        and abs((line.p1_px[0] + line.p2_px[0]) / 2 - target_x) <= 5
+    ]
+    for segment_start, segment_end in intervals:
+        segment_length = segment_end - segment_start
+        assert any(
+            max(
+                0,
+                min(segment_end, max(line.p1_px[1], line.p2_px[1]))
+                - max(segment_start, min(line.p1_px[1], line.p2_px[1])),
+            )
+            >= 0.75 * segment_length
+            for line in lines
+        ), f"{preset} lost source-supported {name} interval {segment_start}:{segment_end}"
+
+    for (_, previous_end), (next_start, _) in zip(intervals, intervals[1:]):
+        assert not any(
+            min(line.p1_px[1], line.p2_px[1]) <= previous_end
+            and max(line.p1_px[1], line.p2_px[1]) >= next_start
+            for line in lines
+        ), f"{preset} joined {name} across unsupported gap {previous_end}:{next_start}"
 
 
 def test_source_gap_split_drops_zero_length_interval_beside_supported_line(
