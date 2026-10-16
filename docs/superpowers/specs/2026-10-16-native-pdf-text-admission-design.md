@@ -1,0 +1,42 @@
+# Native PDF Text Admission Through Fidelity Review
+
+**Approval date:** 2026-10-16 (delegated Local PO decision, same CASE06 decision chain)
+**Supported scope:** private fidelity reconstruction output; explicitly selected, source-verified PDF text spans may be emitted as editable plain DXF `TEXT` through the existing fidelity approval and reconstruction owner.
+**Decision:** Option B approved with the clarifications below. Implementation approval does not approve emission of any CASE06 source span.
+
+## Goal
+
+Let a reviewer select exact native PDF text spans after inspecting their source render, approve them individually, and reconstruct those approved spans as editable plain `TEXT` in the private fidelity DXF. Preserve the current OCR path and keep all unselected or unsupported text out of the DXF.
+
+## Existing owner and boundary
+
+Extend `cad_agent.fidelity`'s existing observation, review-selection, per-item approval, glyph-check, and `run_fidelity_text_reconstruct` flow. Native spans remain a separately typed collection in the existing private sidecar. Do not create a second approval/reconstruction workflow or alter Primitive IR, public schemas, or AutoCAD integration.
+
+The approval action is the existing explicit per-item approval operation. Identity, author, timestamp, or visibility fields by themselves do not create authority. Each approved span's provenance must bind the exact source PDF, rendered page, stable span ID, content, bbox, and mapping. A selection is not approval until passed through the existing approval writer.
+
+## Review and approval
+
+- The review page presents the source render and visibly marks native span bboxes, with each exact span's content, stable ID, bbox, source font metadata, and separate selection control.
+- Exported selection keeps OCR candidate IDs and native span IDs in distinct typed fields. Native selections carry the reviewed source/render identity and exact span snapshot.
+- The approval writer rebinds each selected native span to the canonical current observation. It rejects an absent ID, duplicate ID, changed content/bbox/frame, stale source/render, or selection from another source/page.
+- OCR approvals retain their current format and behavior. A mixed approval can contain both typed lists without treating native text as OCR.
+
+## Reconstruction and mapping
+
+Before output staging, reconstruction verifies the canonical observation and approval, freshly renders the hash-verified source page, checks the render pixels and audit frame, re-extracts native spans, and requires each approved span to match the exact reviewed snapshot. Selection records the review of visibility for that exact source/render/span; bbox intersection, raster ink, or re-extraction alone cannot promote visibility.
+
+Map the PDF text baseline origin and direction into paper coordinates using the existing displayed-page transform and page scale. Map source font size through the same page scale and use the existing fidelity Unicode style/glyph-check owner. Record source font metadata and the deterministic output mapping in the reconstruction report. Reject invalid or unsupported values before creating the output directory. Do not claim source CAD style equivalence.
+
+Emit one `TEXT` per approved span. Keep equal strings at distinct source positions as separate entities. Do not infer semantic role, dimension/component association, calibration approval, or higher CAD entity types. The existing OCR candidate list and OCR freshness checks remain unchanged.
+
+## Failure behavior
+
+Fail closed before output creation for stale or substituted source/render/span evidence; unselected or duplicate span IDs; missing explicit item approval; hidden, clipped, off-page, zero-area, or invalid spans; unsupported page transforms; invalid coordinate/font-size values; unsupported glyphs; or mismatched audit frame. Do not infer visibility from pixel content. Preserve existing output-root containment and no-overwrite checks.
+
+## Verification
+
+Focused regressions cover separate selection/approval provenance, selected-only native `TEXT` emission, baseline/direction/height mapping, duplicate strings at distinct positions, stale/forged/hidden/clipped/unselected evidence, invalid transform and glyph failures before output creation, and unchanged OCR behavior. Use synthetic private fixtures for tests; CASE06 emission remains unavailable until an authorized per-item source review occurs. AutoCAD/.NET and the context A/B benchmark are not prerequisites for this bounded private DXF owner change and must not be reported as run unless they are.
+
+## Explicit exclusions
+
+No automatic visibility inference, OCR relabeling, semantic-role inference, dimension or component association, `DIMENSION`/`MLEADER`/`MTEXT` generation, new trust/approval service, source/reference DWG access, candidate promotion, AutoCAD mutation, or change to PR #521's pinned head.
