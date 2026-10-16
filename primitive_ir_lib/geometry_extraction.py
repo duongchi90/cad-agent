@@ -100,24 +100,6 @@ def _split_line_at_source_gaps(
     normal_x = -dy / length
     normal_y = dx / length
     supported = np.zeros(xs.shape, dtype=bool)
-    # Compare the candidate stroke with nearby pixels across its width. An
-    # absolute darkness threshold treats gray paper/shading as line support,
-    # while local contrast still admits a visible gray stroke on white.
-    background_samples = []
-    for offset in (-4, -3, 3, 4):
-        probe_x = np.rint(xs + normal_x * offset).astype(int)
-        probe_y = np.rint(ys + normal_y * offset).astype(int)
-        inside = (
-            (probe_x >= 0)
-            & (probe_x < source_gray.shape[1])
-            & (probe_y >= 0)
-            & (probe_y < source_gray.shape[0])
-        )
-        sample = np.full(xs.shape, 255, dtype=np.uint8)
-        sample[inside] = source_gray[probe_y[inside], probe_x[inside]]
-        background_samples.append(sample)
-    local_background = np.median(np.stack(background_samples), axis=0)
-
     for offset in (-1, 0, 1):
         probe_x = np.rint(xs + normal_x * offset).astype(int)
         probe_y = np.rint(ys + normal_y * offset).astype(int)
@@ -127,10 +109,7 @@ def _split_line_at_source_gaps(
             & (probe_y >= 0)
             & (probe_y < source_gray.shape[0])
         )
-        supported[inside] |= (
-            source_gray[probe_y[inside], probe_x[inside]]
-            <= local_background[inside] - 20
-        )
+        supported[inside] |= source_gray[probe_y[inside], probe_x[inside]] < 250
 
     transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
     starts = np.flatnonzero(transitions == 1)
