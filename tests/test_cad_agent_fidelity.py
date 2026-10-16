@@ -994,6 +994,64 @@ def test_text_reconstruction_rejects_changed_hash_bound_observation(tmp_path: Pa
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+def test_text_reconstruction_rejects_rewritten_observation_and_matching_crafted_approval(
+    tmp_path: Path,
+) -> None:
+    """A native PDF span must not become OCR merely by rewriting both sidecars."""
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "invisible-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE ONLY", fontsize=18, render_mode=3)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"] == []
+    native = observation["native_pdf_spans"][0]
+    forged_candidate = {
+        "id": "forged-ocr-native-span",
+        "content": native["content"],
+        "bbox_px": native["bbox_px"],
+        "rotation_deg": native["rotation_deg"],
+        "confidence": 1.0,
+        "source": "text_tesseract",
+        "semantic_role": "unknown",
+        "parsed_value": None,
+    }
+    observation["state"] = "needs_human_approval"
+    observation["candidates"] = [forged_candidate]
+    observation_path.write_text(json.dumps(observation, ensure_ascii=False), encoding="utf-8")
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": fidelity_module._artifact(observation_path, output),
+        "approval_reference": "approved-test",
+        "approved_candidates": [{
+            "candidate": forged_candidate,
+            "glyph_render": fidelity_module._unicode_glyph_render_check(forged_candidate["content"]),
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="fresh OCR"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
 def test_text_reconstruction_rejects_alternate_native_observation(tmp_path: Path) -> None:
     from cad_agent import fidelity as fidelity_module
 
@@ -2364,6 +2422,19 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
     _pdf(source)
+    from cad_agent import fidelity as fidelity_module
+
+    original_page_ocr = fidelity_module._fidelity_page_text_ocr
+
+    def unicode_fixture_ocr(image: np.ndarray, rois=None):
+        texts = original_page_ocr(image, rois)
+        if texts:
+            # Keep the recognized source geometry while exercising Unicode DXF
+            # styling with the existing visible-text fixture.
+            texts[0].content = "SỐ LƯỢNG"
+        return texts
+
+    monkeypatch.setattr(fidelity_module, "_fidelity_page_text_ocr", unicode_fixture_ocr)
     manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
     run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
 
@@ -2371,10 +2442,6 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     observation_path = outputs[0]
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     assert observation["candidates"], "fixture PDF phải có ít nhất 1 candidate OCR"
-    # ghi đè nội dung candidate đầu tiên thành tiếng Việt có dấu -- vẫn giữ
-    # nguyên cấu trúc/hash-binding thật do run_fidelity_text_observations tạo
-    observation["candidates"][0]["content"] = "SỐ LƯỢNG"
-    observation_path.write_text(json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     approved = write_fidelity_text_approval(
         source, output, manifest, 1, observation_path, [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
