@@ -994,6 +994,77 @@ def test_text_reconstruction_rejects_changed_hash_bound_observation(tmp_path: Pa
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+def test_text_reconstruction_rejects_alternate_native_observation(tmp_path: Path) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_spans"][0]
+
+    alternate_path = output / "fidelity_text_observations" / "alternate-page_01.json"
+    alternate = {**observation, "candidates": [native]}
+    alternate_path.write_text(json.dumps(alternate, ensure_ascii=False), encoding="utf-8")
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": fidelity_module._artifact(alternate_path, output),
+        "approval_reference": "approved-test",
+        "approved_candidates": [{
+            "candidate": native,
+            "glyph_render": fidelity_module._unicode_glyph_render_check(native["content"]),
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="canonical OCR observation"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_text_reconstruction_revalidates_glyph_render_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"]
+    write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path,
+        [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval["approved_candidates"][0]["glyph_render"] = {"passed": True}
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="glyph-render evidence"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
 @pytest.mark.parametrize("unsupported", ["rotation", "crop"])
 def test_native_pdf_text_observation_fails_closed_for_unsupported_page_frames(
     tmp_path: Path, unsupported: str,

@@ -2312,6 +2312,10 @@ def run_fidelity_text_reconstruct(
     observation_record = approval.get("observation")
     if not isinstance(observation_record, dict):
         raise FidelityError("Text approval is missing hash-bound OCR observation provenance.")
+    canonical_observation = output_root / "fidelity_text_observations" / f"page_{page_number:02d}.json"
+    canonical_record_path = canonical_observation.resolve().relative_to(output_root.resolve()).as_posix()
+    if observation_record.get("artifact") != canonical_record_path:
+        raise FidelityError("Text approval must reference the canonical OCR observation.")
     observation_path = _safe_artifact_path(output_root, observation_record)
     try:
         observation = json.loads(observation_path.read_text(encoding="utf-8"))
@@ -2336,6 +2340,8 @@ def run_fidelity_text_reconstruct(
     for item in observation_candidates:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             raise FidelityError("Text observation contains an invalid OCR candidate.")
+        if item.get("source") != "text_tesseract":
+            raise FidelityError("Text observation contains evidence that is not from the OCR path.")
         if item["id"] in ocr_candidates:
             raise FidelityError("Text observation contains duplicate OCR candidate ids.")
         ocr_candidates[item["id"]] = item
@@ -2352,8 +2358,16 @@ def run_fidelity_text_reconstruct(
         if candidate_id in approved_ids or candidate != ocr_candidates[candidate_id]:
             raise FidelityError("Text approval candidate does not match its hash-bound OCR observation.")
         glyph_render = approved.get("glyph_render")
-        if not isinstance(glyph_render, dict) or glyph_render.get("passed") is not True:
-            raise FidelityError("Text approval is missing passing Unicode glyph-render evidence.")
+        content = candidate.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise FidelityError("Text approval contains an invalid OCR candidate.")
+        current_glyph_render = _unicode_glyph_render_check(content)
+        if (
+            not isinstance(glyph_render, dict)
+            or not current_glyph_render["passed"]
+            or glyph_render != current_glyph_render
+        ):
+            raise FidelityError("Text approval is missing matching passing Unicode glyph-render evidence.")
         approved_ids.add(candidate_id)
         approved_candidates.append({"candidate": ocr_candidates[candidate_id], "glyph_render": glyph_render})
     if base_dxf is not None and (not _is_within(base_dxf, output_root) or not base_dxf.is_file()):
