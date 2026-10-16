@@ -2288,12 +2288,74 @@ def run_fidelity_text_reconstruct(
     verify_source(manifest, source)
     if not _is_within(approval_path, output_root) or not approval_path.is_file():
         raise FidelityError("Text approval must reside inside the private fidelity output root.")
-    approval = json.loads(approval_path.read_text(encoding="utf-8"))
-    if approval.get("state") != "approved-text-candidates-only" or approval.get("source") != manifest.get("source"):
-        raise FidelityError("Text approval is not valid for reconstruction.")
-    page = next((item for item in manifest["pages"] if item["page"] == approval.get("page")), None)
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Text approval is invalid JSON.") from exc
+    if (
+        not isinstance(approval, dict)
+        or approval.get("schema_version") != "fidelity-text-approval-1.0"
+        or approval.get("private_artifact") is not True
+        or approval.get("state") != "approved-text-candidates-only"
+        or approval.get("source") != manifest.get("source")
+        or not isinstance(approval.get("approval_reference"), str)
+        or not approval["approval_reference"].strip()
+    ):
+        raise FidelityError("Text approval has an unsupported or incomplete schema.")
+    page_number = approval.get("page")
+    if type(page_number) is not int or page_number <= 0:
+        raise FidelityError("Text approval page must be a positive integer.")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
     if page is None:
         raise FidelityError("Text approval page is absent from the fidelity manifest.")
+
+    observation_record = approval.get("observation")
+    if not isinstance(observation_record, dict):
+        raise FidelityError("Text approval is missing hash-bound OCR observation provenance.")
+    observation_path = _safe_artifact_path(output_root, observation_record)
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Text observation is invalid JSON.") from exc
+    if (
+        not isinstance(observation, dict)
+        or observation.get("schema_version") != "fidelity-text-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("state") != "needs_human_approval"
+        or observation.get("source") != manifest.get("source")
+        or type(observation.get("page")) is not int
+        or observation.get("page") != page_number
+        or observation.get("source_layout_audit") != page.get("artifacts", {}).get("layout_audit")
+    ):
+        raise FidelityError("Text observation does not match the approval source and page.")
+
+    observation_candidates = observation.get("candidates")
+    if not isinstance(observation_candidates, list):
+        raise FidelityError("Text observation has no OCR candidate list.")
+    ocr_candidates: dict[str, dict[str, Any]] = {}
+    for item in observation_candidates:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            raise FidelityError("Text observation contains an invalid OCR candidate.")
+        if item["id"] in ocr_candidates:
+            raise FidelityError("Text observation contains duplicate OCR candidate ids.")
+        ocr_candidates[item["id"]] = item
+    approved_records = approval.get("approved_candidates")
+    if not isinstance(approved_records, list) or not approved_records:
+        raise FidelityError("Text approval requires approved OCR candidates.")
+    approved_candidates = []
+    approved_ids: set[str] = set()
+    for approved in approved_records:
+        candidate = approved.get("candidate") if isinstance(approved, dict) else None
+        candidate_id = candidate.get("id") if isinstance(candidate, dict) else None
+        if not isinstance(candidate_id, str) or candidate_id not in ocr_candidates:
+            raise FidelityError("Text approval references an unknown OCR candidate.")
+        if candidate_id in approved_ids or candidate != ocr_candidates[candidate_id]:
+            raise FidelityError("Text approval candidate does not match its hash-bound OCR observation.")
+        glyph_render = approved.get("glyph_render")
+        if not isinstance(glyph_render, dict) or glyph_render.get("passed") is not True:
+            raise FidelityError("Text approval is missing passing Unicode glyph-render evidence.")
+        approved_ids.add(candidate_id)
+        approved_candidates.append({"candidate": ocr_candidates[candidate_id], "glyph_render": glyph_render})
     if base_dxf is not None and (not _is_within(base_dxf, output_root) or not base_dxf.is_file()):
         raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
     import ezdxf
@@ -2310,7 +2372,7 @@ def run_fidelity_text_reconstruct(
         raise FidelityError("Cannot read rendered page for text reconstruction sizing.")
     emitted = 0
     sizing_records: list[dict[str, Any]] = []
-    for approved in approval.get("approved_candidates", []):
+    for approved in approved_candidates:
         candidate = approved.get("candidate", {})
         content = candidate.get("content")
         bbox = candidate.get("bbox_px")

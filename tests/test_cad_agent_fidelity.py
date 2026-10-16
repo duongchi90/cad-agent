@@ -940,6 +940,59 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
             workspace_root=Path.cwd(),
         )
 
+    # A hand-crafted approval sidecar must not bypass the OCR-only candidate
+    # admission performed by write_fidelity_text_approval.
+    from cad_agent import fidelity as fidelity_module
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": fidelity_module._artifact(observation_path, output),
+        "approval_reference": "approved-test",
+        "approved_candidates": [{
+            "candidate": native[0],
+            "glyph_render": {"passed": True},
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="OCR candidate"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_text_reconstruction_rejects_changed_hash_bound_observation(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"]
+    write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path,
+        [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
+    )
+
+    observation["candidates"][0]["content"] = "CHANGED AFTER APPROVAL"
+    observation_path.write_text(json.dumps(observation), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="hash"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+            workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
 
 @pytest.mark.parametrize("unsupported", ["rotation", "crop"])
 def test_native_pdf_text_observation_fails_closed_for_unsupported_page_frames(
