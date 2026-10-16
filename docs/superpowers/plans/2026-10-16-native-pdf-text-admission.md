@@ -27,10 +27,10 @@
 - Off-page/clipped spans and unsupported page frames must not be emitted; hidden or illegible spans require the reviewer to reject the exact source-render-span item.
 - Unsupported glyphs or invalid source baseline/font-size metadata must fail before output staging.
 
-**Status:** executing  
+**Status:** awaiting exact-head review and applicable gates  
 **Base SHA:** `ef8c7eee1c778d19957a0c7ba9bb2e9e6362f49e`  
-**Completion Head SHA:** pending  
-**Verification:** pending; required final command `scripts/verify.ps1 -SkipAutoCADDotNet` plus focused fidelity regressions.  
+**Implementation Head SHA:** `3c51012150e3ade2e8407042e3718072ea94199c` (tree `3da307d31ad4194d4e0c0453c806c654fa4693ca`).  
+**Verification:** `scripts/verify.ps1 -SkipAutoCADDotNet` passed at the implementation head; 3,665 Python tests passed, 23 deselected, 77 subtests passed; .NET IPC offline set 128 passed; required causal-RED negative oracle reported its expected marked failure; unavailable real-data probe skipped 2 and AutoCAD live probe skipped 18. Focused fidelity module: 90 passed. `git diff --check` passed.  
 **Required private/live gates:** CASE06 source span emission `NOT RUN` pending per-item approval; AutoCAD/.NET `NOT RUN`; no reference DWG access; exact-head Security/Integration and #392 V7 required before any merge; context A/B benchmark `NOT RUN`.
 
 ---
@@ -65,15 +65,15 @@
 - [x] Run the focused tests and confirm the expected missing-path failures.
 - [x] Implement source-page re-render/re-extraction checks and deterministic PDF baseline-to-paper mapping; retain the existing OCR branch and checks unchanged.
 - [x] Run the full fidelity test module, then the focused CASE06 source observation/provenance tests without emitting the real CASE06 spans.
-- [ ] Run `scripts/verify.ps1 -SkipAutoCADDotNet`, inspect status/diff, and commit the task.
+- [x] Run `scripts/verify.ps1 -SkipAutoCADDotNet`, inspect status/diff, and commit the task.
 
 ### Task 3: Final verification and review package
 
 **Files:**
 - Review only: all changed files.
 
-- [ ] Run `git diff --check` and confirm the write set is only the two production/test files plus the approved spec and plan.
-- [ ] Perform one cheap self-check for false approval/emission paths; preserve exact base/head/tree.
+- [x] Run `git diff --check` and confirm the write set is only the two production/test files plus the approved spec and plan.
+- [x] Perform one cheap self-check for false approval/emission paths; preserve exact base/head/tree.
 - [ ] Request independent exact-head `SECURITY_REDTEAM` and `INTEGRATION_CI` reviews for the material runtime PR; keep first-pass evidence independent.
 - [ ] Apply current #392 V7 procedure only after hosted required checks are terminal and the review head is stable.
 - [ ] Record completion head, exact verification results, and live gates in this plan; route durable acceptance to `docs/STATUS.md` only after product acceptance.
