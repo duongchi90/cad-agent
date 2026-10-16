@@ -2195,6 +2195,64 @@ def _unicode_glyph_render_check(content: str) -> dict[str, Any]:
     }
 
 
+def _fresh_fidelity_native_pdf_spans(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    page: dict[str, Any],
+    observation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Re-render and re-extract native spans in the exact reviewed source frame."""
+    page_number = page.get("page")
+    dpi = manifest.get("configuration", {}).get("dpi")
+    if type(page_number) is not int or page_number < 1 or type(dpi) is not int or dpi <= 0:
+        raise FidelityError("Native PDF reconstruction requires valid page and render DPI metadata.")
+    try:
+        with fitz.open(source) as document:
+            if page_number > len(document):
+                raise FidelityError("Native PDF reconstruction page is absent from the source.")
+            source_page = document[page_number - 1]
+            pixmap = source_page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
+            fresh_image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), dtype=np.uint8), cv2.IMREAD_COLOR)
+            if fresh_image is None:
+                raise FidelityError("Native PDF reconstruction could not decode the fresh source render.")
+            rendered_record = page.get("artifacts", {}).get("rendered_png")
+            rendered_path = _safe_artifact_path(output_root, rendered_record)
+            stored_image = cv2.imread(str(rendered_path))
+            if stored_image is None or stored_image.shape != fresh_image.shape or not np.array_equal(stored_image, fresh_image):
+                raise FidelityError("Native PDF source render no longer matches the reviewed pixels.")
+            audit_record = page.get("artifacts", {}).get("layout_audit")
+            audit_path = _safe_artifact_path(output_root, audit_record)
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            source_audit = audit.get("source_page", {})
+            if (
+                type(source_audit.get("page")) is not int
+                or source_audit.get("page") != page_number
+                or source_audit.get("render_width_px") != fresh_image.shape[1]
+                or source_audit.get("render_height_px") != fresh_image.shape[0]
+                or source_audit.get("render_sha256") != sha256_file(rendered_path)
+                or observation.get("source_layout_audit") != audit_record
+            ):
+                raise FidelityError("Native PDF source render does not match its audited page frame.")
+            fresh = _native_pdf_text_span_records(
+                source_page,
+                page_number,
+                manifest["source"]["sha256"],
+                sha256_file(rendered_path),
+                fresh_image.shape[1],
+                fresh_image.shape[0],
+                manifest.get("configuration", {}).get("transform"),
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        if isinstance(exc, FidelityError):
+            raise
+        raise FidelityError("Could not freshly validate native PDF text spans.") from exc
+    observed = observation.get("native_pdf_spans")
+    if not isinstance(observed, list) or observed != fresh:
+        raise FidelityError("Native PDF spans no longer match the exact source and reviewed render.")
+    return fresh
+
+
 def write_fidelity_text_approval(
     source: Path,
     output_root: Path,
@@ -2482,7 +2540,7 @@ def run_fidelity_text_reconstruct(
     base_dxf: Path | None = None,
     workspace_root: Path,
 ) -> Path:
-    """Emit approved OCR as paper-coordinate TEXT in a fresh fidelity-only DXF."""
+    """Emit approved OCR and native PDF text as paper-coordinate TEXT."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
@@ -2492,11 +2550,13 @@ def run_fidelity_text_reconstruct(
         approval = json.loads(approval_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise FidelityError("Text approval is invalid JSON.") from exc
+    schema_version = approval.get("schema_version") if isinstance(approval, dict) else None
+    native_approval = schema_version == "fidelity-text-approval-2.0"
     if (
         not isinstance(approval, dict)
-        or approval.get("schema_version") != "fidelity-text-approval-1.0"
+        or schema_version not in {"fidelity-text-approval-1.0", "fidelity-text-approval-2.0"}
         or approval.get("private_artifact") is not True
-        or approval.get("state") != "approved-text-candidates-only"
+        or approval.get("state") != ("approved-text-items-only" if native_approval else "approved-text-candidates-only")
         or approval.get("source") != manifest.get("source")
         or not isinstance(approval.get("approval_reference"), str)
         or not approval["approval_reference"].strip()
@@ -2536,8 +2596,6 @@ def run_fidelity_text_reconstruct(
     observation_candidates = observation.get("candidates")
     if not isinstance(observation_candidates, list):
         raise FidelityError("Text observation has no OCR candidate list.")
-    fresh_candidates = _fresh_fidelity_ocr_candidates(source, output_root, manifest, page, observation)
-    fresh_candidate_evidence = Counter(_ocr_candidate_evidence_key(item) for item in fresh_candidates)
     ocr_candidates: dict[str, dict[str, Any]] = {}
     for item in observation_candidates:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
@@ -2548,10 +2606,15 @@ def run_fidelity_text_reconstruct(
             raise FidelityError("Text observation contains duplicate OCR candidate ids.")
         ocr_candidates[item["id"]] = item
     approved_records = approval.get("approved_candidates")
-    if not isinstance(approved_records, list) or not approved_records:
-        raise FidelityError("Text approval requires approved OCR candidates.")
+    if not isinstance(approved_records, list) or (not approved_records and not native_approval):
+        raise FidelityError("Text approval requires approved typed text items.")
     approved_candidates = []
     approved_ids: set[str] = set()
+    if approved_records:
+        fresh_candidates = _fresh_fidelity_ocr_candidates(source, output_root, manifest, page, observation)
+        fresh_candidate_evidence = Counter(_ocr_candidate_evidence_key(item) for item in fresh_candidates)
+    else:
+        fresh_candidate_evidence = Counter()
     for approved in approved_records:
         candidate = approved.get("candidate") if isinstance(approved, dict) else None
         candidate_id = candidate.get("id") if isinstance(candidate, dict) else None
@@ -2576,6 +2639,149 @@ def run_fidelity_text_reconstruct(
             raise FidelityError("Text approval is missing matching passing Unicode glyph-render evidence.")
         approved_ids.add(candidate_id)
         approved_candidates.append({"candidate": ocr_candidates[candidate_id], "glyph_render": glyph_render})
+
+    approved_native: list[dict[str, Any]] = []
+    native_to_emit: list[dict[str, Any]] = []
+    if native_approval:
+        native_records = approval.get("approved_native_spans")
+        selection_record = approval.get("native_selection")
+        if not isinstance(native_records, list) or not native_records or not isinstance(selection_record, dict):
+            raise FidelityError("Native text approval requires selected spans and their reviewed selection artifact.")
+        selection_path = _safe_artifact_path(output_root, selection_record)
+        try:
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FidelityError("Native text selection artifact is invalid JSON.") from exc
+        page_selections = [
+            item for item in selection.get("selections", [])
+            if isinstance(item, dict) and item.get("page") == page_number
+        ] if isinstance(selection, dict) else []
+        if (
+            not isinstance(selection, dict)
+            or selection.get("schema_version") != "fidelity-text-selection-1.0"
+            or selection.get("source") != manifest.get("source")
+            or len(page_selections) != 1
+        ):
+            raise FidelityError("Native text selection does not match its source and approval page.")
+        fresh_native = _fresh_fidelity_native_pdf_spans(source, output_root, manifest, page, observation)
+        native_by_id = {item["id"]: item for item in fresh_native}
+        selected_ids = page_selections[0].get("native_span_ids")
+        reviews = page_selections[0].get("native_span_reviews")
+        if (
+            not isinstance(selected_ids, list)
+            or not selected_ids
+            or any(not isinstance(item, str) for item in selected_ids)
+            or len(set(selected_ids)) != len(selected_ids)
+            or not isinstance(reviews, list)
+            or len(reviews) != len(selected_ids)
+            or len(native_records) != len(selected_ids)
+        ):
+            raise FidelityError("Native text selection contains missing or duplicate span reviews.")
+        reviews_by_id: dict[str, dict[str, Any]] = {}
+        for review in reviews:
+            span = review.get("span") if isinstance(review, dict) else None
+            span_id = span.get("id") if isinstance(span, dict) else None
+            if not isinstance(span_id, str) or span_id in reviews_by_id:
+                raise FidelityError("Native text selection contains an invalid or duplicate span review.")
+            reviews_by_id[span_id] = review
+        approval_by_id: dict[str, dict[str, Any]] = {}
+        for record in native_records:
+            span = record.get("span") if isinstance(record, dict) else None
+            span_id = span.get("id") if isinstance(span, dict) else None
+            if not isinstance(span_id, str) or span_id in approval_by_id:
+                raise FidelityError("Native text approval contains an invalid or duplicate span.")
+            approval_by_id[span_id] = record
+        if set(selected_ids) != set(reviews_by_id) or set(selected_ids) != set(approval_by_id):
+            raise FidelityError("Native text approval does not match every explicitly selected span.")
+        for span_id in selected_ids:
+            span = native_by_id.get(span_id)
+            review = reviews_by_id[span_id]
+            record = approval_by_id[span_id]
+            visibility = record.get("visibility_review")
+            content = span.get("content") if isinstance(span, dict) else None
+            glyph_render = record.get("glyph_render")
+            expected_span_sha256 = hashlib.sha256(
+                json.dumps(span, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            ).hexdigest() if isinstance(span, dict) else None
+            current_glyph_render = _unicode_glyph_render_check(content) if isinstance(content, str) else None
+            if (
+                span is None
+                or record.get("span") != span
+                or review.get("span") != span
+                or review.get("visible_and_legible") is not True
+                or not isinstance(visibility, dict)
+                or visibility.get("decision") != "visible_and_legible"
+                or visibility.get("source_sha256") != manifest["source"].get("sha256")
+                or visibility.get("render_sha256") != span.get("render_sha256")
+                or visibility.get("span_id") != span_id
+                or visibility.get("span_sha256") != expected_span_sha256
+                or visibility.get("selection") != selection_record
+                or span.get("evidence_kind") != "native_pdf"
+                or span.get("visibility") != "unverified"
+                or not isinstance(span.get("source_origin_pt"), list)
+                or len(span["source_origin_pt"]) != 2
+                or any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in span["source_origin_pt"])
+                or not isinstance(span.get("source_font_size_pt"), (int, float))
+                or not math.isfinite(span["source_font_size_pt"])
+                or span["source_font_size_pt"] <= 0
+                or not isinstance(span.get("rotation_deg"), (int, float))
+                or not math.isfinite(span["rotation_deg"])
+                or not isinstance(content, str)
+                or not content.strip()
+                or not isinstance(glyph_render, dict)
+                or current_glyph_render is None
+                or not current_glyph_render["passed"]
+                or glyph_render != current_glyph_render
+            ):
+                raise FidelityError("Native text approval is stale, unsupported, unselected, or missing current glyph evidence.")
+            approved_native.append({"span": span, "glyph_render": glyph_render})
+        audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        render_width = audit.get("source_page", {}).get("render_width_px")
+        render_height = audit.get("source_page", {}).get("render_height_px")
+        scale = page.get("pixel_to_paper_mm", {}).get("used")
+        if (
+            type(render_width) is not int or render_width <= 0
+            or type(render_height) is not int or render_height <= 0
+            or not isinstance(scale, (int, float)) or not math.isfinite(scale) or scale <= 0
+        ):
+            raise FidelityError("Native text reconstruction has an invalid audited page scale.")
+        with fitz.open(source) as source_document:
+            if page_number > len(source_document):
+                raise FidelityError("Native text reconstruction page is absent from the source.")
+            displayed = source_document[page_number - 1].rect
+            if displayed.width <= 0 or displayed.height <= 0:
+                raise FidelityError("Native text reconstruction has an invalid source page frame.")
+            scale_x = render_width / displayed.width
+            scale_y = render_height / displayed.height
+            for approved in approved_native:
+                span = approved["span"]
+                origin_x, origin_y = span["source_origin_pt"]
+                direction = math.radians(float(span["rotation_deg"]))
+                dx = math.cos(direction) * scale_x
+                dy = math.sin(direction) * scale_y
+                insertion = (
+                    (origin_x - displayed.x0) * scale_x * float(scale),
+                    (render_height - (origin_y - displayed.y0) * scale_y) * float(scale),
+                )
+                height_mm = float(span["source_font_size_pt"]) * scale_y * float(scale)
+                rotation_deg = math.degrees(math.atan2(-dy, dx))
+                if (
+                    not all(math.isfinite(value) for value in (*insertion, height_mm, rotation_deg))
+                    or height_mm <= 0
+                    or insertion[0] < 0 or insertion[1] < 0
+                    or insertion[0] > render_width * float(scale)
+                    or insertion[1] > render_height * float(scale)
+                ):
+                    raise FidelityError("Native text baseline or font size maps outside the supported page frame.")
+                native_to_emit.append({
+                    "span": span,
+                    "insertion_mm": insertion,
+                    "height_mm": height_mm,
+                    "rotation_deg": rotation_deg,
+                })
+    elif approval.get("approved_native_spans") or approval.get("native_selection"):
+        raise FidelityError("Native text cannot be added to an OCR-only approval record.")
     if base_dxf is not None and (not _is_within(base_dxf, output_root) or not base_dxf.is_file()):
         raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
     import ezdxf
@@ -2610,6 +2816,27 @@ def run_fidelity_text_reconstruct(
         entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height, "width": sizing["width_factor"], "style": _ensure_unicode_text_style(document)})
         entity.set_placement((x0 * scale, (height_px - y1) * scale))
         sizing_records.append({"id": candidate.get("id"), **sizing})
+        emitted += 1
+    for approved in native_to_emit:
+        span = approved["span"]
+        entity = model.add_text(span["content"], dxfattribs={
+            "layer": "FIDELITY_TEXT",
+            "height": approved["height_mm"],
+            "width": 1.0,
+            "rotation": approved["rotation_deg"],
+            "style": _ensure_unicode_text_style(document),
+        })
+        entity.set_placement(approved["insertion_mm"])
+        sizing_records.append({
+            "id": span["id"],
+            "height_mm": approved["height_mm"],
+            "width_factor": 1.0,
+            "insertion_mm": list(approved["insertion_mm"]),
+            "rotation_deg": approved["rotation_deg"],
+            "mapping_version": "displayed-page-baseline-v1",
+            "source_font_name": span["source_font_name"],
+            "source_font_size_pt": span["source_font_size_pt"],
+        })
         emitted += 1
     root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
     if root.exists():

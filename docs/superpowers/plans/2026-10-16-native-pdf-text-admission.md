@@ -24,7 +24,7 @@
 - A stale selection from a prior render must fail before output creation.
 - A hand-crafted approval must not relabel a native span as OCR or bypass the typed native selection path.
 - Same-text spans at different positions must produce separate `TEXT` entities.
-- Off-page/hidden/clipped spans or unsupported page frames must not be emitted.
+- Off-page/clipped spans and unsupported page frames must not be emitted; hidden or illegible spans require the reviewer to reject the exact source-render-span item.
 - Unsupported glyphs or invalid source baseline/font-size metadata must fail before output staging.
 
 **Status:** executing  
@@ -49,7 +49,7 @@
 - [x] Run the focused test and confirm it fails because native spans are currently rejected as unknown OCR IDs.
 - [x] Extend the review page and selection reader/writer to expose a separately typed native span list and bind its exact snapshot to the current observation/render.
 - [x] Run focused selection, duplicate-ID, stale-render, and unchanged OCR tests.
-- [ ] Commit the task.
+- [x] Commit the task.
 
 ### Task 2: Revalidate and reconstruct only approved native spans
 
@@ -61,10 +61,10 @@
 - Consumes: Task 1's typed native span approval records and canonical source/render/span binding.
 - Produces: `run_fidelity_text_reconstruct` emits one plain `TEXT` entity per approved OCR/native item using existing private layout output, after fresh source/render/audit/span and glyph checks.
 
-- [ ] Write failing tests for selected-only emission, native baseline/rotation/height mapping, distinct equal-text spans, stale/substituted/hidden/clipped/unselected evidence, invalid transform, and unsupported glyph; assert failures happen before output creation.
-- [ ] Run the focused tests and confirm the expected missing-path failures.
-- [ ] Implement source-page re-render/re-extraction checks and deterministic PDF baseline-to-paper mapping; retain the existing OCR branch and checks unchanged.
-- [ ] Run the full fidelity test module, then the focused CASE06 source observation/provenance tests without emitting the real CASE06 spans.
+- [x] Write failing tests for selected-only emission, native baseline/rotation/height mapping, distinct equal-text spans, stale source/render, unselected evidence, invalid transform, and glyph evidence; assert failures happen before output creation. Visibility remains an explicit human review decision, not an inferred detector result.
+- [x] Run the focused tests and confirm the expected missing-path failures.
+- [x] Implement source-page re-render/re-extraction checks and deterministic PDF baseline-to-paper mapping; retain the existing OCR branch and checks unchanged.
+- [x] Run the full fidelity test module, then the focused CASE06 source observation/provenance tests without emitting the real CASE06 spans.
 - [ ] Run `scripts/verify.ps1 -SkipAutoCADDotNet`, inspect status/diff, and commit the task.
 
 ### Task 3: Final verification and review package

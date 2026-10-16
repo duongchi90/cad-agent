@@ -1033,6 +1033,132 @@ def test_native_pdf_text_selection_creates_typed_per_span_approval(tmp_path: Pat
     assert approval_path.is_file()
 
 
+def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "native-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "REPEATED NOTE", fontsize=18)
+    page.insert_text((40, 150), "REPEATED NOTE", fontsize=18)
+    page.insert_text((40, 220), "UNSELECTED", fontsize=18)
+    page.insert_text((200, 100), "ROTATED", fontsize=14, rotate=90)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selected = [item for item in native_spans if item["content"] != "UNSELECTED"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in selected],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True}
+                for item in selected
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    from cad_agent import fidelity as fidelity_module
+
+    def unexpected_ocr_rerun(*args: object, **kwargs: object) -> list[dict[str, Any]]:
+        raise AssertionError("native-only reconstruction must not rerun OCR")
+
+    monkeypatch.setattr(fidelity_module, "_fresh_fidelity_ocr_candidates", unexpected_ocr_rerun)
+
+    output_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+        workspace_root=Path.cwd(),
+    )
+    emitted = list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))
+    assert len(emitted) == 3
+    assert sorted(item.dxf.text for item in emitted) == ["REPEATED NOTE", "REPEATED NOTE", "ROTATED"]
+    assert len({(round(item.dxf.insert.x, 4), round(item.dxf.insert.y, 4)) for item in emitted}) == 3
+    page_record = manifest["pages"][0]
+    audit = json.loads((output / page_record["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = audit["source_page"]["render_height_px"]
+    width_px = audit["source_page"]["render_width_px"]
+    scale = page_record["pixel_to_paper_mm"]["used"]
+    render_height = height_px
+    for entity, span in zip(emitted, selected):
+        origin_x, origin_y = span["source_origin_pt"]
+        expected_insert = (
+            origin_x * width_px / 400 * scale,
+            (height_px - origin_y * height_px / 300) * scale,
+        )
+        assert (entity.dxf.insert.x, entity.dxf.insert.y) == pytest.approx(expected_insert, abs=1e-5)
+        assert entity.dxf.height == pytest.approx(span["source_font_size_pt"] * render_height / 300 * scale, abs=1e-5)
+        assert entity.dxf.width == pytest.approx(1.0)
+        assert entity.dxf.rotation == pytest.approx(-span["rotation_deg"], abs=1e-5)
+    report = json.loads((output_dxf.parent / "report.json").read_text(encoding="utf-8"))
+    assert report["emitted_text_entities"] == 3
+    assert all(record["source_font_name"] for record in report["text_sizing"])
+
+
+@pytest.mark.parametrize("tamper", ["changed_source", "stale_render", "unselected_span", "failed_glyph", "unsupported_transform"])
+def test_native_pdf_text_reconstruction_fails_closed_before_output(tmp_path: Path, tamper: str) -> None:
+    source = tmp_path / "native-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "SELECTED", fontsize=18)
+    page.insert_text((40, 150), "NOT SELECTED", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [native_spans[0]["id"]],
+            "native_span_reviews": [{"span": native_spans[0], "visible_and_legible": True}],
+        }],
+    }), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    if tamper == "changed_source":
+        source.write_bytes(source.read_bytes() + b"changed")
+    elif tamper == "stale_render":
+        rendered_path = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+        Path(output, rendered_path).write_bytes(b"stale-render")
+    elif tamper == "unselected_span":
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        extra_span = native_spans[1]
+        approval["approved_native_spans"].append({
+            "span": extra_span,
+            "glyph_render": approval["approved_native_spans"][0]["glyph_render"],
+            "visibility_review": dict(approval["approved_native_spans"][0]["visibility_review"], span_id=extra_span["id"]),
+        })
+        approval_path.write_text(json.dumps(approval), encoding="utf-8")
+    elif tamper == "failed_glyph":
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        approval["approved_native_spans"][0]["glyph_render"]["passed"] = False
+        approval_path.write_text(json.dumps(approval), encoding="utf-8")
+    elif tamper == "unsupported_transform":
+        manifest["configuration"]["transform"] = "unknown-transform"
+
+    from cad_agent.manifest import ManifestError
+
+    with pytest.raises((FidelityError, ManifestError)):
+        run_fidelity_text_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
 @pytest.mark.parametrize("tamper", ["duplicate_id", "stale_render", "visibility_not_confirmed"])
 def test_native_pdf_text_approval_rejects_unbound_or_unreviewed_selection(tmp_path: Path, tamper: str) -> None:
     source = tmp_path / "native-review.pdf"
