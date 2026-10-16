@@ -160,6 +160,9 @@ def extract_lines(
             source_gray, int(x1), int(y1), int(x2), int(y2)
         )
     ]
+    source_intervals = [
+        interval for interval in source_intervals if interval[:2] != interval[2:]
+    ]
     lengths = [float(np.hypot(x2 - x1, y2 - y1)) for x1, y1, x2, y2 in source_intervals]
     max_len = max(lengths) if lengths else 1.0
 

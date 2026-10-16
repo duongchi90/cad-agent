@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
-from primitive_ir_lib.geometry_extraction import PRESETS, extract_raw_geometry
+from primitive_ir_lib.geometry_extraction import PRESETS, extract_lines, extract_raw_geometry
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -32,6 +32,40 @@ def _vertical_lines(image: np.ndarray, preset: str):
         if abs(line.p2_px[0] - line.p1_px[0]) <= 3
         and abs((line.p1_px[0] + line.p2_px[0]) / 2 - 150) <= 5
     ]
+
+
+def test_source_gap_split_drops_zero_length_interval_beside_supported_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((80, 80, 3), 255, dtype=np.uint8)
+    image[20, 50] = (0, 0, 0)
+    cv2.line(image, (50, 30), (50, 60), (0, 0, 0), 1)
+    monkeypatch.setattr(
+        cv2,
+        "HoughLinesP",
+        lambda *args, **kwargs: np.array([[[50, 20, 50, 60]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert lines
+    assert all(line.length_px() > 0 for line in lines)
+    assert any(line.length_px() >= 25 for line in lines)
+
+
+def test_source_gap_split_with_only_isolated_pixels_returns_no_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((80, 80, 3), 255, dtype=np.uint8)
+    image[20, 50] = (0, 0, 0)
+    image[50, 50] = (0, 0, 0)
+    monkeypatch.setattr(
+        cv2,
+        "HoughLinesP",
+        lambda *args, **kwargs: np.array([[[50, 20, 50, 50]]], dtype=np.int32),
+    )
+
+    assert extract_lines(image) == []
 
 
 @pytest.mark.parametrize("preset", list(PRESETS))
