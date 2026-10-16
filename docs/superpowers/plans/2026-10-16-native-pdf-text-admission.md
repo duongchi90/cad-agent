@@ -27,10 +27,13 @@
 - Off-page/clipped spans and unsupported page frames must not be emitted; hidden or illegible spans require the reviewer to reject the exact source-render-span item.
 - Unsupported glyphs or invalid source baseline/font-size metadata must fail before output staging.
 
-**Status:** awaiting exact-head review and applicable gates  
-**Base SHA:** `ef8c7eee1c778d19957a0c7ba9bb2e9e6362f49e`  
-**Implementation Head SHA:** `3c51012150e3ade2e8407042e3718072ea94199c` (tree `3da307d31ad4194d4e0c0453c806c654fa4693ca`).  
-**Verification:** `scripts/verify.ps1 -SkipAutoCADDotNet` passed at the implementation head; 3,665 Python tests passed, 23 deselected, 77 subtests passed; .NET IPC offline set 128 passed; required causal-RED negative oracle reported its expected marked failure; unavailable real-data probe skipped 2 and AutoCAD live probe skipped 18. Focused fidelity module: 90 passed. `git diff --check` passed.  
+**Status:** awaiting exact-head review and applicable gates
+
+**Base SHA:** `ef8c7eee1c778d19957a0c7ba9bb2e9e6362f49e`
+
+**Implementation Head SHA:** `3c51012150e3ade2e8407042e3718072ea94199c` (tree `3da307d31ad4194d4e0c0453c806c654fa4693ca`).
+
+**Verification:** `scripts/verify.ps1 -SkipAutoCADDotNet` passed at the implementation head; 3,665 Python tests passed, 23 deselected, 77 subtests passed; .NET IPC offline set 128 passed; required causal-RED negative oracle reported its expected marked failure; unavailable real-data probe skipped 2 and AutoCAD live probe skipped 18. Focused fidelity module: 90 passed. `git diff --check` passed.
 **Required private/live gates:** CASE06 source span emission `NOT RUN` pending per-item approval; AutoCAD/.NET `NOT RUN`; no reference DWG access; exact-head Security/Integration and #392 V7 required before any merge; context A/B benchmark `NOT RUN`.
 
 ---
