@@ -883,7 +883,9 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert observation["source_layout_audit"]["sha256"]
         assert observation["candidates"]
         assert all(candidate["content"] for candidate in observation["candidates"])
-        assert observation["unresolved"] == ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"]
+        assert observation["unresolved"][0] == "no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"
+        if observation["native_pdf_spans"]:
+            assert observation["unresolved"][1] == "native PDF spans are separate unverified evidence; they are not OCR approval or reconstruction candidates"
         review = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
         assert review.is_file()
         assert observation["candidates"][0]["id"] in review.read_text(encoding="utf-8")
@@ -916,8 +918,8 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
         source, output, manifest, workspace_root=Path.cwd(),
     )[0]
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    native = [item for item in observation["candidates"] if item.get("evidence_kind") == "native_pdf"]
-    ocr = [item for item in observation["candidates"] if item.get("evidence_kind") != "native_pdf"]
+    native = observation["native_pdf_spans"]
+    ocr = observation["candidates"]
 
     assert len(native) == 1
     assert native[0]["content"] == "NATIVE 123"
@@ -932,6 +934,11 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert all(item.get("source") != "native_pdf" for item in ocr)
     assert all(not item.get("semantic_role") for item in native)
     assert "TEXT" not in observation and "MTEXT" not in observation
+    with pytest.raises(FidelityError, match="unknown OCR candidate"):
+        write_fidelity_text_approval(
+            source, output, manifest, 1, observation_path, [native[0]["id"]], "approved-test",
+            workspace_root=Path.cwd(),
+        )
 
 
 @pytest.mark.parametrize("unsupported", ["rotation", "crop"])

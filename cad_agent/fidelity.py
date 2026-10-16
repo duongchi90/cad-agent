@@ -1421,7 +1421,6 @@ def run_fidelity_text_observations(
                             })
         finally:
             source_document.close()
-        candidates.extend(native_candidates)
         approved_region_ocr: dict[str, Any] | None = None
         if page["page"] in approved_regions_by_page:
             rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
@@ -1449,8 +1448,13 @@ def run_fidelity_text_observations(
             "page": page["page"],
             "source_layout_audit": audit_record,
             "candidates": candidates,
+            "native_pdf_spans": native_candidates,
             "unresolved": ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"],
         }
+        if native_candidates:
+            payload["unresolved"].append(
+                "native PDF spans are separate unverified evidence; they are not OCR approval or reconstruction candidates"
+            )
         if region_approval_record is not None and page["page"] in approved_regions_by_page:
             payload["region_approval"] = region_approval_record
             payload["approved_region_ocr"] = approved_region_ocr
