@@ -41,6 +41,7 @@ from .models import new_id
 # at most 2,000 x 2,000 pixels while retaining a full-radius halo at seams.
 _HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
 _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
+_HOUGH_LINE_RHO_RESOLUTION_PX = 1.0
 
 
 @dataclass
@@ -76,6 +77,69 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     return blurred
 
 
+def _refine_hough_segment_with_edge_support(
+    segment: np.ndarray,
+    edge_x: np.ndarray,
+    edge_y: np.ndarray,
+    min_line_length: int,
+    max_line_gap: int,
+) -> List[Tuple[float, float, float, float]]:
+    """Refine one Hough seed to contiguous Canny-supported intervals.
+
+    Hough may clip a line where its vote threshold is not met even though the
+    same collinear edge continues nearby. Projecting Canny pixels onto the seed
+    recovers that support; gaps longer than the configured Hough gap remain
+    separate intervals. The perpendicular support band is the existing rho
+    resolution, not a separately tuned tolerance.
+    """
+    x1, y1, x2, y2 = (float(value) for value in segment)
+    dx = x2 - x1
+    dy = y2 - y1
+    seed_length = float(np.hypot(dx, dy))
+    if seed_length == 0.0:
+        return []
+
+    ux = dx / seed_length
+    uy = dy / seed_length
+    nx = -uy
+    ny = ux
+
+    relative_x = edge_x.astype(np.float32) - x1
+    relative_y = edge_y.astype(np.float32) - y1
+    along = relative_x * ux + relative_y * uy
+    perpendicular = np.abs(relative_x * nx + relative_y * ny)
+    supported = np.rint(along[perpendicular <= _HOUGH_LINE_RHO_RESOLUTION_PX]).astype(np.int32)
+    if supported.size == 0:
+        return []
+
+    stations = np.unique(supported)
+    intervals: List[Tuple[int, int]] = []
+    interval_start = previous = int(stations[0])
+    for station_value in stations[1:]:
+        station = int(station_value)
+        if station - previous > max_line_gap + 1:
+            intervals.append((interval_start, previous))
+            interval_start = station
+        previous = station
+    intervals.append((interval_start, previous))
+
+    refined: List[Tuple[float, float, float, float]] = []
+    for start, end in intervals:
+        if end - start < min_line_length:
+            continue
+        # Keep only support intervals associated with this Hough seed; nearby
+        # parallel geometry elsewhere in the image is not a continuation.
+        if end < -max_line_gap or start > seed_length + max_line_gap:
+            continue
+        refined.append((
+            x1 + start * ux,
+            y1 + start * uy,
+            x1 + end * ux,
+            y1 + end * uy,
+        ))
+    return refined
+
+
 def extract_lines(
     image_bgr: np.ndarray,
     canny_low: int = 50,
@@ -89,7 +153,7 @@ def extract_lines(
     gray = _preprocess(image_bgr)
     edges = cv2.Canny(gray, canny_low, canny_high)
     segments = cv2.HoughLinesP(
-        edges, rho=1, theta=np.pi / 180, threshold=hough_threshold,
+        edges, rho=_HOUGH_LINE_RHO_RESOLUTION_PX, theta=np.pi / 180, threshold=hough_threshold,
         minLineLength=min_line_length, maxLineGap=max_line_gap,
     )
 
@@ -100,6 +164,17 @@ def extract_lines(
     # Tương thích cả OpenCV 4 (shape (N,1,4)) lẫn OpenCV 5 (shape (N,4)):
     # luôn chuẩn hoá về mảng 2D (N,4), mỗi hàng là [x1,y1,x2,y2].
     seg = np.asarray(segments).reshape(-1, 4)
+    edge_y, edge_x = np.nonzero(edges)
+    refined_segments = [
+        refined
+        for segment in seg
+        for refined in _refine_hough_segment_with_edge_support(
+            segment, edge_x, edge_y, min_line_length, max_line_gap,
+        )
+    ]
+    if not refined_segments:
+        return raw_lines
+    seg = np.asarray(refined_segments, dtype=np.float32).reshape(-1, 4)
 
     lengths = [float(np.hypot(x2 - x1, y2 - y1)) for (x1, y1, x2, y2) in seg]
     max_len = max(lengths) if lengths else 1.0
