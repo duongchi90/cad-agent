@@ -103,8 +103,13 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
             actual = client.entity_get(str(handle))
         except (MCPTimeoutError, MCPToolError) as exc:
             result.geometry_degraded = True
-            result.warnings.append(f"{pid}: bỏ qua geometry check ({exc})")
-            result.mismatch(f"{pid}: geometry readback unavailable")
+            result.warnings.append(
+                f"{pid}: geometry readback unavailable; check skipped ({exc})"
+            )
+            # Missing readback is not a proven geometry mismatch; keeping it
+            # out of mismatches prevents the repair owner from treating a
+            # transport failure as authorization to replace the entity.
+            result.passed = False
         else:
             result.geometry_checked += 1
             _check_geometry(pid, written, actual, result)

@@ -586,6 +586,10 @@ def repair_live(
     }
     if before.passed:
         return report
+    if before.geometry_degraded:
+        raise LiveSafetyError(
+            "GEOMETRY_READBACK_UNAVAILABLE: repair is refused because live geometry was not freshly read."
+        )
     if before.contour_mismatches:
         raise LiveSafetyError(
             "CONTOUR_JOIN_REPAIR_UNSUPPORTED: declared joins are not proven; "

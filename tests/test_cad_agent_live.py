@@ -380,6 +380,29 @@ def test_post_save_attestation_rejects_degraded_geometry() -> None:
             _attest_saved_candidate(build, client, dxf, evidence)
 
 
+def test_repair_refuses_to_mutate_when_geometry_readback_is_unavailable() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _CanonicalIdentityFakeMCPClient(fail_entity_get=True)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (10.0, 0.0)}
+        )
+        before = dxf.read_bytes(), evidence.read_bytes()
+        backup_dir = root / "backups"
+
+        with pytest.raises(LiveSafetyError, match="GEOMETRY_READBACK_UNAVAILABLE"):
+            repair_live(build, client, dxf, evidence, backup_dir, "change-42")
+
+        assert (dxf.read_bytes(), evidence.read_bytes()) == before
+        assert set(client._entities) == {"A"}
+        assert not backup_dir.exists()
+
+
 class _DriftingActiveClient(FakeMCPClient):
     def __init__(self) -> None:
         super().__init__(fail_entity_get=False)

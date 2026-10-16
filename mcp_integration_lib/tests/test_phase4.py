@@ -32,7 +32,8 @@ class Phase4Tests(unittest.TestCase):
         result = review_dxf_live(build, client)
         self.assertFalse(result.passed)
         self.assertTrue(result.geometry_degraded)
-        self.assertTrue(any("geometry readback unavailable" in item for item in result.mismatches))
+        self.assertFalse(result.mismatches)
+        self.assertTrue(any("geometry readback" in item for item in result.warnings))
 
     def test_geometry_mismatch_fails(self):
         build, client = _pair(entity_get=True)
