@@ -901,6 +901,89 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert json.loads((text_dxf.parent / "report.json").read_text(encoding="utf-8"))["output_dxf_sha256"] == __import__("hashlib").sha256(text_dxf.read_bytes()).hexdigest()
 
 
+def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_path: Path) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = [item for item in observation["candidates"] if item.get("evidence_kind") == "native_pdf"]
+    ocr = [item for item in observation["candidates"] if item.get("evidence_kind") != "native_pdf"]
+
+    assert len(native) == 1
+    assert native[0]["content"] == "NATIVE 123"
+    assert native[0]["visibility"] == "unverified"
+    assert native[0]["source_sha256"] == manifest["source"]["sha256"]
+    audit_path = output / observation["source_layout_audit"]["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert native[0]["render_sha256"] == audit["source_page"]["render_sha256"]
+    assert native[0]["mapping_version"] == "displayed-page-box-v1"
+    assert native[0]["bbox_px"][0] == pytest.approx(80, abs=1.0)
+    assert native[0]["bbox_px"][2] > native[0]["bbox_px"][0]
+    assert all(item.get("source") != "native_pdf" for item in ocr)
+    assert all(not item.get("semantic_role") for item in native)
+    assert "TEXT" not in observation and "MTEXT" not in observation
+
+
+@pytest.mark.parametrize("unsupported", ["rotation", "crop"])
+def test_native_pdf_text_observation_fails_closed_for_unsupported_page_frames(
+    tmp_path: Path, unsupported: str,
+) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    if unsupported == "rotation":
+        page.set_rotation(90)
+    else:
+        page.set_cropbox(fitz.Rect(10, 10, 390, 290))
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    with pytest.raises(FidelityError, match="native PDF text mapping"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+@pytest.mark.parametrize("stale_artifact", ["source", "render"])
+def test_native_pdf_text_observation_rejects_stale_source_or_render_hash(
+    tmp_path: Path, stale_artifact: str,
+) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    if stale_artifact == "source":
+        source.write_bytes(source.read_bytes() + b"stale")
+    else:
+        rendered = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+        rendered.write_bytes(rendered.read_bytes() + b"stale")
+    expected_error = FidelityError
+    if stale_artifact == "source":
+        from cad_agent.manifest import ManifestError
+
+        expected_error = ManifestError
+    with pytest.raises(expected_error):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
 def test_text_observation_uses_hash_bound_approved_region_for_single_component_dimension_roi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1357,6 +1357,71 @@ def run_fidelity_text_observations(
             for item in raw_texts
             if isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
         ]
+        native_candidates: list[dict[str, Any]] = []
+        source_document = fitz.open(source)
+        try:
+            source_page = source_document[page["page"] - 1]
+            cropbox = source_page.cropbox
+            mediabox = source_page.mediabox
+            displayed = source_page.rect
+            if source_page.get_text("text").strip():
+                if (
+                    source_page.rotation != 0
+                    or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(cropbox, mediabox))
+                    or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(cropbox, displayed))
+                    or manifest.get("configuration", {}).get("transform") != "displayed-page-box-v1"
+                ):
+                    raise FidelityError("Unsupported native PDF text mapping frame.")
+                source_page_audit = audit.get("source_page", {})
+                rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+                render_sha256 = sha256_file(rendered_path)
+                render_width = source_page_audit.get("render_width_px")
+                render_height = source_page_audit.get("render_height_px")
+                if (
+                    source_page_audit.get("render_sha256") != render_sha256
+                    or not isinstance(render_width, int) or not isinstance(render_height, int)
+                    or render_width <= 0 or render_height <= 0
+                ):
+                    raise FidelityError("Native PDF text mapping is missing current render provenance.")
+                scale_x = render_width / displayed.width
+                scale_y = render_height / displayed.height
+                for block_index, block in enumerate(source_page.get_text("dict").get("blocks", [])):
+                    for line_index, line in enumerate(block.get("lines", [])):
+                        for span_index, span in enumerate(line.get("spans", [])):
+                            content = span.get("text")
+                            bbox = span.get("bbox")
+                            if not isinstance(content, str) or not content or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                                continue
+                            rect = fitz.Rect(bbox)
+                            if rect.is_empty or not rect.is_valid:
+                                continue
+                            corners = [
+                                fitz.Point(rect.x0, rect.y0), fitz.Point(rect.x1, rect.y0),
+                                fitz.Point(rect.x1, rect.y1), fitz.Point(rect.x0, rect.y1),
+                            ]
+                            mapped = [point * source_page.rotation_matrix for point in corners]
+                            x0 = (min(point.x for point in mapped) - displayed.x0) * scale_x
+                            y0 = (min(point.y for point in mapped) - displayed.y0) * scale_y
+                            x1 = (max(point.x for point in mapped) - displayed.x0) * scale_x
+                            y1 = (max(point.y for point in mapped) - displayed.y0) * scale_y
+                            if x0 < 0 or y0 < 0 or x1 > render_width or y1 > render_height or x1 <= x0 or y1 <= y0:
+                                continue
+                            native_candidates.append({
+                                "id": f"native-pdf-p{page['page']:02d}-b{block_index:03d}-l{line_index:03d}-s{span_index:03d}",
+                                "content": content,
+                                "bbox_px": [x0, y0, x1, y1],
+                                "rotation_deg": math.degrees(math.atan2(line.get("dir", (1.0, 0.0))[1], line.get("dir", (1.0, 0.0))[0])),
+                                "evidence_kind": "native_pdf",
+                                "visibility": "unverified",
+                                "source_span_bbox_pt": [float(value) for value in bbox],
+                                "source_sha256": manifest["source"]["sha256"],
+                                "render_sha256": render_sha256,
+                                "mapping_version": "displayed-page-box-v1",
+                                "semantic_role": None,
+                            })
+        finally:
+            source_document.close()
+        candidates.extend(native_candidates)
         approved_region_ocr: dict[str, Any] | None = None
         if page["page"] in approved_regions_by_page:
             rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
