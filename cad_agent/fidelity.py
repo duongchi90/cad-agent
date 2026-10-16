@@ -8,6 +8,7 @@ or calibration can never be mistaken for CAD source geometry.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -1382,6 +1383,82 @@ def _fresh_fidelity_ocr_candidates(
     return candidates
 
 
+def _native_pdf_text_span_records(
+    source_page: fitz.Page,
+    page_number: int,
+    source_sha256: str,
+    render_sha256: str,
+    render_width: int,
+    render_height: int,
+    transform: str,
+) -> list[dict[str, Any]]:
+    """Map native PDF spans into the reviewed page frame without approving them."""
+    displayed = source_page.rect
+    if source_page.get_text("text").strip() and (
+        source_page.rotation != 0
+        or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(source_page.cropbox, source_page.mediabox))
+        or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(source_page.cropbox, displayed))
+        or transform != "displayed-page-box-v1"
+        or render_width <= 0
+        or render_height <= 0
+    ):
+        raise FidelityError("Unsupported native PDF text mapping frame.")
+    if not source_page.get_text("text").strip():
+        return []
+
+    scale_x = render_width / displayed.width
+    scale_y = render_height / displayed.height
+    records: list[dict[str, Any]] = []
+    for block_index, block in enumerate(source_page.get_text("dict").get("blocks", [])):
+        for line_index, line in enumerate(block.get("lines", [])):
+            direction = line.get("dir", (1.0, 0.0))
+            for span_index, span in enumerate(line.get("spans", [])):
+                content = span.get("text")
+                bbox = span.get("bbox")
+                if not isinstance(content, str) or not content or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    continue
+                rect = fitz.Rect(bbox)
+                if rect.is_empty or not rect.is_valid:
+                    continue
+                corners = [
+                    fitz.Point(rect.x0, rect.y0), fitz.Point(rect.x1, rect.y0),
+                    fitz.Point(rect.x1, rect.y1), fitz.Point(rect.x0, rect.y1),
+                ]
+                mapped = [point * source_page.rotation_matrix for point in corners]
+                x0 = (min(point.x for point in mapped) - displayed.x0) * scale_x
+                y0 = (min(point.y for point in mapped) - displayed.y0) * scale_y
+                x1 = (max(point.x for point in mapped) - displayed.x0) * scale_x
+                y1 = (max(point.y for point in mapped) - displayed.y0) * scale_y
+                if x0 < 0 or y0 < 0 or x1 > render_width or y1 > render_height or x1 <= x0 or y1 <= y0:
+                    continue
+                origin = span.get("origin")
+                source_origin = None
+                if isinstance(origin, (list, tuple)) and len(origin) == 2:
+                    values = [float(value) for value in origin]
+                    if all(math.isfinite(value) for value in values):
+                        source_origin = values
+                font_size = span.get("size")
+                source_font_size = float(font_size) if isinstance(font_size, (int, float)) and math.isfinite(font_size) and font_size > 0 else None
+                font_name = span.get("font")
+                records.append({
+                    "id": f"native-pdf-p{page_number:02d}-b{block_index:03d}-l{line_index:03d}-s{span_index:03d}",
+                    "content": content,
+                    "bbox_px": [x0, y0, x1, y1],
+                    "rotation_deg": math.degrees(math.atan2(float(direction[1]), float(direction[0]))),
+                    "evidence_kind": "native_pdf",
+                    "visibility": "unverified",
+                    "source_span_bbox_pt": [float(value) for value in bbox],
+                    "source_origin_pt": source_origin,
+                    "source_font_name": str(font_name) if isinstance(font_name, str) else None,
+                    "source_font_size_pt": source_font_size,
+                    "source_sha256": source_sha256,
+                    "render_sha256": render_sha256,
+                    "mapping_version": "displayed-page-box-v1",
+                    "semantic_role": None,
+                })
+    return records
+
+
 def run_fidelity_text_observations(
     source: Path,
     output_root: Path,
@@ -1427,71 +1504,33 @@ def run_fidelity_text_observations(
             if type(page_number) is not int or page_number < 1 or page_number > len(source_document):
                 raise FidelityError("Native PDF text mapping has invalid manifest page metadata.")
             source_page = source_document[page_number - 1]
-            cropbox = source_page.cropbox
-            mediabox = source_page.mediabox
-            displayed = source_page.rect
-            if source_page.get_text("text").strip():
-                if (
-                    source_page.rotation != 0
-                    or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(cropbox, mediabox))
-                    or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(cropbox, displayed))
-                    or manifest.get("configuration", {}).get("transform") != "displayed-page-box-v1"
-                ):
-                    raise FidelityError("Unsupported native PDF text mapping frame.")
-                source_page_audit = audit.get("source_page", {})
-                rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
-                rendered_image = cv2.imread(str(rendered_path))
-                if rendered_image is None:
-                    raise FidelityError("Native PDF text mapping cannot read the rendered page.")
-                render_sha256 = sha256_file(rendered_path)
-                render_width = source_page_audit.get("render_width_px")
-                render_height = source_page_audit.get("render_height_px")
-                if (
-                    type(source_page_audit.get("page")) is not int
-                    or source_page_audit.get("page") != page_number
-                    or source_page_audit.get("render_sha256") != render_sha256
-                    or type(render_width) is not int or type(render_height) is not int
-                    or render_width <= 0 or render_height <= 0
-                    or rendered_image.shape[1] != render_width
-                    or rendered_image.shape[0] != render_height
-                ):
-                    raise FidelityError("Native PDF text mapping is missing current render provenance.")
-                scale_x = render_width / displayed.width
-                scale_y = render_height / displayed.height
-                for block_index, block in enumerate(source_page.get_text("dict").get("blocks", [])):
-                    for line_index, line in enumerate(block.get("lines", [])):
-                        for span_index, span in enumerate(line.get("spans", [])):
-                            content = span.get("text")
-                            bbox = span.get("bbox")
-                            if not isinstance(content, str) or not content or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-                                continue
-                            rect = fitz.Rect(bbox)
-                            if rect.is_empty or not rect.is_valid:
-                                continue
-                            corners = [
-                                fitz.Point(rect.x0, rect.y0), fitz.Point(rect.x1, rect.y0),
-                                fitz.Point(rect.x1, rect.y1), fitz.Point(rect.x0, rect.y1),
-                            ]
-                            mapped = [point * source_page.rotation_matrix for point in corners]
-                            x0 = (min(point.x for point in mapped) - displayed.x0) * scale_x
-                            y0 = (min(point.y for point in mapped) - displayed.y0) * scale_y
-                            x1 = (max(point.x for point in mapped) - displayed.x0) * scale_x
-                            y1 = (max(point.y for point in mapped) - displayed.y0) * scale_y
-                            if x0 < 0 or y0 < 0 or x1 > render_width or y1 > render_height or x1 <= x0 or y1 <= y0:
-                                continue
-                            native_candidates.append({
-                                "id": f"native-pdf-p{page['page']:02d}-b{block_index:03d}-l{line_index:03d}-s{span_index:03d}",
-                                "content": content,
-                                "bbox_px": [x0, y0, x1, y1],
-                                "rotation_deg": math.degrees(math.atan2(line.get("dir", (1.0, 0.0))[1], line.get("dir", (1.0, 0.0))[0])),
-                                "evidence_kind": "native_pdf",
-                                "visibility": "unverified",
-                                "source_span_bbox_pt": [float(value) for value in bbox],
-                                "source_sha256": manifest["source"]["sha256"],
-                                "render_sha256": render_sha256,
-                                "mapping_version": "displayed-page-box-v1",
-                                "semantic_role": None,
-                            })
+            source_page_audit = audit.get("source_page", {})
+            rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+            rendered_image = cv2.imread(str(rendered_path))
+            if rendered_image is None:
+                raise FidelityError("Native PDF text mapping cannot read the rendered page.")
+            render_sha256 = sha256_file(rendered_path)
+            render_width = source_page_audit.get("render_width_px")
+            render_height = source_page_audit.get("render_height_px")
+            if source_page.get_text("text").strip() and (
+                type(source_page_audit.get("page")) is not int
+                or source_page_audit.get("page") != page_number
+                or source_page_audit.get("render_sha256") != render_sha256
+                or type(render_width) is not int or type(render_height) is not int
+                or render_width <= 0 or render_height <= 0
+                or rendered_image.shape[1] != render_width
+                or rendered_image.shape[0] != render_height
+            ):
+                raise FidelityError("Native PDF text mapping is missing current render provenance.")
+            native_candidates = _native_pdf_text_span_records(
+                source_page,
+                page_number,
+                manifest["source"]["sha256"],
+                render_sha256,
+                int(render_width),
+                int(render_height),
+                manifest.get("configuration", {}).get("transform"),
+            )
         finally:
             source_document.close()
         approved_region_ocr: dict[str, Any] | None = None
@@ -1516,7 +1555,7 @@ def run_fidelity_text_observations(
         payload = {
             "schema_version": "fidelity-text-observation-1.0",
             "private_artifact": True,
-            "state": "needs_human_approval" if candidates else "not_evaluated",
+            "state": "needs_human_approval" if candidates or native_candidates else "not_evaluated",
             "source": manifest["source"],
             "page": page["page"],
             "source_layout_audit": audit_record,
@@ -2166,15 +2205,26 @@ def write_fidelity_text_approval(
     approval_reference: str,
     *,
     workspace_root: Path,
+    native_span_ids: list[str] | None = None,
+    native_span_reviews: list[dict[str, Any]] | None = None,
+    selection_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Record explicit per-text approval after a local Unicode glyph-render check."""
+    """Record explicit OCR or typed native-span approvals after glyph checks."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
     if not _is_within(observation_path, output_root) or not observation_path.is_file():
         raise FidelityError("Text observation must reside inside the private fidelity output root.")
-    if not candidate_ids or len(set(candidate_ids)) != len(candidate_ids):
-        raise FidelityError("Text approval requires one or more unique candidate ids.")
+    native_span_ids = native_span_ids or []
+    native_span_reviews = native_span_reviews or []
+    if (
+        (not candidate_ids and not native_span_ids)
+        or any(not isinstance(item, str) for item in candidate_ids)
+        or any(not isinstance(item, str) for item in native_span_ids)
+        or len(set(candidate_ids)) != len(candidate_ids)
+        or len(set(native_span_ids)) != len(native_span_ids)
+    ):
+        raise FidelityError("Text approval requires one or more unique typed item ids.")
     if not approval_reference.strip():
         raise FidelityError("Text approval requires a non-empty approval reference.")
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
@@ -2192,21 +2242,95 @@ def write_fidelity_text_approval(
         if not glyph_render["passed"]:
             raise FidelityError(f"Unicode glyph-render check failed for OCR candidate: {candidate_id}")
         approved_candidates.append({"candidate": candidate, "glyph_render": glyph_render})
+    approved_native_spans = []
+    native_selection_artifact = None
+    if native_span_ids:
+        if selection_path is None or not _is_within(selection_path, output_root) or not selection_path.is_file():
+            raise FidelityError("Native PDF text approval requires its private source-bound selection artifact.")
+        try:
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise FidelityError("Native PDF text selection is invalid JSON.") from exc
+        page_selection = next((item for item in selection.get("selections", []) if isinstance(item, dict) and item.get("page") == page_number), None)
+        if (
+            not isinstance(selection, dict)
+            or selection.get("schema_version") != "fidelity-text-selection-1.0"
+            or selection.get("source") != manifest.get("source")
+            or not isinstance(page_selection, dict)
+            or page_selection.get("native_span_ids") != native_span_ids
+            or page_selection.get("native_span_reviews") != native_span_reviews
+        ):
+            raise FidelityError("Native PDF text selection does not match its source-bound page review.")
+        native_candidates = {
+            item.get("id"): item
+            for item in observation.get("native_pdf_spans", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        reviews_by_id: dict[str, dict[str, Any]] = {}
+        for review in native_span_reviews:
+            span = review.get("span") if isinstance(review, dict) else None
+            span_id = span.get("id") if isinstance(span, dict) else None
+            if not isinstance(span_id, str) or span_id in reviews_by_id:
+                raise FidelityError("Native PDF text selection contains an invalid or duplicate reviewed span.")
+            reviews_by_id[span_id] = review
+        if set(reviews_by_id) != set(native_span_ids):
+            raise FidelityError("Native PDF text selection must review every selected span exactly once.")
+        selection_record = _artifact(selection_path, output_root)
+        native_selection_artifact = selection_record
+        for span_id in native_span_ids:
+            span = native_candidates.get(span_id)
+            review = reviews_by_id[span_id]
+            if (
+                span is None
+                or review.get("span") != span
+                or review.get("visible_and_legible") is not True
+                or span.get("evidence_kind") != "native_pdf"
+                or span.get("visibility") != "unverified"
+                or span.get("source_sha256") != manifest["source"].get("sha256")
+                or not isinstance(span.get("render_sha256"), str)
+                or span.get("mapping_version") != "displayed-page-box-v1"
+            ):
+                raise FidelityError("Native PDF text selection does not bind an explicitly reviewed current source span.")
+            content = span.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise FidelityError("Native PDF text selection contains invalid text content.")
+            glyph_render = _unicode_glyph_render_check(content)
+            if not glyph_render["passed"]:
+                raise FidelityError(f"Unicode glyph-render check failed for native PDF span: {span_id}")
+            span_sha256 = hashlib.sha256(
+                json.dumps(span, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            approved_native_spans.append({
+                "span": span,
+                "glyph_render": glyph_render,
+                "visibility_review": {
+                    "decision": "visible_and_legible",
+                    "source_sha256": span["source_sha256"],
+                    "render_sha256": span["render_sha256"],
+                    "span_id": span_id,
+                    "span_sha256": span_sha256,
+                    "selection": selection_record,
+                },
+            })
     output = output_root / "fidelity_text_approvals" / f"page_{page_number:02d}.json"
     if output.exists():
         raise FidelityError(f"Fidelity text approval already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": "fidelity-text-approval-1.0",
+        "schema_version": "fidelity-text-approval-2.0" if native_span_ids else "fidelity-text-approval-1.0",
         "private_artifact": True,
-        "state": "approved-text-candidates-only",
+        "state": "approved-text-items-only" if native_span_ids else "approved-text-candidates-only",
         "source": manifest["source"],
         "page": page_number,
         "observation": _artifact(observation_path, output_root),
         "approval_reference": approval_reference.strip(),
         "approved_candidates": approved_candidates,
-        "unresolved": ["approved OCR candidates are not emitted into DXF by this command", "text placement, height, style, and DXF emission require a separate approved reconstruction step"],
+        "unresolved": ["approved text items are not emitted into DXF by this command", "text placement, height, style, and DXF emission require the existing reconstruction step"],
     }
+    if native_span_ids:
+        payload["approved_native_spans"] = approved_native_spans
+        payload["native_selection"] = native_selection_artifact
+        payload["unresolved"].append("native span visibility is an explicit item review bound to the selected source, render, and span; no semantic role or association is inferred")
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return payload
 
@@ -2225,19 +2349,32 @@ def write_fidelity_text_approvals_from_selection(
         selection = json.loads(selection_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise FidelityError(f"Cannot read text selection file: {selection_path}") from exc
-    if selection.get("schema_version") != "fidelity-text-selection-1.0" or selection.get("source") != manifest.get("source"):
+    if (
+        not isinstance(selection, dict)
+        or selection.get("schema_version") != "fidelity-text-selection-1.0"
+        or selection.get("source") != manifest.get("source")
+    ):
         raise FidelityError("Text selection does not match the private fidelity source.")
     selections = selection.get("selections")
     if not isinstance(selections, list) or not selections:
         raise FidelityError("Text selection requires at least one page selection.")
     results = []
     for item in selections:
-        if not isinstance(item, dict) or not isinstance(item.get("page"), int) or not isinstance(item.get("candidate_ids"), list):
+        if (
+            not isinstance(item, dict)
+            or type(item.get("page")) is not int
+            or not isinstance(item.get("candidate_ids", []), list)
+            or not isinstance(item.get("native_span_ids", []), list)
+            or not isinstance(item.get("native_span_reviews", []), list)
+        ):
             raise FidelityError("Text selection page records are invalid.")
         observation = output_root / "fidelity_text_observations" / f"page_{item['page']:02d}.json"
         results.append(write_fidelity_text_approval(
-            source, output_root, manifest, item["page"], observation, item["candidate_ids"], approval_reference,
+            source, output_root, manifest, item["page"], observation, item.get("candidate_ids", []), approval_reference,
             workspace_root=workspace_root,
+            native_span_ids=item.get("native_span_ids", []),
+            native_span_reviews=item.get("native_span_reviews", []),
+            selection_path=selection_path if item.get("native_span_ids") else None,
         ))
     return results
 
@@ -2485,7 +2622,7 @@ def run_fidelity_text_reconstruct(
 
 
 def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
-    """Create a private, read-only browser review page for OCR candidates."""
+    """Create a private review page with separately typed OCR/native text choices."""
     if _is_within(output_root, workspace_root):
         raise FidelityError("Fidelity output must be outside the Git worktree.")
     verify_source(manifest, source)
@@ -2496,6 +2633,7 @@ def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: 
         index = review_root / f"index-r{revision}.html"
         revision += 1
     cards: list[str] = []
+    native_by_page: dict[str, dict[str, dict[str, Any]]] = {}
     for page in manifest.get("pages", []):
         number = page["page"]
         observation_path = output_root / "fidelity_text_observations" / f"page_{number:02d}.json"
@@ -2505,17 +2643,59 @@ def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: 
         if observation.get("source") != manifest.get("source") or observation.get("page") != number:
             raise FidelityError(f"Text observation for page {number} does not match the fidelity manifest.")
         rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
-        rows = []
+        ocr_rows = []
         for candidate in observation.get("candidates", []):
             candidate_id = escape(str(candidate.get("id", "")))
             content = escape(str(candidate.get("content", "")))
             confidence = escape(str(candidate.get("confidence", "")))
             bbox = escape(str(candidate.get("bbox_px", "")))
-            rows.append(f'<tr><td><input type="checkbox" data-page="{number}" value="{candidate_id}"></td><td><code>{candidate_id}</code></td><td>{content}</td><td>{confidence}</td><td><code>{bbox}</code></td></tr>')
+            ocr_rows.append(f'<tr><td><input type="checkbox" data-kind="ocr" data-page="{number}" value="{candidate_id}"></td><td><code>{candidate_id}</code></td><td>{content}</td><td>{confidence}</td><td><code>{bbox}</code></td></tr>')
+        native_rows = []
+        overlay_rects = []
+        native_by_page[str(number)] = {}
+        native_spans = observation.get("native_pdf_spans", [])
+        rendered_image = cv2.imread(str(rendered))
+        if rendered_image is None:
+            raise FidelityError(f"Cannot read the rendered page for native text review: {rendered}")
+        for span in native_spans:
+            if not isinstance(span, dict) or not isinstance(span.get("id"), str):
+                raise FidelityError(f"Native PDF text observation for page {number} contains an invalid span.")
+            span_id = span["id"]
+            native_by_page[str(number)][span_id] = span
+            candidate_id = escape(span_id)
+            content = escape(str(span.get("content", "")))
+            bbox_value = span.get("bbox_px", [])
+            bbox = escape(str(bbox_value))
+            font_name = escape(str(span.get("source_font_name") or "unknown"))
+            font_size = escape(str(span.get("source_font_size_pt") or "unknown"))
+            if isinstance(bbox_value, list) and len(bbox_value) == 4:
+                x0, y0, x1, y1 = (float(value) for value in bbox_value)
+                if all(math.isfinite(value) for value in (x0, y0, x1, y1)) and x1 > x0 and y1 > y0:
+                    overlay_rects.append(
+                        f'<rect data-span-id="{candidate_id}" x="{x0:.3f}" y="{y0:.3f}" width="{x1-x0:.3f}" height="{y1-y0:.3f}"/>'
+                    )
+            native_rows.append(
+                f'<tr><td><label><input type="checkbox" class="native-span-review" data-kind="native_pdf_spans" data-page="{number}" value="{candidate_id}"> visible and legible in this source render</label></td>'
+                f'<td><code>{candidate_id}</code></td><td>{content}</td><td><code>{bbox}</code></td>'
+                f'<td>{font_name}</td><td>{font_size} pt</td></tr>'
+            )
         rel_rendered = Path(os.path.relpath(rendered, index.parent)).as_posix()
-        cards.append(f'<section><h2>Trang {number} <small>{len(rows)} ứng viên</small></h2><details><summary>Xem ảnh PDF</summary><img src="{rel_rendered}" alt="PDF page {number}"></details><div class="scroll"><table><thead><tr><th>Duyệt</th><th>ID</th><th>OCR</th><th>Độ tin cậy</th><th>Khung pixel</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>')
+        image_width = rendered_image.shape[1]
+        image_height = rendered_image.shape[0]
+        source_frame = (
+            f'<div class="source-frame"><img src="{escape(rel_rendered, quote=True)}" alt="PDF page {number} with native span bboxes">'
+            f'<svg viewBox="0 0 {image_width} {image_height}" preserveAspectRatio="none" aria-label="Native PDF span bounding boxes">{"".join(overlay_rects)}</svg></div>'
+        )
+        cards.append(
+            f'<section><h2>Trang {number} <small>{len(ocr_rows)} OCR candidates; {len(native_rows)} native_pdf_spans</small></h2>'
+            f'<h3>Source render and native span bounds</h3>{source_frame}'
+            f'<div class="scroll"><table><thead><tr><th>OCR selection</th><th>ID</th><th>OCR content</th><th>Confidence</th><th>Bbox px</th></tr></thead><tbody>{"".join(ocr_rows)}</tbody></table></div>'
+            f'<h3>Native PDF spans</h3><p>Checking a row confirms this exact span is visible and legible in the displayed source render. It remains a separate native span selection; it is not OCR approval and does not create DXF.</p>'
+            f'<div class="scroll"><table><thead><tr><th>Per-span visibility review</th><th>ID</th><th>Exact PDF text</th><th>Bbox px</th><th>Source font</th><th>Source size</th></tr></thead><tbody>{"".join(native_rows)}</tbody></table></div></section>'
+        )
     source_json = json.dumps(manifest["source"], ensure_ascii=False)
-    page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600;margin-right:8px}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}img{max-width:100%;margin-top:12px;border:1px solid #cad3dc}summary{cursor:pointer;font-weight:600}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>Chọn các OCR đúng rồi tải tệp lựa chọn. Tệp đó được dùng để tạo phê duyệt từng chữ có kiểm tra Unicode; việc tick không tự tạo DXF.</p><button onclick='copyIds()'>Sao chép ID</button><button onclick='downloadSelection()'>Tải tệp lựa chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + f"""<script>const source={source_json};function selected(){{const byPage={{}};document.querySelectorAll('input:checked').forEach(x=>(byPage[x.dataset.page]??=[]).push(x.value));return byPage;}}function copyIds(){{const byPage=selected();const text=Object.entries(byPage).map(([page,ids])=>'Trang '+page+': '+ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}}function downloadSelection(){{const byPage=selected();const selections=Object.entries(byPage).map(([page,candidate_ids])=>({{page:Number(page),candidate_ids}}));if(!selections.length){{document.querySelector('#result').textContent='Chưa chọn ứng viên nào.';return;}}const blob=new Blob([JSON.stringify({{schema_version:'fidelity-text-selection-1.0',source,selections}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='fidelity-text-selection.json';link.click();URL.revokeObjectURL(link.href);document.querySelector('#result').textContent='Đã tải tệp lựa chọn.';}}</script>"""
+    native_by_page_json = json.dumps(native_by_page, ensure_ascii=True).replace("<", "\\u003c")
+    page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}h3{margin:20px 0 8px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600;margin-right:8px}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}.source-frame{position:relative;width:100%;line-height:0}.source-frame img{display:block;width:100%;height:auto;border:1px solid #cad3dc}.source-frame svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.source-frame rect{fill:rgba(255,165,0,.15);stroke:#e65100;stroke-width:2;vector-effect:non-scaling-stroke}label{cursor:pointer}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>OCR and native PDF spans use separate selection fields. A native checkbox records your per-span visibility review for the exact source render. The separate approval step is still required; selection alone never creates DXF.</p><button onclick='copyIds()'>Sao chép ID</button><button onclick='downloadSelection()'>Tải tệp lựa chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + f"""<script>const source={source_json};const nativeByPage={native_by_page_json};function selected(){{const byPage={{}};document.querySelectorAll('input[data-kind]:checked').forEach(x=>{{const entry=byPage[x.dataset.page]??={{page:Number(x.dataset.page),candidate_ids:[],native_span_ids:[],native_span_reviews:[]}};if(x.dataset.kind==='native_pdf_spans'){{entry.native_span_ids.push(x.value);entry.native_span_reviews.push({{span:nativeByPage[x.dataset.page][x.value],visible_and_legible:true}});}}else{{entry.candidate_ids.push(x.value);}}byPage[x.dataset.page]=entry;}});return Object.values(byPage);}}function copyIds(){{const items=selected();const text=items.map(x=>'Trang '+x.page+': OCR '+x.candidate_ids.join(', ')+'; native '+x.native_span_ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}}function downloadSelection(){{const selections=selected();if(!selections.length){{document.querySelector('#result').textContent='Chưa chọn ứng viên nào.';return;}}const blob=new Blob([JSON.stringify({{schema_version:'fidelity-text-selection-1.0',source,selections}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='fidelity-text-selection.json';link.click();URL.revokeObjectURL(link.href);document.querySelector('#result').textContent='Đã tải tệp lựa chọn.';}}</script>"""
     review_root.mkdir(parents=True, exist_ok=True)
     index.write_text(page_html, encoding="utf-8")
     return index

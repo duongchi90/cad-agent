@@ -45,10 +45,10 @@
 - Consumes: canonical `fidelity-text-observation-1.0` with `native_pdf_spans` and the existing `fidelity-text-selection-1.0` file.
 - Produces: typed native span selection and approval records bound to the exact current source, page, render, span ID, content, and bbox; OCR fields remain unchanged.
 
-- [ ] Write a failing test for a browser selection that approves one native span while leaving OCR candidates untouched.
-- [ ] Run the focused test and confirm it fails because native spans are currently rejected as unknown OCR IDs.
-- [ ] Extend the review page and selection reader/writer to expose a separately typed native span list and bind its exact snapshot to the current observation/render.
-- [ ] Run focused selection, duplicate-ID, stale-render, and unchanged OCR tests.
+- [x] Write a failing test for a browser selection that approves native spans while leaving OCR candidates untouched.
+- [x] Run the focused test and confirm it fails because native spans are currently rejected as unknown OCR IDs.
+- [x] Extend the review page and selection reader/writer to expose a separately typed native span list and bind its exact snapshot to the current observation/render.
+- [x] Run focused selection, duplicate-ID, stale-render, and unchanged OCR tests.
 - [ ] Commit the task.
 
 ### Task 2: Revalidate and reconstruct only approved native spans

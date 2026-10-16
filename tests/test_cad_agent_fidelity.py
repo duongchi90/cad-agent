@@ -967,6 +967,113 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+def test_native_pdf_text_review_shows_source_bound_visibility_choices(tmp_path: Path) -> None:
+    source = tmp_path / "native-review.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "VISIBLE NATIVE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+    review_path = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
+    review_html = review_path.read_text(encoding="utf-8")
+
+    assert "native_pdf_spans" in review_html
+    assert "native-span-review" in review_html
+    assert "visible_and_legible" in review_html
+    assert "VISIBLE NATIVE" in review_html
+
+
+def test_native_pdf_text_selection_creates_typed_per_span_approval(tmp_path: Path) -> None:
+    source = tmp_path / "native-selected.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "REPEATED NOTE", fontsize=18)
+    page.insert_text((40, 150), "REPEATED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native_spans = observation["native_pdf_spans"]
+    assert [item["content"] for item in native_spans] == ["REPEATED NOTE", "REPEATED NOTE"]
+
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True}
+                for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    approvals = write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    assert approvals[0]["state"] == "approved-text-items-only"
+    assert approvals[0]["approved_candidates"] == []
+    assert [item["span"]["id"] for item in approvals[0]["approved_native_spans"]] == [
+        item["id"] for item in native_spans
+    ]
+    assert all(item["visibility_review"]["selection"]["sha256"] for item in approvals[0]["approved_native_spans"])
+
+    assert approval_path.is_file()
+
+
+@pytest.mark.parametrize("tamper", ["duplicate_id", "stale_render", "visibility_not_confirmed"])
+def test_native_pdf_text_approval_rejects_unbound_or_unreviewed_selection(tmp_path: Path, tamper: str) -> None:
+    source = tmp_path / "native-review.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "VISIBLE NATIVE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_span = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"][0]
+    review_span = dict(native_span)
+    if tamper == "stale_render":
+        review_span["render_sha256"] = "0" * 64
+    review = {"span": review_span, "visible_and_legible": tamper != "visibility_not_confirmed"}
+    native_span_ids = [native_span["id"]]
+    reviews = [review]
+    if tamper == "duplicate_id":
+        native_span_ids.append(native_span["id"])
+        reviews.append(review)
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": native_span_ids,
+            "native_span_reviews": reviews,
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError):
+        write_fidelity_text_approvals_from_selection(
+            source, output, manifest, selection_path, "approval-attempt", workspace_root=Path.cwd(),
+        )
+    assert not (output / "fidelity_text_approvals" / "page_01.json").exists()
+
+
 def test_text_reconstruction_rejects_changed_hash_bound_observation(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     output = tmp_path / "private-staging"
