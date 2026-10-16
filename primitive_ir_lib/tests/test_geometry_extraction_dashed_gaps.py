@@ -136,6 +136,32 @@ def test_source_gap_split_drops_zero_length_interval_beside_supported_line(
     assert any(line.length_px() >= 25 for line in lines)
 
 
+def test_splitting_dashed_candidate_does_not_renormalize_unrelated_line_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((140, 220, 3), 255, dtype=np.uint8)
+    cv2.line(image, (20, 40), (74, 40), (0, 0, 0), 1)
+    cv2.line(image, (80, 40), (134, 40), (0, 0, 0), 1)
+    cv2.line(image, (140, 40), (190, 40), (0, 0, 0), 1)
+    cv2.line(image, (30, 100), (130, 100), (0, 0, 0), 1)
+    monkeypatch.setattr(
+        cv2,
+        "HoughLinesP",
+        lambda *args, **kwargs: np.array(
+            [[[20, 40, 190, 40], [30, 100, 130, 100]]], dtype=np.int32
+        ),
+    )
+
+    lines = extract_lines(image)
+
+    unrelated_solid = next(
+        line
+        for line in lines
+        if line.p1_px == (30.0, 100.0) and line.p2_px == (130.0, 100.0)
+    )
+    assert unrelated_solid.confidence == 0.794
+
+
 def test_source_gap_split_with_only_isolated_pixels_returns_no_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

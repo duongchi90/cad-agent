@@ -153,21 +153,24 @@ def extract_lines(
     # luôn chuẩn hoá về mảng 2D (N,4), mỗi hàng là [x1,y1,x2,y2].
     seg = np.asarray(segments).reshape(-1, 4)
 
-    source_intervals = [
-        interval
+    hough_lengths = [
+        float(np.hypot(x2 - x1, y2 - y1))
         for x1, y1, x2, y2 in seg
+    ]
+    max_hough_len = max(hough_lengths) if hough_lengths else 1.0
+    source_intervals = [
+        (interval, hough_length)
+        for (x1, y1, x2, y2), hough_length in zip(seg, hough_lengths)
         for interval in _split_line_at_source_gaps(
             source_gray, int(x1), int(y1), int(x2), int(y2)
         )
+        if interval[:2] != interval[2:]
     ]
-    source_intervals = [
-        interval for interval in source_intervals if interval[:2] != interval[2:]
-    ]
-    lengths = [float(np.hypot(x2 - x1, y2 - y1)) for x1, y1, x2, y2 in source_intervals]
-    max_len = max(lengths) if lengths else 1.0
 
-    for (x1, y1, x2, y2), length in zip(source_intervals, lengths):
-        confidence = min(1.0, 0.5 + 0.5 * (length / max_len))
+    # Confidence describes the Hough candidate, so splitting its geometry at
+    # source gaps must not change its score or renormalize unrelated lines.
+    for (x1, y1, x2, y2), hough_length in source_intervals:
+        confidence = min(1.0, 0.5 + 0.5 * (hough_length / max_hough_len))
         bbox = (float(min(x1, x2)), float(min(y1, y2)), float(max(x1, x2)), float(max(y1, y2)))
         raw_lines.append(RawLine(
             id=new_id("rawline"),
