@@ -149,7 +149,7 @@ def _merge_nearby_boxes(
 def _select_dimension_line(segments: list[Segment]) -> tuple[Segment | None, str | None]:
     horizontal = [segment for segment in segments if _is_horizontal(segment)]
     vertical = [segment for segment in segments if _is_vertical(segment)]
-    candidates = horizontal or vertical
+    candidates = [*horizontal, *vertical]
     if not candidates:
         return None, None
 
@@ -253,6 +253,130 @@ def _endpoint_arrow_points(binary: np.ndarray, dimension_line: Segment) -> tuple
     return tuple(points)
 
 
+def _axis_interval(binary: np.ndarray, dimension_line: Segment) -> tuple[int, int] | None:
+    """Measure the shaft's transverse dark-pixel interval away from its ends."""
+    first, second = dimension_line
+    vertical = _is_vertical(dimension_line)
+    axis = int(round((first[0] + second[0]) / 2.0 if vertical else (first[1] + second[1]) / 2.0))
+    start = int(round((first[1] + second[1]) / 2.0 if vertical else (first[0] + second[0]) / 2.0))
+    profile = binary[start, :] if vertical else binary[:, start]
+    indices = np.flatnonzero(profile > 0)
+    runs = [run for run in np.split(indices, np.where(np.diff(indices) > 1)[0] + 1) if len(run)]
+    ranked = sorted(
+        runs,
+        key=lambda run: (
+            max(int(run[0]) - axis, axis - int(run[-1]), 0),
+            int(run[0]),
+            int(run[-1]),
+        ),
+    )
+    if not ranked:
+        return None
+    nearest_gap = max(int(ranked[0][0]) - axis, axis - int(ranked[0][-1]), 0)
+    if len(ranked) > 1:
+        second_gap = max(int(ranked[1][0]) - axis, axis - int(ranked[1][-1]), 0)
+        if second_gap == nearest_gap:
+            return None
+    return int(ranked[0][0]), int(ranked[0][-1])
+
+
+def _endpoint_flank_witnesses(binary: np.ndarray, dimension_line: Segment) -> tuple[Point, ...]:
+    """Find a unique pair of source-pixel flanks tapering away from a shaft.
+
+    Profile widths, axial reach, and transverse alignment are measured from the
+    raster and the candidate shaft. No case coordinates or fixed acceptance
+    distances are used.
+    """
+    if not (_is_horizontal(dimension_line) or _is_vertical(dimension_line)):
+        return ()
+    shaft_interval = _axis_interval(binary, dimension_line)
+    if shaft_interval is None:
+        return ()
+    shaft_width = shaft_interval[1] - shaft_interval[0] + 1
+    height, width = binary.shape[:2]
+    vertical = _is_vertical(dimension_line)
+    points: list[Point] = []
+    endpoint_intervals: list[tuple[int, int]] = []
+
+    for endpoint_index, endpoint in enumerate(dimension_line):
+        outward = -1 if endpoint_index == 0 else 1
+        axial_endpoint = int(round(endpoint[1] if vertical else endpoint[0]))
+        limit = height if vertical else width
+        witnesses: list[tuple[tuple[int, int], int, int]] = []
+        for direction in (outward, -outward):
+            widths: list[int] = []
+            intervals: list[tuple[int, int]] = []
+            positions: list[int] = []
+            started = False
+            for distance in range(1, limit + 1):
+                position = axial_endpoint + direction * distance
+                if not 0 <= position < limit:
+                    break
+                profile = binary[position, :] if vertical else binary[:, position]
+                indices = np.flatnonzero(profile > 0)
+                runs = [run for run in np.split(indices, np.where(np.diff(indices) > 1)[0] + 1) if len(run)]
+                matching = [
+                    run for run in runs
+                    if int(run[0]) <= shaft_interval[1] and int(run[-1]) >= shaft_interval[0]
+                ]
+                if len(matching) != 1:
+                    if started:
+                        break
+                    continue
+                run = matching[0]
+                interval = (int(run[0]), int(run[-1]))
+                if not (interval[0] < shaft_interval[0] and interval[1] > shaft_interval[1]):
+                    if started:
+                        break
+                    continue
+                started = True
+                widths.append(interval[1] - interval[0] + 1)
+                intervals.append(interval)
+                positions.append(position)
+
+            valid_profiles: list[tuple[int, int, tuple[int, int], int]] = []
+            for start_index in range(len(widths) - 1):
+                profile_widths = widths[start_index:]
+                if direction == outward:
+                    monotonic = all(a >= b for a, b in zip(profile_widths, profile_widths[1:]))
+                    contraction = profile_widths[0] - profile_widths[-1]
+                else:
+                    monotonic = all(a <= b for a, b in zip(profile_widths, profile_widths[1:]))
+                    contraction = profile_widths[-1] - profile_widths[0]
+                axial_reach = abs(positions[-1] - positions[start_index]) + 1
+                initial_gap = abs(positions[start_index] - axial_endpoint)
+                if monotonic and contraction > shaft_width and initial_gap <= axial_reach:
+                    point_position = positions[-1] if direction == outward else axial_endpoint
+                    valid_profiles.append(
+                        (len(profile_widths), start_index, intervals[start_index], point_position)
+                    )
+            if valid_profiles:
+                longest = max(profile[0] for profile in valid_profiles)
+                best_profiles = [profile for profile in valid_profiles if profile[0] == longest]
+                if len(best_profiles) == 1:
+                    _, _, first_interval, point_position = best_profiles[0]
+                    witnesses.append((first_interval, point_position, direction))
+
+        if len(witnesses) != 1:
+            continue
+        interval, point_position, _ = witnesses[0]
+        endpoint_intervals.append(interval)
+        transverse_center = (interval[0] + interval[1]) / 2.0
+        points.append(
+            (transverse_center, float(point_position))
+            if vertical
+            else (float(point_position), transverse_center)
+        )
+
+    if len(points) != 2 or len(endpoint_intervals) != 2:
+        return ()
+    common_low = max(endpoint_intervals[0][0], endpoint_intervals[1][0])
+    common_high = min(endpoint_intervals[0][1], endpoint_intervals[1][1])
+    if common_low > shaft_interval[0] or common_high < shaft_interval[1]:
+        return ()
+    return tuple(points)
+
+
 def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence:
     """Detect controlled line/arrow evidence without scale or attachments."""
     if not isinstance(crop_bgr, np.ndarray) or crop_bgr.ndim not in {2, 3}:
@@ -297,6 +421,8 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
         )
     arrow_points = _contour_arrow_points(binary, dimension_line)
     if len(arrow_points) < 2:
+        arrow_points = list(_endpoint_flank_witnesses(binary, dimension_line))
+    if len(arrow_points) < 2:
         arrow_points = list(_endpoint_arrow_points(binary, dimension_line))
     arrow_points = tuple(sorted(arrow_points, key=lambda point: (point[0], point[1])))
     confidence = min(
@@ -339,10 +465,12 @@ def detect_dimension_geometry_regions(image_bgr: np.ndarray) -> tuple[tuple[int,
         for segment in _hough_segments(binary)
         if (_is_horizontal(segment) or _is_vertical(segment)) and _length(segment) >= 40.0
     ]
-    candidate_boxes = [_segment_bbox(segment) for segment in structural_segments]
     height, width = gray.shape[:2]
     regions: list[tuple[int, int, int, int]] = []
-    for left, top, right, bottom in _merge_nearby_boxes(candidate_boxes, tolerance=32):
+    # Evaluate each structural segment in its own locally padded box. Merging
+    # all page segments first can create a near-page ROI from unrelated lines.
+    for segment in structural_segments:
+        left, top, right, bottom = _segment_bbox(segment)
         clipped = (
             max(0, left),
             max(0, top),
@@ -351,8 +479,24 @@ def detect_dimension_geometry_regions(image_bgr: np.ndarray) -> tuple[tuple[int,
         )
         if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
             continue
-        geometry = detect_dimension_geometry(image_bgr[clipped[1] : clipped[3], clipped[0] : clipped[2]])
-        if geometry.dimension_line is None or len(geometry.extension_lines) < 2:
+        crop = image_bgr[clipped[1] : clipped[3], clipped[0] : clipped[2]]
+        geometry = detect_dimension_geometry(crop)
+        if geometry.dimension_line is None:
+            continue
+        crop_gray = crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        crop_binary = cv2.adaptiveThreshold(
+            crop_gray,
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            25,
+            10,
+        )
+        has_extensions = len(geometry.extension_lines) >= 2
+        has_flank_pair = len(
+            _endpoint_flank_witnesses(crop_binary, geometry.dimension_line)
+        ) == 2
+        if not has_extensions and not has_flank_pair:
             continue
         if clipped not in regions:
             regions.append(clipped)
