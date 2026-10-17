@@ -97,6 +97,7 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Sequence, Tuple
 
+import cv2
 import numpy as np
 
 from .geometry_extraction import RawLine
@@ -144,6 +145,80 @@ def _line_angle_and_ref(line: RawLine) -> Tuple[float, float, float]:
     x2, y2 = line.p2_px
     angle = _angle_mod_pi(x2 - x1, y2 - y1)
     return angle, x1, y1
+
+
+def _source_dash_gap_intervals(
+    image_bgr: np.ndarray,
+    x0: float,
+    y0: float,
+    angle: float,
+    t_min: float,
+    t_max: float,
+) -> List[Tuple[float, float]]:
+    """Return source-supported gaps in a repeated, regular dash cadence.
+
+    This is deliberately a narrow veto: it requires at least four dark runs,
+    multiple similarly sized gaps, and similarly sized runs along the actual
+    raster corridor. Hough segment counts are not used as source evidence.
+    """
+    if image_bgr.ndim == 2:
+        gray = image_bgr
+    else:
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    start = int(math.floor(t_min))
+    end = int(math.ceil(t_max))
+    if end < start:
+        return []
+
+    direction = np.array([math.cos(angle), math.sin(angle)])
+    normal = np.array([-direction[1], direction[0]])
+    ts = np.arange(start, end + 1, dtype=np.float64)
+    offsets = np.arange(-3, 4, dtype=np.float64)
+    xs = np.rint(x0 + ts[:, None] * direction[0] + offsets[None, :] * normal[0]).astype(int)
+    ys = np.rint(y0 + ts[:, None] * direction[1] + offsets[None, :] * normal[1]).astype(int)
+    inside = (xs >= 0) & (xs < gray.shape[1]) & (ys >= 0) & (ys < gray.shape[0])
+    dark_counts = np.zeros(len(ts), dtype=np.uint8)
+    dark_counts[:] = np.sum(inside & (gray[np.clip(ys, 0, gray.shape[0] - 1),
+                                            np.clip(xs, 0, gray.shape[1] - 1)] < 200), axis=1)
+    supported = dark_counts >= 2
+
+    # A single rasterization dropout inside a stroke is not a physical gap.
+    for index in range(1, len(supported) - 1):
+        if supported[index - 1] and supported[index + 1]:
+            supported[index] = True
+
+    transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
+    run_starts = np.flatnonzero(transitions == 1)
+    run_ends = np.flatnonzero(transitions == -1) - 1
+    if len(run_starts) < 4:
+        return []
+    run_lengths = run_ends - run_starts + 1
+    gap_lengths = run_starts[1:] - run_ends[:-1] - 1
+    if len(gap_lengths) < 3:
+        return []
+
+    def regular(values: np.ndarray) -> bool:
+        median = float(np.median(values))
+        return median > 0 and float(np.max(values) - np.min(values)) <= max(2.0, median * 0.45)
+
+    if not regular(run_lengths) or not regular(gap_lengths):
+        return []
+    return [
+        (float(start + left), float(start + right))
+        for left, right in zip(run_ends[:-1], run_starts[1:])
+    ]
+
+
+def _gap_matches_source_dash(
+    gap_start: float,
+    gap_end: float,
+    source_gaps: Sequence[Tuple[float, float]],
+) -> bool:
+    midpoint = (gap_start + gap_end) / 2.0
+    return any(
+        abs(midpoint - (source_start + source_end) / 2.0) <= max(2.0, (source_end - source_start) * 0.4)
+        for source_start, source_end in source_gaps
+    )
 
 
 def merge_collinear_lines(
@@ -341,6 +416,17 @@ def merge_collinear_lines(
                     clipped_segs.append((start, end, line, p_start, p_end))
             segs = sorted(clipped_segs, key=lambda s: s[0])
 
+        source_dash_gaps: List[Tuple[float, float]] = []
+        if image_bgr is not None and len(segs) >= 4:
+            source_dash_gaps = _source_dash_gap_intervals(
+                image_bgr,
+                ref_x0,
+                ref_y0,
+                ref_angle,
+                min(seg[0] for seg in segs),
+                max(seg[1] for seg in segs),
+            )
+
         # tính trước danh sách text "sát trục" (trong hành lang perp_tol lateral)
         # cùng toạ độ chiếu tâm bbox của chúng lên trục này
         nearby_text_t: List[float] = []
@@ -385,6 +471,8 @@ def merge_collinear_lines(
             )
             blocked = gap > gap_tol_px or (
                 crosses_witness_barrier
+                or
+                _gap_matches_source_dash(cur_max, seg_min, source_dash_gaps)
                 or
                 gap_blocked_by_tick_mark(cur_p_at_max, seg_p_at_min)
                 or gap_blocked_by_text(cur_max, seg_min)

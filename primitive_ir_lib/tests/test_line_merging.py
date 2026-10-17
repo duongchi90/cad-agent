@@ -19,10 +19,13 @@ text-anchor một mình không xử lý được).
 from __future__ import annotations
 
 import cv2
+import json
 import numpy as np
+from pathlib import Path
 
-from primitive_ir_lib.geometry_extraction import RawLine
+from primitive_ir_lib.geometry_extraction import RawLine, extract_raw_geometry
 from primitive_ir_lib.line_merging import merge_collinear_lines
+from primitive_ir_lib.line_merging import _source_dash_gap_intervals
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 
 
@@ -182,3 +185,95 @@ def test_tick_mark_does_not_block_technical_break_without_tick_marks():
     l2 = _line((155, 100), (300, 100), "b")
     merged = merge_collinear_lines([l1, l2], blocking_texts=[], image_bgr=img, gap_tol_px=25.0)
     assert len(merged) == 1
+
+
+def test_integrated_merger_preserves_cadenced_c04_dash_pattern():
+    fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
+    image = cv2.imread(str(fixture))
+    metadata = json.loads(fixture.with_suffix(".json").read_text(encoding="utf-8"))
+    assert image is not None
+    for preset in ("default", "real_scan_tuned_v1"):
+        raw = extract_raw_geometry(image, preset=preset).lines
+        merged = merge_collinear_lines(raw, image_bgr=image)
+
+        assert len(raw) == 8
+        assert len(merged) == len(raw), f"{preset} joined regular source-supported dashes"
+        expected = {
+            line.id: (line.p1_px, line.p2_px, line.confidence, line.bbox_px)
+            for line in raw
+        }
+        actual = {
+            line.id: (line.p1_px, line.p2_px, line.confidence, line.bbox_px)
+            for line in merged
+        }
+        assert actual == expected, f"{preset} changed source segment identity or geometry"
+        for gap in metadata["ground_truth_geometry"]["forbidden_gap_intervals"]:
+            assert not any(
+                abs((line.p1_px[0] + line.p2_px[0]) / 2 - gap["x_center"]) <= gap["x_tol"]
+                and min(line.p1_px[1], line.p2_px[1]) <= gap["gap_end"]
+                and max(line.p1_px[1], line.p2_px[1]) >= gap["gap_start"]
+                for line in merged
+            ), f"{preset} bridges forbidden source gap {gap}"
+
+
+def test_rotated_cadenced_dashes_are_not_rejoined():
+    image = np.full((220, 260, 3), 255, dtype=np.uint8)
+    angle = np.deg2rad(28)
+    origin = np.array([35.0, 45.0])
+    direction = np.array([np.cos(angle), np.sin(angle)])
+    raw = []
+    for index, start in enumerate(range(0, 176, 22)):
+        p1 = origin + direction * start
+        p2 = origin + direction * (start + 16)
+        a, b = tuple(np.rint(p1).astype(int)), tuple(np.rint(p2).astype(int))
+        cv2.line(image, a, b, (0, 0, 0), 2)
+        raw.append(_line(tuple(p1), tuple(p2), f"rotated-{index}"))
+
+    merged = merge_collinear_lines(
+        raw, blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == len(raw), "raster cadence detection must not depend on axis alignment"
+
+
+def test_truncated_but_repeated_dash_cadence_remains_separate():
+    image = np.full((100, 120, 3), 255, dtype=np.uint8)
+    raw = []
+    for index, start in enumerate([0, 22, 44, 66, 88]):
+        end = min(start + 14, image.shape[0] - 1)
+        cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
+        raw.append(_line((60, start), (60, end), f"truncated-{index}"))
+
+    merged = merge_collinear_lines(
+        raw, blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == len(raw), "image-edge truncation must not erase repeated dash evidence"
+
+
+def test_crossing_witnesses_do_not_look_like_a_regular_dash_cadence():
+    image = np.full((180, 220, 3), 255, dtype=np.uint8)
+    raw = []
+    for index, start in enumerate([10, 36, 62, 88]):
+        end = start + 20
+        cv2.line(image, (start, 90), (end, 90), (0, 0, 0), 2)
+        raw.append(_line((start, 90), (end, 90), f"crossing-{index}"))
+        if index < 3:
+            crossing_x = end + 3
+            cv2.line(image, (crossing_x, 70), (crossing_x, 110), (0, 0, 0), 1)
+
+    merged = merge_collinear_lines(
+        raw, blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == 1, "independent perpendicular source witnesses must retain recovery"
+    assert round(merged[0].p1_px[0]) == 10
+    assert round(merged[0].p2_px[0]) == 108
+
+
+def test_irregular_gaps_are_not_misclassified_as_regular_dash_cadence():
+    image = np.full((180, 220, 3), 255, dtype=np.uint8)
+    for start, end in [(10, 24), (30, 45), (57, 71), (79, 94), (110, 124)]:
+        cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
+
+    assert _source_dash_gap_intervals(image, 60, 0, np.pi / 2, 10, 124) == []
