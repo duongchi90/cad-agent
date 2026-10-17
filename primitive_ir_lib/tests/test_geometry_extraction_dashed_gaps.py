@@ -177,6 +177,64 @@ def test_source_gap_split_with_only_isolated_pixels_returns_no_lines(
     assert extract_lines(image) == []
 
 
+@pytest.mark.parametrize("background_texture", ["uniform", "block_compression"])
+def test_gray_paper_background_does_not_support_a_real_source_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    background_texture: str,
+) -> None:
+    image = np.full((160, 100, 3), 220, dtype=np.uint8)
+    if background_texture == "block_compression":
+        for y in range(0, image.shape[0], 8):
+            for x in range(0, image.shape[1], 8):
+                value = 212 if (x // 8 + y // 8) % 2 else 228
+                image[y:y + 8, x:x + 8] = value
+    cv2.line(image, (50, 15), (50, 70), (45, 45, 45), 2)
+    cv2.line(image, (50, 77), (50, 140), (45, 45, 45), 2)
+    monkeypatch.setattr(
+        cv2,
+        "HoughLinesP",
+        lambda *args, **kwargs: np.array([[[50, 15, 50, 140]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert any(
+        min(line.p1_px[1], line.p2_px[1]) <= 20
+        and max(line.p1_px[1], line.p2_px[1]) >= 60
+        for line in lines
+    )
+    assert any(
+        min(line.p1_px[1], line.p2_px[1]) <= 85
+        and max(line.p1_px[1], line.p2_px[1]) >= 130
+        for line in lines
+    )
+    assert not any(
+        min(line.p1_px[1], line.p2_px[1]) <= 70
+        and max(line.p1_px[1], line.p2_px[1]) >= 77
+        for line in lines
+    ), f"{background_texture} gray background falsely supported the gap"
+
+
+def test_faint_thin_stroke_on_gray_paper_remains_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((120, 100, 3), 220, dtype=np.uint8)
+    cv2.line(image, (50, 15), (50, 100), (145, 145, 145), 1)
+    monkeypatch.setattr(
+        cv2,
+        "HoughLinesP",
+        lambda *args, **kwargs: np.array([[[50, 15, 50, 100]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert any(
+        min(line.p1_px[1], line.p2_px[1]) <= 20
+        and max(line.p1_px[1], line.p2_px[1]) >= 95
+        for line in lines
+    ), "a faint, thin source stroke was discarded"
+
+
 @pytest.mark.parametrize("preset", list(PRESETS))
 @pytest.mark.parametrize(
     ("name", "runs", "gaps"),

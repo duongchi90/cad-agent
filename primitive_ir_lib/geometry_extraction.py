@@ -95,21 +95,33 @@ def _split_line_at_source_gaps(
     xs = np.rint(x1 + dx * distances / length).astype(int)
     ys = np.rint(y1 + dy * distances / length).astype(int)
 
-    # Probe the detected centerline and one source pixel on either side. Use the
-    # unblurred source: Gaussian/Canny edges can leak into narrow white gaps.
+    # A supported point needs a dark transverse ridge, not merely pixels below
+    # an absolute brightness cutoff. The candidate may lie on either edge of
+    # the physical stroke, so probe nearby centers and require brighter flanks.
     normal_x = -dy / length
     normal_y = dx / length
+    offsets = np.arange(-4, 5, dtype=np.float64)
+    probe_x = np.rint(xs[:, None] + normal_x * offsets[None, :]).astype(int)
+    probe_y = np.rint(ys[:, None] + normal_y * offsets[None, :]).astype(int)
+    inside = (
+        (probe_x >= 0)
+        & (probe_x < source_gray.shape[1])
+        & (probe_y >= 0)
+        & (probe_y < source_gray.shape[0])
+    )
+    sampled_gray = source_gray[
+        np.clip(probe_y, 0, source_gray.shape[0] - 1),
+        np.clip(probe_x, 0, source_gray.shape[1] - 1),
+    ]
     supported = np.zeros(xs.shape, dtype=bool)
-    for offset in (-1, 0, 1):
-        probe_x = np.rint(xs + normal_x * offset).astype(int)
-        probe_y = np.rint(ys + normal_y * offset).astype(int)
-        inside = (
-            (probe_x >= 0)
-            & (probe_x < source_gray.shape[1])
-            & (probe_y >= 0)
-            & (probe_y < source_gray.shape[0])
+    for center_index in (3, 4, 5):
+        center = sampled_gray[:, center_index]
+        flanks_inside = inside[:, center_index - 3] & inside[:, center_index + 3]
+        dark_ridge = (
+            (sampled_gray[:, center_index - 3].astype(np.int16) - center.astype(np.int16) >= 10)
+            & (sampled_gray[:, center_index + 3].astype(np.int16) - center.astype(np.int16) >= 10)
         )
-        supported[inside] |= source_gray[probe_y[inside], probe_x[inside]] < 250
+        supported |= flanks_inside & inside[:, center_index] & dark_ridge
 
     transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
     starts = np.flatnonzero(transitions == 1)
