@@ -417,7 +417,7 @@ def merge_collinear_lines(
             segs = sorted(clipped_segs, key=lambda s: s[0])
 
         source_dash_gaps: List[Tuple[float, float]] = []
-        if image_bgr is not None and len(segs) >= 4:
+        if image_bgr is not None:
             source_dash_gaps = _source_dash_gap_intervals(
                 image_bgr,
                 ref_x0,

@@ -216,6 +216,82 @@ def test_integrated_merger_preserves_cadenced_c04_dash_pattern():
             ), f"{preset} bridges forbidden source gap {gap}"
 
 
+def test_c04_four_fragments_with_four_visible_runs_keep_source_gaps():
+    """Keep the four-source-run control on the frozen C04 fixture."""
+    fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
+    image = cv2.imread(str(fixture))
+    assert image is not None
+
+    raw = extract_raw_geometry(image, preset="default").lines
+    selected = sorted(
+        raw,
+        key=lambda line: (line.p1_px[1] + line.p2_px[1]) / 2,
+    )[:4]
+    assert len(selected) == 4
+
+    # Count visible dark runs from the frozen source pixels along the shaft's
+    # center column, limited to the interval actually presented to merger.
+    y_start = int(min(min(line.p1_px[1], line.p2_px[1]) for line in selected))
+    y_end = int(max(max(line.p1_px[1], line.p2_px[1]) for line in selected))
+    center_column = cv2.cvtColor(image[y_start : y_end + 1, 150:151], cv2.COLOR_BGR2GRAY)[:, 0]
+    source_supported = center_column < 200
+    transitions = np.diff(np.r_[False, source_supported, False].astype(np.int8))
+    run_starts = np.flatnonzero(transitions == 1)
+    run_ends = np.flatnonzero(transitions == -1) - 1
+    visible_run_count = len(run_starts)
+    assert visible_run_count == 4
+    visible_gaps = [
+        (y_start + int(previous_end) + 1, y_start + int(next_start) - 1)
+        for previous_end, next_start in zip(run_ends[:-1], run_starts[1:])
+    ]
+
+    merged = merge_collinear_lines(selected, image_bgr=image)
+    merged_spans = [
+        (int(min(line.p1_px[1], line.p2_px[1])), int(max(line.p1_px[1], line.p2_px[1])))
+        for line in merged
+    ]
+    newly_bridged_gaps = [
+        gap
+        for gap in visible_gaps
+        if any(start <= gap[0] and end >= gap[1] for start, end in merged_spans)
+    ]
+
+    assert not newly_bridged_gaps, (
+        f"4 fragments span {visible_run_count} visible runs; "
+        f"source gaps {newly_bridged_gaps} were bridged into {merged_spans}"
+    )
+
+
+def test_c04_three_input_fragments_with_four_visible_runs_keep_first_gap():
+    fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
+    image = cv2.imread(str(fixture))
+    assert image is not None
+
+    raw = sorted(
+        extract_raw_geometry(image, preset="default").lines,
+        key=lambda line: (line.p1_px[1] + line.p2_px[1]) / 2,
+    )
+    selected = [raw[0], raw[1], raw[3]]
+    assert len(selected) == 3
+
+    y_start = int(min(min(line.p1_px[1], line.p2_px[1]) for line in selected))
+    y_end = int(max(max(line.p1_px[1], line.p2_px[1]) for line in selected))
+    center_column = cv2.cvtColor(image[y_start : y_end + 1, 150:151], cv2.COLOR_BGR2GRAY)[:, 0]
+    supported = center_column < 200
+    transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
+    visible_run_count = int(np.count_nonzero(transitions == 1))
+    assert visible_run_count == 4
+
+    merged = merge_collinear_lines(selected, image_bgr=image)
+
+    first_gap = (56, 60)
+    assert not any(
+        min(line.p1_px[1], line.p2_px[1]) <= first_gap[0]
+        and max(line.p1_px[1], line.p2_px[1]) >= first_gap[1]
+        for line in merged
+    ), f"3 input fragments span 4 visible runs; bridged {first_gap} into {merged}"
+
+
 def test_rotated_cadenced_dashes_are_not_rejoined():
     image = np.full((220, 260, 3), 255, dtype=np.uint8)
     angle = np.deg2rad(28)
