@@ -26,6 +26,7 @@ from pathlib import Path
 from primitive_ir_lib.geometry_extraction import RawLine, extract_raw_geometry
 from primitive_ir_lib.line_merging import merge_collinear_lines
 from primitive_ir_lib.line_merging import _source_dash_gap_intervals
+from primitive_ir_lib.run_image import run as run_image
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 
 
@@ -105,6 +106,67 @@ def test_merges_when_no_text_blocks_even_with_larger_gap_but_still_within_tol():
     merged = merge_collinear_lines([l1, l2], blocking_texts=[], gap_tol_px=25.0)
     assert len(merged) == 1
     assert merged[0].length_px() == 250.0
+
+
+def test_merge_enabled_two_source_runs_do_not_reconnect_short_unsupported_gap():
+    """A single short source gap is evidence even without repeated cadence."""
+    image = np.full((120, 220, 3), 220, dtype=np.uint8)
+    cv2.line(image, (40, 60), (100, 60), (0, 0, 0), 2)
+    cv2.line(image, (106, 60), (166, 60), (0, 0, 0), 2)
+    left = _line((40, 60), (100, 60), "left-run")
+    right = _line((106, 60), (166, 60), "right-run")
+
+    merged = merge_collinear_lines(
+        [left, right], blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == 2, f"merge_lines=True reconnected source gap: {merged}"
+
+
+def test_merge_enabled_two_fragments_join_when_source_stroke_is_continuous():
+    image = np.full((120, 220, 3), 255, dtype=np.uint8)
+    cv2.line(image, (40, 60), (166, 60), (0, 0, 0), 2)
+    left = _line((40, 60), (100, 60), "left-fragment")
+    right = _line((106, 60), (166, 60), "right-fragment")
+
+    merged = merge_collinear_lines(
+        [left, right], blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == 1
+    assert merged[0].p1_px == (40.0, 60.0)
+    assert merged[0].p2_px == (166.0, 60.0)
+
+
+def test_run_image_merge_enabled_keeps_two_gray_background_source_runs(tmp_path):
+    image = np.full((600, 1200, 3), 220, dtype=np.uint8)
+    cv2.line(image, (150, 300), (350, 300), (0, 0, 0), 2)
+    cv2.line(image, (362, 300), (562, 300), (0, 0, 0), 2)
+    image_path = tmp_path / "two-source-runs.png"
+    output_path = tmp_path / "primitive-ir.json"
+    assert cv2.imwrite(str(image_path), image)
+
+    run_image(
+        str(image_path),
+        str(output_path),
+        scale_mm_per_px=1.0,
+        preset="real_scan_tuned_v1",
+        merge_lines=True,
+    )
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    line_boxes = [
+        primitive["trace"]["bbox_px"]
+        for primitive in document["primitives"]
+        if primitive.get("type") == "line"
+    ]
+
+    source_gap = (350, 362)
+    assert any(box[0] <= 250 and box[2] >= 250 for box in line_boxes), line_boxes
+    assert any(box[0] <= 450 and box[2] >= 450 for box in line_boxes), line_boxes
+    assert not any(
+        box[0] < source_gap[0] and box[2] > source_gap[1]
+        for box in line_boxes
+    ), f"run_image(merge_lines=True) reconnected the source gap: {line_boxes}"
 
 
 def test_does_not_merge_lines_with_different_angle():

@@ -154,12 +154,16 @@ def _source_dash_gap_intervals(
     angle: float,
     t_min: float,
     t_max: float,
+    *,
+    include_single_gap: bool = False,
 ) -> List[Tuple[float, float]]:
-    """Return source-supported gaps in a repeated, regular dash cadence.
+    """Return source-unsupported intervals separating supported dark runs.
 
-    This is deliberately a narrow veto: it requires at least four dark runs,
-    multiple similarly sized gaps, and similarly sized runs along the actual
-    raster corridor. Hough segment counts are not used as source evidence.
+    The normal cadence veto requires at least four dark runs, multiple
+    similarly sized gaps, and similarly sized runs along the actual raster
+    corridor. When explicitly requested, one unsupported interval between
+    exactly two dark runs is also returned for the merge-enabled source-gap
+    veto. Hough segment counts are not used as source evidence.
     """
     if image_bgr.ndim == 2:
         gray = image_bgr
@@ -199,6 +203,8 @@ def _source_dash_gap_intervals(
     transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
     run_starts = np.flatnonzero(transitions == 1)
     run_ends = np.flatnonzero(transitions == -1) - 1
+    if include_single_gap and len(run_starts) == 2:
+        return [(float(start + run_ends[0]), float(start + run_starts[1]))]
     if len(run_starts) < 4:
         return []
     run_lengths = run_ends - run_starts + 1
@@ -236,8 +242,10 @@ def _source_dash_gaps_for_cluster(
     ref_x0: float,
     ref_y0: float,
     ref_angle: float,
+    *,
+    include_single_gap: bool = False,
 ) -> List[Tuple[float, float]]:
-    """Sample cadence on a fitted group axis and return gaps in the ref frame."""
+    """Sample source gaps on the fitted group axis and return them in ref frame."""
     points = np.asarray(
         [point for line in cluster_lines for point in (line.p1_px, line.p2_px)],
         dtype=np.float32,
@@ -256,6 +264,7 @@ def _source_dash_gaps_for_cluster(
         fit_angle,
         float(np.min(endpoint_values)),
         float(np.max(endpoint_values)),
+        include_single_gap=include_single_gap,
     )
 
     ref_origin = np.array([ref_x0, ref_y0], dtype=np.float64)
@@ -464,14 +473,15 @@ def merge_collinear_lines(
                     clipped_segs.append((start, end, line, p_start, p_end))
             segs = sorted(clipped_segs, key=lambda s: s[0])
 
-        source_dash_gaps: List[Tuple[float, float]] = []
+        source_gaps: List[Tuple[float, float]] = []
         if image_bgr is not None:
-            source_dash_gaps = _source_dash_gaps_for_cluster(
+            source_gaps = _source_dash_gaps_for_cluster(
                 image_bgr,
                 cluster_lines,
                 ref_x0,
                 ref_y0,
                 ref_angle,
+                include_single_gap=True,
             )
 
         # tính trước danh sách text "sát trục" (trong hành lang perp_tol lateral)
@@ -519,7 +529,7 @@ def merge_collinear_lines(
             blocked = gap > gap_tol_px or (
                 crosses_witness_barrier
                 or
-                _gap_matches_source_dash(cur_max, seg_min, source_dash_gaps)
+                _gap_matches_source_dash(cur_max, seg_min, source_gaps)
                 or
                 gap_blocked_by_tick_mark(cur_p_at_max, seg_p_at_min)
                 or gap_blocked_by_text(cur_max, seg_min)
