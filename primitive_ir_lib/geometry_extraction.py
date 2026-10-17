@@ -98,6 +98,8 @@ def _split_line_at_source_gaps(
     # A supported point needs a dark transverse ridge, not merely pixels below
     # an absolute brightness cutoff. The candidate may lie on either edge of
     # the physical stroke, so probe nearby centers and require brighter flanks.
+    # At an image border, two in-bounds probes on the surviving side are needed;
+    # off-image samples never count as support.
     normal_x = -dy / length
     normal_y = dx / length
     offsets = np.arange(-4, 5, dtype=np.float64)
@@ -116,12 +118,56 @@ def _split_line_at_source_gaps(
     supported = np.zeros(xs.shape, dtype=bool)
     for center_index in (3, 4, 5):
         center = sampled_gray[:, center_index]
-        flanks_inside = inside[:, center_index - 3] & inside[:, center_index + 3]
-        dark_ridge = (
-            (sampled_gray[:, center_index - 3].astype(np.int16) - center.astype(np.int16) >= 10)
-            & (sampled_gray[:, center_index + 3].astype(np.int16) - center.astype(np.int16) >= 10)
+        left_near_index = center_index - 3
+        left_far_index = center_index - 4
+        right_near_index = center_index + 3
+        right_far_index = center_index + 4
+        left_available = (
+            inside[:, left_near_index] & inside[:, left_far_index]
+            if left_far_index >= 0
+            else np.zeros(xs.shape, dtype=bool)
         )
-        supported |= flanks_inside & inside[:, center_index] & dark_ridge
+        right_available = (
+            inside[:, right_near_index] & inside[:, right_far_index]
+            if right_far_index < inside.shape[1]
+            else np.zeros(xs.shape, dtype=bool)
+        )
+        center_gray = center.astype(np.int16)
+        left_near_dark = (
+            sampled_gray[:, left_near_index].astype(np.int16) - center_gray >= 10
+        )
+        left_far_dark = (
+            sampled_gray[:, max(left_far_index, 0)].astype(np.int16) - center_gray >= 10
+        )
+        right_near_dark = (
+            sampled_gray[:, right_near_index].astype(np.int16) - center_gray >= 10
+        )
+        right_far_dark = (
+            sampled_gray[:, min(right_far_index, inside.shape[1] - 1)].astype(np.int16)
+            - center_gray
+            >= 10
+        )
+        two_sided_ridge = (
+            left_available
+            & right_available
+            & left_near_dark
+            & right_near_dark
+        )
+        one_sided_border_ridge = (
+            left_available
+            & ~right_available
+            & left_near_dark
+            & left_far_dark
+        ) | (
+            right_available
+            & ~left_available
+            & right_near_dark
+            & right_far_dark
+        )
+        supported |= (
+            inside[:, center_index]
+            & (two_sided_ridge | one_sided_border_ridge)
+        )
 
     transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
     starts = np.flatnonzero(transitions == 1)

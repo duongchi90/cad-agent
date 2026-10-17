@@ -235,6 +235,69 @@ def test_faint_thin_stroke_on_gray_paper_remains_supported(
     ), "a faint, thin source stroke was discarded"
 
 
+@pytest.mark.parametrize("x", [0, 1])
+@pytest.mark.parametrize("background_texture", ["uniform", "block_compression"])
+def test_real_hough_border_candidate_does_not_bridge_gray_source_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    x: int,
+    background_texture: str,
+) -> None:
+    image = np.full((160, 100, 3), 220, dtype=np.uint8)
+    if background_texture == "block_compression":
+        for y in range(0, image.shape[0], 8):
+            for column in range(0, image.shape[1], 8):
+                value = 212 if (column // 8 + y // 8) % 2 else 228
+                image[y:y + 8, column:column + 8] = value
+    cv2.line(image, (x, 15), (x, 70), (45, 45, 45), 2)
+    cv2.line(image, (x, 77), (x, 140), (45, 45, 45), 2)
+
+    actual_hough = cv2.HoughLinesP
+    captured_segments: list[np.ndarray] = []
+
+    def capture_hough_candidates(*args, **kwargs):
+        segments = actual_hough(*args, **kwargs)
+        if segments is not None:
+            captured_segments.append(np.asarray(segments).reshape(-1, 4))
+        return segments
+
+    monkeypatch.setattr(cv2, "HoughLinesP", capture_hough_candidates)
+    lines = extract_raw_geometry(image, preset="default").lines
+
+    assert any(
+        abs(int(x1) - int(x2)) <= 2
+        and min(int(y1), int(y2)) <= 20
+        and max(int(y1), int(y2)) >= 135
+        for candidates in captured_segments
+        for x1, y1, x2, y2 in candidates
+    ), "the shipped Hough path must produce the edge-spanning causal candidate"
+
+    assert not any(
+        min(line.p1_px[1], line.p2_px[1]) <= 70
+        and max(line.p1_px[1], line.p2_px[1]) >= 77
+        for line in lines
+    ), f"{background_texture} gray background bridged the border gap at x={x}"
+    for run_start, run_end in ((15, 70), (77, 140)):
+        assert any(
+            min(line.p1_px[1], line.p2_px[1]) <= run_start + 5
+            and max(line.p1_px[1], line.p2_px[1]) >= run_end - 5
+            for line in lines
+        ), f"{background_texture} gray background lost source run at x={x}"
+
+
+def test_real_hough_preserves_faint_thin_stroke_on_gray_paper() -> None:
+    image = np.full((120, 100, 3), 220, dtype=np.uint8)
+    cv2.line(image, (20, 15), (20, 100), (145, 145, 145), 1)
+
+    lines = extract_raw_geometry(image, preset="default").lines
+
+    assert any(
+        abs(line.p1_px[0] - line.p2_px[0]) <= 2
+        and min(line.p1_px[1], line.p2_px[1]) <= 20
+        and max(line.p1_px[1], line.p2_px[1]) >= 95
+        for line in lines
+    ), "the shipped Hough path lost a faint, thin real stroke"
+
+
 @pytest.mark.parametrize("preset", list(PRESETS))
 @pytest.mark.parametrize(
     ("name", "runs", "gaps"),
