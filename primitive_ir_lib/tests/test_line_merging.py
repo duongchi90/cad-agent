@@ -19,10 +19,14 @@ text-anchor một mình không xử lý được).
 from __future__ import annotations
 
 import cv2
+import json
 import numpy as np
+from pathlib import Path
 
-from primitive_ir_lib.geometry_extraction import RawLine
+from primitive_ir_lib.geometry_extraction import RawLine, extract_raw_geometry
 from primitive_ir_lib.line_merging import merge_collinear_lines
+from primitive_ir_lib.line_merging import _source_dash_gap_intervals
+from primitive_ir_lib.run_image import run as run_image
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 
 
@@ -104,6 +108,67 @@ def test_merges_when_no_text_blocks_even_with_larger_gap_but_still_within_tol():
     assert merged[0].length_px() == 250.0
 
 
+def test_merge_enabled_two_source_runs_do_not_reconnect_short_unsupported_gap():
+    """A single short source gap is evidence even without repeated cadence."""
+    image = np.full((120, 220, 3), 220, dtype=np.uint8)
+    cv2.line(image, (40, 60), (100, 60), (0, 0, 0), 2)
+    cv2.line(image, (106, 60), (166, 60), (0, 0, 0), 2)
+    left = _line((40, 60), (100, 60), "left-run")
+    right = _line((106, 60), (166, 60), "right-run")
+
+    merged = merge_collinear_lines(
+        [left, right], blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == 2, f"merge_lines=True reconnected source gap: {merged}"
+
+
+def test_merge_enabled_two_fragments_join_when_source_stroke_is_continuous():
+    image = np.full((120, 220, 3), 255, dtype=np.uint8)
+    cv2.line(image, (40, 60), (166, 60), (0, 0, 0), 2)
+    left = _line((40, 60), (100, 60), "left-fragment")
+    right = _line((106, 60), (166, 60), "right-fragment")
+
+    merged = merge_collinear_lines(
+        [left, right], blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == 1
+    assert merged[0].p1_px == (40.0, 60.0)
+    assert merged[0].p2_px == (166.0, 60.0)
+
+
+def test_run_image_merge_enabled_keeps_two_gray_background_source_runs(tmp_path):
+    image = np.full((600, 1200, 3), 220, dtype=np.uint8)
+    cv2.line(image, (150, 300), (350, 300), (0, 0, 0), 2)
+    cv2.line(image, (362, 300), (562, 300), (0, 0, 0), 2)
+    image_path = tmp_path / "two-source-runs.png"
+    output_path = tmp_path / "primitive-ir.json"
+    assert cv2.imwrite(str(image_path), image)
+
+    run_image(
+        str(image_path),
+        str(output_path),
+        scale_mm_per_px=1.0,
+        preset="real_scan_tuned_v1",
+        merge_lines=True,
+    )
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    line_boxes = [
+        primitive["trace"]["bbox_px"]
+        for primitive in document["primitives"]
+        if primitive.get("type") == "line"
+    ]
+
+    source_gap = (350, 362)
+    assert any(box[0] <= 250 and box[2] >= 250 for box in line_boxes), line_boxes
+    assert any(box[0] <= 450 and box[2] >= 450 for box in line_boxes), line_boxes
+    assert not any(
+        box[0] < source_gap[0] and box[2] > source_gap[1]
+        for box in line_boxes
+    ), f"run_image(merge_lines=True) reconnected the source gap: {line_boxes}"
+
+
 def test_does_not_merge_lines_with_different_angle():
     horiz = _line((0, 0), (100, 0), "h")
     vert = _line((100, 0), (100, 100), "v")
@@ -182,3 +247,260 @@ def test_tick_mark_does_not_block_technical_break_without_tick_marks():
     l2 = _line((155, 100), (300, 100), "b")
     merged = merge_collinear_lines([l1, l2], blocking_texts=[], image_bgr=img, gap_tol_px=25.0)
     assert len(merged) == 1
+
+
+def test_integrated_merger_preserves_cadenced_c04_dash_pattern():
+    fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
+    image = cv2.imread(str(fixture))
+    metadata = json.loads(fixture.with_suffix(".json").read_text(encoding="utf-8"))
+    assert image is not None
+    for preset in ("default", "real_scan_tuned_v1"):
+        raw = extract_raw_geometry(image, preset=preset).lines
+        merged = merge_collinear_lines(raw, image_bgr=image)
+
+        assert len(raw) == 8
+        assert len(merged) == len(raw), f"{preset} joined regular source-supported dashes"
+        expected = {
+            line.id: (line.p1_px, line.p2_px, line.confidence, line.bbox_px)
+            for line in raw
+        }
+        actual = {
+            line.id: (line.p1_px, line.p2_px, line.confidence, line.bbox_px)
+            for line in merged
+        }
+        assert actual == expected, f"{preset} changed source segment identity or geometry"
+        for gap in metadata["ground_truth_geometry"]["forbidden_gap_intervals"]:
+            assert not any(
+                abs((line.p1_px[0] + line.p2_px[0]) / 2 - gap["x_center"]) <= gap["x_tol"]
+                and min(line.p1_px[1], line.p2_px[1]) <= gap["gap_end"]
+                and max(line.p1_px[1], line.p2_px[1]) >= gap["gap_start"]
+                for line in merged
+            ), f"{preset} bridges forbidden source gap {gap}"
+
+
+_VERTICAL_CADENCED_RUNS = (
+    (40, 54),
+    (62, 76),
+    (84, 98),
+    (106, 120),
+    (128, 142),
+    (150, 164),
+)
+_VERTICAL_CADENCED_GAPS_2PX = ((56, 60), (78, 82), (100, 104), (122, 126), (144, 148))
+_VERTICAL_CADENCED_GAPS_1PX = ((55, 61), (77, 83), (99, 105), (121, 127), (143, 149))
+
+
+def _vertical_cadenced_image(*, background_gray: int, ink_gray: int, stroke_width_px: int):
+    image = np.full((240, 260, 3), background_gray, dtype=np.uint8)
+    for start, end in _VERTICAL_CADENCED_RUNS:
+        cv2.line(image, (150, start), (150, end), (ink_gray, ink_gray, ink_gray), stroke_width_px)
+    return image
+
+
+def _assert_integrated_merge_preserves_cadenced_gaps(
+    image,
+    *,
+    expected_gaps: tuple[tuple[int, int], ...],
+    source_parameters: str,
+):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    assert all(
+        np.all(gray[start : end + 1, 148:153] == 255)
+        for start, end in expected_gaps
+    ), f"fixture construction lost a white source gap: {source_parameters}"
+
+    raw = extract_raw_geometry(image, preset="default").lines
+    assert raw, f"default extractor found no line segments: {source_parameters}"
+    merged = merge_collinear_lines(raw, blocking_texts=[], image_bgr=image)
+    merged_spans = [
+        (min(line.p1_px[1], line.p2_px[1]), max(line.p1_px[1], line.p2_px[1]))
+        for line in merged
+        if abs((line.p1_px[0] + line.p2_px[0]) / 2 - 150) <= 3
+    ]
+    bridged_gaps = [
+        gap
+        for gap in expected_gaps
+        if any(start <= gap[0] and end >= gap[1] for start, end in merged_spans)
+    ]
+    assert not bridged_gaps, (
+        f"integrated extractor->merger path rejoined source gaps {bridged_gaps}; "
+        f"source_parameters={source_parameters}; merged_spans={merged_spans}"
+    )
+
+
+def test_integrated_merger_preserves_faint_cadenced_source_gaps():
+    """Ink intensity 210 on white; default preset; 2px strokes at x=150."""
+    parameters = "background_gray=255, ink_gray=210, stroke_width_px=2, preset=default"
+    image = _vertical_cadenced_image(background_gray=255, ink_gray=210, stroke_width_px=2)
+    _assert_integrated_merge_preserves_cadenced_gaps(
+        image, expected_gaps=_VERTICAL_CADENCED_GAPS_2PX, source_parameters=parameters,
+    )
+
+
+def test_integrated_merger_preserves_thin_cadenced_source_gaps():
+    """Black 1px strokes on white; default preset; centerline x=150."""
+    parameters = "background_gray=255, ink_gray=0, stroke_width_px=1, preset=default"
+    image = _vertical_cadenced_image(background_gray=255, ink_gray=0, stroke_width_px=1)
+    _assert_integrated_merge_preserves_cadenced_gaps(
+        image, expected_gaps=_VERTICAL_CADENCED_GAPS_1PX, source_parameters=parameters,
+    )
+
+
+def test_c04_four_fragments_with_four_visible_runs_keep_source_gaps():
+    """Keep the four-source-run control on the frozen C04 fixture."""
+    fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
+    image = cv2.imread(str(fixture))
+    assert image is not None
+
+    raw = extract_raw_geometry(image, preset="default").lines
+    selected = sorted(
+        raw,
+        key=lambda line: (line.p1_px[1] + line.p2_px[1]) / 2,
+    )[:4]
+    assert len(selected) == 4
+
+    # Count visible dark runs from the frozen source pixels along the shaft's
+    # center column, limited to the interval actually presented to merger.
+    y_start = int(min(min(line.p1_px[1], line.p2_px[1]) for line in selected))
+    y_end = int(max(max(line.p1_px[1], line.p2_px[1]) for line in selected))
+    center_column = cv2.cvtColor(image[y_start : y_end + 1, 150:151], cv2.COLOR_BGR2GRAY)[:, 0]
+    source_supported = center_column < 200
+    transitions = np.diff(np.r_[False, source_supported, False].astype(np.int8))
+    run_starts = np.flatnonzero(transitions == 1)
+    run_ends = np.flatnonzero(transitions == -1) - 1
+    visible_run_count = len(run_starts)
+    assert visible_run_count == 4
+    visible_gaps = [
+        (y_start + int(previous_end) + 1, y_start + int(next_start) - 1)
+        for previous_end, next_start in zip(run_ends[:-1], run_starts[1:])
+    ]
+
+    merged = merge_collinear_lines(selected, image_bgr=image)
+    merged_spans = [
+        (int(min(line.p1_px[1], line.p2_px[1])), int(max(line.p1_px[1], line.p2_px[1])))
+        for line in merged
+    ]
+    newly_bridged_gaps = [
+        gap
+        for gap in visible_gaps
+        if any(start <= gap[0] and end >= gap[1] for start, end in merged_spans)
+    ]
+
+    assert not newly_bridged_gaps, (
+        f"4 fragments span {visible_run_count} visible runs; "
+        f"source gaps {newly_bridged_gaps} were bridged into {merged_spans}"
+    )
+
+
+def test_c04_three_input_fragments_with_four_visible_runs_keep_first_gap():
+    fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
+    image = cv2.imread(str(fixture))
+    assert image is not None
+
+    raw = sorted(
+        extract_raw_geometry(image, preset="default").lines,
+        key=lambda line: (line.p1_px[1] + line.p2_px[1]) / 2,
+    )
+    selected = [raw[0], raw[1], raw[3]]
+    assert len(selected) == 3
+
+    y_start = int(min(min(line.p1_px[1], line.p2_px[1]) for line in selected))
+    y_end = int(max(max(line.p1_px[1], line.p2_px[1]) for line in selected))
+    center_column = cv2.cvtColor(image[y_start : y_end + 1, 150:151], cv2.COLOR_BGR2GRAY)[:, 0]
+    supported = center_column < 200
+    transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
+    visible_run_count = int(np.count_nonzero(transitions == 1))
+    assert visible_run_count == 4
+
+    merged = merge_collinear_lines(selected, image_bgr=image)
+
+    first_gap = (56, 60)
+    assert not any(
+        min(line.p1_px[1], line.p2_px[1]) <= first_gap[0]
+        and max(line.p1_px[1], line.p2_px[1]) >= first_gap[1]
+        for line in merged
+    ), f"3 input fragments span 4 visible runs; bridged {first_gap} into {merged}"
+
+
+def test_rotated_cadenced_dashes_are_not_rejoined():
+    image = np.full((220, 260, 3), 255, dtype=np.uint8)
+    angle = np.deg2rad(28)
+    origin = np.array([35.0, 45.0])
+    direction = np.array([np.cos(angle), np.sin(angle)])
+    raw = []
+    for index, start in enumerate(range(0, 176, 22)):
+        p1 = origin + direction * start
+        p2 = origin + direction * (start + 16)
+        a, b = tuple(np.rint(p1).astype(int)), tuple(np.rint(p2).astype(int))
+        cv2.line(image, a, b, (0, 0, 0), 2)
+        raw.append(_line(tuple(p1), tuple(p2), f"rotated-{index}"))
+
+    merged = merge_collinear_lines(
+        raw, blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == len(raw), "raster cadence detection must not depend on axis alignment"
+
+
+def test_rounded_rotated_cadenced_endpoints_keep_source_gaps_separate():
+    image = np.full((240, 260, 3), 255, dtype=np.uint8)
+    angle = np.deg2rad(28)
+    origin = np.array([30.0, 25.0])
+    direction = np.array([np.cos(angle), np.sin(angle)])
+    raw = []
+    for index in range(6):
+        start = 40 + 22 * index
+        end = 54 + 22 * index
+        p1 = origin + direction * start
+        p2 = origin + direction * end
+        rounded_p1 = tuple(np.rint(p1).astype(int))
+        rounded_p2 = tuple(np.rint(p2).astype(int))
+        cv2.line(image, rounded_p1, rounded_p2, (0, 0, 0), 2)
+        raw.append(_line(rounded_p1, rounded_p2, f"rounded-matrix-{index}"))
+
+    merged = merge_collinear_lines(raw, blocking_texts=[], image_bgr=image)
+
+    assert len(merged) == len(raw), "rounded endpoints must not rotate the source-cadence sampling axis"
+
+
+def test_truncated_but_repeated_dash_cadence_remains_separate():
+    image = np.full((100, 120, 3), 255, dtype=np.uint8)
+    raw = []
+    for index, start in enumerate([0, 22, 44, 66, 88]):
+        end = min(start + 14, image.shape[0] - 1)
+        cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
+        raw.append(_line((60, start), (60, end), f"truncated-{index}"))
+
+    merged = merge_collinear_lines(
+        raw, blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == len(raw), "image-edge truncation must not erase repeated dash evidence"
+
+
+def test_crossing_witnesses_do_not_look_like_a_regular_dash_cadence():
+    image = np.full((180, 220, 3), 255, dtype=np.uint8)
+    raw = []
+    for index, start in enumerate([10, 36, 62, 88]):
+        end = start + 20
+        cv2.line(image, (start, 90), (end, 90), (0, 0, 0), 2)
+        raw.append(_line((start, 90), (end, 90), f"crossing-{index}"))
+        if index < 3:
+            crossing_x = end + 3
+            cv2.line(image, (crossing_x, 70), (crossing_x, 110), (0, 0, 0), 1)
+
+    merged = merge_collinear_lines(
+        raw, blocking_texts=[], image_bgr=image,
+    )
+
+    assert len(merged) == 1, "independent perpendicular source witnesses must retain recovery"
+    assert round(merged[0].p1_px[0]) == 10
+    assert round(merged[0].p2_px[0]) == 108
+
+
+def test_irregular_gaps_are_not_misclassified_as_regular_dash_cadence():
+    image = np.full((180, 220, 3), 255, dtype=np.uint8)
+    for start, end in [(10, 24), (30, 45), (57, 71), (79, 94), (110, 124)]:
+        cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
+
+    assert _source_dash_gap_intervals(image, 60, 0, np.pi / 2, 10, 124) == []
