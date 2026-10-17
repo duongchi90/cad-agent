@@ -177,10 +177,19 @@ def _source_dash_gap_intervals(
     xs = np.rint(x0 + ts[:, None] * direction[0] + offsets[None, :] * normal[0]).astype(int)
     ys = np.rint(y0 + ts[:, None] * direction[1] + offsets[None, :] * normal[1]).astype(int)
     inside = (xs >= 0) & (xs < gray.shape[1]) & (ys >= 0) & (ys < gray.shape[0])
-    dark_counts = np.zeros(len(ts), dtype=np.uint8)
-    dark_counts[:] = np.sum(inside & (gray[np.clip(ys, 0, gray.shape[0] - 1),
-                                            np.clip(xs, 0, gray.shape[1] - 1)] < 200), axis=1)
-    supported = dark_counts >= 2
+    sampled_gray = gray[
+        np.clip(ys, 0, gray.shape[0] - 1),
+        np.clip(xs, 0, gray.shape[1] - 1),
+    ]
+    valid_corridor_values = sampled_gray[inside].reshape(-1, 1)
+    otsu_threshold, _ = cv2.threshold(
+        valid_corridor_values,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU,
+    )
+    dark_counts = np.sum(inside & (sampled_gray <= otsu_threshold), axis=1)
+    supported = dark_counts >= 1
 
     # A single rasterization dropout inside a stroke is not a physical gap.
     for index in range(1, len(supported) - 1):
@@ -219,6 +228,45 @@ def _gap_matches_source_dash(
         abs(midpoint - (source_start + source_end) / 2.0) <= max(2.0, (source_end - source_start) * 0.4)
         for source_start, source_end in source_gaps
     )
+
+
+def _source_dash_gaps_for_cluster(
+    image_bgr: np.ndarray,
+    cluster_lines: Sequence[RawLine],
+    ref_x0: float,
+    ref_y0: float,
+    ref_angle: float,
+) -> List[Tuple[float, float]]:
+    """Sample cadence on a fitted group axis and return gaps in the ref frame."""
+    points = np.asarray(
+        [point for line in cluster_lines for point in (line.p1_px, line.p2_px)],
+        dtype=np.float32,
+    )
+    vx, vy, fit_x0, fit_y0 = cv2.fitLine(
+        points, cv2.DIST_L2, 0, 0.01, 0.01
+    ).flatten()
+    fit_angle = math.atan2(float(vy), float(vx))
+    fit_direction = np.array([math.cos(fit_angle), math.sin(fit_angle)])
+    fit_origin = np.array([fit_x0, fit_y0], dtype=np.float64)
+    endpoint_values = (points.astype(np.float64) - fit_origin) @ fit_direction
+    fitted_gaps = _source_dash_gap_intervals(
+        image_bgr,
+        float(fit_x0),
+        float(fit_y0),
+        fit_angle,
+        float(np.min(endpoint_values)),
+        float(np.max(endpoint_values)),
+    )
+
+    ref_origin = np.array([ref_x0, ref_y0], dtype=np.float64)
+    ref_direction = np.array([math.cos(ref_angle), math.sin(ref_angle)])
+    return [
+        tuple(sorted((
+            float((fit_origin + fit_direction * start - ref_origin) @ ref_direction),
+            float((fit_origin + fit_direction * end - ref_origin) @ ref_direction),
+        )))
+        for start, end in fitted_gaps
+    ]
 
 
 def merge_collinear_lines(
@@ -418,13 +466,12 @@ def merge_collinear_lines(
 
         source_dash_gaps: List[Tuple[float, float]] = []
         if image_bgr is not None:
-            source_dash_gaps = _source_dash_gap_intervals(
+            source_dash_gaps = _source_dash_gaps_for_cluster(
                 image_bgr,
+                cluster_lines,
                 ref_x0,
                 ref_y0,
                 ref_angle,
-                min(seg[0] for seg in segs),
-                max(seg[1] for seg in segs),
             )
 
         # tính trước danh sách text "sát trục" (trong hành lang perp_tol lateral)

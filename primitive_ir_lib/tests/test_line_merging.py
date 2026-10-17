@@ -216,6 +216,74 @@ def test_integrated_merger_preserves_cadenced_c04_dash_pattern():
             ), f"{preset} bridges forbidden source gap {gap}"
 
 
+_VERTICAL_CADENCED_RUNS = (
+    (40, 54),
+    (62, 76),
+    (84, 98),
+    (106, 120),
+    (128, 142),
+    (150, 164),
+)
+_VERTICAL_CADENCED_GAPS_2PX = ((56, 60), (78, 82), (100, 104), (122, 126), (144, 148))
+_VERTICAL_CADENCED_GAPS_1PX = ((55, 61), (77, 83), (99, 105), (121, 127), (143, 149))
+
+
+def _vertical_cadenced_image(*, background_gray: int, ink_gray: int, stroke_width_px: int):
+    image = np.full((240, 260, 3), background_gray, dtype=np.uint8)
+    for start, end in _VERTICAL_CADENCED_RUNS:
+        cv2.line(image, (150, start), (150, end), (ink_gray, ink_gray, ink_gray), stroke_width_px)
+    return image
+
+
+def _assert_integrated_merge_preserves_cadenced_gaps(
+    image,
+    *,
+    expected_gaps: tuple[tuple[int, int], ...],
+    source_parameters: str,
+):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    assert all(
+        np.all(gray[start : end + 1, 148:153] == 255)
+        for start, end in expected_gaps
+    ), f"fixture construction lost a white source gap: {source_parameters}"
+
+    raw = extract_raw_geometry(image, preset="default").lines
+    assert raw, f"default extractor found no line segments: {source_parameters}"
+    merged = merge_collinear_lines(raw, blocking_texts=[], image_bgr=image)
+    merged_spans = [
+        (min(line.p1_px[1], line.p2_px[1]), max(line.p1_px[1], line.p2_px[1]))
+        for line in merged
+        if abs((line.p1_px[0] + line.p2_px[0]) / 2 - 150) <= 3
+    ]
+    bridged_gaps = [
+        gap
+        for gap in expected_gaps
+        if any(start <= gap[0] and end >= gap[1] for start, end in merged_spans)
+    ]
+    assert not bridged_gaps, (
+        f"integrated extractor->merger path rejoined source gaps {bridged_gaps}; "
+        f"source_parameters={source_parameters}; merged_spans={merged_spans}"
+    )
+
+
+def test_integrated_merger_preserves_faint_cadenced_source_gaps():
+    """Ink intensity 210 on white; default preset; 2px strokes at x=150."""
+    parameters = "background_gray=255, ink_gray=210, stroke_width_px=2, preset=default"
+    image = _vertical_cadenced_image(background_gray=255, ink_gray=210, stroke_width_px=2)
+    _assert_integrated_merge_preserves_cadenced_gaps(
+        image, expected_gaps=_VERTICAL_CADENCED_GAPS_2PX, source_parameters=parameters,
+    )
+
+
+def test_integrated_merger_preserves_thin_cadenced_source_gaps():
+    """Black 1px strokes on white; default preset; centerline x=150."""
+    parameters = "background_gray=255, ink_gray=0, stroke_width_px=1, preset=default"
+    image = _vertical_cadenced_image(background_gray=255, ink_gray=0, stroke_width_px=1)
+    _assert_integrated_merge_preserves_cadenced_gaps(
+        image, expected_gaps=_VERTICAL_CADENCED_GAPS_1PX, source_parameters=parameters,
+    )
+
+
 def test_c04_four_fragments_with_four_visible_runs_keep_source_gaps():
     """Keep the four-source-run control on the frozen C04 fixture."""
     fixture = Path(__file__).parent / "fixtures" / "C04_DASHED_HIDDEN_LINE.png"
@@ -310,6 +378,27 @@ def test_rotated_cadenced_dashes_are_not_rejoined():
     )
 
     assert len(merged) == len(raw), "raster cadence detection must not depend on axis alignment"
+
+
+def test_rounded_rotated_cadenced_endpoints_keep_source_gaps_separate():
+    image = np.full((240, 260, 3), 255, dtype=np.uint8)
+    angle = np.deg2rad(28)
+    origin = np.array([30.0, 25.0])
+    direction = np.array([np.cos(angle), np.sin(angle)])
+    raw = []
+    for index in range(6):
+        start = 40 + 22 * index
+        end = 54 + 22 * index
+        p1 = origin + direction * start
+        p2 = origin + direction * end
+        rounded_p1 = tuple(np.rint(p1).astype(int))
+        rounded_p2 = tuple(np.rint(p2).astype(int))
+        cv2.line(image, rounded_p1, rounded_p2, (0, 0, 0), 2)
+        raw.append(_line(rounded_p1, rounded_p2, f"rounded-matrix-{index}"))
+
+    merged = merge_collinear_lines(raw, blocking_texts=[], image_bgr=image)
+
+    assert len(merged) == len(raw), "rounded endpoints must not rotate the source-cadence sampling axis"
 
 
 def test_truncated_but_repeated_dash_cadence_remains_separate():
