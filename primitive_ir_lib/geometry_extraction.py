@@ -100,8 +100,35 @@ def _extend_line_endpoints_along_ink(
     ux, uy = dx / length, dy / length
     nx, ny = -uy, ux
 
-    def profile_ink_count(point: Tuple[float, float]) -> int:
-        sample_positions = set()
+    def has_source_ridge(point: Tuple[float, float], center_offset: int) -> bool:
+        """Require the splitter's source-relative support at one anchored center."""
+        center_x = int(round(point[0] + nx * center_offset))
+        center_y = int(round(point[1] + ny * center_offset))
+        if not (0 <= center_x < width and 0 <= center_y < height):
+            return False
+        center = int(gray[center_y, center_x])
+
+        def flank(offset: int) -> tuple[bool, int]:
+            px = int(round(point[0] + nx * (center_offset + offset)))
+            py = int(round(point[1] + ny * (center_offset + offset)))
+            if not (0 <= px < width and 0 <= py < height):
+                return False, center
+            return True, int(gray[py, px])
+
+        left_near, left_far = flank(-3), flank(-4)
+        right_near, right_far = flank(3), flank(4)
+        left_available = left_near[0] and left_far[0]
+        right_available = right_near[0] and right_far[0]
+        if left_available and right_available:
+            return left_near[1] - center >= 10 and right_near[1] - center >= 10
+        if left_available and not right_available:
+            return left_near[1] - center >= 10 and left_far[1] - center >= 10
+        if right_available and not left_available:
+            return right_near[1] - center >= 10 and right_far[1] - center >= 10
+        return False
+
+    def profile_samples(point: Tuple[float, float]) -> List[Tuple[int, int]]:
+        samples_by_position = {}
         for offset in range(
             -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
             _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX + 1,
@@ -109,25 +136,65 @@ def _extend_line_endpoints_along_ink(
             px = int(round(point[0] + nx * offset))
             py = int(round(point[1] + ny * offset))
             if 0 <= px < width and 0 <= py < height:
-                sample_positions.add((px, py))
-        return sum(
-            gray[py, px] <= _LINE_ENDPOINT_DARK_THRESHOLD
-            for px, py in sample_positions
-        )
+                position = (px, py)
+                previous = samples_by_position.get(position)
+                if previous is None or abs(offset) < abs(previous[0]):
+                    samples_by_position[position] = (offset, int(gray[py, px]))
+        return list(samples_by_position.values())
+
+    def supported_profile_samples(
+        point: Tuple[float, float], *, corridor_only: bool = False
+    ) -> List[Tuple[int, int]]:
+        samples = profile_samples(point)
+        outer = _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX - 1
+        left = [
+            value for offset, value in samples
+            if -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX <= offset <= -outer
+        ]
+        right = [
+            value for offset, value in samples
+            if outer <= offset <= _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX
+        ]
+        backgrounds = [max(side) for side in (left, right) if side]
+        if not backgrounds:
+            return []
+        background = min(backgrounds)
+        return [
+            (offset, value)
+            for offset, value in samples
+            if (not corridor_only or abs(offset) <= _LINE_ENDPOINT_PERP_HALF_WIDTH_PX)
+            and value <= _LINE_ENDPOINT_DARK_THRESHOLD
+            and background - value >= 10
+        ]
+
+    def profile_ink_count(point: Tuple[float, float]) -> int:
+        return len(supported_profile_samples(point))
 
     def march(endpoint: Tuple[float, float], direction: float) -> Tuple[float, float]:
         best = endpoint
         if length < 2:
             return best
-        baseline_counts = [
-            profile_ink_count(
-                (
-                    endpoint[0] - direction * ux * length * fraction,
-                    endpoint[1] - direction * uy * length * fraction,
-                )
+        baseline_points = [
+            (
+                endpoint[0] - direction * ux * length * fraction,
+                endpoint[1] - direction * uy * length * fraction,
             )
             for fraction in (0.2, 0.35, 0.5, 0.65, 0.8)
         ]
+        baseline_counts = [profile_ink_count(point) for point in baseline_points]
+        # Lock the continuation to a source-relative center already observed
+        # inside this Hough segment. Prefer offset 0 for thick strokes; permit
+        # one adjacent center only when that is where the source ridge lies.
+        ridge_offsets = [
+            offset
+            for offset in (-1, 0, 1)
+            if sum(has_source_ridge(point, offset) for point in baseline_points) >= 3
+        ]
+        center_offset = (
+            min(ridge_offsets, key=lambda offset: (abs(offset), offset))
+            if ridge_offsets
+            else None
+        )
         # Keep the allowance near the candidate's observed width so partial
         # perpendicular junctions cannot hide just below the finite window.
         profile_limit = min(
@@ -146,18 +213,17 @@ def _extend_line_endpoints_along_ink(
             if profile_ink_count((x, y)) > profile_limit:
                 break
 
-            sample_positions = set()
-            for offset in range(-_LINE_ENDPOINT_PERP_HALF_WIDTH_PX, _LINE_ENDPOINT_PERP_HALF_WIDTH_PX + 1):
-                px = int(round(x + nx * offset))
-                py = int(round(y + ny * offset))
-                if 0 <= px < width and 0 <= py < height:
-                    sample_positions.add((px, py))
-            dark_samples = sum(
-                gray[py, px] <= _LINE_ENDPOINT_DARK_THRESHOLD
-                for px, py in sample_positions
-            )
+            dark_samples = len(supported_profile_samples((x, y), corridor_only=True))
 
-            if dark_samples >= 2:
+            anchored_source = (
+                center_offset is not None
+                and has_source_ridge((x, y), center_offset)
+            )
+            one_pixel_source = (
+                dark_samples == 1
+                and max(baseline_counts, default=0) == 1
+            )
+            if anchored_source and (dark_samples >= 2 or one_pixel_source):
                 best = (x, y)
             else:
                 break

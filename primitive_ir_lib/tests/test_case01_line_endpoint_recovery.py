@@ -95,6 +95,52 @@ def test_extract_lines_splits_source_gap_and_extends_each_supported_run(
     )
 
 
+def test_extract_lines_does_not_reconnect_source_gap_on_gray_background_170(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 140), 170, dtype=np.uint8)
+    gray[1, 20:61] = 0
+    gray[1, 68:101] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 2, 100, 2]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    spans = sorted(
+        (min(line.p1_px[0], line.p2_px[0]), max(line.p1_px[0], line.p2_px[0]))
+        for line in lines
+    )
+    assert len(spans) == 2, f"the two source-supported runs must remain separate: {spans}"
+    assert spans[0][1] < spans[1][0], (
+        "endpoint recovery must not treat gray-170 background as source ink and bridge "
+        f"the unsupported gap: {spans}"
+    )
+
+
+def test_extract_lines_keeps_faint_thin_source_stroke_on_gray_background_170(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 140), 170, dtype=np.uint8)
+    gray[50, 20:101] = 150
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 50, 60, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p1_px == (20.0, 50.0)
+    assert 60.0 < lines[0].p2_px[0] <= 90.0, (
+        "the continuous faint one-pixel source stroke with local contrast must "
+        f"support bounded endpoint recovery: {lines[0].p2_px}"
+    )
+
+
 def test_ray_march_does_not_follow_a_perpendicular_stem_past_the_line_endpoint() -> None:
     gray = np.full((100, 150), 255, dtype=np.uint8)
     gray[49:52, 20:81] = 0
