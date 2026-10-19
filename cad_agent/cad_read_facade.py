@@ -307,7 +307,8 @@ def _read_entity_index(
     try:
         raw_entities = client.entity_list(layer=layer)
     except Exception as error:
-        raise CadReadFacadeError("ENTITY_LIST_FAILED") from error
+        code = "ENTITY_LIST_INVALID" if str(error) == "ENTITY_LIST_INVALID" else "ENTITY_LIST_FAILED"
+        raise CadReadFacadeError(code) from error
     _validate_client_drawing(client, expected_path)
     if not isinstance(raw_entities, list):
         _fail("ENTITY_LIST_INVALID")
@@ -489,6 +490,224 @@ def query_entities(
     )
 
 
+def _tag_audit_payload(
+    *,
+    status: str,
+    binding: Mapping[str, object] | None,
+    reason_codes: Sequence[str] = (),
+    evidence_refs: Mapping[str, object] | None = None,
+    counts: Mapping[str, object] | None = None,
+    findings: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": CAD_READ_FACADE_SCHEMA_VERSION,
+        "operation": "audit_model_text_tags",
+        "binding": deepcopy(dict(binding)) if binding is not None else None,
+        "status": status,
+        "scope": "MODEL_TEXT",
+        "consistency": "NON_ATOMIC_OBSERVATION",
+        "reason_codes": sorted(set(reason_codes)),
+        "evidence_refs": deepcopy(dict(evidence_refs or {})),
+        "counts": {
+            "indexed_text_count": None,
+            "model_text_count": None,
+            "excluded_paperspace_text_count": None,
+            "duplicate_group_count": None,
+            "duplicate_entity_count": None,
+            "expected_tag_count": None,
+            "missing_tag_count": None,
+            **deepcopy(dict(counts or {})),
+        },
+        "findings": {
+            "duplicates": [],
+            "missing_expected_tags": [],
+            **deepcopy(dict(findings or {})),
+        },
+    }
+
+
+def audit_model_text_tags(
+    *,
+    client: CadReadClient,
+    drawing_reference: Mapping[str, object],
+    drawing_observation: Mapping[str, object],
+    artifact_bytes: bytes,
+    candidate_state: Mapping[str, object],
+    drawing_path: str,
+    scope: str,
+    layer: str | None = None,
+    expected_tags: Sequence[str] | None = None,
+    parent_reference: Mapping[str, object] | None = None,
+    accepted_transition_evidence_sha256: str | None = None,
+) -> dict[str, object]:
+    """Audit exact Model-space TEXT values without claiming an atomic snapshot."""
+
+    if scope != "MODEL_TEXT":
+        return _finish_result(
+            _tag_audit_payload(
+                status="UNSUPPORTED",
+                binding=None,
+                reason_codes=("SCOPE_UNSUPPORTED",),
+            )
+        )
+    if expected_tags is not None and (
+        isinstance(expected_tags, (str, bytes))
+        or not isinstance(expected_tags, Sequence)
+        or any(type(value) is not str for value in expected_tags)
+    ):
+        return _finish_result(
+            _tag_audit_payload(
+                status="INCOMPLETE", binding=None, reason_codes=("EXPECTED_TAGS_INVALID",)
+            )
+        )
+    try:
+        normalized_layer = _normalize_filter(layer, "LAYER_INVALID")
+        initial_binding = _validated_binding(
+            client=client,
+            drawing_reference=drawing_reference,
+            drawing_observation=drawing_observation,
+            artifact_bytes=artifact_bytes,
+            candidate_state=candidate_state,
+            drawing_path=drawing_path,
+            parent_reference=parent_reference,
+            accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
+        )
+        query = query_entities(
+            client=client,
+            drawing_reference=drawing_reference,
+            drawing_observation=drawing_observation,
+            artifact_bytes=artifact_bytes,
+            candidate_state=candidate_state,
+            drawing_path=drawing_path,
+            parent_reference=parent_reference,
+            accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
+            entity_type="TEXT",
+            layer=normalized_layer,
+            projection=("handle", "type", "layer"),
+            limit=MAX_QUERY_RESULT_COUNT,
+        )
+        binding = query["binding"]
+        evidence_refs = {
+            "query_id": query["query_id"],
+            "result_sha256": query["result_sha256"],
+        }
+        indexed = query["entities"]
+        if query["truncated"] or query["total_count"] > MAX_QUERY_RESULT_COUNT:
+            return _finish_result(
+                _tag_audit_payload(
+                    status="INCOMPLETE",
+                    binding=binding,
+                    reason_codes=("ENTITY_SCOPE_TRUNCATED",),
+                    evidence_refs=evidence_refs,
+                    counts={"indexed_text_count": query["total_count"]},
+                )
+            )
+
+        handles = [item["handle"] for item in indexed]
+        if len(set(handles)) != len(handles):
+            _fail("DUPLICATE_HANDLE")
+
+        text_by_handle: dict[str, str] = {}
+        excluded_count = 0
+        for item in indexed:
+            _validate_client_drawing(client, binding["drawing_path"])
+            try:
+                detail = client.entity_get(item["handle"])
+            except Exception as error:
+                raise CadReadFacadeError("ENTITY_GET_FAILED") from error
+            _validate_client_drawing(client, binding["drawing_path"])
+            if not isinstance(detail, Mapping):
+                _fail("ENTITY_DETAIL_INVALID")
+            if any(detail.get(field) != item[field] for field in _BASE_FIELDS):
+                _fail("ENTITY_IDENTITY_MISMATCH")
+            layout = detail.get("layout")
+            if type(layout) is not str or not layout:
+                _fail("LAYOUT_UNAVAILABLE")
+            content = detail.get("content")
+            if type(content) is not str:
+                _fail("CONTENT_UNAVAILABLE")
+            if detail.get("truncated") is True or detail.get("content_truncated") is True:
+                _fail("CONTENT_TRUNCATED")
+            if layout == "Model":
+                text_by_handle[item["handle"]] = content
+            else:
+                excluded_count += 1
+
+        current_binding = _validated_binding(
+            client=client,
+            drawing_reference=drawing_reference,
+            drawing_observation=drawing_observation,
+            artifact_bytes=artifact_bytes,
+            candidate_state=candidate_state,
+            drawing_path=drawing_path,
+            parent_reference=parent_reference,
+            accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
+        )
+        if current_binding != initial_binding or current_binding != binding:
+            _fail("DRAWING_ARTIFACT_STALE")
+
+        values_to_handles: dict[str, list[str]] = {}
+        for handle, value in text_by_handle.items():
+            values_to_handles.setdefault(value, []).append(handle)
+        duplicate_groups = [
+            {"text": value, "handles": sorted(value_handles)}
+            for value, value_handles in values_to_handles.items()
+            if len(value_handles) > 1
+        ]
+        duplicate_groups.sort(key=lambda item: item["text"])
+        distinct_expected = (
+            sorted(set(expected_tags)) if expected_tags is not None else None
+        )
+        present_values = set(text_by_handle.values())
+        missing = (
+            [value for value in distinct_expected if value not in present_values]
+            if distinct_expected is not None
+            else []
+        )
+        payload = _tag_audit_payload(
+            status="COMPLETE",
+            binding=binding,
+            evidence_refs=evidence_refs,
+            counts={
+                "indexed_text_count": len(indexed),
+                "model_text_count": len(text_by_handle),
+                "excluded_paperspace_text_count": excluded_count,
+                "duplicate_group_count": len(duplicate_groups),
+                "duplicate_entity_count": sum(
+                    len(item["handles"]) for item in duplicate_groups
+                ),
+                "expected_tag_count": (
+                    len(distinct_expected) if distinct_expected is not None else None
+                ),
+                "missing_tag_count": len(missing) if distinct_expected is not None else None,
+            },
+            findings={"duplicates": duplicate_groups, "missing_expected_tags": missing},
+        )
+        return _finish_bound_result(
+            client=client, expected_path=binding["drawing_path"], payload=payload
+        )
+    except CadReadFacadeError as error:
+        code = str(error) or "READ_INCOMPLETE"
+        return _finish_result(
+            _tag_audit_payload(
+                status="INCOMPLETE",
+                binding=locals().get("binding"),
+                reason_codes=(code,),
+                evidence_refs=locals().get("evidence_refs"),
+                counts={"indexed_text_count": locals().get("query", {}).get("total_count")},
+            )
+        )
+    except Exception:
+        return _finish_result(
+            _tag_audit_payload(
+                status="INCOMPLETE",
+                binding=locals().get("binding"),
+                reason_codes=("READ_INCOMPLETE",),
+                evidence_refs=locals().get("evidence_refs"),
+            )
+        )
+
+
 __all__ = [
     "CAD_READ_FACADE_SCHEMA_VERSION",
     "CadReadClient",
@@ -497,5 +716,6 @@ __all__ = [
     "CadReadFacadeError",
     "observe_drawing",
     "query_entities",
+    "audit_model_text_tags",
     "validate_observe_drawing_result",
 ]
