@@ -557,6 +557,23 @@ def test_audit_model_text_tags_refuses_truncated_scope() -> None:
     assert result["findings"]["duplicates"] == []
 
 
+@pytest.mark.parametrize("truncation_field", ["truncated", "content_truncated"])
+def test_audit_model_text_tags_refuses_truncated_entity_content(
+    truncation_field: str,
+) -> None:
+    client = _tag_client([("1", "A", "Model")])
+    client._entities["1"][truncation_field] = True
+
+    result = _facade().audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+
+    assert result["status"] == "INCOMPLETE"
+    assert "CONTENT_TRUNCATED" in result["reason_codes"]
+    assert result["findings"]["duplicates"] == []
+    assert result["findings"]["missing_expected_tags"] == []
+
+
 def test_audit_model_text_tags_preserves_malformed_entity_list_reason() -> None:
     class _MalformedIndexClient(_BoundFakeCadClient):
         def entity_list(self, layer: str | None = None) -> list[dict[str, object]]:
