@@ -1,0 +1,19 @@
+{
+  "schema_version": "layer-standard-check-1.0",
+  "status": "CLASSIFIED",
+  "classification_scope": "LAYER_NAME_RULES_ONLY",
+  "engineering_compliance": "NOT_EVALUATED",
+  "audit_full_path": "SYNTHETIC_AUDIT_PATH",
+  "audit_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "drawing_full_path": "SYNTHETIC_DRAWING_PATH",
+  "drawing_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "rules": {"allowed_exact_names": ["A-WALL"], "allowed_prefixes": ["A-"], "case_sensitive": true},
+  "layer_count": 2,
+  "standard_count": 1,
+  "nonstandard_count": 1,
+  "standard_percentage": 50.0,
+  "layers": [
+    {"name": "A-WALL", "classification": "STANDARD", "matching_rules": [{"kind": "EXACT_NAME", "value": "A-WALL"}, {"kind": "PREFIX", "value": "A-"}]},
+    {"name": "MISC", "classification": "NONSTANDARD", "matching_rules": []}
+  ]
+}

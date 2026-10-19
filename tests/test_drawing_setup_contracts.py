@@ -30,6 +30,7 @@ CONTRACTS = {
     "drawing-setup-plan.json": "drawing_setup_plan",
     "drawing-setup-audit.json": "drawing_setup_audit",
     "drawing-setup-evidence.json": "drawing_setup_evidence",
+    "layer-standard-check.json": "layer_standard_check",
 }
 
 

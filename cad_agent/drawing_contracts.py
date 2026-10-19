@@ -567,6 +567,78 @@ def _validate_evidence(payload: dict[str, Any]) -> None:
     _validate_policy_evidence(payload, contract=contract)
 
 
+def _validate_layer_standard_check(payload: dict[str, Any]) -> None:
+    contract = "layer_standard_check"
+    required = {
+        "schema_version", "status", "classification_scope", "engineering_compliance",
+        "audit_full_path", "audit_sha256", "drawing_full_path", "drawing_sha256",
+        "rules", "layer_count", "standard_count", "nonstandard_count",
+        "standard_percentage", "layers",
+    }
+    _keys(payload, contract=contract, required=required)
+    if payload["schema_version"] != "layer-standard-check-1.0":
+        _fail(contract, "schema_version is invalid")
+    if payload["status"] not in {"CLASSIFIED", "EMPTY_TABLE"}:
+        _fail(contract, "status is invalid")
+    if payload["classification_scope"] != "LAYER_NAME_RULES_ONLY":
+        _fail(contract, "classification_scope is invalid")
+    if payload["engineering_compliance"] != "NOT_EVALUATED":
+        _fail(contract, "engineering_compliance must remain NOT_EVALUATED")
+    for field in ("audit_full_path", "drawing_full_path"):
+        _string(payload[field], contract=contract, path=field)
+    for field in ("audit_sha256", "drawing_sha256"):
+        _sha(payload[field], contract=contract, path=field)
+    rules = _object(payload["rules"], contract=contract, path="rules")
+    _keys(rules, contract=contract, required={"allowed_exact_names", "allowed_prefixes", "case_sensitive"})
+    for field in ("allowed_exact_names", "allowed_prefixes"):
+        values = rules[field]
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            _fail(contract, f"rules.{field} must contain non-empty strings")
+    _bool(rules["case_sensitive"], contract=contract, path="rules.case_sensitive")
+    counts = []
+    for field in ("layer_count", "standard_count", "nonstandard_count"):
+        value = payload[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            _fail(contract, f"{field} must be a non-negative integer")
+        counts.append(value)
+    total, standard, nonstandard = counts
+    if standard + nonstandard != total:
+        _fail(contract, "layer counts do not reconcile")
+    expected_status = "CLASSIFIED" if total else "EMPTY_TABLE"
+    if payload["status"] != expected_status:
+        _fail(contract, "status does not match layer count")
+    percentage = payload["standard_percentage"]
+    if total == 0:
+        if percentage is not None:
+            _fail(contract, "empty table percentage must be null")
+    elif isinstance(percentage, bool) or not isinstance(percentage, (int, float)) or not math.isclose(percentage, standard * 100.0 / total):
+        _fail(contract, "standard_percentage does not match counts")
+    layers = payload["layers"]
+    if not isinstance(layers, list) or len(layers) != total:
+        _fail(contract, "layers must contain every audited layer")
+    observed_standard = 0
+    for index, value in enumerate(layers):
+        item = _object(value, contract=contract, path=f"layers[{index}]")
+        _keys(item, contract=contract, required={"name", "classification", "matching_rules"})
+        _string(item["name"], contract=contract, path=f"layers[{index}].name")
+        if item["classification"] not in {"STANDARD", "NONSTANDARD"}:
+            _fail(contract, f"layers[{index}].classification is invalid")
+        matches = item["matching_rules"]
+        if not isinstance(matches, list):
+            _fail(contract, f"layers[{index}].matching_rules must be a list")
+        if bool(matches) != (item["classification"] == "STANDARD"):
+            _fail(contract, f"layers[{index}] classification does not match rule witnesses")
+        observed_standard += item["classification"] == "STANDARD"
+        for match_index, match in enumerate(matches):
+            witness = _object(match, contract=contract, path=f"layers[{index}].matching_rules[{match_index}]")
+            _keys(witness, contract=contract, required={"kind", "value"})
+            if witness["kind"] not in {"EXACT_NAME", "PREFIX"}:
+                _fail(contract, "matching rule kind is invalid")
+            _string(witness["value"], contract=contract, path="matching rule value")
+    if observed_standard != standard:
+        _fail(contract, "standard_count does not match layers")
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "drawing_definition": _validate_definition,
     "drawing_profile": _validate_profile,
@@ -575,6 +647,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
     "drawing_setup_plan": _validate_setup_plan,
     "drawing_setup_audit": _validate_audit,
     "drawing_setup_evidence": _validate_evidence,
+    "layer_standard_check": _validate_layer_standard_check,
 }
 
 
@@ -593,3 +666,21 @@ def read_contract(path: Path, *, contract: str) -> dict[str, object]:
         raise DrawingContractError(f"{contract}: root must be an object")
     validator(payload)
     return payload
+
+
+def read_contract_with_sha256(path: Path, *, contract: str) -> tuple[dict[str, object], str]:
+    """Read and validate a contract while hashing the exact bytes consumed."""
+    key = contract.replace("-", "_")
+    validator = _VALIDATORS.get(key)
+    if validator is None:
+        raise DrawingContractError(f"unsupported contract kind: {contract}")
+    source = Path(path)
+    try:
+        raw = source.read_bytes()
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DrawingContractError(f"Cannot read {contract}: {source}") from exc
+    if not isinstance(payload, dict):
+        raise DrawingContractError(f"{contract}: root must be an object")
+    validator(payload)
+    return payload, hashlib.sha256(raw).hexdigest()
