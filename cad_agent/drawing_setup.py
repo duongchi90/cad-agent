@@ -11,6 +11,7 @@ from typing import Any
 
 from .drawing_contracts import (
     DrawingContractError,
+    _layer_rule_witnesses,
     canonical_json_sha256,
     read_contract_with_sha256,
 )
@@ -352,27 +353,15 @@ def create_layer_standard_check(
     if actual_drawing_sha != expected_drawing_sha:
         raise _fail("audited drawing source hash is stale")
 
-    def key(value: str) -> str:
-        # Uppercase each code point independently: do not allow expansions such as ß -> SS.
-        return "".join(char.upper() if len(char.upper()) == 1 else char for char in value)
-
-    compare = (lambda value: value) if case_sensitive else key
-    exact_keys = [(item, compare(item)) for item in exact]
-    prefix_keys = [(item, compare(item)) for item in prefixes]
     layers: list[dict[str, object]] = []
     for entry in audit["layers"]:
         assert isinstance(entry, Mapping)
         name = str(entry["name"])
-        compared_name = compare(name)
-        matches: list[dict[str, str]] = [
-            {"kind": "EXACT_NAME", "value": original}
-            for original, candidate in exact_keys
-            if compared_name == candidate
-        ]
-        matches.extend(
-            {"kind": "PREFIX", "value": original}
-            for original, candidate in prefix_keys
-            if compared_name.startswith(candidate)
+        matches = _layer_rule_witnesses(
+            name,
+            exact,
+            prefixes,
+            case_sensitive,
         )
         layers.append({
             "name": name,

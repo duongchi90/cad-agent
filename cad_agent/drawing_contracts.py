@@ -567,6 +567,32 @@ def _validate_evidence(payload: dict[str, Any]) -> None:
     _validate_policy_evidence(payload, contract=contract)
 
 
+def _layer_rule_witnesses(
+    name: str,
+    allowed_exact_names: list[str],
+    allowed_prefixes: list[str],
+    case_sensitive: bool,
+) -> list[dict[str, str]]:
+    """Return every caller rule that literally matches one layer name."""
+    def key(value: str) -> str:
+        # Keep single-code-point case folding consistent with the original classifier.
+        return "".join(char.upper() if len(char.upper()) == 1 else char for char in value)
+
+    compare = (lambda value: value) if case_sensitive else key
+    compared_name = compare(name)
+    matches = [
+        {"kind": "EXACT_NAME", "value": original}
+        for original in allowed_exact_names
+        if compared_name == compare(original)
+    ]
+    matches.extend(
+        {"kind": "PREFIX", "value": original}
+        for original in allowed_prefixes
+        if compared_name.startswith(compare(original))
+    )
+    return matches
+
+
 def _validate_layer_standard_check(payload: dict[str, Any]) -> None:
     contract = "layer_standard_check"
     required = {
@@ -626,8 +652,15 @@ def _validate_layer_standard_check(payload: dict[str, Any]) -> None:
         matches = item["matching_rules"]
         if not isinstance(matches, list):
             _fail(contract, f"layers[{index}].matching_rules must be a list")
-        if bool(matches) != (item["classification"] == "STANDARD"):
-            _fail(contract, f"layers[{index}] classification does not match rule witnesses")
+        expected_matches = _layer_rule_witnesses(
+            item["name"],
+            rules["allowed_exact_names"],
+            rules["allowed_prefixes"],
+            rules["case_sensitive"],
+        )
+        expected_classification = "STANDARD" if expected_matches else "NONSTANDARD"
+        if matches != expected_matches or item["classification"] != expected_classification:
+            _fail(contract, f"layers[{index}] classification and witnesses do not match caller rules")
         observed_standard += item["classification"] == "STANDARD"
         for match_index, match in enumerate(matches):
             witness = _object(match, contract=contract, path=f"layers[{index}].matching_rules[{match_index}]")
