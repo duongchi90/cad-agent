@@ -88,7 +88,8 @@ class DetailCalloutResult:
     detail_id_pos: Point2D
     sheet_ref_pos: Point2D
     leader_line: Optional[LineSegment2D] = None
-    processed_count: int = 4
+    ir_entity_count: int = 4
+    processed_count: int = 0
     layer: str = "DIM"
 
 
@@ -126,7 +127,7 @@ class DetailCalloutHandler:
 
         # 5. Optional Leader Line
         leader_line: Optional[LineSegment2D] = None
-        processed_count = 4
+        ir_entity_count = 4
 
         if args.leader_endpoint is not None and len(args.leader_endpoint) >= 2:
             lx = _validate_finite(args.leader_endpoint[0], "LeaderEndpoint[0]")
@@ -138,9 +139,9 @@ class DetailCalloutHandler:
                 uy = (leader_pt.y - center.y) / dist
                 rim = Point2D(center.x + (ux * radius), center.y + (uy * radius))
                 leader_line = LineSegment2D(rim, leader_pt)
-                processed_count += 1
+                ir_entity_count += 1
 
-        msg = f"Detail callout bubble '{detail_id}/{sheet_ref}' placed at ({cx:.2f}, {cy:.2f})."
+        msg = f"[OFFLINE_IR] Detail callout bubble '{detail_id}/{sheet_ref}' generated ({ir_entity_count} IR entities, 0 native entities committed)."
         return DetailCalloutResult(
             status="OK",
             message=msg,
@@ -151,7 +152,8 @@ class DetailCalloutHandler:
             detail_id_pos=detail_id_pos,
             sheet_ref_pos=sheet_ref_pos,
             leader_line=leader_line,
-            processed_count=processed_count,
+            ir_entity_count=ir_entity_count,
+            processed_count=0,
             layer=layer,
         )
 
@@ -186,7 +188,8 @@ class SectionMarkResult:
     arrow_line_end: LineSegment2D
     text_pos_start: Point2D
     text_pos_end: Point2D
-    processed_count: int = 5
+    ir_entity_count: int = 5
+    processed_count: int = 0
     layer: str = "DIM"
 
 
@@ -253,7 +256,7 @@ class SectionMarkHandler:
         text_pos1 = Point2D(arr_end1.x + (norm_x * 1.5), arr_end1.y + (norm_y * 1.5))
         text_pos2 = Point2D(arr_end2.x + (norm_x * 1.5), arr_end2.y + (norm_y * 1.5))
 
-        msg = f"Section cutting mark '{full_label}' drawn with {5} entities on layer '{layer}'."
+        msg = f"[OFFLINE_IR] Section cutting mark '{full_label}' generated (5 IR entities, 0 native entities committed)."
         return SectionMarkResult(
             status="OK",
             message=msg,
@@ -264,7 +267,8 @@ class SectionMarkHandler:
             arrow_line_end=arrow_line_end,
             text_pos_start=text_pos1,
             text_pos_end=text_pos2,
-            processed_count=5,
+            ir_entity_count=5,
+            processed_count=0,
             layer=layer,
         )
 
@@ -296,7 +300,8 @@ class AreaLabelResult:
     display_area: float
     raw_area: float
     position: Point2D
-    processed_count: int = 1
+    ir_entity_count: int = 1
+    processed_count: int = 0
     layer: str = "TEXT"
 
 
@@ -326,7 +331,7 @@ class AreaLabelHandler:
         display_area = raw_area * scale_factor
         label_text = f"{prefix}{display_area:.2f} {unit}"
 
-        msg = f"Area label '{label_text}' placed on layer '{layer}'."
+        msg = f"[OFFLINE_IR] Area label '{label_text}' generated (1 IR entity, 0 native entities committed)."
         return AreaLabelResult(
             status="OK",
             message=msg,
@@ -334,7 +339,8 @@ class AreaLabelHandler:
             display_area=display_area,
             raw_area=raw_area,
             position=pos,
-            processed_count=1,
+            ir_entity_count=1,
+            processed_count=0,
             layer=layer,
         )
 
@@ -370,7 +376,8 @@ class DetailViewResult:
     shoulder_line: LineSegment2D
     label_text_pos: Point2D
     scale_text_pos: Optional[Point2D] = None
-    processed_count: int = 4
+    ir_entity_count: int = 4
+    processed_count: int = 0
     layer: str = "M-DETAIL"
 
 
@@ -423,7 +430,8 @@ class DetailViewHandler:
             scale_text_pos = Point2D(text_x, scale_y)
             total_entities += 1
 
-        msg = f"Detail view '{label}' placed (Radius: {radius:.1f})."
+        ir_entity_count = total_entities
+        msg = f"[OFFLINE_IR] Detail view '{label}' generated ({ir_entity_count} IR entities, 0 native entities committed)."
         return DetailViewResult(
             status="OK",
             message=msg,
@@ -434,7 +442,8 @@ class DetailViewHandler:
             shoulder_line=shoulder_line,
             label_text_pos=label_text_pos,
             scale_text_pos=scale_text_pos,
-            processed_count=total_entities,
+            ir_entity_count=ir_entity_count,
+            processed_count=0,
             layer=layer,
         )
 
@@ -482,6 +491,7 @@ class ScheduleTableResult:
     total_height: float
     cells: List[ScheduleTableCellIR] = field(default_factory=list)
     grid_lines: List[LineSegment2D] = field(default_factory=list)
+    ir_entity_count: int = 0
     processed_count: int = 0
     layer: str = "S-TABLE"
 
@@ -615,21 +625,31 @@ class ScheduleTableHandler:
             grid_lines.append(LineSegment2D(Point2D(ox, cur_y), Point2D(ox + total_width, cur_y)))
             total_entities += 1
 
-        # 4. Optional Summation Row
+        # 4. Optional Summation Row (Strict 1:1 C# parity with TierAWave6Handlers.cs lines 555-582)
         if has_sum and sum_total is not None:
-            sum_str = f"TOTAL: {sum_total:.2f}"
+            col_x = ox
+            sum_col_idx = args.sum_column if args.sum_column is not None else 0
             tot_y = cur_y - r_height + ((r_height - t_height) / 2.0)
-            cells.append(
-                ScheduleTableCellIR(
-                    row=row_count + 1,
-                    col=args.sum_column if args.sum_column is not None else 0,
-                    text=sum_str,
-                    position=Point2D(ox + 4.0, tot_y),
-                    width=total_width,
-                    height=r_height,
-                )
-            )
-            total_entities += 1
+            for c in range(col_count):
+                cell_str = ""
+                if c == 0 and sum_col_idx > 0:
+                    cell_str = "TOTAL"
+                elif c == sum_col_idx:
+                    cell_str = f"{sum_total:.2f}"
+
+                if cell_str:
+                    cells.append(
+                        ScheduleTableCellIR(
+                            row=row_count + 1,
+                            col=c,
+                            text=cell_str,
+                            position=Point2D(col_x + 3.0, tot_y),
+                            width=col_widths[c],
+                            height=r_height,
+                        )
+                    )
+                    total_entities += 1
+                col_x += col_widths[c]
 
             cur_y -= r_height
             grid_lines.append(LineSegment2D(Point2D(ox, cur_y), Point2D(ox + total_width, cur_y)))
@@ -647,7 +667,7 @@ class ScheduleTableHandler:
             total_entities += 1
 
         total_table_height = abs(oy - cur_y)
-        msg = f"Schedule table drawn with {col_count} columns and {row_count} rows."
+        msg = f"[OFFLINE_IR] Schedule table generated ({total_entities} IR entities, 0 native entities committed)."
 
         return ScheduleTableResult(
             status="OK",
@@ -659,6 +679,7 @@ class ScheduleTableHandler:
             total_height=total_table_height,
             cells=cells,
             grid_lines=grid_lines,
-            processed_count=total_entities,
+            ir_entity_count=total_entities,
+            processed_count=0,
             layer=layer,
         )

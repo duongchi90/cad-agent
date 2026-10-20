@@ -125,6 +125,13 @@ def test_block_dedup_spatial_clustering_dry_run_vs_apply() -> None:
     assert len(mutable_instances) == 3
     assert all(inst.handle != "H2" for inst in mutable_instances)
 
+    # Mutable list with apply=True and 0 duplicates -> must report is_dry_run=False
+    no_dup_list = [BlockReferenceInstance("U1", "X", 0.0, 0.0, 0.0), BlockReferenceInstance("U2", "Y", 100.0, 100.0, 0.0)]
+    res_no_dups = handler.execute(BlockDedupArgs(tolerance=0.01, apply=True), no_dup_list)
+    assert res_no_dups.duplicates_found == 0
+    assert res_no_dups.duplicates_erased == 0
+    assert res_no_dups.is_dry_run is False
+
 
 def test_block_dedup_negative_tolerance_raises() -> None:
     handler = BlockDedupHandler()
@@ -164,6 +171,17 @@ def test_font_audit_standard_shx_and_missing() -> None:
 def test_drawing_merge_file_not_found() -> None:
     handler = DrawingMergeHandler()
     args = DrawingMergeArgs(files=[MergeFileItem(path="C:/non_existent_path.dwg")])
+    res = handler.execute(args)
+
+    assert res.status == "ERROR"
+    assert "FILE_NOT_FOUND" in res.message
+
+
+def test_drawing_merge_directory_rejected() -> None:
+    handler = DrawingMergeHandler()
+    # Path is an existing directory, not a file
+    d = tempfile.gettempdir()
+    args = DrawingMergeArgs(files=[MergeFileItem(path=d)])
     res = handler.execute(args)
 
     assert res.status == "ERROR"

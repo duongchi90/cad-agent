@@ -54,7 +54,8 @@ class TestDetailCalloutHandler:
         assert res.status == "OK"
         assert res.detail_id == "C"
         assert res.sheet_ref == "A-04"
-        assert res.processed_count == 4  # circle + chord + 2 texts
+        assert res.ir_entity_count == 4  # circle + chord + 2 texts
+        assert res.processed_count == 0  # 0 native entities mutated offline
         assert res.leader_line is None
 
         # Circle verification
@@ -82,7 +83,8 @@ class TestDetailCalloutHandler:
         res = self.handler.execute(args)
 
         assert res.status == "OK"
-        assert res.processed_count == 5  # +1 for leader
+        assert res.ir_entity_count == 5  # +1 for leader
+        assert res.processed_count == 0  # 0 native entities mutated offline
         assert res.leader_line is not None
         # Rim intersection along +Y is (0, 10)
         assert math.isclose(res.leader_line.start.x, 0.0)
@@ -118,7 +120,8 @@ class TestSectionMarkHandler:
         assert res.status == "OK"
         assert res.full_label == "A-A"
         assert res.tip_label == "A"
-        assert res.processed_count == 5
+        assert res.ir_entity_count == 5
+        assert res.processed_count == 0  # 0 native entities mutated offline
 
         # Cut line from (0,0) to (200,0)
         assert res.cut_line.start == Point2D(0.0, 0.0)
@@ -176,7 +179,8 @@ class TestAreaLabelHandler:
         assert res.display_area == 12.5
         assert res.label_text == "Area: 12.50 m2"
         assert res.position == Point2D(50.0, 100.0)
-        assert res.processed_count == 1
+        assert res.ir_entity_count == 1
+        assert res.processed_count == 0  # 0 native entities mutated offline
 
     def test_area_label_custom_unit_and_prefix(self):
         args = AreaLabelArgs(
@@ -220,7 +224,8 @@ class TestDetailViewHandler:
         assert res.status == "OK"
         assert res.label == "B"
         assert res.radius == 10.0
-        assert res.processed_count == 5  # circle + leader + shoulder + label + scale
+        assert res.ir_entity_count == 5  # circle + leader + shoulder + label + scale
+        assert res.processed_count == 0  # 0 native entities mutated offline
 
         # Circle at (0,0) radius 10
         assert res.boundary_circle.center == Point2D(0.0, 0.0)
@@ -249,7 +254,8 @@ class TestDetailViewHandler:
         res = self.handler.execute(args)
         assert res.status == "OK"
         assert res.scale_text_pos is None
-        assert res.processed_count == 4
+        assert res.ir_entity_count == 4
+        assert res.processed_count == 0
 
     def test_detail_view_rejections(self):
         with pytest.raises(DegenerateGeometryError, match="Radius"):
@@ -298,9 +304,13 @@ class TestScheduleTableHandler:
         assert len(res.cells) > 0
         assert len(res.grid_lines) > 0
 
-        # Check summation row text exists
-        sum_cells = [c for c in res.cells if "TOTAL: 415.75" in c.text]
+        # Check summation row text exists (1:1 C# parity: "TOTAL" in col 0, formatted sum in col 2)
+        sum_cells = [c for c in res.cells if c.text == "415.75"]
         assert len(sum_cells) == 1
+        total_label_cells = [c for c in res.cells if c.text == "TOTAL"]
+        assert len(total_label_cells) == 1
+        assert res.processed_count == 0
+        assert res.ir_entity_count > 0
 
         # Check title cell exists
         title_cells = [c for c in res.cells if c.text == "STEEL MEMBER SCHEDULE"]

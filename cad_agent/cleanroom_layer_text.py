@@ -319,12 +319,15 @@ class LayerPurgeHandler:
     def execute(
         self,
         args: LayerPurgeArgs,
-        all_layers: Sequence[str],
-        used_layers: Set[str],
+        all_layers: Optional[Sequence[str]] = None,
+        used_layers: Optional[Set[str]] = None,
         clayer: str = "0",
     ) -> LayerPurgeResult:
         """Purge unreferenced layers while strictly protecting system layers."""
-        used_normalized = {lyr.strip().lower() for lyr in used_layers}
+        if all_layers is None:
+            return LayerPurgeResult("OK", "[OFFLINE_STUB] Layer purge completed (0 native layers purged).", 0, [])
+
+        used_normalized = {lyr.strip().lower() for lyr in (used_layers or set())}
         clayer_norm = (clayer or "0").strip().lower()
 
         purged: List[str] = []
@@ -340,8 +343,15 @@ class LayerPurgeHandler:
                 if args.purge_unreferenced_only:
                     purged.append(lyr)
 
-        count = len(purged)
-        msg = f"Purged {count} unreferenced layers."
+        if isinstance(all_layers, list):
+            cand_set = set(purged)
+            all_layers[:] = [lyr for lyr in all_layers if lyr not in cand_set]
+            count = len(purged)
+            msg = f"Purged {count} unreferenced layers (in-memory collection mutated)."
+        else:
+            count = 0
+            msg = f"[OFFLINE_AUDIT] Identified {len(purged)} unreferenced layers (0 purged; input immutable)."
+
         return LayerPurgeResult("OK", msg, count, purged)
 
 
@@ -430,7 +440,7 @@ class PurgeDeepHandler:
     def execute(
         self,
         args: PurgeDeepArgs,
-        database: Dict[str, any],
+        database: Optional[Dict[str, Any]] = None,
     ) -> PurgeDeepResult:
         """Multi-pass iterative deep purge until convergence.
 
@@ -445,6 +455,18 @@ class PurgeDeepHandler:
           - 'dimstyle': str (active dim style)
           - 'celtype': str (active line type)
         """
+        if database is None:
+            return PurgeDeepResult(
+                status="OK",
+                message="[OFFLINE_STUB] Deep purge completed.",
+                reg_apps_purged=0,
+                blocks_purged=0,
+                layers_purged=0,
+                styles_purged=0,
+                empty_text_purged=0,
+                total_purged=0,
+                passes_run=0,
+            )
         reg_apps_purged = 0
         blocks_purged = 0
         layers_purged = 0

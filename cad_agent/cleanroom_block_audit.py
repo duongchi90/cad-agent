@@ -412,9 +412,10 @@ class BlockDedupHandler:
         dups_found = len(all_duplicate_handles)
         can_mutate_in_place = isinstance(instances, list)
 
-        if args.apply and can_mutate_in_place and dups_found > 0:
-            dup_set = set(all_duplicate_handles)
-            instances[:] = [inst for inst in instances if inst.handle not in dup_set]
+        if args.apply and can_mutate_in_place:
+            if dups_found > 0:
+                dup_set = set(all_duplicate_handles)
+                instances[:] = [inst for inst in instances if inst.handle not in dup_set]
             dups_erased = dups_found
             dry_run = False
             mode_str = "Applied (in-memory collection mutated)"
@@ -532,7 +533,7 @@ class DrawingMergeHandler:
 
         for f in args.files:
             p = (f.path or "").strip()
-            if not p or not os.path.exists(p):
+            if not p or not os.path.isfile(p):
                 return DrawingMergeResult(
                     status="ERROR",
                     message=f"FILE_NOT_FOUND: Source DWG file '{f.path}' not found.",

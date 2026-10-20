@@ -263,9 +263,40 @@ def test_relayer_rules_from_file() -> None:
         os.remove(rule_path)
 
 
+def test_layer_purge_immutable_sequence() -> None:
+    handler = LayerPurgeHandler()
+    all_layers_tuple = ("0", "Defpoints", "ACTIVE_LAYER", "USED_WALL", "UNREFERENCED_1")
+    used_layers = {"USED_WALL"}
+    res = handler.execute(LayerPurgeArgs(), all_layers_tuple, used_layers, clayer="ACTIVE_LAYER")
+
+    assert res.status == "OK"
+    assert res.purged_count == 0  # 0 purged because input is immutable sequence
+    assert "[OFFLINE_AUDIT]" in res.message
+    assert "UNREFERENCED_1" in res.purged_layer_names
+
+
+def test_layer_purge_offline_stub() -> None:
+    handler = LayerPurgeHandler()
+    res = handler.execute(LayerPurgeArgs())
+
+    assert res.status == "OK"
+    assert res.purged_count == 0
+    assert "[OFFLINE_STUB]" in res.message
+
+
 # ============================================================================
 # 5. PurgeDeepHandler Tests
 # ============================================================================
+
+
+def test_purge_deep_offline_stub() -> None:
+    handler = PurgeDeepHandler()
+    res = handler.execute(PurgeDeepArgs(), database=None)
+
+    assert res.status == "OK"
+    assert "[OFFLINE_STUB]" in res.message
+    assert res.total_purged == 0
+    assert res.passes_run == 0
 
 
 def test_purge_deep_convergence_and_counters() -> None:
