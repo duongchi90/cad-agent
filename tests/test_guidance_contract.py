@@ -25,6 +25,35 @@ class GuidanceContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Agent working agreement: `AGENTS.md`", readme)
 
+    def test_workstation_limits_and_recovery_policy_are_durable(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        for term in (
+            "one heavy local job by default",
+            "one Luna-managed Edge window by default, maximum two",
+            "one Luna-managed DWG by default, maximum two",
+            "one exclusive mutable AutoCAD lane",
+            "Do not open a third window/drawing",
+            "never blindly retry",
+            "A blocked lane does not stop independent authorized work",
+        ):
+            self.assertIn(term, agents)
+        for term in (
+            "Run one heavy local job by default",
+            "Keep one Luna-managed Edge window by default and at most two",
+            "Keep one Luna-managed DWG open by default and at most two",
+            "one exclusive mutable AutoCAD lane",
+            "never close a user-owned drawing",
+            "Close only tabs/windows Luna opened and verified it owns",
+            "Retry only after the relevant condition changes",
+            "continue independently authorized work",
+            "A blocked action or lane is not a project stop",
+            "one controlling review attempt per role and exact packet",
+            "do not create bot-to-bot confirmation loops",
+            "completed closed batches",
+        ):
+            self.assertIn(term.lower(), model.lower())
+
     def test_claude_adapter_is_thin_and_forbids_status_invention(self) -> None:
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(claude.splitlines()), 40)

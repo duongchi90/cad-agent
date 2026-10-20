@@ -218,6 +218,26 @@ General safety rules:
 - no fake PASS from missing provider/runtime prerequisites;
 - one physical bootstrap may be reused across a batch of live work when exact identity proves the session remains valid.
 
+### Resource-aware workstation use and recovery
+
+The workstation has limited resources. Minimize CPU, RAM, and I/O without weakening safety or evidence:
+
+- Run one heavy local job by default: a full suite, large build, bulk PDF/raster processing, heavy benchmark, or native AutoCAD operation. Do not overlap heavy jobs without current evidence that the machine can support them. Lightweight read-only, GitHub, analysis, and review work may continue when it adds little local load.
+- Reuse valid processes, sessions, environments, and immutable verification results. Do not start duplicate workers or applications to retry an unclassified failure.
+- Keep one Luna-managed Edge window by default and at most two. This is a window limit, not an operating-system process limit. Reuse the existing window; do not create another profile, InPrivate session, or browser instance to bypass the cap. Close only tabs/windows Luna opened and verified it owns; preserve user sessions, cookies, and cache.
+- Keep one Luna-managed DWG open by default and at most two. Use only one exclusive mutable AutoCAD lane. Do not open a third drawing or create another AutoCAD instance to bypass the cap. Verify drawing identity, ownership, save state, and active command before closing; never close a user-owned drawing or save over source, reference/gold, or accepted drawings.
+- Before recovery, classify the failure and inspect available process, document, receiver, transaction, save, and rollback state. Stop launching heavy work if the machine is slow or overloaded. Close or stop only completed, verified Luna-owned work that is safe to end. Retry only after the relevant condition changes; no blind native retry.
+- A failed screenshot or Computer Use surface blocks only actions that require that observation or control. Hold the dependent native boundary, preserve custody, and continue independently authorized work. A blocked action or lane is not a project stop, but continuity never waives a mandatory safety, evidence, CI, or review gate.
+
+### PO, reviewer, and checkpoint continuity
+
+- Use the Local PO only for a genuine hard product, scope, contract, or owner decision. Prefer a cheap reliable oracle first; send one compact packet per bounded decision and reuse closed evidence. Do not use PO for routine work or create parallel PO consultations.
+- Keep one controlling review attempt per role and exact packet. Preserve request/attempt IDs, BASE/HEAD/TREE, scope, evidence references, limits, and NOT_RUN. Before same-role channel failover, retire the old channel for that packet; late output stays non-controlling. If the head changes, treat the old verdict as historical and obtain a current exact-head review where required.
+- For an apparently idle interactive reviewer, allow one bounded response opportunity and at most one wake; do not repeatedly nudge, duplicate the packet, or create parallel attempts. Channel exhaustion, delay, or a pending optional review does not stop unrelated authorized execution. Required independent Security, Integration, hosted CI, and package acceptance gates still control the actions they gate.
+- Preserve first-pass reviewer independence. Reviewers must not inherit another role’s verdict as their initial finding, and do not create bot-to-bot confirmation loops or repeated no-op reviews. A confirmation is useful only when it changes a decision or closes a required gate.
+- At handoff, record a closed checkpoint: role/package, frozen source identity, current main and exact PR identity when relevant, first unsatisfied boundary, completed closed batches, material evidence references, current verdict, NOT_RUN, forbidden actions, and next authorized action. Reuse still-valid immutable evidence; re-evaluate only claims affected by material identity change.
+- Triage PRs and blocked lanes by the first current mandatory or product boundary. Pending reviews block only their gated promotion/merge. Continue safe independent product work without creating duplicate work, weakening gates, or inventing a new backlog/control plane.
+
 ## 11. Evidence semantics
 
 Evidence is accepted only through the owning validator/oracle and exact applicable identity bindings.
