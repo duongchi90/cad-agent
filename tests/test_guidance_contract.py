@@ -57,6 +57,33 @@ class GuidanceContractTests(unittest.TestCase):
         ):
             self.assertIn(term.lower(), model.lower())
 
+    def test_review_liveness_keeps_delivery_response_and_receipt_distinct(self) -> None:
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        for term in (
+            "`REQUEST_RECORDED`",
+            "`DELIVERY_CONFIRMED`",
+            "`RESPONSE_OBSERVED`",
+            "`TERMINAL_CURRENT`",
+            "A GitHub request comment proves only `REQUEST_RECORDED`",
+            "required canonical review receipt must be present on GitHub",
+            "about 5 minutes",
+            "about 15 minutes",
+            "at 30 minutes",
+            "These are diagnostic checkpoints, not response deadlines or automatic failover triggers",
+            "Do not repeatedly reopen or poll when the same state is already established",
+            "do not create a background monitor",
+            "For `IDLE_NO_SUBSTANTIVE_RESPONSE` or `COMPLETE_NONTERMINAL`",
+            "If a reviewer is visibly generating, do not message or interrupt",
+            "`OBSERVABILITY_UNKNOWN`",
+            "`DELIVERY_STATE=UNKNOWN`",
+            "Before failover, fresh-read PR identity and GitHub receipts",
+            "Fail over only to the same reviewer role",
+            "a current canonical receipt prevents redispatch",
+            "A HEAD change makes old verdicts stale",
+            "Do not blindly resend or duplicate a review",
+        ):
+            self.assertIn(term, model)
+
     def test_claude_adapter_is_thin_and_forbids_status_invention(self) -> None:
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(claude.splitlines()), 40)
