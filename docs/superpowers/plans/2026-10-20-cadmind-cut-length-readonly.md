@@ -27,7 +27,7 @@
 
 ---
 
-**Status:** implementation complete; canonical verification pending
+**Status:** implementation complete; offline canonical verification passed; live/.NET gates unavailable
 **Base SHA:** `5979b1813a27dbc7435c64c6cf3c220f5f8e09ad`
 **Completion Head SHA:** pending
 
@@ -51,10 +51,10 @@
 
 ### Task 3: Verify and hand off
 
-- [ ] Run the canonical `scripts/verify.ps1` after creating the scoped local commit (the verifier requires a clean worktree).
-- [ ] Check AutoCAD/handle smoke prerequisites; if unavailable, record `NOT RUN` with the exact missing prerequisite.
-- [ ] Confirm only the spec, plan, facade and focused test file changed.
+- [x] Run canonical `scripts/verify.ps1` offline on `1acc24c44410d39a2acc32bb966a6542f5ecabb9` using `-SkipAutoCADDotNet`: 3,692 passed, 23 deselected, 77 subtests passed; expected causal-RED negative oracle reproduced its known failure; real-data and AutoCAD/FileIPC gates reported unavailable-state skips. The full invocation without the skip switch stopped before tests because no .NET SDK is installed.
+- [x] AutoCAD/handle smoke was `NOT RUN`: no live AutoCAD Mechanical/FileIPC session or disposable handle fixture was configured.
+- [x] Confirmed only the spec, plan, facade and focused test file changed.
 - [ ] Create/update one Draft PR; obtain terminal hosted checks and independent exact-head Security/Integration reviews before any adoption claim. Do not mark ready or merge while gates remain pending.
 
 **Required private/live gates:** AutoCAD/handle smoke applicability to be checked; no private drawing data is required by the offline oracle.
-**Verification:** focused checks passed as listed above; canonical verifier, live smoke, hosted checks, and independent reviews remain pending.
+**Verification:** focused pytest (36 passed), Ruff and `git diff --check` passed. Offline canonical verifier passed on the implementation commit. .NET/AutoCAD, live handle smoke, hosted checks, and independent reviews remain pending. The verifier requires a clean tree, so this recorded-result-only plan update is committed separately; production/test source was unchanged after the verified commit.
