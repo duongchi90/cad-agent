@@ -21,6 +21,9 @@ class GuidanceContractTests(unittest.TestCase):
         ):
             self.assertIn(reference, agents)
         self.assertIn("one writer", agents.lower())
+        self.assertIn("Do not claim durable policy adoption from a document edit alone", agents)
+        self.assertIn("fresh repository-only session recovery without chat history", agents)
+        self.assertIn("PERSISTENCE_ACCEPTANCE_GATE=NOT_VERIFIED", agents)
         self.assertIn("human approval", agents.lower())
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Agent working agreement: `AGENTS.md`", readme)

@@ -86,3 +86,4 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 - Confirm `git diff --check` is clean and verification did not change repository status.
 - Leave no unresolved P0/P1 finding; give deferred P2 findings a reason and owner.
 - Route durable acceptance through `docs/STATUS.md`; keep transient state on GitHub.
+- Do not claim durable policy adoption from a document edit alone: require merge to canonical `main`, a fresh repository-only session recovery without chat history, and policy contract plus evidence-backed scenario checks. Otherwise report `PERSISTENCE_ACCEPTANCE_GATE=NOT_VERIFIED`.
