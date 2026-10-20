@@ -1259,6 +1259,62 @@ def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_pat
     assert all(record["source_font_name"] for record in report["text_sizing"])
 
 
+def test_native_pdf_text_reconstruction_rejects_junction_output_redirect(tmp_path: Path) -> None:
+    import subprocess
+
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Directory junction protection is Windows-specific.")
+
+    source = tmp_path / "native-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    external = tmp_path / "outside-private-root"
+    external.mkdir()
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "APPROVED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    redirected_root = output / "text_reconstruction"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(redirected_root), str(external)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"Directory junction creation unavailable: {result.stderr.strip() or result.stdout.strip()}")
+
+    with pytest.raises(FidelityError, match="private|directory|output"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+            workspace_root=Path.cwd(),
+        )
+    assert not (external / "page_01").exists()
+
+
 @pytest.mark.parametrize("tamper", ["changed_source", "stale_render", "unselected_span", "failed_glyph", "unsupported_transform"])
 def test_native_pdf_text_reconstruction_fails_closed_before_output(tmp_path: Path, tamper: str) -> None:
     source = tmp_path / "native-reconstruction.pdf"

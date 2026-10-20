@@ -32,6 +32,7 @@ from primitive_ir_lib.table_extraction import build_cells, detect_grid
 from primitive_ir_lib.view_calibration import detect_view_candidates
 from dxf_builder_lib.builder import _ensure_unicode_text_style
 
+from .file_integrity import FileIdentityError, pin_directory_chain
 from .manifest import ManifestError, sha256_file, verify_source, write_manifest
 
 FIDELITY_MANIFEST_NAME = "fidelity-run-manifest.json"
@@ -2926,10 +2927,15 @@ def run_fidelity_text_reconstruct(
     root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
     if root.exists():
         raise FidelityError(f"Text reconstruction already exists: {root}")
-    root.mkdir(parents=True)
-    output = root / "layout.dxf"
-    document.saveas(output)
-    (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "output_dxf_sha256": sha256_file(output), "emitted_text_entities": emitted, "text_sizing": sizing_records, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+    try:
+        with pin_directory_chain(root.absolute()):
+            if not _is_within(root, output_root):
+                raise FidelityError("Text reconstruction output escaped the private fidelity root.")
+            output = root / "layout.dxf"
+            document.saveas(output)
+            (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "output_dxf_sha256": sha256_file(output), "emitted_text_entities": emitted, "text_sizing": sizing_records, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+    except FileIdentityError as exc:
+        raise FidelityError("Text reconstruction output must use a stable, non-reparse directory inside the private fidelity root.") from exc
     return output
 
 
