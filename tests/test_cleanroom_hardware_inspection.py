@@ -23,19 +23,14 @@ from cad_agent.cleanroom_hardware_inspection import (
     DegenerateGeometryError,
     DivideMeasureArgs,
     DivideMeasureHandler,
-    DivideMeasureResult,
     MachiningNoteArgs,
     MachiningNoteHandler,
-    MachiningNoteResult,
     RivetPinArgs,
     RivetPinHandler,
-    RivetPinResult,
     SheetNumberArgs,
     SheetNumberHandler,
-    SheetNumberResult,
     SurfaceAreaArgs,
     SurfaceAreaHandler,
-    SurfaceAreaResult,
 )
 
 
