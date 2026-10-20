@@ -217,6 +217,156 @@ def test_validate_observe_drawing_result_rejects_oversized_summary_sample() -> N
         _facade().validate_observe_drawing_result(tampered)
 
 
+def _cut_length_client(
+    entities: list[tuple[str, str, dict[str, object]]],
+    *,
+    drawing_path: str = _DRAWING_PATH,
+) -> _BoundFakeCadClient:
+    class _UnitsClient(_BoundFakeCadClient):
+        def drawing_get_variables(self, names: list[str]) -> dict[str, object]:
+            values = super().drawing_get_variables(names)
+            if "INSUNITS" in names:
+                values["INSUNITS"] = 4
+            return values
+
+    client = _UnitsClient(drawing_path)
+    for handle, entity_type, geometry in entities:
+        client.preload_entity(handle, entity_type, "MEASURE", geometry)
+    return client
+
+
+def _measure_entity_lengths(**kwargs: object) -> dict[str, object]:
+    measure = getattr(_facade(), "measure_entity_lengths", None)
+    assert callable(measure), "read-only cut-length operation is not implemented"
+    return measure(**kwargs)
+
+
+def test_measure_entity_lengths_reports_line_circle_and_declared_units() -> None:
+    client = _cut_length_client(
+        [
+            ("1A", "LINE", {"start": (0.0, 0.0, 0.0), "end": (3.0, 4.0, 0.0)}),
+            ("2B", "CIRCLE", {"center": (0.0, 0.0, 0.0), "radius": 2.0}),
+        ]
+    )
+    bound = _bound_kwargs()
+
+    millimetres = _measure_entity_lengths(
+        client=client,
+        handles=["1A", "2B"],
+        declared_unit_label="mm",
+        **bound,
+    )
+    feet = _measure_entity_lengths(
+        client=client,
+        handles=["1A", "2B"],
+        declared_unit_label="ft",
+        **bound,
+    )
+
+    assert millimetres["operation"] == "measure_entity_lengths"
+    assert millimetres["status"] == "COMPLETE"
+    assert millimetres.get("consistency") == "NON_ATOMIC_OBSERVATION"
+    assert millimetres["units"] == {
+        "basis": "DRAWING_UNITS",
+        "insunits": 4,
+        "declared_unit_label": "mm",
+    }
+    assert [item["length_drawing_units"] for item in millimetres["items"]] == pytest.approx(
+        [5.0, 4.0 * 3.141592653589793]
+    )
+    assert millimetres["total_length_drawing_units"] == pytest.approx(5.0 + 4.0 * 3.141592653589793)
+    assert feet["total_length_drawing_units"] == millimetres["total_length_drawing_units"]
+    assert feet["units"]["declared_unit_label"] == "ft"
+
+
+def test_measure_entity_lengths_requires_nonempty_unique_bounded_selection() -> None:
+    client = _cut_length_client(
+        [("1A", "LINE", {"start": (0.0, 0.0), "end": (3.0, 4.0)})]
+    )
+    bound = _bound_kwargs()
+
+    with pytest.raises(_facade().CadReadFacadeError, match="HANDLE_SELECTION_EMPTY"):
+        _measure_entity_lengths(client=client, handles=[], **bound)
+    with pytest.raises(_facade().CadReadFacadeError, match="HANDLE_SELECTION_DUPLICATE"):
+        _measure_entity_lengths(client=client, handles=["1A", "1a"], **bound)
+    with pytest.raises(_facade().CadReadFacadeError, match="HANDLE_SELECTION_UNBOUNDED"):
+        _measure_entity_lengths(client=client, handles=[f"{index:X}" for index in range(101)], **bound)
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "geometry", "expected_error"),
+    [
+        ("LINE", {"start": (0.0, 0.0), "end": (3.0, 4.0)}, None),
+        ("LINE", {"start": (0.0, 0.0), "end": (float("nan"), 4.0)}, "ENTITY_GEOMETRY_INVALID"),
+        ("LINE", {"start": (0.0, 0.0), "end": (3.0,)}, "ENTITY_GEOMETRY_INVALID"),
+        ("LINE", {"start": (1e308, 0.0), "end": (-1e308, 0.0)}, "ENTITY_LENGTH_NONFINITE"),
+        ("CIRCLE", {"center": (0.0, 0.0), "radius": -1.0}, "ENTITY_GEOMETRY_INVALID"),
+        ("CIRCLE", {"center": (0.0, 0.0), "radius": 1e308}, "ENTITY_LENGTH_NONFINITE"),
+        ("ARC", {"center": (0.0, 0.0), "radius": 2.0}, "ENTITY_TYPE_UNSUPPORTED"),
+    ],
+)
+def test_measure_entity_lengths_rejects_invalid_or_unsupported_geometry(
+    entity_type: str,
+    geometry: dict[str, object],
+    expected_error: str | None,
+) -> None:
+    client = _cut_length_client([("1A", entity_type, geometry)])
+    if expected_error is None:
+        result = _measure_entity_lengths(
+            client=client,
+            handles=["1A"],
+            **_bound_kwargs(),
+        )
+        assert result["items"][0]["length_drawing_units"] == pytest.approx(5.0)
+        return
+
+    with pytest.raises(_facade().CadReadFacadeError, match=expected_error):
+        _measure_entity_lengths(client=client, handles=["1A"], **_bound_kwargs())
+
+
+def test_measure_entity_lengths_fails_closed_on_missing_handle_and_identity_drift() -> None:
+    client = _cut_length_client(
+        [("1A", "LINE", {"start": (0.0, 0.0), "end": (3.0, 4.0)})]
+    )
+    with pytest.raises(_facade().CadReadFacadeError, match="ENTITY_NOT_FOUND"):
+        _measure_entity_lengths(client=client, handles=["FFFF"], **_bound_kwargs())
+
+    foreign = _cut_length_client(
+        [("1A", "LINE", {"start": (0.0, 0.0), "end": (3.0, 4.0)})],
+        drawing_path=_FOREIGN_DRAWING_PATH,
+    )
+    with pytest.raises(_facade().CadReadFacadeError, match="DRAWING_IDENTITY_MISMATCH"):
+        _measure_entity_lengths(client=foreign, handles=["1A"], **_bound_kwargs())
+
+
+def test_measure_entity_lengths_rejects_stale_candidate_before_entity_read() -> None:
+    class _NoEntityReadClient(_BoundFakeCadClient):
+        def entity_get(self, entity_id: str) -> dict[str, object]:
+            del entity_id
+            raise AssertionError("stale candidate must be rejected before entity reads")
+
+    bound = _bound_kwargs()
+    bound["artifact_bytes"] = b"stale-candidate-bytes"
+    with pytest.raises(_facade().CadReadFacadeError, match="DRAWING_ARTIFACT_STALE"):
+        _measure_entity_lengths(
+            client=_NoEntityReadClient(), handles=["1A"], **bound
+        )
+
+
+def test_measure_entity_lengths_rejects_nonfinite_aggregate() -> None:
+    client = _cut_length_client(
+        [
+            ("1A", "CIRCLE", {"center": (0.0, 0.0), "radius": 1e307}),
+            ("2B", "CIRCLE", {"center": (0.0, 0.0), "radius": 1e307}),
+            ("3C", "CIRCLE", {"center": (0.0, 0.0), "radius": 1e307}),
+        ]
+    )
+    with pytest.raises(_facade().CadReadFacadeError, match="ENTITY_LENGTH_NONFINITE"):
+        _measure_entity_lengths(
+            client=client, handles=["1A", "2B", "3C"], **_bound_kwargs()
+        )
+
+
 def test_query_entities_filters_projects_and_bounds_results() -> None:
     bound = _bound_kwargs()
     result = _facade().query_entities(

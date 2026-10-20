@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import json
+import math
 import ntpath
 from typing import Protocol
 
@@ -426,6 +427,180 @@ def observe_drawing(
     )
 
 
+def _normalize_handle_selection(value: object) -> list[str]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        _fail("HANDLE_SELECTION_INVALID")
+    if not value:
+        _fail("HANDLE_SELECTION_EMPTY")
+    if len(value) > MAX_QUERY_RESULT_COUNT:
+        _fail("HANDLE_SELECTION_UNBOUNDED")
+    handles = [_string(item, "HANDLE_SELECTION_INVALID") for item in value]
+    normalized = [handle.casefold() for handle in handles]
+    if len(set(normalized)) != len(normalized):
+        _fail("HANDLE_SELECTION_DUPLICATE")
+    return handles
+
+
+def _finite_coordinate(value: object) -> float:
+    if type(value) not in {int, float}:
+        _fail("ENTITY_GEOMETRY_INVALID")
+    try:
+        coordinate = float(value)
+    except (OverflowError, ValueError) as error:
+        raise CadReadFacadeError("ENTITY_GEOMETRY_INVALID") from error
+    if not math.isfinite(coordinate):
+        _fail("ENTITY_GEOMETRY_INVALID")
+    return coordinate
+
+
+def _line_length(start: object, end: object) -> float:
+    if (
+        isinstance(start, (str, bytes))
+        or not isinstance(start, Sequence)
+        or isinstance(end, (str, bytes))
+        or not isinstance(end, Sequence)
+        or len(start) not in {2, 3}
+        or len(end) != len(start)
+    ):
+        _fail("ENTITY_GEOMETRY_INVALID")
+    start_values = tuple(_finite_coordinate(value) for value in start)
+    end_values = tuple(_finite_coordinate(value) for value in end)
+    if len(start_values) == 2:
+        start_values += (0.0,)
+        end_values += (0.0,)
+    length = math.hypot(*(end_value - start_value for start_value, end_value in zip(start_values, end_values)))
+    if not math.isfinite(length):
+        _fail("ENTITY_LENGTH_NONFINITE")
+    return length
+
+
+def _circle_length(radius_value: object) -> float:
+    radius = _finite_coordinate(radius_value)
+    if radius < 0.0:
+        _fail("ENTITY_GEOMETRY_INVALID")
+    length = 2.0 * math.pi * radius
+    if not math.isfinite(length):
+        _fail("ENTITY_LENGTH_NONFINITE")
+    return length
+
+
+def _read_drawing_insunits(client: CadReadClient, expected_path: str) -> int | None:
+    _validate_client_drawing(client, expected_path)
+    try:
+        variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME", "INSUNITS"])
+    except Exception as error:
+        raise CadReadFacadeError("DRAWING_UNITS_UNAVAILABLE") from error
+    _validate_client_drawing(client, expected_path)
+    if not isinstance(variables, Mapping):
+        _fail("DRAWING_UNITS_INVALID")
+    value = variables.get("INSUNITS")
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        _fail("DRAWING_UNITS_INVALID")
+    return value
+
+
+def measure_entity_lengths(
+    *,
+    client: CadReadClient,
+    drawing_reference: Mapping[str, object],
+    drawing_observation: Mapping[str, object],
+    artifact_bytes: bytes,
+    candidate_state: Mapping[str, object],
+    drawing_path: str,
+    handles: Sequence[str],
+    declared_unit_label: str | None = None,
+    parent_reference: Mapping[str, object] | None = None,
+    accepted_transition_evidence_sha256: str | None = None,
+) -> dict[str, object]:
+    """Measure explicit LINE/CIRCLE handles in raw, identity-bound drawing units."""
+
+    selected_handles = _normalize_handle_selection(handles)
+    if declared_unit_label is not None:
+        declared_unit_label = _string(declared_unit_label, "UNIT_LABEL_INVALID")
+        if len(declared_unit_label) > 64:
+            _fail("UNIT_LABEL_INVALID")
+
+    binding = _validated_binding(
+        client=client,
+        drawing_reference=drawing_reference,
+        drawing_observation=drawing_observation,
+        artifact_bytes=artifact_bytes,
+        candidate_state=candidate_state,
+        drawing_path=drawing_path,
+        parent_reference=parent_reference,
+        accepted_transition_evidence_sha256=accepted_transition_evidence_sha256,
+    )
+    insunits = _read_drawing_insunits(client, binding["drawing_path"])
+    items: list[dict[str, object]] = []
+    for handle in selected_handles:
+        _validate_client_drawing(client, binding["drawing_path"])
+        try:
+            entity = client.entity_get(handle)
+        except KeyError as error:
+            raise CadReadFacadeError("ENTITY_NOT_FOUND") from error
+        except Exception as error:
+            raise CadReadFacadeError("ENTITY_GET_FAILED") from error
+        if not isinstance(entity, Mapping):
+            _fail("ENTITY_GET_INVALID")
+        if entity.get("handle") != handle:
+            _fail("ENTITY_IDENTITY_MISMATCH")
+        entity_type = _string(entity.get("type"), "ENTITY_GET_INVALID").upper()
+        _string(entity.get("layer"), "ENTITY_GET_INVALID")
+        _validate_client_drawing(client, binding["drawing_path"])
+
+        if entity_type == "LINE":
+            length = _line_length(entity.get("start"), entity.get("end"))
+        elif entity_type == "CIRCLE":
+            length = _circle_length(entity.get("radius"))
+        else:
+            _fail("ENTITY_TYPE_UNSUPPORTED")
+        items.append(
+            {
+                "handle": handle,
+                "entity_type": entity_type,
+                "length_drawing_units": length,
+            }
+        )
+
+    final_insunits = _read_drawing_insunits(client, binding["drawing_path"])
+    if final_insunits != insunits:
+        _fail("DRAWING_UNITS_CHANGED")
+    try:
+        total_length = math.fsum(
+            item["length_drawing_units"] for item in items
+        )
+    except OverflowError as error:
+        raise CadReadFacadeError("ENTITY_LENGTH_NONFINITE") from error
+    if not math.isfinite(total_length):
+        _fail("ENTITY_LENGTH_NONFINITE")
+
+    payload = {
+        "schema_version": CAD_READ_FACADE_SCHEMA_VERSION,
+        "operation": "measure_entity_lengths",
+        "binding": binding,
+        "status": "COMPLETE",
+        "consistency": "NON_ATOMIC_OBSERVATION",
+        "units": {
+            "basis": "DRAWING_UNITS",
+            "insunits": insunits,
+            "declared_unit_label": declared_unit_label,
+        },
+        "selection": {
+            "requested_count": len(selected_handles),
+            "covered_count": len(items),
+        },
+        "items": items,
+        "total_length_drawing_units": total_length,
+    }
+    return _finish_bound_result(
+        client=client,
+        expected_path=binding["drawing_path"],
+        payload=payload,
+    )
+
+
 def query_entities(
     *,
     client: CadReadClient,
@@ -495,6 +670,7 @@ __all__ = [
     "MAX_QUERY_RESULT_BYTES",
     "MAX_QUERY_RESULT_COUNT",
     "CadReadFacadeError",
+    "measure_entity_lengths",
     "observe_drawing",
     "query_entities",
     "validate_observe_drawing_result",
