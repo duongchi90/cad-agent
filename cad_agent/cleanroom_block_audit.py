@@ -143,6 +143,7 @@ class BlockDedupGroup:
 
     survivor_handle: str
     duplicate_handles: List[str]
+    block_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -315,8 +316,17 @@ class BlockInsertTableHandler:
                 )
 
         count = len(args.rows)
-        msg = f"Placed {count} block insert references for '{block_name}' on layer '{args.layer}'."
-        return BlockInsertTableResult("OK", msg, block_name, count, count)
+        msg = (
+            f"[OFFLINE_STUB] Validated {count} block insert row(s) for '{block_name}' "
+            f"on layer '{args.layer}' (0 native entities placed)."
+        )
+        return BlockInsertTableResult(
+            status="OK",
+            message=msg,
+            block_name=block_name,
+            insert_count=count,
+            processed_count=0,
+        )
 
 
 # ============================================================================
@@ -397,15 +407,26 @@ class BlockDedupHandler:
                         all_duplicate_handles.append(b_cand.handle)
 
             if dups:
-                groups.append(BlockDedupGroup(b_curr.handle, dups))
+                groups.append(BlockDedupGroup(b_curr.handle, dups, b_curr.name))
 
         dups_found = len(all_duplicate_handles)
-        dups_erased = dups_found if args.apply else 0
-        dry_run = not args.apply
+        can_mutate_in_place = isinstance(instances, list)
+
+        if args.apply and can_mutate_in_place and dups_found > 0:
+            dup_set = set(all_duplicate_handles)
+            instances[:] = [inst for inst in instances if inst.handle not in dup_set]
+            dups_erased = dups_found
+            dry_run = False
+            mode_str = "Applied (in-memory collection mutated)"
+        else:
+            dups_erased = 0
+            dry_run = True
+            mode_str = "DryRun/Offline Audit" if args.apply else "DryRun"
 
         msg = (
-            f"Block dedup complete: {total_scanned} scanned, {len(groups)} duplicate groups, "
-            f"{dups_found} duplicates found, {dups_erased} erased (DryRun: {dry_run})."
+            f"Block dedup complete ({mode_str}): {total_scanned} scanned, "
+            f"{len(groups)} duplicate groups, {dups_found} duplicates found, "
+            f"{dups_erased} erased (DryRun: {dry_run})."
         )
         return BlockDedupResult(
             status="OK",
@@ -520,8 +541,13 @@ class DrawingMergeHandler:
                 )
 
         count = len(args.files)
-        msg = f"Merged {count} drawings into current document."
-        return DrawingMergeResult("OK", msg, count, count)
+        msg = f"[OFFLINE_STUB] Validated {count} drawing merge specification(s) (0 native DWG entities mutated)."
+        return DrawingMergeResult(
+            status="OK",
+            message=msg,
+            merged_count=count,
+            processed_count=0,
+        )
 
 
 # ============================================================================

@@ -51,8 +51,9 @@ def test_block_insert_table_valid() -> None:
     res = handler.execute(args)
 
     assert res.status == "OK"
+    assert "[OFFLINE_STUB]" in res.message
     assert res.insert_count == 2
-    assert res.processed_count == 2
+    assert res.processed_count == 0
     assert res.block_name == "MY_BLOCK"
 
 
@@ -91,15 +92,15 @@ def test_block_insert_table_empty_rows_rejected() -> None:
 
 def test_block_dedup_spatial_clustering_dry_run_vs_apply() -> None:
     handler = BlockDedupHandler()
-    instances = [
+    instances_tuple = (
         BlockReferenceInstance("H1", "CHAIR", 100.0, 100.0, 0.0),
         BlockReferenceInstance("H2", "CHAIR", 100.005, 100.005, 0.0),  # within 0.01 tolerance
         BlockReferenceInstance("H3", "CHAIR", 100.0, 200.0, 0.0),      # far away
         BlockReferenceInstance("H4", "TABLE", 100.0, 100.0, 0.0),      # different name
-    ]
+    )
 
-    # Dry run
-    res_dry = handler.execute(BlockDedupArgs(tolerance=0.01, apply=False), instances)
+    # Dry run with immutable tuple
+    res_dry = handler.execute(BlockDedupArgs(tolerance=0.01, apply=False), instances_tuple)
     assert res_dry.status == "OK"
     assert res_dry.total_inserts_scanned == 4
     assert res_dry.duplicate_groups_count == 1
@@ -107,12 +108,22 @@ def test_block_dedup_spatial_clustering_dry_run_vs_apply() -> None:
     assert res_dry.duplicates_erased == 0
     assert res_dry.is_dry_run is True
     assert res_dry.duplicate_handles == ["H2"]
+    assert res_dry.groups[0].block_name == "CHAIR"
 
-    # Apply
-    res_apply = handler.execute(BlockDedupArgs(tolerance=0.01, apply=True), instances)
+    # Immutable input with apply=True -> must report DryRun/Offline Audit (0 erased)
+    res_immutable = handler.execute(BlockDedupArgs(tolerance=0.01, apply=True), instances_tuple)
+    assert res_immutable.duplicates_found == 1
+    assert res_immutable.duplicates_erased == 0
+    assert res_immutable.is_dry_run is True
+
+    # Mutable list input with apply=True -> mutates list in-place and reports 1 erased
+    mutable_instances = list(instances_tuple)
+    res_apply = handler.execute(BlockDedupArgs(tolerance=0.01, apply=True), mutable_instances)
     assert res_apply.status == "OK"
     assert res_apply.duplicates_erased == 1
     assert res_apply.is_dry_run is False
+    assert len(mutable_instances) == 3
+    assert all(inst.handle != "H2" for inst in mutable_instances)
 
 
 def test_block_dedup_negative_tolerance_raises() -> None:
@@ -169,7 +180,9 @@ def test_drawing_merge_valid_files() -> None:
         args = DrawingMergeArgs(files=[MergeFileItem(path=p, insertion_point=Point2D(10.0, 20.0))])
         res = handler.execute(args)
         assert res.status == "OK"
+        assert "[OFFLINE_STUB]" in res.message
         assert res.merged_count == 1
+        assert res.processed_count == 0
     finally:
         os.remove(p)
 
