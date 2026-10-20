@@ -498,6 +498,7 @@ def _tag_audit_payload(
     evidence_refs: Mapping[str, object] | None = None,
     counts: Mapping[str, object] | None = None,
     findings: Mapping[str, object] | None = None,
+    expected_tags: Sequence[str] | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": CAD_READ_FACADE_SCHEMA_VERSION,
@@ -508,6 +509,9 @@ def _tag_audit_payload(
         "consistency": "NON_ATOMIC_OBSERVATION",
         "reason_codes": sorted(set(reason_codes)),
         "evidence_refs": deepcopy(dict(evidence_refs or {})),
+        "expected_tags": (
+            deepcopy(list(expected_tags)) if expected_tags is not None else None
+        ),
         "counts": {
             "indexed_text_count": None,
             "model_text_count": None,
@@ -560,6 +564,9 @@ def audit_model_text_tags(
                 status="INCOMPLETE", binding=None, reason_codes=("EXPECTED_TAGS_INVALID",)
             )
         )
+    distinct_expected = (
+        sorted(set(expected_tags)) if expected_tags is not None else None
+    )
     try:
         normalized_layer = _normalize_filter(layer, "LAYER_INVALID")
         initial_binding = _validated_binding(
@@ -600,6 +607,7 @@ def audit_model_text_tags(
                     reason_codes=("ENTITY_SCOPE_TRUNCATED",),
                     evidence_refs=evidence_refs,
                     counts={"indexed_text_count": query["total_count"]},
+                    expected_tags=distinct_expected,
                 )
             )
 
@@ -655,9 +663,6 @@ def audit_model_text_tags(
             if len(value_handles) > 1
         ]
         duplicate_groups.sort(key=lambda item: item["text"])
-        distinct_expected = (
-            sorted(set(expected_tags)) if expected_tags is not None else None
-        )
         present_values = set(text_by_handle.values())
         missing = (
             [value for value in distinct_expected if value not in present_values]
@@ -682,6 +687,7 @@ def audit_model_text_tags(
                 "missing_tag_count": len(missing) if distinct_expected is not None else None,
             },
             findings={"duplicates": duplicate_groups, "missing_expected_tags": missing},
+            expected_tags=distinct_expected,
         )
         return _finish_bound_result(
             client=client, expected_path=binding["drawing_path"], payload=payload
@@ -695,6 +701,7 @@ def audit_model_text_tags(
                 reason_codes=(code,),
                 evidence_refs=locals().get("evidence_refs"),
                 counts={"indexed_text_count": locals().get("query", {}).get("total_count")},
+                expected_tags=distinct_expected,
             )
         )
     except Exception:
@@ -704,6 +711,7 @@ def audit_model_text_tags(
                 binding=locals().get("binding"),
                 reason_codes=("READ_INCOMPLETE",),
                 evidence_refs=locals().get("evidence_refs"),
+                expected_tags=distinct_expected,
             )
         )
 

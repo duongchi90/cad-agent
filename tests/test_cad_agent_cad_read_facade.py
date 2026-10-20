@@ -663,3 +663,20 @@ def test_audit_model_text_tags_refuses_final_identity_change_and_bad_details() -
     )
     assert missing_result["status"] == "INCOMPLETE"
     assert "CONTENT_UNAVAILABLE" in missing_result["reason_codes"]
+
+
+def test_audit_model_text_tags_binds_normalized_expected_tags_to_complete_receipt() -> None:
+    client = _tag_client([("1", "A", "Model"), ("2", "B", "Model")])
+    facade = _facade()
+    first = facade.audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs(), expected_tags=["A"]
+    )
+    second = facade.audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs(), expected_tags=["B", "A", "B"]
+    )
+
+    assert first["status"] == second["status"] == "COMPLETE"
+    assert first["expected_tags"] == ["A"]
+    assert second["expected_tags"] == ["A", "B"]
+    assert first["result_sha256"] != second["result_sha256"]
+    assert first["query_id"] != second["query_id"]
