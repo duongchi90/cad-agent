@@ -52,3 +52,32 @@ def test_ambiguous_ocr_does_not_replace_letters_with_digits() -> None:
     assert parsed.value is None
     assert parsed.unit is None
     assert parsed.confidence < 0.5
+
+
+def test_autocad_dimension_control_codes_parsed_correctly() -> None:
+    # AutoCAD diameter code %%c / %%C
+    p_diam = parse_dimension_text('%%c25')
+    assert p_diam.value == 25.0
+    assert p_diam.kind_hint == 'DIAMETER'
+    assert p_diam.symbol_text == '⌀'
+
+    p_diam_repeat = parse_dimension_text('4x%%C10')
+    assert p_diam_repeat.value == 10.0
+    assert p_diam_repeat.kind_hint == 'DIAMETER'
+    assert p_diam_repeat.repeat_count == 4
+    assert p_diam_repeat.symbol_text == '⌀'
+
+    # AutoCAD degree code %%d / %%D
+    p_deg = parse_dimension_text('45%%d')
+    assert p_deg.value == 45.0
+    assert p_deg.unit == 'deg'
+    assert p_deg.kind_hint == 'ANGULAR'
+    assert p_deg.symbol_text == '°'
+
+    # AutoCAD plus-minus tolerance code %%p / %%P
+    p_tol = parse_dimension_text('100 %%p0.2 mm')
+    assert p_tol.value == 100.0
+    assert p_tol.unit == 'mm'
+    assert p_tol.tolerance_mode == 'SYMMETRIC'
+    assert p_tol.tolerance_upper == 0.2
+    assert p_tol.tolerance_lower == -0.2

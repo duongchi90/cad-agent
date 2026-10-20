@@ -40,6 +40,9 @@ _NUMBER_RE = re.compile(rf"^{_NUMBER}$")
 
 def _normalize_for_parse(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).strip()
+    normalized = re.sub(r"%%[cC]", "\u2300", normalized)
+    normalized = re.sub(r"%%[dD]", "\u00b0", normalized)
+    normalized = re.sub(r"%%[pP]", "\u00b1", normalized)
     normalized = normalized.replace("Ø", "⌀").replace("ø", "⌀").replace("∅", "⌀")
     normalized = normalized.replace("×", "x").replace("−", "-")
     normalized = re.sub(r"(?<=\d),(?=\d)", ".", normalized)
