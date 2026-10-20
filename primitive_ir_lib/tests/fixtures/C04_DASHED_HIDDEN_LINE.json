@@ -1,0 +1,128 @@
+{
+  "case_id": "C04_DASHED_HIDDEN_LINE",
+  "category": "C_INTENTIONAL_GAP_PROTECTION",
+  "png_file": "fixtures/synthetic/C04_DASHED_HIDDEN_LINE.png",
+  "bytes": 1731,
+  "sha256": "9ae9b1fa4f56abc5b7147899555df99c4a56144856f0e057421b74afe69d9b2b",
+  "ground_truth_geometry": {
+    "canvas": [
+      300,
+      300
+    ],
+    "segments": [
+      {
+        "x1": 150,
+        "y1": 40,
+        "x2": 150,
+        "y2": 54,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 62,
+        "x2": 150,
+        "y2": 76,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 84,
+        "x2": 150,
+        "y2": 98,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 106,
+        "x2": 150,
+        "y2": 120,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 128,
+        "x2": 150,
+        "y2": 142,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 150,
+        "x2": 150,
+        "y2": 164,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 172,
+        "x2": 150,
+        "y2": 186,
+        "width": 2
+      },
+      {
+        "x1": 150,
+        "y1": 194,
+        "x2": 150,
+        "y2": 208,
+        "width": 2
+      }
+    ],
+    "endpoint_regions": {
+      "upper": [
+        145,
+        36,
+        155,
+        56
+      ],
+      "lower": [
+        145,
+        190,
+        155,
+        220
+      ]
+    },
+    "forbidden_gap_intervals": [
+      {
+        "axis": "y",
+        "gap_start": 56,
+        "gap_end": 60,
+        "x_center": 150,
+        "x_tol": 6
+      },
+      {
+        "axis": "y",
+        "gap_start": 100,
+        "gap_end": 104,
+        "x_center": 150,
+        "x_tol": 6
+      },
+      {
+        "axis": "y",
+        "gap_start": 144,
+        "gap_end": 148,
+        "x_center": 150,
+        "x_tol": 6
+      }
+    ]
+  },
+  "must_recover": {
+    "endpoint_A": null,
+    "endpoint_B": null
+  },
+  "must_not_bridge": [
+    {
+      "axis": "y",
+      "gap_start": 56,
+      "gap_end": 60,
+      "x_center": 150,
+      "x_tol": 6
+    },
+    {
+      "axis": "y",
+      "gap_start": 100,
+      "gap_end": 104,
+      "x_center": 150,
+      "x_tol": 6
+    }
+  ]
+}

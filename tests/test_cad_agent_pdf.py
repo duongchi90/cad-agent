@@ -214,6 +214,43 @@ def test_pdf_run_writes_page_checkpoints_and_resume_preserves_them() -> None:
         assert (output / "pdf-run-manifest.json").read_bytes() == before
 
 
+def test_staged_pdf_primitive_path_does_not_reconnect_two_source_runs() -> None:
+    """The production PDF stage enables merging; source support must survive it."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "two-source-runs.pdf"
+        output = root / "run"
+        document = fitz.open()
+        page = document.new_page(width=600, height=300)
+        page.draw_line((75, 150), (175, 150), color=(0, 0, 0), width=2)
+        page.draw_line((181, 150), (281, 150), color=(0, 0, 0), width=2)
+        document.save(source)
+        document.close()
+
+        manifest = new_pdf_manifest(source, 1.0, "test-reference", 144)
+        run_pdf_stages(source, output, output / "pdf-run-manifest.json", manifest)
+
+        persisted = json.loads((output / "pdf-run-manifest.json").read_text(encoding="utf-8"))
+        page_ir_path = output / persisted["pages"][0]["stages"]["primitive_ir"]["artifact"]
+        primitive_ir = json.loads(page_ir_path.read_text(encoding="utf-8"))
+        line_boxes = [
+            primitive["trace"]["bbox_px"]
+            for primitive in primitive_ir["primitives"]
+            if primitive.get("type") == "line"
+        ]
+        assert line_boxes, f"staged primitive IR contained no lines: {primitive_ir['primitives']}"
+
+        # The PDF stage renders at 144 DPI, so the 6 pt source gap is 12 px.
+        source_gap = (350, 362)
+        assert any(box[0] <= 250 and box[2] >= 250 and box[3] - box[1] <= 6 for box in line_boxes), line_boxes
+        assert any(box[0] <= 450 and box[2] >= 450 and box[3] - box[1] <= 6 for box in line_boxes), line_boxes
+        assert not any(
+            box[0] < source_gap[0] and box[2] > source_gap[1]
+            and box[3] - box[1] <= 6
+            for box in line_boxes
+        ), f"staged PDF -> _run_primitive reconnected the source gap: {line_boxes}"
+
+
 def test_pdf_resume_rejects_changed_source() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

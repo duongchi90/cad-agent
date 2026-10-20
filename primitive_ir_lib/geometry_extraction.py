@@ -76,6 +76,115 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     return blurred
 
 
+def _split_line_at_source_gaps(
+    source_gray: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+) -> List[Tuple[int, int, int, int]]:
+    """Keep Hough output from spanning intervals with no dark source pixels."""
+    dx = float(x2 - x1)
+    dy = float(y2 - y1)
+    length = float(np.hypot(dx, dy))
+    if length == 0:
+        return [(x1, y1, x2, y2)]
+
+    sample_count = max(1, int(np.ceil(length)))
+    distances = np.linspace(0.0, length, sample_count + 1)
+    xs = np.rint(x1 + dx * distances / length).astype(int)
+    ys = np.rint(y1 + dy * distances / length).astype(int)
+
+    # A supported point needs a dark transverse ridge, not merely pixels below
+    # an absolute brightness cutoff. The candidate may lie on either edge of
+    # the physical stroke, so probe nearby centers and require brighter flanks.
+    # At an image border, two in-bounds probes on the surviving side are needed;
+    # off-image samples never count as support.
+    normal_x = -dy / length
+    normal_y = dx / length
+    offsets = np.arange(-4, 5, dtype=np.float64)
+    probe_x = np.rint(xs[:, None] + normal_x * offsets[None, :]).astype(int)
+    probe_y = np.rint(ys[:, None] + normal_y * offsets[None, :]).astype(int)
+    inside = (
+        (probe_x >= 0)
+        & (probe_x < source_gray.shape[1])
+        & (probe_y >= 0)
+        & (probe_y < source_gray.shape[0])
+    )
+    sampled_gray = source_gray[
+        np.clip(probe_y, 0, source_gray.shape[0] - 1),
+        np.clip(probe_x, 0, source_gray.shape[1] - 1),
+    ]
+    supported = np.zeros(xs.shape, dtype=bool)
+    for center_index in (3, 4, 5):
+        center = sampled_gray[:, center_index]
+        left_near_index = center_index - 3
+        left_far_index = center_index - 4
+        right_near_index = center_index + 3
+        right_far_index = center_index + 4
+        left_available = (
+            inside[:, left_near_index] & inside[:, left_far_index]
+            if left_far_index >= 0
+            else np.zeros(xs.shape, dtype=bool)
+        )
+        right_available = (
+            inside[:, right_near_index] & inside[:, right_far_index]
+            if right_far_index < inside.shape[1]
+            else np.zeros(xs.shape, dtype=bool)
+        )
+        center_gray = center.astype(np.int16)
+        left_near_dark = (
+            sampled_gray[:, left_near_index].astype(np.int16) - center_gray >= 10
+        )
+        left_far_dark = (
+            sampled_gray[:, max(left_far_index, 0)].astype(np.int16) - center_gray >= 10
+        )
+        right_near_dark = (
+            sampled_gray[:, right_near_index].astype(np.int16) - center_gray >= 10
+        )
+        right_far_dark = (
+            sampled_gray[:, min(right_far_index, inside.shape[1] - 1)].astype(np.int16)
+            - center_gray
+            >= 10
+        )
+        two_sided_ridge = (
+            left_available
+            & right_available
+            & left_near_dark
+            & right_near_dark
+        )
+        one_sided_border_ridge = (
+            left_available
+            & ~right_available
+            & left_near_dark
+            & left_far_dark
+        ) | (
+            right_available
+            & ~left_available
+            & right_near_dark
+            & right_far_dark
+        )
+        supported |= (
+            inside[:, center_index]
+            & (two_sided_ridge | one_sided_border_ridge)
+        )
+
+    transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
+    starts = np.flatnonzero(transitions == 1)
+    ends = np.flatnonzero(transitions == -1) - 1
+    if len(starts) < 2:
+        return [(x1, y1, x2, y2)]
+
+    gap_lengths = starts[1:] - ends[:-1] - 1
+    if not np.any(gap_lengths >= 2):
+        return [(x1, y1, x2, y2)]
+
+    return [
+        (int(xs[start]), int(ys[start]), int(xs[end]), int(ys[end]))
+        for start, end in zip(starts, ends)
+    ]
+
+
 def extract_lines(
     image_bgr: np.ndarray,
     canny_low: int = 50,
@@ -87,6 +196,7 @@ def extract_lines(
     """HoughLinesP trên ảnh sau Canny. confidence ước lượng thô từ độ dài
     đoạn so với min_line_length (đoạn càng dài, vote Hough càng chắc)."""
     gray = _preprocess(image_bgr)
+    source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, canny_low, canny_high)
     segments = cv2.HoughLinesP(
         edges, rho=1, theta=np.pi / 180, threshold=hough_threshold,
@@ -101,11 +211,24 @@ def extract_lines(
     # luôn chuẩn hoá về mảng 2D (N,4), mỗi hàng là [x1,y1,x2,y2].
     seg = np.asarray(segments).reshape(-1, 4)
 
-    lengths = [float(np.hypot(x2 - x1, y2 - y1)) for (x1, y1, x2, y2) in seg]
-    max_len = max(lengths) if lengths else 1.0
+    hough_lengths = [
+        float(np.hypot(x2 - x1, y2 - y1))
+        for x1, y1, x2, y2 in seg
+    ]
+    max_hough_len = max(hough_lengths) if hough_lengths else 1.0
+    source_intervals = [
+        (interval, hough_length)
+        for (x1, y1, x2, y2), hough_length in zip(seg, hough_lengths)
+        for interval in _split_line_at_source_gaps(
+            source_gray, int(x1), int(y1), int(x2), int(y2)
+        )
+        if interval[:2] != interval[2:]
+    ]
 
-    for (x1, y1, x2, y2), length in zip(seg, lengths):
-        confidence = min(1.0, 0.5 + 0.5 * (length / max_len))
+    # Confidence describes the Hough candidate, so splitting its geometry at
+    # source gaps must not change its score or renormalize unrelated lines.
+    for (x1, y1, x2, y2), hough_length in source_intervals:
+        confidence = min(1.0, 0.5 + 0.5 * (hough_length / max_hough_len))
         bbox = (float(min(x1, x2)), float(min(y1, y2)), float(max(x1, x2)), float(max(y1, y2)))
         raw_lines.append(RawLine(
             id=new_id("rawline"),
