@@ -86,6 +86,13 @@ def test_real_scan_entrypoint_does_not_promote_ellipse_or_open_arc_to_circle():
     )
     controls.append(open_circle_arc)
 
+    open_circle_arc_with_small_gap = _paper()
+    cv2.ellipse(
+        open_circle_arc_with_small_gap, CENTER, (425, 425), 0, 0, 355,
+        (STROKE_GRAY,) * 3, 2, lineType=cv2.LINE_AA,
+    )
+    controls.append(open_circle_arc_with_small_gap)
+
     for image in controls:
         detected = extract_raw_geometry(
             image, preset="real_scan_tuned_v1"

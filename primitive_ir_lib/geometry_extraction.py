@@ -358,6 +358,20 @@ def _circle_has_distributed_source_support(
 
     if float(np.mean(supported)) < 0.90:
         return False
+
+    # Overall coverage and fixed sectors can hide a short, contiguous opening.
+    # Permit only a small raster-sampling gap; a visible 5-degree opening must
+    # not be promoted to a complete circle by this supplemental path.
+    first_supported = int(np.flatnonzero(supported)[0])
+    unsupported = np.roll(~supported, -first_supported)
+    transitions = np.diff(np.r_[False, unsupported, False].astype(np.int8))
+    gap_starts = np.flatnonzero(transitions == 1)
+    gap_ends = np.flatnonzero(transitions == -1)
+    largest_gap = int(np.max(gap_ends - gap_starts)) if gap_starts.size else 0
+    max_sampling_gap = max(2, int(np.ceil(sample_count * 0.01)))
+    if largest_gap > max_sampling_gap:
+        return False
+
     return all(float(np.mean(section)) >= 0.70 for section in np.array_split(supported, 16))
 
 
