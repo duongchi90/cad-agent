@@ -1265,3 +1265,20 @@ def test_deferred_close_binds_existing_owner_into_result_slot_preflight_before_c
     preflight = "(mcp-result-slot-free-p root request-id nonce)"
     assert preflight in deferred_body
     assert deferred_body.index(preflight) < deferred_body.index("'vla-close")
+
+@pytest.mark.parametrize("payload", [{}, {"entities": None}, {"entities": {}}])
+def test_file_ipc_entity_list_rejects_malformed_payload(payload: dict[str, object], tmp_path: Path) -> None:
+    client = FileIPCLiveMCPClient(str(tmp_path))
+    client._dispatch = lambda command, arguments: payload  # type: ignore[method-assign]
+
+    with pytest.raises(MCPToolError, match="ENTITY_LIST_INVALID"):
+        client.entity_list()
+
+
+def test_file_ipc_entity_list_preserves_valid_empty_and_populated_payloads(tmp_path: Path) -> None:
+    client = FileIPCLiveMCPClient(str(tmp_path))
+    payloads = iter([{"entities": []}, {"entities": [{"handle": "A", "type": "TEXT", "layer": "0"}]}])
+    client._dispatch = lambda command, arguments: next(payloads)  # type: ignore[method-assign]
+
+    assert client.entity_list() == []
+    assert client.entity_list() == [{"handle": "A", "type": "TEXT", "layer": "0"}]

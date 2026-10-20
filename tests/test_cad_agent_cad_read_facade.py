@@ -626,3 +626,207 @@ def test_query_rejects_unbounded_or_unsupported_requests(
             projection=projection,
             limit=limit,
         )
+
+
+def _tag_client(texts: list[tuple[str, str, str | None]]) -> _BoundFakeCadClient:
+    client = _BoundFakeCadClient(fail_entity_get=False)
+    for handle, content, layout in texts:
+        geometry: dict[str, object] = {"content": content}
+        if layout is not None:
+            geometry["layout"] = layout
+        client.preload_entity(handle, "TEXT", "NOTES", geometry)
+    return client
+
+
+def test_audit_model_text_tags_uses_literal_duplicates_and_expected_values() -> None:
+    client = _tag_client([("1", "A", "Model"), ("2", "A", "Model"), ("3", "a", "Model"), ("4", " A", "Model"), ("5", "A", "Layout1")])
+    result = _facade().audit_model_text_tags(
+        client=client,
+        scope="MODEL_TEXT",
+        **_bound_kwargs(),
+        expected_tags=["A", "B", "A"],
+    )
+
+    assert result["status"] == "COMPLETE"
+    assert result["scope"] == "MODEL_TEXT"
+    assert result["consistency"] == "NON_ATOMIC_OBSERVATION"
+    assert result["findings"]["duplicates"] == [{"text": "A", "handles": ["1", "2"]}]
+    assert result["findings"]["missing_expected_tags"] == ["B"]
+    assert result["counts"]["excluded_paperspace_text_count"] == 1
+
+
+def test_audit_model_text_tags_distinguishes_unrequested_and_empty_expectations() -> None:
+    client = _tag_client([])
+    facade = _facade()
+    not_requested = facade.audit_model_text_tags(client=client, scope="MODEL_TEXT", **_bound_kwargs())
+    requested_empty = facade.audit_model_text_tags(client=client, scope="MODEL_TEXT", **_bound_kwargs(), expected_tags=[])
+
+    assert not_requested["counts"]["expected_tag_count"] is None
+    assert not_requested["counts"]["missing_tag_count"] is None
+    assert requested_empty["counts"]["expected_tag_count"] == 0
+    assert requested_empty["counts"]["missing_tag_count"] == 0
+    assert requested_empty["status"] == "COMPLETE"
+
+
+@pytest.mark.parametrize("expected_tags", [[1], [None], "A"])
+def test_audit_model_text_tags_rejects_invalid_expected_tag_types(expected_tags: object) -> None:
+    result = _facade().audit_model_text_tags(
+        client=_tag_client([]), scope="MODEL_TEXT", **_bound_kwargs(), expected_tags=expected_tags
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert "EXPECTED_TAGS_INVALID" in result["reason_codes"]
+
+
+def test_audit_model_text_tags_refuses_unknown_or_missing_detail_fields() -> None:
+    client = _tag_client([("1", "A", None)])
+    result = _facade().audit_model_text_tags(client=client, scope="MODEL_TEXT", **_bound_kwargs())
+    assert result["status"] == "INCOMPLETE"
+    assert "LAYOUT_UNAVAILABLE" in result["reason_codes"]
+    assert result["findings"]["duplicates"] == []
+
+
+def test_audit_model_text_tags_unsupported_scope_does_not_read_client() -> None:
+    class _NoReadClient(_BoundFakeCadClient):
+        def drawing_get_variables(self, names: list[str]) -> dict[str, object]:
+            raise AssertionError("unsupported scope must be rejected before client reads")
+
+    result = _facade().audit_model_text_tags(
+        client=_NoReadClient(), scope="ALL_TEXT", **_bound_kwargs()
+    )
+    assert result["status"] == "UNSUPPORTED"
+    assert "SCOPE_UNSUPPORTED" in result["reason_codes"]
+
+
+def test_audit_model_text_tags_refuses_truncated_scope() -> None:
+    client = _tag_client([(str(index), "T", "Model") for index in range(101)])
+    result = _facade().audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert "ENTITY_SCOPE_TRUNCATED" in result["reason_codes"]
+    assert result["findings"]["duplicates"] == []
+
+
+@pytest.mark.parametrize("truncation_field", ["truncated", "content_truncated"])
+def test_audit_model_text_tags_refuses_truncated_entity_content(
+    truncation_field: str,
+) -> None:
+    client = _tag_client([("1", "A", "Model")])
+    client._entities["1"][truncation_field] = True
+
+    result = _facade().audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+
+    assert result["status"] == "INCOMPLETE"
+    assert "CONTENT_TRUNCATED" in result["reason_codes"]
+    assert result["findings"]["duplicates"] == []
+    assert result["findings"]["missing_expected_tags"] == []
+
+
+def test_audit_model_text_tags_preserves_malformed_entity_list_reason() -> None:
+    class _MalformedIndexClient(_BoundFakeCadClient):
+        def entity_list(self, layer: str | None = None) -> list[dict[str, object]]:
+            del layer
+            raise RuntimeError("ENTITY_LIST_INVALID")
+
+    result = _facade().audit_model_text_tags(
+        client=_MalformedIndexClient(), scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert "ENTITY_LIST_INVALID" in result["reason_codes"]
+
+
+def test_audit_model_text_tags_refuses_duplicate_handles_and_identity_drift() -> None:
+    class _DuplicateIndexClient(_BoundFakeCadClient):
+        def entity_list(self, layer: str | None = None) -> list[dict[str, object]]:
+            del layer
+            return [
+                {"handle": "1", "type": "TEXT", "layer": "NOTES"},
+                {"handle": "1", "type": "TEXT", "layer": "NOTES"},
+            ]
+
+    duplicate = _DuplicateIndexClient(fail_entity_get=False)
+    duplicate.preload_entity("1", "TEXT", "NOTES", {"content": "A", "layout": "Model"})
+    duplicate_result = _facade().audit_model_text_tags(
+        client=duplicate, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert duplicate_result["status"] == "INCOMPLETE"
+    assert "DUPLICATE_HANDLE" in duplicate_result["reason_codes"]
+
+    class _FlippingDetailClient(_BoundFakeCadClient):
+        def __init__(self) -> None:
+            super().__init__(fail_entity_get=False)
+            self.identity_reads = 0
+
+        def drawing_get_variables(self, names: list[str]) -> dict[str, object]:
+            self.identity_reads += 1
+            path = _DRAWING_PATH if self.identity_reads < 4 else _FOREIGN_DRAWING_PATH
+            return _BoundFakeCadClient(path).drawing_get_variables(names)
+
+    flipping = _FlippingDetailClient()
+    flipping.preload_entity("1", "TEXT", "NOTES", {"content": "A", "layout": "Model"})
+    result = _facade().audit_model_text_tags(
+        client=flipping, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert "DRAWING_IDENTITY_MISMATCH" in result["reason_codes"]
+
+
+def test_audit_model_text_tags_refuses_final_identity_change_and_bad_details() -> None:
+    class _LateFlippingClient(_BoundFakeCadClient):
+        def __init__(self) -> None:
+            super().__init__(fail_entity_get=False)
+            self.identity_reads = 0
+
+        def drawing_get_variables(self, names: list[str]) -> dict[str, object]:
+            self.identity_reads += 1
+            path = _DRAWING_PATH if self.identity_reads < 8 else _FOREIGN_DRAWING_PATH
+            return _BoundFakeCadClient(path).drawing_get_variables(names)
+
+    late = _LateFlippingClient()
+    late.preload_entity("1", "TEXT", "NOTES", {"content": "A", "layout": "Model"})
+    result = _facade().audit_model_text_tags(
+        client=late, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert result["status"] == "INCOMPLETE"
+    assert "DRAWING_IDENTITY_MISMATCH" in result["reason_codes"]
+
+    class _MismatchedDetailClient(_BoundFakeCadClient):
+        def entity_get(self, entity_id: str) -> dict[str, object]:
+            detail = super().entity_get(entity_id)
+            detail["handle"] = "FOREIGN"
+            return detail
+
+    mismatched = _MismatchedDetailClient(fail_entity_get=False)
+    mismatched.preload_entity("1", "TEXT", "NOTES", {"content": "A", "layout": "Model"})
+    mismatch_result = _facade().audit_model_text_tags(
+        client=mismatched, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert mismatch_result["status"] == "INCOMPLETE"
+    assert "ENTITY_IDENTITY_MISMATCH" in mismatch_result["reason_codes"]
+
+    missing_content = _tag_client([("1", "unused", "Model")])
+    missing_content._entities["1"].pop("content")
+    missing_result = _facade().audit_model_text_tags(
+        client=missing_content, scope="MODEL_TEXT", **_bound_kwargs()
+    )
+    assert missing_result["status"] == "INCOMPLETE"
+    assert "CONTENT_UNAVAILABLE" in missing_result["reason_codes"]
+
+
+def test_audit_model_text_tags_binds_normalized_expected_tags_to_complete_receipt() -> None:
+    client = _tag_client([("1", "A", "Model"), ("2", "B", "Model")])
+    facade = _facade()
+    first = facade.audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs(), expected_tags=["A"]
+    )
+    second = facade.audit_model_text_tags(
+        client=client, scope="MODEL_TEXT", **_bound_kwargs(), expected_tags=["B", "A", "B"]
+    )
+
+    assert first["status"] == second["status"] == "COMPLETE"
+    assert first["expected_tags"] == ["A"]
+    assert second["expected_tags"] == ["A", "B"]
+    assert first["result_sha256"] != second["result_sha256"]
+    assert first["query_id"] != second["query_id"]
