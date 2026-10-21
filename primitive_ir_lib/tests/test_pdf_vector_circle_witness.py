@@ -256,6 +256,38 @@ def test_run_pdf_does_not_promote_chord_closed_partial_arc_to_circle(tmp_path: P
     )
 
 
+def test_run_pdf_refines_circle_geometry_from_unique_pdf_witness(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "circle-witness-precision.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=842, height=595)
+    center = fitz.Point(161.55, 401.59)
+    page_height = page.rect.height
+    radii = (45.2725, 17.01095)
+    for radius in radii:
+        page.draw_circle(center, radius, color=(0.05, 0.05, 0.05), width=0.75)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert len(circles) == 2, "each uniquely visible PDF circle must have one raster candidate"
+    for radius in radii:
+        closest = min(
+            circles,
+            key=lambda circle: abs(circle["geometry"]["radius"] * 0.5 - radius),
+        )
+        output_radius_pt = closest["geometry"]["radius"] * 0.5
+        output_center_pt = (
+            closest["geometry"]["center"]["x"] * 0.5,
+            closest["geometry"]["center"]["y"] * 0.5,
+        )
+        expected_center_pt = (center.x, page_height - center.y)
+        assert abs(output_radius_pt - radius) <= 0.05
+        assert math.dist(output_center_pt, expected_center_pt) <= 0.05
+
+
 def test_run_pdf_keeps_raster_circle_enclosed_by_unrelated_curve_bounds(tmp_path: Path) -> None:
     pdf_path = tmp_path / "raster-circle-enclosed-by-vector-bounds.pdf"
     image_path = tmp_path / "same-page-render.png"

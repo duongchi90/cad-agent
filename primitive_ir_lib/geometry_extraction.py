@@ -664,19 +664,45 @@ def extract_raw_geometry(
             candidate_matches.append(matches)
             candidate_has_suspect_region.append(has_suspect_region)
 
-        circles = [
-            candidate
-            for candidate, matches, has_suspect_region in zip(
-                circles, candidate_matches, candidate_has_suspect_region
-            )
-            if (
-                len(matches) == 1 and witness_match_counts[matches[0]] == 1
-            ) or (
+        source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        accepted_circles = []
+        min_radius = kwargs.get("min_radius")
+        max_radius = kwargs.get("max_radius")
+        for candidate, matches, has_suspect_region in zip(
+            circles, candidate_matches, candidate_has_suspect_region
+        ):
+            if len(matches) == 1 and witness_match_counts[matches[0]] == 1:
+                witness_x, witness_y, witness_radius = witnesses[matches[0]]
+                if (
+                    min_radius is not None and witness_radius < min_radius
+                ) or (
+                    max_radius is not None and max_radius > 0
+                    and witness_radius > max_radius
+                ):
+                    continue
+                if not _circle_has_distributed_source_support(
+                    source_gray, witness_x, witness_y, witness_radius
+                ):
+                    continue
+                accepted_circles.append(RawCircle(
+                    id=candidate.id,
+                    center_px=(witness_x, witness_y),
+                    radius_px=witness_radius,
+                    confidence=candidate.confidence,
+                    bbox_px=(
+                        witness_x - witness_radius,
+                        witness_y - witness_radius,
+                        witness_x + witness_radius,
+                        witness_y + witness_radius,
+                    ),
+                ))
+            elif (
                 not require_pdf_vector_circle_witness
                 and not has_suspect_region
                 and not matches
-            )
-        ]
+            ):
+                accepted_circles.append(candidate)
+        circles = accepted_circles
 
     return RawGeometry(
         lines=extract_lines(image_bgr, **line_kwargs),
