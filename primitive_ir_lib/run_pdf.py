@@ -335,6 +335,99 @@ def _is_closed_line_contour(drawing: dict) -> bool:
     return True
 
 
+def _fit_open_line_circle_arc(
+    drawing: dict,
+) -> Optional[tuple[float, float, float]]:
+    """Recognize a circle-like open polyline that must remain only a suspect."""
+    if (
+        drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("color") is None
+        or drawing.get("width", 0) <= 0
+        or float(drawing.get("stroke_opacity", 0.0)) <= 0.0
+    ):
+        return None
+    items = drawing.get("items", [])
+    if len(items) < 8 or any(item[0] != "l" for item in items):
+        return None
+
+    starts: list[fitz.Point] = []
+    ends: list[fitz.Point] = []
+    lengths: list[float] = []
+    directions: list[float] = []
+    previous_end: Optional[fitz.Point] = None
+    for item in items:
+        _, start, end = item
+        if (
+            previous_end is not None
+            and math.hypot(start.x - previous_end.x, start.y - previous_end.y) > 0.02
+        ):
+            return None
+        dx, dy = end.x - start.x, end.y - start.y
+        length = math.hypot(dx, dy)
+        if not math.isfinite(length) or length <= 0.02:
+            return None
+        starts.append(start)
+        ends.append(end)
+        lengths.append(length)
+        directions.append(math.atan2(dy, dx))
+        previous_end = end
+
+    if (
+        previous_end is None
+        or math.hypot(starts[0].x - previous_end.x, starts[0].y - previous_end.y) <= 0.02
+    ):
+        return None
+
+    turns = [
+        math.atan2(math.sin(next_direction - direction), math.cos(next_direction - direction))
+        for direction, next_direction in zip(directions, directions[1:])
+    ]
+    sweep = sum(abs(turn) for turn in turns)
+    if (
+        not turns
+        or not (all(turn > 1e-6 for turn in turns) or all(turn < -1e-6 for turn in turns))
+        or max(abs(turn) for turn in turns) > math.radians(45.0)
+        or not math.radians(15.0) <= sweep < 2.0 * math.pi - 0.02
+        or max(lengths) > float(np.median(lengths)) * 3.0
+    ):
+        return None
+
+    samples: list[tuple[float, float]] = []
+    for start, end in zip(starts, ends):
+        for fraction in (0.0, 0.25, 0.5, 0.75):
+            samples.append(
+                (
+                    start.x + fraction * (end.x - start.x),
+                    start.y + fraction * (end.y - start.y),
+                )
+            )
+    points = np.asarray(samples, dtype=np.float64)
+    matrix = np.column_stack((points[:, 0], points[:, 1], np.ones(len(points))))
+    target = -(points[:, 0] ** 2 + points[:, 1] ** 2)
+    try:
+        a, b, c = np.linalg.lstsq(matrix, target, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return None
+    center_x, center_y = -a / 2.0, -b / 2.0
+    radius_squared = center_x**2 + center_y**2 - c
+    if not math.isfinite(radius_squared) or radius_squared <= 0.0:
+        return None
+    radius = math.sqrt(radius_squared)
+    radial_errors = np.abs(
+        np.hypot(points[:, 0] - center_x, points[:, 1] - center_y) - radius
+    )
+    stroke_width = float(drawing.get("width") or 0.0)
+    if (
+        not math.isfinite(stroke_width)
+        or stroke_width <= 0.0
+        or float(np.max(radial_errors))
+        > max(0.18, min(stroke_width * 0.25, radius * 0.005))
+    ):
+        return None
+    return center_x, center_y, radius
+
+
 def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Matrix) -> dict:
     """Preserve supported path and paint footprints instead of using bounds alone."""
     segments: list[tuple[float, float, float, float]] = []
@@ -570,7 +663,15 @@ def _page_circle_witnesses(
     line_contour_indices = {
         index for index, drawing in enumerate(drawings) if _is_closed_line_contour(drawing)
     }
-    if not curve_drawings and not line_contour_indices:
+    open_line_circle_arcs = {
+        index: _fit_open_line_circle_arc(drawing)
+        for index, drawing in enumerate(drawings)
+        if index not in line_contour_indices
+    }
+    open_line_circle_arcs = {
+        index: circle for index, circle in open_line_circle_arcs.items() if circle is not None
+    }
+    if not curve_drawings and not line_contour_indices and not open_line_circle_arcs:
         return False, [], []
     background_color = _page_background_color(page)
     page_transform = page.rotation_matrix
@@ -586,6 +687,8 @@ def _page_circle_witnesses(
         has_curve = any(item[0] == "c" for item in drawing.get("items", []))
         has_line_contour = index in line_contour_indices
         if not has_curve and not has_line_contour:
+            if index in open_line_circle_arcs:
+                suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
             continue
         if not has_curve and has_line_contour:
             drawing_rect = drawing.get("rect")

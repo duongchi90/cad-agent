@@ -10,6 +10,7 @@ import fitz
 import numpy as np
 
 from primitive_ir_lib.run_pdf import _page_circle_witnesses, run_pdf
+from primitive_ir_lib.run_image import run as run_image
 
 
 def _draw_circular_beziers(
@@ -704,11 +705,11 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
         arc = page.new_shape()
         for start, end in zip(points, points[1:]):
             arc.draw_line(start, end)
-        arc.finish(color=(0.05, 0.05, 0.05), width=1.5)
+        arc.finish(color=(0.05, 0.05, 0.05), width=1.5, closePath=False)
         arc.commit()
         chord = page.new_shape()
         chord.draw_line(points[-1], points[0])
-        chord.finish(color=(0.05, 0.05, 0.05), width=1.5)
+        chord.finish(color=(0.05, 0.05, 0.05), width=1.5, closePath=False)
         chord.commit()
 
     document = fitz.open()
@@ -740,6 +741,18 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
     add_partial_arc_and_chord(raster_page, fitz.Point(280, 280), 55)
     document.save(pdf_path)
     document.close()
+
+    raster_document = fitz.open(pdf_path)
+    split_render = tmp_path / "split-path.png"
+    raster_document[0].get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False).save(
+        split_render
+    )
+    raster_document.close()
+    pre_gate_ir = tmp_path / "pre-gate.json"
+    run_image(str(split_render), str(pre_gate_ir), scale_mm_per_px=1.0)
+    assert _has_circle_near(_circle_primitives(pre_gate_ir), (200, 200), 70), (
+        "the red control must prove raster Hough actually proposes the unsupported circle"
+    )
 
     run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
 
