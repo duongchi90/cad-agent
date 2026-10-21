@@ -9,7 +9,12 @@ import cv2
 import fitz
 import numpy as np
 
-from primitive_ir_lib.run_pdf import _page_circle_witnesses, run_pdf
+from primitive_ir_lib.run_pdf import (
+    _fit_full_line_circle_path,
+    _page_circle_witnesses,
+    _single_line_record_paths,
+    run_pdf,
+)
 from primitive_ir_lib.run_image import run as run_image
 
 
@@ -830,6 +835,198 @@ def test_run_pdf_keeps_source_supported_line_segmented_circle(tmp_path: Path) ->
     assert _has_circle_near(circles, (120, 120), 42.5), (
         "a complete, source-visible circle drawn as connected line segments must survive source gating"
     )
+
+
+def test_run_pdf_keeps_consecutive_single_line_concentric_cycles_when_raster_aliases(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "separate-line-record-concentric-circles.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=120, height=120)
+    center = fitz.Point(60, 60)
+    radii = (20.0, 20.25, 21.0)
+    for radius in radii:
+        points = [
+            fitz.Point(
+                center.x + radius * math.cos(math.radians(360.0 * index / 32)),
+                center.y + radius * math.sin(math.radians(360.0 * index / 32)),
+            )
+            for index in range(32)
+        ]
+        for start, end in zip(points, points[1:] + points[:1]):
+            page.draw_line(start, end, color=(0.05, 0.05, 0.05), width=0.6)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    actual_radii = sorted(circle["geometry"]["radius"] for circle in circles)
+    assert len(actual_radii) == 3, (
+        "each distinct, closed source cycle must survive even when raster Hough candidates alias"
+    )
+    assert np.allclose(actual_radii, sorted(radius * 2.0 for radius in radii), atol=0.2), (
+        f"source vector radii should remain distinct and exact; got {actual_radii}"
+    )
+
+
+def test_run_pdf_deduplicates_duplicate_single_line_circle_paint(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "duplicate-single-line-circle-paint.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=120, height=120)
+    center = fitz.Point(60, 60)
+    radius = 21.25
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(360.0 * index / 32)),
+            center.y + radius * math.sin(math.radians(360.0 * index / 32)),
+        )
+        for index in range(32)
+    ]
+    for _ in range(2):
+        for start, end in zip(points, points[1:] + points[:1]):
+            page.draw_line(start, end, color=(0.05, 0.05, 0.05), width=0.6)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert len(circles) == 1, "duplicate paint of one source cycle must not emit duplicate circles"
+    assert math.isclose(circles[0]["geometry"]["radius"], radius * 2.0, abs_tol=0.2)
+
+
+def test_run_pdf_does_not_promote_single_line_record_arc_plus_chord(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "single-line-record-arc-plus-chord.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=120, height=120)
+    center = fitz.Point(60, 60)
+    radius = 30.0
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(355.0 * index / 35)),
+            center.y + radius * math.sin(math.radians(355.0 * index / 35)),
+        )
+        for index in range(36)
+    ]
+    for start, end in zip(points, points[1:]):
+        page.draw_line(start, end, color=(0.05, 0.05, 0.05), width=0.8)
+    page.draw_line(points[-1], points[0], color=(0.05, 0.05, 0.05), width=0.8)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert circles == [], "a separately recorded closing chord must not turn a partial arc into a circle"
+
+
+def test_later_background_line_invalidates_single_record_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=120, height=120)
+    page.draw_rect(page.rect, color=None, fill=(0.75, 0.75, 0.75))
+    center = fitz.Point(60, 60)
+    radius = 30.0
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(360.0 * index / 32)),
+            center.y + radius * math.sin(math.radians(360.0 * index / 32)),
+        )
+        for index in range(32)
+    ]
+    for start, end in zip(points, points[1:] + points[:1]):
+        page.draw_line(start, end, color=(0.05, 0.05, 0.05), width=0.8)
+    page.draw_line((30, 60), (90, 60), color=(0.75, 0.75, 0.75), width=2.0)
+
+    _, witnesses, suspects = _page_circle_witnesses(page, 2.0)
+    document.close()
+
+    assert witnesses == [], "later background-colored paint crossing the perimeter invalidates the cycle"
+    assert suspects, "an occluded vector circle remains a bounded suspect region"
+
+
+def test_single_line_cycle_with_parser_gap_is_not_a_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=120, height=120)
+    center = fitz.Point(60, 60)
+    radius = 21.25
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(360.0 * index / 32)),
+            center.y + radius * math.sin(math.radians(360.0 * index / 32)),
+        )
+        for index in range(32)
+    ]
+    for start, end in zip(points, points[1:]):
+        page.draw_line(start, end, color=(0.05, 0.05, 0.05), width=0.8)
+    page.draw_line(points[-1], fitz.Point(points[0].x + 0.05, points[0].y), color=(0.05, 0.05, 0.05), width=0.8)
+
+    _, witnesses, suspects = _page_circle_witnesses(page, 2.0)
+    document.close()
+
+    assert witnesses == [], "a path gap beyond parser endpoint precision is not a closed contour"
+    assert suspects, "a nearly closed curved source path must not silently disappear"
+
+
+def test_single_line_hairline_records_are_eligible_for_source_reconstruction() -> None:
+    center = fitz.Point(60, 60)
+    radius = 21.25
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(360.0 * index / 32)),
+            center.y + radius * math.sin(math.radians(360.0 * index / 32)),
+        )
+        for index in range(32)
+    ]
+    records = [
+        {
+            "type": "s",
+            "fill": None,
+            "color": (0.05, 0.05, 0.05),
+            "width": 0.0,
+            "dashes": "[] 0",
+            "stroke_opacity": 1.0,
+            "items": [("l", start, end)],
+            "seqno": index,
+        }
+        for index, (start, end) in enumerate(zip(points, points[1:] + points[:1]))
+    ]
+
+    paths = _single_line_record_paths(records)
+
+    assert len(paths) == 1
+    assert paths[0][3] is True
+    assert math.isclose(paths[0][2]["rect"].width, radius * 2.0, abs_tol=0.2)
+    fitted = _fit_full_line_circle_path(paths[0][2], np.ones(3, dtype=np.float64))
+    assert fitted is not None, "zero-width PDF hairlines remain visible stroke geometry"
+    assert math.isclose(fitted[2], radius, abs_tol=0.1)
+
+
+def test_interleaved_single_line_branch_breaks_contour_reconstruction() -> None:
+    document = fitz.open()
+    page = document.new_page(width=120, height=120)
+    center = fitz.Point(60, 60)
+    radius = 21.25
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(360.0 * index / 32)),
+            center.y + radius * math.sin(math.radians(360.0 * index / 32)),
+        )
+        for index in range(32)
+    ]
+    for index, (start, end) in enumerate(zip(points, points[1:] + points[:1])):
+        page.draw_line(start, end, color=(0.05, 0.05, 0.05), width=0.8)
+        if index == 15:
+            page.draw_line(center, end, color=(0.05, 0.05, 0.05), width=0.8)
+
+    _, witnesses, suspects = _page_circle_witnesses(page, 2.0)
+    document.close()
+
+    assert witnesses == [], "a branch inserted into the source record sequence is ambiguous"
+    assert suspects, "the broken curved record sequence remains a bounded suspect"
 
 
 def test_line_segmented_circle_witness_requires_known_contrast() -> None:

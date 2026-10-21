@@ -138,7 +138,8 @@ def _fit_full_circle_path(
         drawing.get("type") != "s"
         or drawing.get("fill") is not None
         or drawing.get("color") is None
-        or drawing.get("width", 0) <= 0
+        or not math.isfinite(float(drawing.get("width", math.nan)))
+        or drawing.get("width", -1) < 0
         or abs(float(drawing.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
         or str(drawing.get("dashes", "")).strip() not in {"[] 0", "[] 0.0"}
     ):
@@ -209,7 +210,8 @@ def _fit_full_line_circle_path(
         drawing.get("type") != "s"
         or drawing.get("fill") is not None
         or drawing.get("color") is None
-        or drawing.get("width", 0) <= 0
+        or not math.isfinite(float(drawing.get("width", math.nan)))
+        or drawing.get("width", -1) < 0
         or abs(float(drawing.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
         or str(drawing.get("dashes", "")).strip() not in {"[] 0", "[] 0.0"}
         or background is None
@@ -263,6 +265,7 @@ def _fit_full_line_circle_path(
         )
         or max(abs(turn) for turn in signed_turns) > math.radians(45.0)
         or abs(abs(sum(signed_turns)) - 2.0 * math.pi) > 0.02
+        or min(lengths) < float(np.median(lengths)) * 0.65
         or max(lengths) > float(np.median(lengths)) * 3.0
     ):
         return None
@@ -296,7 +299,7 @@ def _fit_full_line_circle_path(
     stroke_width = float(drawing.get("width") or 0.0)
     if (
         not math.isfinite(stroke_width)
-        or stroke_width <= 0.0
+        or stroke_width < 0.0
         or float(np.max(radial_errors)) > max(0.18, min(stroke_width * 0.25, radius * 0.005))
     ):
         return None
@@ -343,7 +346,8 @@ def _fit_open_line_circle_arc(
         drawing.get("type") != "s"
         or drawing.get("fill") is not None
         or drawing.get("color") is None
-        or drawing.get("width", 0) <= 0
+        or not math.isfinite(float(drawing.get("width", math.nan)))
+        or drawing.get("width", -1) < 0
         or float(drawing.get("stroke_opacity", 0.0)) <= 0.0
     ):
         return None
@@ -436,7 +440,8 @@ def _open_line_curve_fragment(
         drawing.get("type") != "s"
         or drawing.get("fill") is not None
         or drawing.get("color") is None
-        or drawing.get("width", 0) <= 0
+        or not math.isfinite(float(drawing.get("width", math.nan)))
+        or drawing.get("width", -1) < 0
         or float(drawing.get("stroke_opacity", 0.0)) <= 0.0
     ):
         return None
@@ -573,6 +578,102 @@ def _collect_open_line_curve_suspects(drawings: list[dict]) -> list[dict]:
 
     finish_chain()
     return suspects
+
+
+def _single_line_record_paths(drawings: list[dict]) -> list[tuple[int, int, dict, bool]]:
+    """Join only consecutive, style-matched one-line records at exact endpoints."""
+    paths: list[tuple[int, int, dict, bool]] = []
+    chain: list[tuple[int, dict]] = []
+    chain_style: Optional[tuple] = None
+    chain_end: Optional[fitz.Point] = None
+
+    def style_for(drawing: dict) -> Optional[tuple]:
+        if (
+            drawing.get("type") != "s"
+            or drawing.get("fill") is not None
+            or drawing.get("color") is None
+            or not math.isfinite(float(drawing.get("width", math.nan)))
+            or drawing.get("width", -1) < 0
+            or float(drawing.get("stroke_opacity", 0.0)) <= 0.0
+            or len(drawing.get("items", [])) != 1
+            or drawing["items"][0][0] != "l"
+            or drawing.get("seqno") is None
+        ):
+            return None
+        color = drawing["color"]
+        color_key = tuple(color) if isinstance(color, (tuple, list)) else color
+        scissor = drawing.get("scissor")
+        scissor_key = tuple(scissor) if scissor is not None else None
+        line_cap = drawing.get("lineCap")
+        line_cap_key = tuple(line_cap) if isinstance(line_cap, (tuple, list)) else line_cap
+        return (
+            color_key,
+            float(drawing["width"]),
+            float(drawing.get("stroke_opacity", 0.0)),
+            drawing.get("dashes"),
+            line_cap_key,
+            drawing.get("lineJoin"),
+            int(drawing.get("level") or 0),
+            drawing.get("layer"),
+            scissor_key,
+        )
+
+    def finish_chain() -> None:
+        nonlocal chain, chain_style, chain_end
+        if len(chain) < 8:
+            chain = []
+            chain_style = None
+            chain_end = None
+            return
+        items = [record["items"][0] for _, record in chain]
+        merged = dict(chain[0][1])
+        merged["items"] = items
+        merged["seqno"] = chain[-1][1].get("seqno")
+        merged["closePath"] = False
+        points = [point for item in items for point in item[1:]]
+        merged["rect"] = fitz.Rect(
+            min(point.x for point in points),
+            min(point.y for point in points),
+            max(point.x for point in points),
+            max(point.y for point in points),
+        )
+        closed = math.hypot(items[0][1].x - items[-1][2].x, items[0][1].y - items[-1][2].y) <= 0.02
+        if closed or _fit_open_line_circle_arc(merged) is not None or _is_materially_curved_open_line_contour(merged):
+            paths.append((chain[0][0], chain[-1][0], merged, closed))
+        chain = []
+        chain_style = None
+        chain_end = None
+
+    for index, drawing in enumerate(drawings):
+        style = style_for(drawing)
+        if style is None:
+            finish_chain()
+            continue
+        _, start, end = drawing["items"][0]
+        length = math.hypot(end.x - start.x, end.y - start.y)
+        if not math.isfinite(length) or length <= 0.02:
+            finish_chain()
+            continue
+
+        compatible = bool(chain) and (
+            style == chain_style
+            and int(drawing["seqno"]) == int(chain[-1][1]["seqno"]) + 1
+            and chain_end is not None
+            and math.hypot(start.x - chain_end.x, start.y - chain_end.y) <= 0.02
+        )
+        if chain and not compatible:
+            finish_chain()
+        if not chain:
+            chain_style = style
+        chain.append((index, drawing))
+        chain_end = end
+
+        first_start = chain[0][1]["items"][0][1]
+        if len(chain) >= 8 and math.hypot(end.x - first_start.x, end.y - first_start.y) <= 0.02:
+            finish_chain()
+
+    finish_chain()
+    return paths
 
 
 def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Matrix) -> dict:
@@ -810,6 +911,11 @@ def _page_circle_witnesses(
     line_contour_indices = {
         index for index, drawing in enumerate(drawings) if _is_closed_line_contour(drawing)
     }
+    single_line_paths = _single_line_record_paths(drawings)
+    single_line_paths_by_end = {
+        end_index: (start_index, drawing, closed)
+        for start_index, end_index, drawing, closed in single_line_paths
+    }
     open_line_circle_arcs = {
         index: _fit_open_line_circle_arc(drawing)
         for index, drawing in enumerate(drawings)
@@ -819,9 +925,13 @@ def _page_circle_witnesses(
         index: circle for index, circle in open_line_circle_arcs.items() if circle is not None
     }
     open_line_curve_suspects = _collect_open_line_curve_suspects(drawings)
+    open_line_curve_suspects.extend(
+        drawing for _, _, drawing, closed in single_line_paths if not closed
+    )
     if (
         not curve_drawings
         and not line_contour_indices
+        and not single_line_paths
         and not open_line_circle_arcs
         and not open_line_curve_suspects
     ):
@@ -840,8 +950,14 @@ def _page_circle_witnesses(
         for drawing in open_line_curve_suspects
     ]
     for index, drawing in enumerate(drawings):
+        line_record_path = single_line_paths_by_end.get(index)
+        if line_record_path is not None:
+            path_start_index, drawing, closed_line_record_path = line_record_path
+        else:
+            path_start_index = index
+            closed_line_record_path = False
         has_curve = any(item[0] == "c" for item in drawing.get("items", []))
-        has_line_contour = index in line_contour_indices
+        has_line_contour = index in line_contour_indices or closed_line_record_path
         if not has_curve and not has_line_contour:
             if index in open_line_circle_arcs:
                 suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
@@ -875,7 +991,7 @@ def _page_circle_witnesses(
                     and not _clip_fully_contains_circle(prior, cx, cy, radius)
                 )
             )
-            for prior in drawings[:index]
+            for prior in drawings[:path_start_index]
         )
         if prior_clip_context:
             suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
@@ -1016,13 +1132,18 @@ def _page_circle_witnesses(
                 break
         if not occluded:
             rendered_center = fitz.Point(cx, cy) * page_transform
-            witnesses.append(
-                (
-                    rendered_center.x * pixel_scale,
-                    rendered_center.y * pixel_scale,
-                    radius * pixel_scale,
-                )
+            witness = (
+                rendered_center.x * pixel_scale,
+                rendered_center.y * pixel_scale,
+                radius * pixel_scale,
             )
+            identity_tolerance = 0.02 * pixel_scale
+            if not any(
+                math.hypot(witness[0] - prior[0], witness[1] - prior[1]) <= identity_tolerance
+                and abs(witness[2] - prior[2]) <= identity_tolerance
+                for prior in witnesses
+            ):
+                witnesses.append(witness)
         else:
             suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
     return False, witnesses, suspect_regions
