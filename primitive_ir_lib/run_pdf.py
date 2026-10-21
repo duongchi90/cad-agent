@@ -26,7 +26,9 @@ from .calibration_registry import get_verified_scale
 from .run_image import run
 
 
-def _candidate_crop_bbox(candidate: dict, width: int, height: int, padding_px: int = 12) -> tuple[int, int, int, int]:
+def _candidate_crop_bbox(
+    candidate: dict, width: int, height: int, padding_px: int = 12
+) -> tuple[int, int, int, int]:
     boxes = [candidate["bbox_px"], candidate["region_bbox_px"]]
     x0 = max(0, int(min(box[0] for box in boxes)) - padding_px)
     y0 = max(0, int(min(box[1] for box in boxes)) - padding_px)
@@ -92,9 +94,7 @@ def _materialize_view_children(
         candidate["child_calibration_status"] = "needs_verification"
         candidate["child_state"] = "needs_verification"
         candidate["child_image_sha256"] = child_image_sha256
-        candidate["child_ir_sha256"] = hashlib.sha256(
-            child_ir.read_bytes()
-        ).hexdigest()
+        candidate["child_ir_sha256"] = hashlib.sha256(child_ir.read_bytes()).hexdigest()
 
 
 def _configure_console_output() -> None:
@@ -155,7 +155,10 @@ def _fit_full_circle_path(
     previous_end: Optional[fitz.Point] = None
     for item in items:
         _, p0, p1, p2, p3 = item
-        if previous_end is not None and math.hypot(p0.x - previous_end.x, p0.y - previous_end.y) > 0.02:
+        if (
+            previous_end is not None
+            and math.hypot(p0.x - previous_end.x, p0.y - previous_end.y) > 0.02
+        ):
             return None
         previous_end = p3
         endpoints.append((p0.x, p0.y))
@@ -164,9 +167,10 @@ def _fit_full_circle_path(
             x = u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x
             y = u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y
             samples.append((x, y))
-    if previous_end is None or math.hypot(
-        endpoints[0][0] - previous_end.x, endpoints[0][1] - previous_end.y
-    ) > 0.02:
+    if (
+        previous_end is None
+        or math.hypot(endpoints[0][0] - previous_end.x, endpoints[0][1] - previous_end.y) > 0.02
+    ):
         return None
 
     points = np.asarray(samples + endpoints, dtype=np.float64)
@@ -186,7 +190,10 @@ def _fit_full_circle_path(
         return None
 
     angles = [math.atan2(y - center_y, x - center_x) for x, y in endpoints]
-    deltas = [math.atan2(math.sin(b - a), math.cos(b - a)) for a, b in zip(angles, angles[1:] + angles[:1])]
+    deltas = [
+        math.atan2(math.sin(b - a), math.cos(b - a))
+        for a, b in zip(angles, angles[1:] + angles[:1])
+    ]
     if not (all(delta > 0 for delta in deltas) or all(delta < 0 for delta in deltas)):
         return None
     if abs(sum(abs(delta) for delta in deltas) - 2.0 * math.pi) > 0.02:
@@ -194,29 +201,130 @@ def _fit_full_circle_path(
     return center_x, center_y, radius
 
 
-def _is_smooth_closed_line_contour(drawing: dict) -> bool:
-    """Identify closed, smoothly turning line paths that need local fail-closed handling."""
+def _fit_full_line_circle_path(
+    drawing: dict, background: Optional[np.ndarray]
+) -> Optional[tuple[float, float, float]]:
+    """Return a visible circle fit for one continuous, closed, line-only path."""
+    if (
+        drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("color") is None
+        or drawing.get("width", 0) <= 0
+        or abs(float(drawing.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
+        or str(drawing.get("dashes", "")).strip() not in {"[] 0", "[] 0.0"}
+        or background is None
+        or _colors_match(drawing.get("color"), background) is not False
+    ):
+        return None
+
+    items = drawing.get("items", [])
+    if len(items) < 8 or any(item[0] != "l" for item in items):
+        return None
+
+    starts: list[fitz.Point] = []
+    ends: list[fitz.Point] = []
+    lengths: list[float] = []
+    directions: list[float] = []
+    previous_end: Optional[fitz.Point] = None
+    for item in items:
+        _, start, end = item
+        if (
+            previous_end is not None
+            and math.hypot(start.x - previous_end.x, start.y - previous_end.y) > 0.02
+        ):
+            return None
+        dx, dy = end.x - start.x, end.y - start.y
+        length = math.hypot(dx, dy)
+        if not math.isfinite(length) or length <= 0.02:
+            return None
+        starts.append(start)
+        ends.append(end)
+        lengths.append(length)
+        directions.append(math.atan2(dy, dx))
+        previous_end = end
+
+    if (
+        previous_end is None
+        or math.hypot(starts[0].x - previous_end.x, starts[0].y - previous_end.y) > 0.02
+    ):
+        return None
+
+    signed_turns = [
+        math.atan2(
+            math.sin(next_direction - direction),
+            math.cos(next_direction - direction),
+        )
+        for direction, next_direction in zip(directions, directions[1:] + directions[:1])
+    ]
+    if (
+        not signed_turns
+        or not (
+            all(turn > 1e-6 for turn in signed_turns) or all(turn < -1e-6 for turn in signed_turns)
+        )
+        or max(abs(turn) for turn in signed_turns) > math.radians(45.0)
+        or abs(abs(sum(signed_turns)) - 2.0 * math.pi) > 0.02
+        or max(lengths) > float(np.median(lengths)) * 3.0
+    ):
+        return None
+
+    # Fit vertices and points along each chord so a coarse polygon or a closing
+    # chord cannot masquerade as a circle merely because its vertices are close.
+    samples: list[tuple[float, float]] = []
+    for start, end in zip(starts, ends):
+        for fraction in (0.0, 0.25, 0.5, 0.75):
+            samples.append(
+                (
+                    start.x + fraction * (end.x - start.x),
+                    start.y + fraction * (end.y - start.y),
+                )
+            )
+    points = np.asarray(samples, dtype=np.float64)
+    if not np.all(np.isfinite(points)):
+        return None
+    matrix = np.column_stack((points[:, 0], points[:, 1], np.ones(len(points))))
+    target = -(points[:, 0] ** 2 + points[:, 1] ** 2)
+    try:
+        a, b, c = np.linalg.lstsq(matrix, target, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return None
+    center_x, center_y = -a / 2.0, -b / 2.0
+    radius_squared = center_x**2 + center_y**2 - c
+    if not math.isfinite(radius_squared) or radius_squared <= 0:
+        return None
+    radius = math.sqrt(radius_squared)
+    radial_errors = np.abs(np.hypot(points[:, 0] - center_x, points[:, 1] - center_y) - radius)
+    stroke_width = float(drawing.get("width") or 0.0)
+    if (
+        not math.isfinite(stroke_width)
+        or stroke_width <= 0.0
+        or float(np.max(radial_errors)) > max(0.18, min(stroke_width * 0.25, radius * 0.005))
+    ):
+        return None
+    return center_x, center_y, radius
+
+
+def _is_closed_line_contour(drawing: dict) -> bool:
+    """Identify one connected closed line-only path for local witness checking."""
     if drawing.get("type") != "s" or drawing.get("fill") is not None:
         return False
     items = drawing.get("items", [])
     if not items or any(item[0] != "l" for item in items):
         return False
 
-    directions: list[float] = []
     first_start: Optional[fitz.Point] = None
     previous_end: Optional[fitz.Point] = None
     for item in items:
         _, start, end = item
         if first_start is None:
             first_start = start
-        if previous_end is not None and math.hypot(
-            start.x - previous_end.x, start.y - previous_end.y
-        ) > 0.02:
+        if (
+            previous_end is not None
+            and math.hypot(start.x - previous_end.x, start.y - previous_end.y) > 0.02
+        ):
             return False
         dx, dy = end.x - start.x, end.y - start.y
         if math.hypot(dx, dy) <= 0.02:
             return False
-        directions.append(math.atan2(dy, dx))
         previous_end = end
     if (
         first_start is None
@@ -224,20 +332,10 @@ def _is_smooth_closed_line_contour(drawing: dict) -> bool:
         or math.hypot(first_start.x - previous_end.x, first_start.y - previous_end.y) > 0.02
     ):
         return False
-
-    turns = [
-        abs(math.atan2(
-            math.sin(next_direction - direction),
-            math.cos(next_direction - direction),
-        ))
-        for direction, next_direction in zip(directions, directions[1:] + directions[:1])
-    ]
-    return bool(turns) and float(np.median(turns)) <= math.radians(20.0) and max(turns) > 1e-6
+    return True
 
 
-def _suspect_geometry(
-    drawing: dict, pixel_scale: float, page_transform: fitz.Matrix
-) -> dict:
+def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Matrix) -> dict:
     """Preserve supported path and paint footprints instead of using bounds alone."""
     segments: list[tuple[float, float, float, float]] = []
     fill_polygons: list[list[tuple[float, float]]] = []
@@ -277,16 +375,21 @@ def _suspect_geometry(
             for step in range(33):
                 t = step / 32.0
                 u = 1.0 - t
-                points.append((
-                    u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
-                    u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
-                ))
+                points.append(
+                    (
+                        u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
+                        u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
+                    )
+                )
         elif item[0] == "re":
             rect = item[1]
             finish_path(close=False)
             points = [
-                (rect.x0, rect.y0), (rect.x1, rect.y0),
-                (rect.x1, rect.y1), (rect.x0, rect.y1), (rect.x0, rect.y0),
+                (rect.x0, rect.y0),
+                (rect.x1, rect.y0),
+                (rect.x1, rect.y1),
+                (rect.x0, rect.y1),
+                (rect.x0, rect.y0),
             ]
             pending_path = points
             finish_path(close=True)
@@ -304,18 +407,20 @@ def _suspect_geometry(
             finish_path(close=False)
             unsupported_item = True
             continue
-        if pending_path and math.hypot(
-            pending_path[-1][0] - points[0][0],
-            pending_path[-1][1] - points[0][1],
-        ) > 0.02:
+        if (
+            pending_path
+            and math.hypot(
+                pending_path[-1][0] - points[0][0],
+                pending_path[-1][1] - points[0][1],
+            )
+            > 0.02
+        ):
             finish_path(close=False)
         if pending_path:
             pending_path.extend(points[1:])
         else:
             pending_path = points
-    finish_path(close=(
-        drawing.get("type") in {"f", "fs"} or bool(drawing.get("closePath"))
-    ))
+    finish_path(close=(drawing.get("type") in {"f", "fs"} or bool(drawing.get("closePath"))))
 
     result = {
         "segments": segments,
@@ -332,12 +437,16 @@ def _suspect_geometry(
         rect = drawing.get("rect")
         if rect is not None:
             corners = [
-                to_pixel((rect.x0, rect.y0)), to_pixel((rect.x1, rect.y0)),
-                to_pixel((rect.x1, rect.y1)), to_pixel((rect.x0, rect.y1)),
+                to_pixel((rect.x0, rect.y0)),
+                to_pixel((rect.x1, rect.y0)),
+                to_pixel((rect.x1, rect.y1)),
+                to_pixel((rect.x0, rect.y1)),
             ]
             result["bounds"] = (
-                min(point[0] for point in corners), min(point[1] for point in corners),
-                max(point[0] for point in corners), max(point[1] for point in corners),
+                min(point[0] for point in corners),
+                min(point[1] for point in corners),
+                max(point[0] for point in corners),
+                max(point[1] for point in corners),
             )
     return result
 
@@ -350,10 +459,13 @@ def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
     pixels = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
         pixmap.height, pixmap.width, pixmap.n
     )[:, :, :3]
-    corners = np.asarray(
-        (pixels[0, 0], pixels[0, -1], pixels[-1, 0], pixels[-1, -1]),
-        dtype=np.float64,
-    ) / 255.0
+    corners = (
+        np.asarray(
+            (pixels[0, 0], pixels[0, -1], pixels[-1, 0], pixels[-1, -1]),
+            dtype=np.float64,
+        )
+        / 255.0
+    )
     background = np.median(corners, axis=0)
     if float(np.max(np.linalg.norm(corners - background, axis=1))) > 0.08:
         return None
@@ -395,7 +507,8 @@ def _clip_fully_contains_circle(
         math.hypot(
             segments[index][1].x - segments[(index + 1) % 4][0].x,
             segments[index][1].y - segments[(index + 1) % 4][0].y,
-        ) > 0.02
+        )
+        > 0.02
         for index in range(4)
     ):
         return False
@@ -452,12 +565,10 @@ def _page_circle_witnesses(
     if not drawings:
         return False, [], []
     curve_drawings = [
-        drawing for drawing in drawings
-        if any(item[0] == "c" for item in drawing.get("items", []))
+        drawing for drawing in drawings if any(item[0] == "c" for item in drawing.get("items", []))
     ]
     line_contour_indices = {
-        index for index, drawing in enumerate(drawings)
-        if _is_smooth_closed_line_contour(drawing)
+        index for index, drawing in enumerate(drawings) if _is_closed_line_contour(drawing)
     }
     if not curve_drawings and not line_contour_indices:
         return False, [], []
@@ -472,21 +583,26 @@ def _page_circle_witnesses(
     witnesses: list[tuple[float, float, float]] = []
     suspect_regions: list[dict] = []
     for index, drawing in enumerate(drawings):
-        if not any(item[0] == "c" for item in drawing.get("items", [])):
-            drawing_rect = drawing.get("rect")
-            if index in line_contour_indices and drawing_rect is not None:
-                suspect_regions.append(
-                    _suspect_geometry(drawing, pixel_scale, page_transform)
-                )
+        has_curve = any(item[0] == "c" for item in drawing.get("items", []))
+        has_line_contour = index in line_contour_indices
+        if not has_curve and not has_line_contour:
             continue
+        if not has_curve and has_line_contour:
+            drawing_rect = drawing.get("rect")
+            circle = _fit_full_line_circle_path(drawing, background_color)
+            if circle is None:
+                if drawing_rect is not None:
+                    suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
+                continue
+        else:
+            circle = None
         drawing_rect = drawing.get("rect")
         if drawing_rect is None:
             continue
-        circle = _fit_full_circle_path(drawing, background_color)
         if circle is None:
-            suspect_regions.append(
-                _suspect_geometry(drawing, pixel_scale, page_transform)
-            )
+            circle = _fit_full_circle_path(drawing, background_color)
+        if circle is None:
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
             continue
 
         cx, cy, radius = circle
@@ -503,9 +619,7 @@ def _page_circle_witnesses(
             for prior in drawings[:index]
         )
         if prior_clip_context:
-            suspect_regions.append(
-                _suspect_geometry(drawing, pixel_scale, page_transform)
-            )
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
             continue
 
         # A later drawing/clip/group touching this perimeter can obscure or
@@ -523,7 +637,12 @@ def _page_circle_witnesses(
             min_distance = math.hypot(dx, dy)
             max_distance = max(
                 math.hypot(x - cx, y - cy)
-                for x, y in ((rect.x0, rect.y0), (rect.x0, rect.y1), (rect.x1, rect.y0), (rect.x1, rect.y1))
+                for x, y in (
+                    (rect.x0, rect.y0),
+                    (rect.x0, rect.y1),
+                    (rect.x1, rect.y0),
+                    (rect.x1, rect.y1),
+                )
             )
             if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
                 occluded = True
@@ -543,17 +662,18 @@ def _page_circle_witnesses(
                 later, drawing.get("color")
             ):
                 continue
-            later_circle = (
-                _fit_full_circle_path(later, background_color)
-                if later_type == "s"
-                else None
-            )
+            later_circle = None
+            if later_type == "s":
+                later_circle = _fit_full_circle_path(later, background_color)
+                if later_circle is None:
+                    later_circle = _fit_full_line_circle_path(later, background_color)
             if later_circle is not None:
                 later_cx, later_cy, later_radius = later_circle
                 center_distance = math.hypot(later_cx - cx, later_cy - cy)
                 if (
                     center_distance <= radius + later_radius + 1.0
-                    and center_distance + min(radius, later_radius) >= max(radius, later_radius) - 1.0
+                    and center_distance + min(radius, later_radius)
+                    >= max(radius, later_radius) - 1.0
                 ):
                     occluded = True
                     break
@@ -574,8 +694,7 @@ def _page_circle_witnesses(
                                 1.0,
                                 max(
                                     0.0,
-                                    ((cx - start.x) * dx + (cy - start.y) * dy)
-                                    / length_squared,
+                                    ((cx - start.x) * dx + (cy - start.y) * dy) / length_squared,
                                 ),
                             )
                             closest_x = start.x + fraction * dx
@@ -587,10 +706,18 @@ def _page_circle_witnesses(
                         for step in range(33):
                             t = step / 32.0
                             u = 1.0 - t
-                            points.append((
-                                u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
-                                u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
-                            ))
+                            points.append(
+                                (
+                                    u**3 * p0.x
+                                    + 3 * u**2 * t * p1.x
+                                    + 3 * u * t**2 * p2.x
+                                    + t**3 * p3.x,
+                                    u**3 * p0.y
+                                    + 3 * u**2 * t * p1.y
+                                    + 3 * u * t**2 * p2.y
+                                    + t**3 * p3.y,
+                                )
+                            )
                     else:
                         unsupported_item = True
                         points = []
@@ -600,7 +727,10 @@ def _page_circle_witnesses(
                     break
                 if radial_samples:
                     stroke_margin = max(1.0, float(later.get("width") or 0.0) / 2.0)
-                    if min(radial_samples) <= radius + stroke_margin and max(radial_samples) >= radius - stroke_margin:
+                    if (
+                        min(radial_samples) <= radius + stroke_margin
+                        and max(radial_samples) >= radius - stroke_margin
+                    ):
                         occluded = True
                         break
                 continue
@@ -615,22 +745,27 @@ def _page_circle_witnesses(
             min_distance = math.hypot(dx, dy)
             max_distance = max(
                 math.hypot(x - cx, y - cy)
-                for x, y in ((rect.x0, rect.y0), (rect.x0, rect.y1), (rect.x1, rect.y0), (rect.x1, rect.y1))
+                for x, y in (
+                    (rect.x0, rect.y0),
+                    (rect.x0, rect.y1),
+                    (rect.x1, rect.y0),
+                    (rect.x1, rect.y1),
+                )
             )
             if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
                 occluded = True
                 break
         if not occluded:
             rendered_center = fitz.Point(cx, cy) * page_transform
-            witnesses.append((
-                rendered_center.x * pixel_scale,
-                rendered_center.y * pixel_scale,
-                radius * pixel_scale,
-            ))
-        else:
-            suspect_regions.append(
-                _suspect_geometry(drawing, pixel_scale, page_transform)
+            witnesses.append(
+                (
+                    rendered_center.x * pixel_scale,
+                    rendered_center.y * pixel_scale,
+                    radius * pixel_scale,
+                )
             )
+        else:
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
     return False, witnesses, suspect_regions
 
 
@@ -700,8 +835,10 @@ def run_pdf(
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
             run(
-                image_path=str(image_path), output_path=str(output_path),
-                scale_mm_per_px=scale_mm_per_px, preset=preset,
+                image_path=str(image_path),
+                output_path=str(output_path),
+                scale_mm_per_px=scale_mm_per_px,
+                preset=preset,
                 merge_lines=merge_lines,
                 auto_ocr_roi=auto_ocr_roi,
                 auto_calibrate=auto_calibrate,
@@ -725,16 +862,18 @@ def run_pdf(
                 json.dumps(scale_label_candidates, indent=2) + "\n",
                 encoding="utf-8",
             )
-            manifest["pages"].append({
-                "page": index,
-                "rendered_png": str(image_path.relative_to(output_dir)),
-                "primitive_ir": str(output_path.relative_to(output_dir)),
-                "primitive_count": len(payload["primitives"]),
-                "cross_validation_count": len(payload["cross_validations"]),
-                "calibration_method": payload["calibration"]["method"],
-                "scale_mm_per_px": payload["calibration"]["pixel_to_unit_scale"],
-                "scale_label_candidates": scale_label_candidates,
-            })
+            manifest["pages"].append(
+                {
+                    "page": index,
+                    "rendered_png": str(image_path.relative_to(output_dir)),
+                    "primitive_ir": str(output_path.relative_to(output_dir)),
+                    "primitive_count": len(payload["primitives"]),
+                    "cross_validation_count": len(payload["cross_validations"]),
+                    "calibration_method": payload["calibration"]["method"],
+                    "scale_mm_per_px": payload["calibration"]["pixel_to_unit_scale"],
+                    "scale_label_candidates": scale_label_candidates,
+                }
+            )
     finally:
         document.close()
     manifest_path = output_dir / "manifest.json"
@@ -747,21 +886,35 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pdf", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--scale-mm-per-px", type=float,
-                        help="Tỷ lệ mm/px đã xác minh, áp dụng cho mọi trang")
-    parser.add_argument("--calibration-registry", type=Path,
-                        help="Hash-bound calibration registry JSON (verified scale, mode thủ công)")
-    parser.add_argument("--calibration-id",
-                        help="Verified calibration record ID (registry mode thủ công, không dùng cùng --auto-calibrate)")
-    parser.add_argument("--auto-ocr-roi", action="store_true",
-                        help="Tự động phát hiện vùng ứng viên chứa text thay vì cần --ocr-roi thủ công")
-    parser.add_argument("--auto-calibrate", action="store_true",
-                        help="Suy tỷ lệ mm/px tự động cho TỪNG TRANG (mỗi trang 1 ảnh khác nhau). "
-                             "KẾT QUẢ CHƯA VERIFY — chỉ dùng để khảo sát/test. Kết hợp với "
-                             "--calibration-registry + --calibration-id (dùng làm prefix, mỗi "
-                             "trang ghi record riêng '<id>_pageNN' status=needs_verification).")
+    parser.add_argument(
+        "--scale-mm-per-px", type=float, help="Tỷ lệ mm/px đã xác minh, áp dụng cho mọi trang"
+    )
+    parser.add_argument(
+        "--calibration-registry",
+        type=Path,
+        help="Hash-bound calibration registry JSON (verified scale, mode thủ công)",
+    )
+    parser.add_argument(
+        "--calibration-id",
+        help="Verified calibration record ID (registry mode thủ công, không dùng cùng --auto-calibrate)",
+    )
+    parser.add_argument(
+        "--auto-ocr-roi",
+        action="store_true",
+        help="Tự động phát hiện vùng ứng viên chứa text thay vì cần --ocr-roi thủ công",
+    )
+    parser.add_argument(
+        "--auto-calibrate",
+        action="store_true",
+        help="Suy tỷ lệ mm/px tự động cho TỪNG TRANG (mỗi trang 1 ảnh khác nhau). "
+        "KẾT QUẢ CHƯA VERIFY — chỉ dùng để khảo sát/test. Kết hợp với "
+        "--calibration-registry + --calibration-id (dùng làm prefix, mỗi "
+        "trang ghi record riêng '<id>_pageNN' status=needs_verification).",
+    )
     parser.add_argument("--dpi", type=int, default=144)
-    parser.add_argument("--preset", choices=("default", "real_scan_tuned_v1"), default="real_scan_tuned_v1")
+    parser.add_argument(
+        "--preset", choices=("default", "real_scan_tuned_v1"), default="real_scan_tuned_v1"
+    )
     parser.add_argument("--merge-lines", action="store_true")
     args = parser.parse_args()
 
@@ -774,22 +927,35 @@ def main() -> int:
             if args.scale_mm_per_px is not None:
                 parser.error("--auto-calibrate không dùng cùng --scale-mm-per-px")
             if args.calibration_registry and not args.calibration_id:
-                parser.error("--calibration-registry với --auto-calibrate cần thêm --calibration-id (dùng làm prefix)")
+                parser.error(
+                    "--calibration-registry với --auto-calibrate cần thêm --calibration-id (dùng làm prefix)"
+                )
             registry_for_run = args.calibration_registry
             calibration_id_prefix = args.calibration_id
         elif args.calibration_registry:
             if not args.calibration_id or args.scale_mm_per_px is not None:
-                parser.error("Registry mode (verified) requires --calibration-id and no --scale-mm-per-px")
+                parser.error(
+                    "Registry mode (verified) requires --calibration-id and no --scale-mm-per-px"
+                )
             # Chế độ thủ công: 1 registry record verified dùng chung cho cả PDF
             # (đại diện bởi chính file PDF gốc, không phải từng trang render).
-            scale_mm_per_px = get_verified_scale(args.calibration_registry, args.calibration_id, args.pdf)
+            scale_mm_per_px = get_verified_scale(
+                args.calibration_registry, args.calibration_id, args.pdf
+            )
         elif args.scale_mm_per_px is not None:
             scale_mm_per_px = args.scale_mm_per_px
         else:
-            parser.error("Supply --scale-mm-per-px, --auto-calibrate, or a verified calibration registry")
+            parser.error(
+                "Supply --scale-mm-per-px, --auto-calibrate, or a verified calibration registry"
+            )
 
         manifest = run_pdf(
-            args.pdf, args.output_dir, scale_mm_per_px, args.dpi, args.preset, args.merge_lines,
+            args.pdf,
+            args.output_dir,
+            scale_mm_per_px,
+            args.dpi,
+            args.preset,
+            args.merge_lines,
             auto_ocr_roi=args.auto_ocr_roi,
             auto_calibrate=args.auto_calibrate,
             calibration_registry_path=registry_for_run,
@@ -797,7 +963,9 @@ def main() -> int:
         )
     except (FileNotFoundError, ValueError) as exc:
         parser.error(str(exc))
-    print(f"PDF Primitive IR saved: {args.output_dir / 'manifest.json'} ({len(manifest['pages'])} pages)")
+    print(
+        f"PDF Primitive IR saved: {args.output_dir / 'manifest.json'} ({len(manifest['pages'])} pages)"
+    )
     return 0
 
 
