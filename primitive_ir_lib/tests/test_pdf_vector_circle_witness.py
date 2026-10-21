@@ -917,3 +917,80 @@ def test_run_pdf_rejects_line_segmented_polygon_and_ellipse_as_circle(tmp_path: 
     assert not _has_circle_near(ellipse_circles, (120, 120), 45), (
         "a line-segmented ellipse must remain distinct from a source circle"
     )
+
+
+def test_run_pdf_rejects_open_line_ellipse_without_suppressing_crossed_raster_circle(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "open-line-ellipse-and-crossed-raster-circle.pdf"
+    output_dir = tmp_path / "out"
+    pre_gate_dir = tmp_path / "pre-gate"
+    document = fitz.open()
+
+    ellipse_page = document.new_page(width=400, height=400)
+    ellipse_center = fitz.Point(200, 200)
+    ellipse_points = [
+        fitz.Point(
+            ellipse_center.x + 70 * math.cos(math.radians(degree)),
+            ellipse_center.y + 62 * math.sin(math.radians(degree)),
+        )
+        for degree in range(0, 356, 5)
+    ]
+    ellipse_shape = ellipse_page.new_shape()
+    for start, end in zip(ellipse_points, ellipse_points[1:]):
+        ellipse_shape.draw_line(start, end)
+    ellipse_shape.finish(color=(0.05, 0.05, 0.05), width=1.5, closePath=False)
+    ellipse_shape.commit()
+
+    raster_page = document.new_page(width=400, height=400)
+    raster = np.full((400, 400, 3), 220, dtype=np.uint8)
+    cv2.circle(raster, (200, 200), 65, (20, 20, 20), 3, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", raster)
+    assert success
+    raster_page.insert_image(raster_page.rect, stream=encoded.tobytes())
+    raster_page.draw_line((130, 200), (270, 200), color=(0.05, 0.05, 0.05), width=1.5)
+
+    document.save(pdf_path)
+    document.close()
+
+    rendered = fitz.open(pdf_path)
+    ellipse_render = tmp_path / "open-ellipse.png"
+    rendered[0].get_pixmap(dpi=72, alpha=False).save(ellipse_render)
+    rendered.close()
+    run_image(
+        str(ellipse_render),
+        str(pre_gate_dir / "primitive_ir.json"),
+        scale_mm_per_px=1.0,
+        preset="real_scan_tuned_v1",
+    )
+    pre_gate_circles = _circle_primitives(pre_gate_dir / "primitive_ir.json")
+    ellipse_candidates = [
+        circle
+        for circle in pre_gate_circles
+        if _has_circle_near(
+            [circle], (200, 200), 66, center_tolerance=16, radius_tolerance=14
+        )
+    ]
+    assert ellipse_candidates, (
+        "image-only extraction must prove Hough proposes the ellipse-induced circle candidate"
+    )
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    ellipse_circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    crossed_raster_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
+    for candidate in ellipse_candidates:
+        candidate_center = candidate["geometry"]["center"]
+        candidate_radius = candidate["geometry"]["radius"]
+        assert not any(
+            math.hypot(
+                circle["geometry"]["center"]["x"] - candidate_center["x"],
+                circle["geometry"]["center"]["y"] - candidate_center["y"],
+            )
+            <= 2.0
+            and abs(circle["geometry"]["radius"] - candidate_radius) <= 2.0
+            for circle in ellipse_circles
+        ), "the same open-ellipse Hough candidate must be rejected by PDF source gating"
+    assert _has_circle_near(crossed_raster_circles, (200, 200), 65), (
+        "a straight drafting line crossing an independent raster circle must not suppress it"
+    )

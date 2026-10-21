@@ -428,7 +428,7 @@ def _fit_open_line_circle_arc(
     return center_x, center_y, radius
 
 
-def _open_line_circle_fragment(
+def _open_line_curve_fragment(
     drawing: dict,
 ) -> Optional[tuple[list[tuple], list[float], int, tuple]]:
     """Describe a visible open line path fragment with one smooth turn direction."""
@@ -489,8 +489,28 @@ def _open_line_circle_fragment(
     return items, directions, 1 if turns[0] > 0.0 else -1, style
 
 
-def _fit_fragmented_open_line_circle_arcs(drawings: list[dict]) -> list[dict]:
-    """Join only adjacent, style-matched, smoothly turning open paths as suspects."""
+def _is_materially_curved_open_line_contour(drawing: dict) -> bool:
+    """Recognize long, smooth open curves even when they are not circles."""
+    fragment = _open_line_curve_fragment(drawing)
+    if fragment is None:
+        return False
+    items, directions, _, _ = fragment
+    if len(items) < 8:
+        return False
+
+    turns = [
+        math.atan2(math.sin(next_direction - direction), math.cos(next_direction - direction))
+        for direction, next_direction in zip(directions, directions[1:])
+    ]
+    lengths = [math.hypot(item[2].x - item[1].x, item[2].y - item[1].y) for item in items]
+    return (
+        sum(abs(turn) for turn in turns) >= math.radians(15.0)
+        and max(lengths) <= float(np.median(lengths)) * 3.0
+    )
+
+
+def _collect_open_line_curve_suspects(drawings: list[dict]) -> list[dict]:
+    """Join adjacent, style-matched open curves as circle or contour suspects."""
     suspects: list[dict] = []
     chain: list[dict] = []
     chain_style: Optional[tuple] = None
@@ -499,16 +519,19 @@ def _fit_fragmented_open_line_circle_arcs(drawings: list[dict]) -> list[dict]:
     chain_direction: Optional[float] = None
 
     def finish_chain() -> None:
-        if len(chain) < 2:
+        if not chain:
             return
         merged = dict(chain[0])
         merged["items"] = [item for fragment in chain for item in fragment["items"]]
         merged["closePath"] = False
-        if _fit_open_line_circle_arc(merged) is not None:
+        if (
+            _fit_open_line_circle_arc(merged) is not None
+            or _is_materially_curved_open_line_contour(merged)
+        ):
             suspects.append(merged)
 
     for drawing in drawings:
-        fragment = _open_line_circle_fragment(drawing)
+        fragment = _open_line_curve_fragment(drawing)
         if fragment is None or _fit_open_line_circle_arc(drawing) is not None:
             finish_chain()
             chain = []
@@ -795,12 +818,12 @@ def _page_circle_witnesses(
     open_line_circle_arcs = {
         index: circle for index, circle in open_line_circle_arcs.items() if circle is not None
     }
-    fragmented_open_line_circle_arcs = _fit_fragmented_open_line_circle_arcs(drawings)
+    open_line_curve_suspects = _collect_open_line_curve_suspects(drawings)
     if (
         not curve_drawings
         and not line_contour_indices
         and not open_line_circle_arcs
-        and not fragmented_open_line_circle_arcs
+        and not open_line_curve_suspects
     ):
         return False, [], []
     background_color = _page_background_color(page)
@@ -814,7 +837,7 @@ def _page_circle_witnesses(
     witnesses: list[tuple[float, float, float]] = []
     suspect_regions: list[dict] = [
         _suspect_geometry(drawing, pixel_scale, page_transform)
-        for drawing in fragmented_open_line_circle_arcs
+        for drawing in open_line_curve_suspects
     ]
     for index, drawing in enumerate(drawings):
         has_curve = any(item[0] == "c" for item in drawing.get("items", []))
