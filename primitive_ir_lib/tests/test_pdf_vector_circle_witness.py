@@ -15,7 +15,11 @@ from primitive_ir_lib.run_pdf import (
     _single_line_record_paths,
     run_pdf,
 )
-from primitive_ir_lib.run_image import run as run_image
+from primitive_ir_lib.geometry_extraction import RawGeometry
+from primitive_ir_lib.run_image import (
+    _apply_pdf_vector_circle_witnesses,
+    run as run_image,
+)
 
 
 def _draw_circular_beziers(
@@ -868,6 +872,17 @@ def test_run_pdf_keeps_consecutive_single_line_concentric_cycles_when_raster_ali
     )
     assert np.allclose(actual_radii, sorted(radius * 2.0 for radius in radii), atol=0.2), (
         f"source vector radii should remain distinct and exact; got {actual_radii}"
+    )
+
+
+def test_validated_concentric_source_witnesses_survive_direct_materialization() -> None:
+    raw_geometry = RawGeometry()
+    witnesses = [(100.0, 100.0, radius) for radius in (20.0, 20.25, 21.0)]
+
+    _apply_pdf_vector_circle_witnesses(raw_geometry, witnesses)
+
+    assert sorted(circle.radius_px for circle in raw_geometry.circles) == [20.0, 20.25, 21.0], (
+        "already-validated exact source cycles must remain separate candidates"
     )
 
 
