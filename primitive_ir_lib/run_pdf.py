@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import fitz
+import numpy as np
 
 from .calibration_registry import get_verified_scale
 from .run_image import run
@@ -112,6 +113,204 @@ def _is_valid_manual_scale(value: object) -> bool:
         return False
 
 
+def _fit_full_circle_path(drawing: dict) -> Optional[tuple[float, float, float]]:
+    """Return page-point center/radius only for a closed, visible solid cubic circle."""
+    if (
+        drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("color") is None
+        or drawing.get("width", 0) <= 0
+        or abs(float(drawing.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
+        or str(drawing.get("dashes", "")).strip() not in {"[] 0", "[] 0.0"}
+    ):
+        return None
+
+    items = drawing.get("items", [])
+    if len(items) < 3 or any(item[0] != "c" for item in items):
+        return None
+
+    samples: list[tuple[float, float]] = []
+    endpoints: list[tuple[float, float]] = []
+    previous_end: Optional[fitz.Point] = None
+    for item in items:
+        _, p0, p1, p2, p3 = item
+        if previous_end is not None and math.hypot(p0.x - previous_end.x, p0.y - previous_end.y) > 0.02:
+            return None
+        previous_end = p3
+        endpoints.append((p0.x, p0.y))
+        for t in (0.25, 0.5, 0.75):
+            u = 1.0 - t
+            x = u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x
+            y = u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y
+            samples.append((x, y))
+    if previous_end is None or math.hypot(
+        endpoints[0][0] - previous_end.x, endpoints[0][1] - previous_end.y
+    ) > 0.02:
+        return None
+
+    points = np.asarray(samples + endpoints, dtype=np.float64)
+    matrix = np.column_stack((points[:, 0], points[:, 1], np.ones(len(points))))
+    target = -(points[:, 0] ** 2 + points[:, 1] ** 2)
+    try:
+        a, b, c = np.linalg.lstsq(matrix, target, rcond=None)[0]
+    except np.linalg.LinAlgError:
+        return None
+    center_x, center_y = -a / 2.0, -b / 2.0
+    radius_squared = center_x**2 + center_y**2 - c
+    if not math.isfinite(radius_squared) or radius_squared <= 0:
+        return None
+    radius = math.sqrt(radius_squared)
+    radial_errors = np.abs(np.hypot(points[:, 0] - center_x, points[:, 1] - center_y) - radius)
+    if float(np.max(radial_errors)) > max(0.25, radius * 0.001):
+        return None
+
+    angles = [math.atan2(y - center_y, x - center_x) for x, y in endpoints]
+    deltas = [math.atan2(math.sin(b - a), math.cos(b - a)) for a, b in zip(angles, angles[1:] + angles[:1])]
+    if not (all(delta > 0 for delta in deltas) or all(delta < 0 for delta in deltas)):
+        return None
+    if abs(sum(abs(delta) for delta in deltas) - 2.0 * math.pi) > 0.02:
+        return None
+    return center_x, center_y, radius
+
+
+def _page_circle_witnesses(
+    page: fitz.Page, pixel_scale: float
+) -> tuple[bool, list[tuple[float, float, float]], list[tuple[float, float, float, float]]]:
+    """Return global fail-closed state, full-circle witnesses, and suspect regions."""
+    drawings = page.get_drawings(extended=True)
+    if not drawings:
+        return False, [], []
+    curve_drawings = [
+        drawing for drawing in drawings
+        if any(item[0] == "c" for item in drawing.get("items", []))
+    ]
+    if not curve_drawings:
+        return False, [], []
+
+    # Keep PDF-to-render coordinates simple and reject page features that can
+    # alter which parts of a source stroke are visible to the raster detector.
+    if (
+        page.rotation != 0
+        or page.cropbox != page.mediabox
+        or page.mediabox.x0 != 0
+        or page.mediabox.y0 != 0
+    ):
+        return True, [], []
+
+    unsupported_clipping = any(drawing.get("type") in {"clip", "group"} for drawing in drawings)
+    occluder_rects: list[fitz.Rect] = []
+    for image in page.get_images():
+        for rect in page.get_image_rects(image[0]):
+            occluder_rects.append(rect)
+    for annotation in page.annots() or ():
+        occluder_rects.append(annotation.rect)
+
+    witnesses: list[tuple[float, float, float]] = []
+    suspect_regions: list[tuple[float, float, float, float]] = []
+    for index, drawing in enumerate(drawings):
+        if not any(item[0] == "c" for item in drawing.get("items", [])):
+            continue
+        rect = drawing.get("rect")
+        if rect is None:
+            continue
+        circle = _fit_full_circle_path(drawing)
+        if unsupported_clipping or circle is None:
+            suspect_regions.append((
+                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
+                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+            ))
+            continue
+
+        cx, cy, radius = circle
+        # A later drawing/clip/group touching this perimeter can obscure or
+        # alter the witness. Conservatively reject rather than infer visibility.
+        occluded = False
+        for rect in occluder_rects:
+            dx = max(rect.x0 - cx, 0.0, cx - rect.x1)
+            dy = max(rect.y0 - cy, 0.0, cy - rect.y1)
+            min_distance = math.hypot(dx, dy)
+            max_distance = max(
+                math.hypot(x - cx, y - cy)
+                for x, y in ((rect.x0, rect.y0), (rect.x0, rect.y1), (rect.x1, rect.y0), (rect.x1, rect.y1))
+            )
+            if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
+                occluded = True
+                break
+        for later in drawings[index + 1 :]:
+            if occluded:
+                break
+            later_type = later.get("type")
+            if later_type not in {"s", "clip", "group", "f", "fs"}:
+                occluded = True
+                break
+            later_circle = _fit_full_circle_path(later) if later_type == "s" else None
+            if later_circle is not None:
+                later_cx, later_cy, later_radius = later_circle
+                center_distance = math.hypot(later_cx - cx, later_cy - cy)
+                if (
+                    center_distance <= radius + later_radius + 1.0
+                    and center_distance + min(radius, later_radius) >= max(radius, later_radius) - 1.0
+                ):
+                    occluded = True
+                    break
+                continue
+
+            if later_type == "s":
+                radial_samples: list[float] = []
+                unsupported_item = False
+                for item in later.get("items", []):
+                    if item[0] == "l":
+                        _, start, end = item
+                        points = [(start.x, start.y), (end.x, end.y)]
+                    elif item[0] == "c":
+                        _, p0, p1, p2, p3 = item
+                        points = []
+                        for step in range(33):
+                            t = step / 32.0
+                            u = 1.0 - t
+                            points.append((
+                                u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
+                                u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
+                            ))
+                    else:
+                        unsupported_item = True
+                        points = []
+                    radial_samples.extend(math.hypot(x - cx, y - cy) for x, y in points)
+                if unsupported_item:
+                    occluded = True
+                    break
+                if radial_samples:
+                    stroke_margin = max(1.0, float(later.get("width") or 0.0) / 2.0)
+                    if min(radial_samples) <= radius + stroke_margin and max(radial_samples) >= radius - stroke_margin:
+                        occluded = True
+                        break
+                continue
+
+            rect = later.get("scissor") or later.get("rect")
+            if rect is None:
+                if later_type in {"clip", "group"}:
+                    occluded = True
+                continue
+            dx = max(rect.x0 - cx, 0.0, cx - rect.x1)
+            dy = max(rect.y0 - cy, 0.0, cy - rect.y1)
+            min_distance = math.hypot(dx, dy)
+            max_distance = max(
+                math.hypot(x - cx, y - cy)
+                for x, y in ((rect.x0, rect.y0), (rect.x0, rect.y1), (rect.x1, rect.y0), (rect.x1, rect.y1))
+            )
+            if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
+                occluded = True
+                break
+        if not occluded:
+            witnesses.append((cx * pixel_scale, cy * pixel_scale, radius * pixel_scale))
+        else:
+            suspect_regions.append((
+                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
+                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+            ))
+    return False, witnesses, suspect_regions
+
+
 def run_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -158,6 +357,9 @@ def run_pdf(
     document = fitz.open(str(pdf_path))
     try:
         for index, page in enumerate(document, start=1):
+            require_all_vector_witnesses, vector_circle_witnesses, suspect_regions = (
+                _page_circle_witnesses(page, scale)
+            )
             image_path = render_dir / f"page_{index:02d}.png"
             page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(str(image_path))
             output_path = ir_dir / f"page_{index:02d}.json"
@@ -167,6 +369,13 @@ def run_pdf(
                 if (auto_calibrate and calibration_registry_path is not None)
                 else None
             )
+            vector_kwargs = {}
+            if require_all_vector_witnesses or vector_circle_witnesses or suspect_regions:
+                vector_kwargs = {
+                    "pdf_vector_circle_witnesses": vector_circle_witnesses,
+                    "pdf_vector_circle_suspect_regions": suspect_regions,
+                    "require_pdf_vector_circle_witness": require_all_vector_witnesses,
+                }
             run(
                 image_path=str(image_path), output_path=str(output_path),
                 scale_mm_per_px=scale_mm_per_px, preset=preset,
@@ -177,6 +386,7 @@ def run_pdf(
                 calibration_id=page_calibration_id,
                 view_candidates_output_path=str(view_candidates_path),
                 view_candidates_dpi=dpi,
+                **vector_kwargs,
             )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             scale_label_candidates = json.loads(view_candidates_path.read_text(encoding="utf-8"))

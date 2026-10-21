@@ -26,7 +26,7 @@ KHÔNG tự động thay thế "default" (tham số gốc, giữ để không ph
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -474,7 +474,15 @@ PRESETS = {
 }
 
 
-def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwargs) -> RawGeometry:
+def extract_raw_geometry(
+    image_bgr: np.ndarray,
+    preset: str = "default",
+    *,
+    pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
+    pdf_vector_circle_suspect_regions: Optional[List[Tuple[float, float, float, float]]] = None,
+    require_pdf_vector_circle_witness: bool = False,
+    **kwargs,
+) -> RawGeometry:
     """Entry point chính của module.
 
     preset: bộ tham số nền dùng trước khi áp kwargs override lên trên — xem
@@ -515,6 +523,61 @@ def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwarg
             )
             if not duplicate:
                 circles.append(candidate)
+
+    if (
+        require_pdf_vector_circle_witness
+        or pdf_vector_circle_witnesses
+        or pdf_vector_circle_suspect_regions
+    ):
+        witnesses = pdf_vector_circle_witnesses or []
+        suspect_regions = pdf_vector_circle_suspect_regions or []
+        candidate_matches: list[list[int]] = []
+        candidate_has_suspect_region: list[bool] = []
+        witness_match_counts = [0] * len(witnesses)
+        for candidate in circles:
+            matches = []
+            center_x, center_y = candidate.center_px
+            radius = candidate.radius_px
+            has_suspect_region = False
+            for x0, y0, x1, y1 in suspect_regions:
+                dx = max(x0 - center_x, 0.0, center_x - x1)
+                dy = max(y0 - center_y, 0.0, center_y - y1)
+                min_distance = float(np.hypot(dx, dy))
+                max_distance = max(
+                    float(np.hypot(x - center_x, y - center_y))
+                    for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1))
+                )
+                if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
+                    has_suspect_region = True
+                    break
+            for index, (witness_x, witness_y, witness_radius) in enumerate(witnesses):
+                tolerance = max(4.0, witness_radius * 0.01)
+                center_error = float(np.hypot(
+                    candidate.center_px[0] - witness_x,
+                    candidate.center_px[1] - witness_y,
+                ))
+                if (
+                    center_error <= tolerance
+                    and abs(candidate.radius_px - witness_radius) <= tolerance
+                ):
+                    matches.append(index)
+                    witness_match_counts[index] += 1
+            candidate_matches.append(matches)
+            candidate_has_suspect_region.append(has_suspect_region)
+
+        circles = [
+            candidate
+            for candidate, matches, has_suspect_region in zip(
+                circles, candidate_matches, candidate_has_suspect_region
+            )
+            if (
+                len(matches) == 1 and witness_match_counts[matches[0]] == 1
+            ) or (
+                not require_pdf_vector_circle_witness
+                and not has_suspect_region
+                and not matches
+            )
+        ]
 
     return RawGeometry(
         lines=extract_lines(image_bgr, **line_kwargs),

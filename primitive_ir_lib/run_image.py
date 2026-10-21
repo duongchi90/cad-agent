@@ -98,6 +98,9 @@ def run(
     view_candidates_dpi: Optional[int] = None,
     calibration_status: str = "verified",
     calibration_source_sha256: Optional[str] = None,
+    pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
+    pdf_vector_circle_suspect_regions: Optional[List[Tuple[float, float, float, float]]] = None,
+    require_pdf_vector_circle_witness: bool = False,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -126,7 +129,20 @@ def run(
     if image is None:
         raise ValueError(f"Không đọc được ảnh bằng OpenCV: {image_path}")
 
-    raw_geometry = extract_raw_geometry(image, preset=preset)
+    if (
+        require_pdf_vector_circle_witness
+        or pdf_vector_circle_witnesses
+        or pdf_vector_circle_suspect_regions
+    ):
+        raw_geometry = extract_raw_geometry(
+            image,
+            preset=preset,
+            pdf_vector_circle_witnesses=pdf_vector_circle_witnesses,
+            pdf_vector_circle_suspect_regions=pdf_vector_circle_suspect_regions,
+            require_pdf_vector_circle_witness=require_pdf_vector_circle_witness,
+        )
+    else:
+        raw_geometry = extract_raw_geometry(image, preset=preset)
 
     effective_rois = list(ocr_rois) if ocr_rois else []
     if auto_ocr_roi or (auto_calibrate and not effective_rois):
