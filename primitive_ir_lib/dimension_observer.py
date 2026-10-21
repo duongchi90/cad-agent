@@ -577,6 +577,9 @@ def observe_radial_leader_attachment(
         ):
             return unresolved
         identifier = str(circle["id"])
+        if identifier in refs_by_id:
+            # Association returns IDs; duplicate IDs could bind another circle's source ref.
+            return unresolved
         refs_by_id[identifier] = circle
         geometry_candidates.append({
             "id": identifier,

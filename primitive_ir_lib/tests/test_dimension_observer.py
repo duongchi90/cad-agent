@@ -95,6 +95,25 @@ def test_radial_leader_observation_requires_identity_and_unique_source_witness()
     assert result["geometry_consumed"] is False
 
 
+def test_radial_leader_observation_rejects_duplicate_circle_ids() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["circle_candidates"].append({
+        "id": "rawcirc-1",
+        "source_sha256": "a" * 64,
+        "page_index": 0,
+        "view_id": "front-upper",
+        "center_pt": [70.0, 70.0],
+        "radius_pt": 5.0,
+        "bounds_pt": [65.0, 65.0, 75.0, 75.0],
+        "source_path_refs": ["page0-drawing5"],
+    })
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
 def test_radial_leader_text_outside_view_is_allowed_when_complete_path_connects_it() -> None:
     inputs = _radial_witness_inputs()
     inputs["text_spans"][0]["bbox_pt"] = [101.0, 30.0, 120.0, 40.0]
