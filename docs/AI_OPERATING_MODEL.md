@@ -205,6 +205,34 @@ Partial mutation, ambiguous cleanup, wrong drawing/session, stale candidate, rep
 
 The mutable AutoCAD lane is exclusive for a given runtime/drawing/candidate.
 
+Luna's normal workstation limits are:
+
+```text
+LUNA_CONTROLLED_OPEN_DRAWINGS=1_DEFAULT
+MAX_LUNA_CONTROLLED_OPEN_DRAWINGS=2
+EDGE_WINDOWS=1_MAX
+```
+
+Use a second AutoCAD drawing only when the current bounded action requires it. Before opening it, enumerate the session documents and verify drawing ownership; never operate on a foreign or unowned drawing or open a third drawing. Close only a drawing Luna owns when its unsaved state and cleanup authority are known. Keep one Edge window for the active workstation task.
+
+Adapt local job concurrency to measured resource capacity:
+
+```text
+DEFAULT_CONCURRENT_HEAVY_LOCAL_JOBS=1
+ALLOW_SECOND_HEAVY_JOB_IF=
+- sufficient measured CPU, RAM, and disk headroom
+- no significant paging or UI slowdown
+- independent workspaces and outputs
+- measured benefit from concurrency
+ON_RESOURCE_PRESSURE=
+- start no additional heavy jobs
+- safely finish or suspend owned work
+- return to one heavy local job
+- continue lightweight or cloud tasks
+```
+
+Do not wait for a fully idle machine when safe independent work can proceed within measured capacity.
+
 Live evidence must bind the identities required by the active contract, such as current implementation, plugin bytes, observed PID/HWND, exact drawing/candidate, transport, and cleanup.
 
 General safety rules:
