@@ -169,6 +169,45 @@ def test_background_colored_crossing_line_invalidates_full_circle_witness() -> N
     assert suspect_regions
 
 
+def test_same_color_filled_wedge_invalidates_full_circle_witness(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "same-color-filled-wedge.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    center = fitz.Point(300, 300)
+    radius = 212.5
+    dark = (0.05, 0.05, 0.05)
+    page.draw_circle(center, radius, color=dark, width=1.5)
+
+    start_angle = math.radians(-15.0)
+    end_angle = math.radians(15.0)
+    wedge = page.new_shape()
+    wedge.draw_polyline(
+        [
+            center,
+            fitz.Point(
+                center.x + radius * math.cos(start_angle),
+                center.y + radius * math.sin(start_angle),
+            ),
+            fitz.Point(
+                center.x + radius * math.cos(end_angle),
+                center.y + radius * math.sin(end_angle),
+            ),
+        ]
+    )
+    wedge.finish(color=None, fill=dark, closePath=True)
+    wedge.commit()
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert not _has_circle_near(circles, (600, 600), 425), (
+        "a same-color opaque fill that masks part of the circumference must invalidate the full-circle witness"
+    )
+
+
 def test_later_clip_context_does_not_invalidate_prior_circle_witness() -> None:
     document = fitz.open()
     page = document.new_page(width=600, height=600)

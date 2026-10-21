@@ -814,17 +814,16 @@ def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
 
 
 def _drawing_may_erase_circle(drawing: dict, witness_color: object) -> bool:
-    """Treat later paint in a different color as capable of hiding a circle stroke."""
+    """Treat later fills or contrasting strokes as capable of hiding a circle stroke."""
     drawing_type = drawing.get("type")
-    colors = []
-    if drawing_type in {"s", "fs"}:
-        colors.append(drawing.get("color"))
-    if drawing_type in {"f", "fs"}:
-        colors.append(drawing.get("fill"))
-    colors = [color for color in colors if color is not None]
-    if not colors:
+    if drawing_type in {"f", "fs"} and drawing.get("fill") is not None:
+        # A same-color opaque fill can hide part of the perimeter just as
+        # effectively as a contrasting fill; color equality is not visibility.
         return True
-    return any(_colors_match(color, witness_color) is not True for color in colors)
+    stroke_color = drawing.get("color") if drawing_type in {"s", "fs"} else None
+    if stroke_color is None:
+        return True
+    return _colors_match(stroke_color, witness_color) is not True
 
 
 def _clip_fully_contains_circle(
