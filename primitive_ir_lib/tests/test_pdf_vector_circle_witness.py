@@ -656,6 +656,76 @@ def test_run_pdf_rejects_segmented_partial_arc_but_keeps_raster_circle(tmp_path:
     )
 
 
+def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "split-path-segmented-arc-and-controls.pdf"
+    output_dir = tmp_path / "out"
+    page_size = 400
+
+    def add_partial_arc_and_chord(page: fitz.Page, center: fitz.Point, radius: float) -> None:
+        points = [
+            fitz.Point(
+                center.x + radius * math.cos(math.radians(degree)),
+                center.y + radius * math.sin(math.radians(degree)),
+            )
+            for degree in range(356)
+        ]
+        arc = page.new_shape()
+        for start, end in zip(points, points[1:]):
+            arc.draw_line(start, end)
+        arc.finish(color=(0.05, 0.05, 0.05), width=1.5)
+        arc.commit()
+        chord = page.new_shape()
+        chord.draw_line(points[-1], points[0])
+        chord.finish(color=(0.05, 0.05, 0.05), width=1.5)
+        chord.commit()
+
+    document = fitz.open()
+    split_page = document.new_page(width=page_size, height=page_size)
+    add_partial_arc_and_chord(split_page, fitz.Point(200, 200), 70)
+
+    circle_page = document.new_page(width=page_size, height=page_size)
+    circle_points = [
+        fitz.Point(
+            200 + 70 * math.cos(math.radians(360.0 * index / 64)),
+            200 + 70 * math.sin(math.radians(360.0 * index / 64)),
+        )
+        for index in range(64)
+    ]
+    full_circle = circle_page.new_shape()
+    for start, end in zip(circle_points, circle_points[1:] + circle_points[:1]):
+        full_circle.draw_line(start, end)
+    full_circle.finish(color=(0.05, 0.05, 0.05), width=1.5)
+    full_circle.commit()
+
+    raster_page = document.new_page(width=page_size, height=page_size)
+    raster = np.full((page_size, page_size, 3), 220, dtype=np.uint8)
+    raster_center = (80, 80)
+    raster_radius = 25
+    cv2.circle(raster, raster_center, raster_radius, (20, 20, 20), 2, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", raster)
+    assert success
+    raster_page.insert_image(raster_page.rect, stream=encoded.tobytes())
+    add_partial_arc_and_chord(raster_page, fitz.Point(280, 280), 55)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    split_circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    full_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
+    raster_circles = _circle_primitives(output_dir / "primitive_ir" / "page_03.json")
+    assert split_circles == [], (
+        "separate vector paths for an arc and chord cannot witness a full circle"
+    )
+    assert _has_circle_near(full_circles, (200, 200), 70), "a complete source circle must survive"
+    assert len(raster_circles) == 1, (
+        "the independent raster circle must survive the uncertain vector paths"
+    )
+    raster_circle_center = raster_circles[0]["geometry"]["center"]
+    assert math.isclose(raster_circle_center["x"], raster_center[0], abs_tol=3)
+    assert math.isclose(raster_circle_center["y"], page_size - raster_center[1], abs_tol=3)
+
+
 def test_run_pdf_keeps_source_supported_line_segmented_circle(tmp_path: Path) -> None:
     pdf_path = tmp_path / "line-segmented-source-circle.pdf"
     output_dir = tmp_path / "out"
