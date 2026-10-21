@@ -317,14 +317,14 @@ def _page_circle_witnesses(
     for index, drawing in enumerate(drawings):
         if not any(item[0] == "c" for item in drawing.get("items", [])):
             continue
-        rect = drawing.get("rect")
-        if rect is None:
+        drawing_rect = drawing.get("rect")
+        if drawing_rect is None:
             continue
         circle = _fit_full_circle_path(drawing, background_color)
         if circle is None:
             suspect_regions.append((
-                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
-                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+                drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
+                drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
             ))
             continue
 
@@ -339,8 +339,8 @@ def _page_circle_witnesses(
         )
         if prior_clip_context:
             suspect_regions.append((
-                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
-                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+                drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
+                drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
             ))
             continue
 
@@ -454,8 +454,8 @@ def _page_circle_witnesses(
             witnesses.append((cx * pixel_scale, cy * pixel_scale, radius * pixel_scale))
         else:
             suspect_regions.append((
-                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
-                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+                drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
+                drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
             ))
     return False, witnesses, suspect_regions
 

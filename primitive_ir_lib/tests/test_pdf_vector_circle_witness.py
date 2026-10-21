@@ -233,3 +233,33 @@ def test_run_pdf_rejects_circle_erased_by_white_paint_on_gray_paper(tmp_path: Pa
 
     assert erased_witness_count == 0, "later white paint must invalidate a dark circle witness on gray paper"
     assert gray_positive_count >= 1, "a visible dark circle on gray paper must remain recognized"
+
+
+def test_run_pdf_keeps_raster_circle_outside_uncertain_vector_bounds(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "mixed-raster-and-erased-vector-circle.pdf"
+    output_dir = tmp_path / "out"
+    page_size = 1200
+    raster_center = (950, 950)
+    raster_radius = 130
+    image = np.full((page_size, page_size, 3), 220, dtype=np.uint8)
+    cv2.circle(image, raster_center, raster_radius, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", image)
+    assert success
+
+    document = fitz.open()
+    page = document.new_page(width=page_size, height=page_size)
+    page.insert_image(page.rect, stream=encoded.tobytes())
+    page.draw_circle((300, 300), 150, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_line((0, 300), (600, 300), color=(1.0, 1.0, 1.0), width=1.5)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    payload = json.loads((output_dir / "primitive_ir" / "page_01.json").read_text(encoding="utf-8"))
+    circles = [primitive for primitive in payload["primitives"] if primitive["type"] == "circle"]
+
+    assert len(circles) == 1, "keep the independent raster circle but reject the erased vector circle"
+    center = circles[0]["geometry"]["center"]
+    assert math.isclose(center["x"], 950, abs_tol=3)
+    assert math.isclose(center["y"], 250, abs_tol=3)
