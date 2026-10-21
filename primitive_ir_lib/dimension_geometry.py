@@ -4,12 +4,88 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from collections.abc import Mapping, Sequence
 
 import cv2
 import numpy as np
 
 Point = tuple[float, float]
 Segment = tuple[Point, Point]
+
+
+def associate_arrow_tip_to_circles(
+    *,
+    arrow_tip: Point,
+    candidates: Sequence[Mapping[str, object]],
+    contact_bound: float | None,
+) -> dict[str, object]:
+    """Associate a witnessed source arrow tip only when contact is unique.
+
+    Coordinates and radii must share the same source frame. The caller must
+    derive ``contact_bound`` from the source and transform/fit uncertainty; an
+    absent or invalid bound is deliberately unresolved.
+    """
+    unresolved = {
+        "status": "UNRESOLVED",
+        "target_id": None,
+        "residual": None,
+        "contact_bound": contact_bound if isinstance(contact_bound, (int, float)) else None,
+    }
+    if (
+        not isinstance(arrow_tip, (tuple, list))
+        or len(arrow_tip) != 2
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in arrow_tip)
+        or isinstance(contact_bound, bool)
+        or not isinstance(contact_bound, (int, float))
+        or not math.isfinite(contact_bound)
+        or contact_bound < 0
+    ):
+        return unresolved
+
+    contacts: list[tuple[str, float]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            return unresolved
+        identifier = candidate.get("id")
+        center = candidate.get("center")
+        radius = candidate.get("radius")
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or not isinstance(center, (tuple, list))
+            or len(center) != 2
+            or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in center)
+            or isinstance(radius, bool)
+            or not isinstance(radius, (int, float))
+            or not math.isfinite(radius)
+            or radius <= 0
+        ):
+            return unresolved
+        residual = abs(math.hypot(float(arrow_tip[0]) - float(center[0]), float(arrow_tip[1]) - float(center[1])) - float(radius))
+        if residual <= float(contact_bound):
+            contacts.append((identifier, residual))
+
+    if len(contacts) == 1:
+        identifier, residual = contacts[0]
+        return {
+            "status": "UNIQUE_CANDIDATE",
+            "target_id": identifier,
+            "residual": residual,
+            "contact_bound": float(contact_bound),
+        }
+    if len(contacts) > 1:
+        return {
+            "status": "AMBIGUOUS",
+            "target_id": None,
+            "residual": None,
+            "contact_bound": float(contact_bound),
+        }
+    return {
+        "status": "UNRESOLVED",
+        "target_id": None,
+        "residual": None,
+        "contact_bound": float(contact_bound),
+    }
 
 
 @dataclass(frozen=True)

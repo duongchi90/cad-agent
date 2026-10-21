@@ -14,6 +14,7 @@ import numpy as np
 
 from primitive_ir_lib.dimension_geometry import (
     DimensionGeometryEvidence,
+    associate_arrow_tip_to_circles,
     detect_dimension_geometry,
     detect_dimension_geometry_regions,
 )
@@ -318,6 +319,320 @@ def _observation_sha256(observation: Mapping[str, object]) -> str:
     without_provenance.pop("provenance", None)
     encoded = json.dumps(without_provenance, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def observe_radial_leader_attachment(
+    *,
+    source_sha256: str,
+    page_index: int,
+    extraction_complete: bool,
+    view: Mapping[str, object],
+    text_spans: Sequence[Mapping[str, object]],
+    leader_witnesses: Sequence[Mapping[str, object]],
+    circle_candidates: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Return a fail-closed source association for one evidenced radial callout.
+
+    All coordinates are in PDF points. ``view`` is caller-supplied evidence;
+    a bare view label or page identity is not sufficient to establish scope.
+    This function records an association only and never changes geometry.
+    """
+    unresolved: dict[str, object] = {
+        "kind": "RADIAL_LEADER",
+        "status": "UNRESOLVED",
+        "source_ref": {"pdf_sha256": source_sha256, "page_index": page_index},
+        "target_ref": None,
+        "geometry_consumed": False,
+    }
+    if (
+        not isinstance(source_sha256, str)
+        or _HASH_RE.fullmatch(source_sha256) is None
+        or isinstance(page_index, bool)
+        or not isinstance(page_index, int)
+        or page_index < 0
+        or extraction_complete is not True
+        or not isinstance(view, Mapping)
+        or view.get("source_sha256") != source_sha256
+        or view.get("page_index") != page_index
+        or not isinstance(view.get("view_id"), str)
+        or not view.get("view_id")
+        or not isinstance(view.get("derivation"), str)
+        or not view.get("derivation", "").strip()
+        or not isinstance(view.get("source_drawing_refs"), (tuple, list))
+        or not view.get("source_drawing_refs")
+    ):
+        return unresolved
+
+    bounds = view.get("bounds_pt")
+    if (
+        not isinstance(bounds, (tuple, list))
+        or len(bounds) != 4
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in bounds)
+        or bounds[2] <= bounds[0]
+        or bounds[3] <= bounds[1]
+    ):
+        return unresolved
+    source_drawing_refs = view.get("source_drawing_refs")
+    drawing_bounds = view.get("source_drawing_bounds_pt")
+    if (
+        not isinstance(source_drawing_refs, (tuple, list))
+        or not source_drawing_refs
+        or any(
+            not isinstance(ref, str) or not ref.startswith(f"page{page_index}-drawing")
+            for ref in source_drawing_refs
+        )
+        or len(set(source_drawing_refs)) != len(source_drawing_refs)
+        or not isinstance(drawing_bounds, Mapping)
+        or set(drawing_bounds) != set(source_drawing_refs)
+    ):
+        return unresolved
+    derived_boxes = list(drawing_bounds.values())
+    if any(
+        not isinstance(box, (tuple, list))
+        or len(box) != 4
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in box)
+        or box[2] <= box[0]
+        or box[3] <= box[1]
+        for box in derived_boxes
+    ):
+        return unresolved
+    derived_bounds = [
+        min(float(box[0]) for box in derived_boxes),
+        min(float(box[1]) for box in derived_boxes),
+        max(float(box[2]) for box in derived_boxes),
+        max(float(box[3]) for box in derived_boxes),
+    ]
+    if not all(
+        math.isclose(float(supplied), derived, rel_tol=0.0, abs_tol=1e-6)
+        for supplied, derived in zip(bounds, derived_bounds)
+    ):
+        return unresolved
+    view_id = str(view["view_id"])
+
+    def source_ref(value: object, kind: str) -> bool:
+        if not isinstance(value, str):
+            return False
+        if kind == "text":
+            return value.startswith(f"page{page_index}:")
+        return value.startswith(f"page{page_index}-drawing")
+
+    def valid_bbox(value: object) -> bool:
+        return (
+            isinstance(value, (tuple, list))
+            and len(value) == 4
+            and all(isinstance(item, (int, float)) and math.isfinite(item) for item in value)
+            and value[0] < value[2]
+            and value[1] < value[3]
+        )
+
+    def inside_bbox(value: object) -> bool:
+        return (
+            valid_bbox(value)
+            and bounds[0] <= value[0] < value[2] <= bounds[2]
+            and bounds[1] <= value[1] < value[3] <= bounds[3]
+        )
+
+    def inside_point(value: object) -> bool:
+        return (
+            isinstance(value, (tuple, list))
+            and len(value) == 2
+            and all(isinstance(item, (int, float)) and math.isfinite(item) for item in value)
+            and bounds[0] <= value[0] <= bounds[2]
+            and bounds[1] <= value[1] <= bounds[3]
+        )
+
+    matching_texts: list[Mapping[str, object]] = []
+    for span in text_spans:
+        if (
+            not isinstance(span, Mapping)
+            or span.get("source_sha256") != source_sha256
+            or span.get("page_index") != page_index
+            or not source_ref(span.get("id"), "text")
+            or not valid_bbox(span.get("bbox_pt"))
+        ):
+            return unresolved
+        parsed = parse_dimension_text(str(span.get("text", "")))
+        if parsed.kind_hint in {"RADIUS", "DIAMETER"}:
+            matching_texts.append(span)
+    if len(matching_texts) != 1:
+        return unresolved
+    text_span = matching_texts[0]
+    if parse_dimension_text(str(text_span.get("text", ""))).kind_hint != "RADIUS":
+        return unresolved
+    tx0, ty0, tx1, ty1 = (float(value) for value in text_span["bbox_pt"])
+
+    def segment_intersects_text(first: Sequence[object], second: Sequence[object]) -> bool:
+        if len(first) != 2 or len(second) != 2:
+            return False
+        x0, y0 = float(first[0]), float(first[1])
+        dx, dy = float(second[0]) - x0, float(second[1]) - y0
+        low, high = 0.0, 1.0
+        for p, q in ((-dx, x0 - tx0), (dx, tx1 - x0), (-dy, y0 - ty0), (dy, ty1 - y0)):
+            if p == 0:
+                if q < 0:
+                    return False
+                continue
+            t = q / p
+            if p < 0:
+                low = max(low, t)
+            else:
+                high = min(high, t)
+            if low > high:
+                return False
+        return True
+
+    matching_leaders: list[Mapping[str, object]] = []
+    for witness in leader_witnesses:
+        if (
+            not isinstance(witness, Mapping)
+            or witness.get("source_sha256") != source_sha256
+            or witness.get("page_index") != page_index
+            or witness.get("view_id") != view_id
+            or not isinstance(witness.get("ordered_path_refs"), (tuple, list))
+            or not witness.get("ordered_path_refs")
+            or any(not source_ref(ref, "drawing") for ref in witness.get("ordered_path_refs", ()))
+            or not isinstance(witness.get("points_pt"), (tuple, list))
+            or len(witness.get("points_pt", ())) < 2
+            or not source_ref(witness.get("arrowhead_ref"), "drawing")
+            or not isinstance(witness.get("arrowhead_base_pt"), (tuple, list))
+            or len(witness.get("arrowhead_base_pt", ())) != 2
+        ):
+            return unresolved
+        points = witness["points_pt"]
+        if any(
+            not isinstance(point, (tuple, list))
+            or len(point) != 2
+            or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in point)
+            for point in points
+        ):
+            return unresolved
+        if any(segment_intersects_text(first, second) for first, second in zip(points, points[1:])):
+            matching_leaders.append(witness)
+    if len(matching_leaders) != 1:
+        return unresolved
+    witness = matching_leaders[0]
+
+    uncertainty = witness.get("uncertainty_pt")
+    required_terms = ("arrow_tip", "target_contour", "transform", "fit")
+    if (
+        not isinstance(uncertainty, Mapping)
+        or any(
+            isinstance(uncertainty.get(key), bool)
+            or not isinstance(uncertainty.get(key), (int, float))
+            or not math.isfinite(uncertainty[key])
+            or uncertainty[key] < 0
+            for key in required_terms
+        )
+    ):
+        return unresolved
+    contact_bound = sum(float(uncertainty[key]) for key in required_terms)
+    arrowhead_base = witness["arrowhead_base_pt"]
+    if (
+        not all(isinstance(value, (int, float)) and math.isfinite(value) for value in arrowhead_base)
+        or not inside_point(arrowhead_base)
+        or min(
+            math.hypot(float(point[0]) - float(arrowhead_base[0]), float(point[1]) - float(arrowhead_base[1]))
+            for point in (witness["points_pt"][0], witness["points_pt"][-1])
+        ) > float(uncertainty["arrow_tip"])
+    ):
+        return unresolved
+    arrow_tip = witness.get("arrow_tip_pt")
+    if (
+        not isinstance(arrow_tip, (tuple, list))
+        or len(arrow_tip) != 2
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in arrow_tip)
+    ):
+        return unresolved
+
+    geometry_candidates: list[dict[str, object]] = []
+    refs_by_id: dict[str, Mapping[str, object]] = {}
+    for circle in circle_candidates:
+        if not isinstance(circle, Mapping):
+            return unresolved
+        if circle.get("source_sha256") != source_sha256 or circle.get("page_index") != page_index:
+            return unresolved
+        if circle.get("view_id") != view_id:
+            continue
+        if (
+            not isinstance(circle.get("id"), str)
+            or not circle.get("id")
+            or not inside_bbox(circle.get("bounds_pt"))
+            or not isinstance(circle.get("source_path_refs"), (tuple, list))
+            or not circle.get("source_path_refs")
+            or any(not source_ref(ref, "drawing") for ref in circle.get("source_path_refs", ()))
+            or not isinstance(circle.get("center_pt"), (tuple, list))
+            or len(circle["center_pt"]) != 2
+            or not all(
+                isinstance(value, (int, float)) and math.isfinite(value)
+                for value in circle["center_pt"]
+            )
+            or isinstance(circle.get("radius_pt"), bool)
+            or not isinstance(circle.get("radius_pt"), (int, float))
+            or not math.isfinite(circle["radius_pt"])
+            or circle["radius_pt"] <= 0
+            or circle["center_pt"][0] - circle["radius_pt"] < circle["bounds_pt"][0]
+            or circle["center_pt"][1] - circle["radius_pt"] < circle["bounds_pt"][1]
+            or circle["center_pt"][0] + circle["radius_pt"] > circle["bounds_pt"][2]
+            or circle["center_pt"][1] + circle["radius_pt"] > circle["bounds_pt"][3]
+        ):
+            return unresolved
+        identifier = str(circle["id"])
+        refs_by_id[identifier] = circle
+        geometry_candidates.append({
+            "id": identifier,
+            "center": circle["center_pt"],
+            "radius": circle["radius_pt"],
+        })
+    association = associate_arrow_tip_to_circles(
+        arrow_tip=(float(arrow_tip[0]), float(arrow_tip[1])),
+        candidates=geometry_candidates,
+        contact_bound=contact_bound,
+    )
+    unresolved.update({
+        "view_ref": {
+            "view_id": view_id,
+            "bounds_pdf_pt": [float(value) for value in bounds],
+            "derivation": view["derivation"],
+        },
+        "text_ref": {
+            "span_id": text_span["id"],
+            "raw_text": text_span["text"],
+            "bbox_pdf_pt": [float(value) for value in text_span["bbox_pt"]],
+        },
+        "leader_ref": {
+            "ordered_path_refs": list(witness["ordered_path_refs"]),
+            "arrowhead_ref": witness["arrowhead_ref"],
+            "arrow_tip_pdf_pt": [float(value) for value in arrow_tip],
+        },
+        "attachment_witness": {
+            "method": "ARROW_TIP_ON_SOURCE_CONTOUR",
+            "residual_pdf_pt": association["residual"],
+            "uncertainty_pdf_pt": contact_bound,
+        },
+        "annotation_parse": {
+            "designation": "RADIUS",
+            "nominal": None,
+            "unit": "UNRESOLVED",
+            "semantic_role": "UNKNOWN",
+        },
+    })
+    unresolved["status"] = association["status"]
+    target_id = association["target_id"]
+    if target_id is not None:
+        target = refs_by_id[str(target_id)]
+        unresolved["target_ref"] = {
+            "primitive_id": target_id,
+            "type": "CIRCLE",
+            "geometry_fingerprint": hashlib.sha256(
+                json.dumps(
+                    [target["center_pt"], target["radius_pt"]],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "source_path_refs": list(target["source_path_refs"]),
+        }
+    return unresolved
 
 
 def observe_dimension_cluster(
