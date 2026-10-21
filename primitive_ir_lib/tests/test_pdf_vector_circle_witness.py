@@ -263,3 +263,63 @@ def test_run_pdf_keeps_raster_circle_outside_uncertain_vector_bounds(tmp_path: P
     center = circles[0]["geometry"]["center"]
     assert math.isclose(center["x"], 950, abs_tol=3)
     assert math.isclose(center["y"], 250, abs_tol=3)
+
+
+def test_run_pdf_rejects_segmented_partial_arc_but_keeps_raster_circle(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "segmented-vector-arc-and-independent-raster-circle.pdf"
+    output_dir = tmp_path / "out"
+    page_size = 1200
+    raster_center = (950, 950)
+    raster_radius = 130
+    image = np.full((page_size, page_size, 3), 220, dtype=np.uint8)
+    cv2.circle(image, raster_center, raster_radius, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", image)
+    assert success
+
+    document = fitz.open()
+    segmented_arc = document.new_page(width=page_size, height=page_size)
+    segmented_arc.insert_image(segmented_arc.rect, stream=encoded.tobytes())
+    shape = segmented_arc.new_shape()
+    center = fitz.Point(300, 300)
+    radius = 150
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(degree)),
+            center.y + radius * math.sin(math.radians(degree)),
+        )
+        for degree in range(356)
+    ]
+    for start, end in zip(points, points[1:]):
+        shape.draw_line(start, end)
+    shape.draw_line(points[-1], points[0])
+    shape.finish(color=(0.05, 0.05, 0.05), width=1.5)
+    shape.commit()
+
+    straight_line_control = document.new_page(width=page_size, height=page_size)
+    straight_line_control.insert_image(straight_line_control.rect, stream=encoded.tobytes())
+    straight_line_control.draw_line((40, 40), (700, 40), color=(0.05, 0.05, 0.05), width=1.5)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    segmented_payload = json.loads(
+        (output_dir / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    straight_payload = json.loads(
+        (output_dir / "primitive_ir" / "page_02.json").read_text(encoding="utf-8")
+    )
+    segmented_circles = [
+        primitive for primitive in segmented_payload["primitives"]
+        if primitive["type"] == "circle"
+    ]
+    straight_line_circles = [
+        primitive for primitive in straight_payload["primitives"]
+        if primitive["type"] == "circle"
+    ]
+
+    assert len(segmented_circles) == 1, "reject the segmented vector arc but retain its independent raster circle"
+    segmented_center = segmented_circles[0]["geometry"]["center"]
+    assert math.isclose(segmented_center["x"], 950, abs_tol=3)
+    assert math.isclose(segmented_center["y"], 250, abs_tol=3)
+    assert len(straight_line_circles) == 1, "ordinary straight drafting linework must not suppress a raster circle"

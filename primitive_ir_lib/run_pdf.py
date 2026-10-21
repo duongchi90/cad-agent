@@ -194,6 +194,47 @@ def _fit_full_circle_path(
     return center_x, center_y, radius
 
 
+def _is_smooth_closed_line_contour(drawing: dict) -> bool:
+    """Identify closed, smoothly turning line paths that need local fail-closed handling."""
+    if drawing.get("type") != "s" or drawing.get("fill") is not None:
+        return False
+    items = drawing.get("items", [])
+    if not items or any(item[0] != "l" for item in items):
+        return False
+
+    directions: list[float] = []
+    first_start: Optional[fitz.Point] = None
+    previous_end: Optional[fitz.Point] = None
+    for item in items:
+        _, start, end = item
+        if first_start is None:
+            first_start = start
+        if previous_end is not None and math.hypot(
+            start.x - previous_end.x, start.y - previous_end.y
+        ) > 0.02:
+            return False
+        dx, dy = end.x - start.x, end.y - start.y
+        if math.hypot(dx, dy) <= 0.02:
+            return False
+        directions.append(math.atan2(dy, dx))
+        previous_end = end
+    if (
+        first_start is None
+        or previous_end is None
+        or math.hypot(first_start.x - previous_end.x, first_start.y - previous_end.y) > 0.02
+    ):
+        return False
+
+    turns = [
+        abs(math.atan2(
+            math.sin(next_direction - direction),
+            math.cos(next_direction - direction),
+        ))
+        for direction, next_direction in zip(directions, directions[1:] + directions[:1])
+    ]
+    return bool(turns) and float(np.median(turns)) <= math.radians(20.0) and max(turns) > 1e-6
+
+
 def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
     """Estimate a uniform page background from low-resolution corner samples."""
     pixmap = page.get_pixmap(matrix=fitz.Matrix(0.1, 0.1), alpha=False)
@@ -291,7 +332,11 @@ def _page_circle_witnesses(
         drawing for drawing in drawings
         if any(item[0] == "c" for item in drawing.get("items", []))
     ]
-    if not curve_drawings:
+    line_contour_indices = {
+        index for index, drawing in enumerate(drawings)
+        if _is_smooth_closed_line_contour(drawing)
+    }
+    if not curve_drawings and not line_contour_indices:
         return False, [], []
     background_color = _page_background_color(page)
 
@@ -316,6 +361,12 @@ def _page_circle_witnesses(
     suspect_regions: list[tuple[float, float, float, float]] = []
     for index, drawing in enumerate(drawings):
         if not any(item[0] == "c" for item in drawing.get("items", [])):
+            drawing_rect = drawing.get("rect")
+            if index in line_contour_indices and drawing_rect is not None:
+                suspect_regions.append((
+                    drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
+                    drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
+                ))
             continue
         drawing_rect = drawing.get("rect")
         if drawing_rect is None:
