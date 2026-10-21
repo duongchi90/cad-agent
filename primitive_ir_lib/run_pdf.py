@@ -262,6 +262,21 @@ def _page_circle_witnesses(
                     if item[0] == "l":
                         _, start, end = item
                         points = [(start.x, start.y), (end.x, end.y)]
+                        dx = end.x - start.x
+                        dy = end.y - start.y
+                        length_squared = dx * dx + dy * dy
+                        if length_squared > 0.0:
+                            fraction = min(
+                                1.0,
+                                max(
+                                    0.0,
+                                    ((cx - start.x) * dx + (cy - start.y) * dy)
+                                    / length_squared,
+                                ),
+                            )
+                            closest_x = start.x + fraction * dx
+                            closest_y = start.y + fraction * dy
+                            radial_samples.append(math.hypot(closest_x - cx, closest_y - cy))
                     elif item[0] == "c":
                         _, p0, p1, p2, p3 = item
                         points = []

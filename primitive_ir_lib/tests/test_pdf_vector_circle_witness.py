@@ -8,7 +8,7 @@ import cv2
 import fitz
 import numpy as np
 
-from primitive_ir_lib.run_pdf import run_pdf
+from primitive_ir_lib.run_pdf import _page_circle_witnesses, run_pdf
 
 
 def _draw_circular_beziers(page: fitz.Page, center: fitz.Point, radius: float, end_degrees: float) -> None:
@@ -33,6 +33,22 @@ def _draw_circular_beziers(page: fitz.Page, center: fitz.Point, radius: float, e
 def _circle_primitive_count(page_ir: Path) -> int:
     payload = json.loads(page_ir.read_text(encoding="utf-8"))
     return sum(primitive["type"] == "circle" for primitive in payload["primitives"])
+
+
+def test_later_crossing_line_invalidates_full_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    center = fitz.Point(300, 300)
+    radius = 212.5
+    page.draw_circle(center, radius, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_line((0, 300), (600, 300), color=(1.0, 1.0, 1.0), width=1.5)
+
+    require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert require_all_witnesses is False
+    assert witnesses == []
+    assert suspect_regions
 
 
 def test_run_pdf_does_not_promote_chord_closed_partial_arc_to_circle(tmp_path: Path) -> None:
