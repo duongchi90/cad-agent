@@ -173,6 +173,99 @@ def _fit_full_circle_path(drawing: dict) -> Optional[tuple[float, float, float]]
     return center_x, center_y, radius
 
 
+def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
+    """Estimate a uniform page background from low-resolution corner samples."""
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(0.1, 0.1), alpha=False)
+    if pixmap.width < 2 or pixmap.height < 2:
+        return None
+    pixels = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+        pixmap.height, pixmap.width, pixmap.n
+    )[:, :, :3]
+    corners = np.asarray(
+        (pixels[0, 0], pixels[0, -1], pixels[-1, 0], pixels[-1, -1]),
+        dtype=np.float64,
+    ) / 255.0
+    background = np.median(corners, axis=0)
+    if float(np.max(np.linalg.norm(corners - background, axis=1))) > 0.08:
+        return None
+    return background
+
+
+def _drawing_may_erase_circle(
+    drawing: dict, background: Optional[np.ndarray]
+) -> bool:
+    """Treat later paint as occlusion only when it can paint the page background."""
+    if background is None:
+        return True
+    drawing_type = drawing.get("type")
+    colors = []
+    if drawing_type in {"s", "fs"}:
+        colors.append(drawing.get("color"))
+    if drawing_type in {"f", "fs"}:
+        colors.append(drawing.get("fill"))
+    colors = [color for color in colors if color is not None]
+    if not colors:
+        return True
+    return any(
+        float(np.max(np.abs(np.asarray(color, dtype=np.float64) - background))) <= 0.08
+        for color in colors
+    )
+
+
+def _clip_fully_contains_circle(
+    drawing: dict, center_x: float, center_y: float, radius: float
+) -> bool:
+    """Prove an axis-aligned clip rectangle leaves a candidate circle intact."""
+    scissor = drawing.get("scissor")
+    items = drawing.get("items", [])
+    if drawing.get("type") != "clip" or scissor is None or len(items) != 4:
+        return False
+
+    segments: list[tuple[fitz.Point, fitz.Point]] = []
+    for item in items:
+        if item[0] != "l":
+            return False
+        _, start, end = item
+        if abs(start.x - end.x) > 0.02 and abs(start.y - end.y) > 0.02:
+            return False
+        segments.append((start, end))
+    if any(
+        math.hypot(
+            segments[index][1].x - segments[(index + 1) % 4][0].x,
+            segments[index][1].y - segments[(index + 1) % 4][0].y,
+        ) > 0.02
+        for index in range(4)
+    ):
+        return False
+
+    points = [point for segment in segments for point in segment]
+    x0 = min(point.x for point in points)
+    y0 = min(point.y for point in points)
+    x1 = max(point.x for point in points)
+    y1 = max(point.y for point in points)
+    expected_corners = {
+        (round(x0, 3), round(y0, 3)),
+        (round(x1, 3), round(y0, 3)),
+        (round(x1, 3), round(y1, 3)),
+        (round(x0, 3), round(y1, 3)),
+    }
+    actual_corners = {(round(point.x, 3), round(point.y, 3)) for point in points}
+    if actual_corners != expected_corners:
+        return False
+
+    margin = 0.02
+    return (
+        scissor.x0 <= center_x - radius + margin
+        and scissor.y0 <= center_y - radius + margin
+        and scissor.x1 >= center_x + radius - margin
+        and scissor.y1 >= center_y + radius - margin
+        and x0 <= center_x - radius + margin
+        and y0 <= center_y - radius + margin
+        and x1 >= center_x + radius - margin
+        and y1 >= center_y + radius - margin
+    )
+
+
 def _page_circle_witnesses(
     page: fitz.Page, pixel_scale: float
 ) -> tuple[bool, list[tuple[float, float, float]], list[tuple[float, float, float, float]]]:
@@ -186,6 +279,7 @@ def _page_circle_witnesses(
     ]
     if not curve_drawings:
         return False, [], []
+    background_color = _page_background_color(page)
 
     # Keep PDF-to-render coordinates simple and reject page features that can
     # alter which parts of a source stroke are visible to the raster detector.
@@ -197,7 +291,6 @@ def _page_circle_witnesses(
     ):
         return True, [], []
 
-    unsupported_clipping = any(drawing.get("type") in {"clip", "group"} for drawing in drawings)
     occluder_rects: list[fitz.Rect] = []
     for image in page.get_images():
         for rect in page.get_image_rects(image[0]):
@@ -214,7 +307,7 @@ def _page_circle_witnesses(
         if rect is None:
             continue
         circle = _fit_full_circle_path(drawing)
-        if unsupported_clipping or circle is None:
+        if circle is None:
             suspect_regions.append((
                 rect.x0 * pixel_scale, rect.y0 * pixel_scale,
                 rect.x1 * pixel_scale, rect.y1 * pixel_scale,
@@ -222,6 +315,21 @@ def _page_circle_witnesses(
             continue
 
         cx, cy, radius = circle
+        prior_clip_context = any(
+            prior.get("type") == "group"
+            or (
+                prior.get("type") == "clip"
+                and not _clip_fully_contains_circle(prior, cx, cy, radius)
+            )
+            for prior in drawings[:index]
+        )
+        if prior_clip_context:
+            suspect_regions.append((
+                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
+                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+            ))
+            continue
+
         # A later drawing/clip/group touching this perimeter can obscure or
         # alter the witness. Conservatively reject rather than infer visibility.
         occluded = False
@@ -240,9 +348,17 @@ def _page_circle_witnesses(
             if occluded:
                 break
             later_type = later.get("type")
-            if later_type not in {"s", "clip", "group", "f", "fs"}:
+            if later_type == "clip":
+                # Extended drawing output reports clipping contexts separately;
+                # they constrain later paint but do not paint over this stroke.
+                continue
+            if later_type not in {"s", "group", "f", "fs"}:
                 occluded = True
                 break
+            if later_type in {"s", "f", "fs"} and not _drawing_may_erase_circle(
+                later, background_color
+            ):
+                continue
             later_circle = _fit_full_circle_path(later) if later_type == "s" else None
             if later_circle is not None:
                 later_cx, later_cy, later_radius = later_circle

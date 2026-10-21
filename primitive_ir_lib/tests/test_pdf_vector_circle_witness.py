@@ -3,6 +3,7 @@
 import json
 import math
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import fitz
@@ -35,6 +36,24 @@ def _circle_primitive_count(page_ir: Path) -> int:
     return sum(primitive["type"] == "circle" for primitive in payload["primitives"])
 
 
+def _rectangular_clip(rect: fitz.Rect) -> dict:
+    corners = [
+        fitz.Point(rect.x0, rect.y0),
+        fitz.Point(rect.x1, rect.y0),
+        fitz.Point(rect.x1, rect.y1),
+        fitz.Point(rect.x0, rect.y1),
+    ]
+    return {
+        "type": "clip",
+        "rect": None,
+        "scissor": rect,
+        "items": [
+            ("l", corners[index], corners[(index + 1) % len(corners)])
+            for index in range(len(corners))
+        ],
+    }
+
+
 def test_later_crossing_line_invalidates_full_circle_witness() -> None:
     document = fitz.open()
     page = document.new_page(width=600, height=600)
@@ -44,6 +63,70 @@ def test_later_crossing_line_invalidates_full_circle_witness() -> None:
     page.draw_line((0, 300), (600, 300), color=(1.0, 1.0, 1.0), width=1.5)
 
     require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert require_all_witnesses is False
+    assert witnesses == []
+    assert suspect_regions
+
+
+def test_later_black_crossing_line_preserves_full_circle_witness(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "black-crossing-circle.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    center = fitz.Point(300, 300)
+    page.draw_circle(center, 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_line((0, 300), (600, 300), color=(0.05, 0.05, 0.05), width=1.5)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circle_count = _circle_primitive_count(output_dir / "primitive_ir" / "page_01.json")
+    assert circle_count >= 1, "a visible full circle must survive a later non-erasing black stroke"
+
+
+def test_background_colored_crossing_line_invalidates_full_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    background = (0.75, 0.75, 0.75)
+    page.draw_rect(page.rect, color=None, fill=background)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_line((0, 300), (600, 300), color=background, width=1.5)
+
+    _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert witnesses == []
+    assert suspect_regions
+
+
+def test_later_clip_context_does_not_invalidate_prior_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    drawings = page.get_drawings(extended=True)
+    drawings.insert(0, _rectangular_clip(fitz.Rect(-100, -100, 700, 700)))
+
+    with patch.object(fitz.Page, "get_drawings", return_value=drawings):
+        require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert require_all_witnesses is False
+    assert len(witnesses) == 1
+    assert suspect_regions == []
+
+
+def test_prior_clip_cutting_circle_does_not_supply_full_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    drawings = page.get_drawings(extended=True)
+    drawings.insert(0, _rectangular_clip(fitz.Rect(0, 0, 400, 600)))
+
+    with patch.object(fitz.Page, "get_drawings", return_value=drawings):
+        require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
     document.close()
 
     assert require_all_witnesses is False
