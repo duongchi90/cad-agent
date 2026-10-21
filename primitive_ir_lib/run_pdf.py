@@ -235,9 +235,38 @@ def _is_smooth_closed_line_contour(drawing: dict) -> bool:
     return bool(turns) and float(np.median(turns)) <= math.radians(20.0) and max(turns) > 1e-6
 
 
-def _suspect_geometry(drawing: dict, pixel_scale: float) -> dict:
-    """Preserve supported source paths instead of treating their bounds as paint."""
+def _suspect_geometry(
+    drawing: dict, pixel_scale: float, page_transform: fitz.Matrix
+) -> dict:
+    """Preserve supported path and paint footprints instead of using bounds alone."""
     segments: list[tuple[float, float, float, float]] = []
+    fill_polygons: list[list[tuple[float, float]]] = []
+    unsupported_item = False
+    pending_path: list[tuple[float, float]] = []
+
+    def to_pixel(point: tuple[float, float]) -> tuple[float, float]:
+        transformed = fitz.Point(point) * page_transform
+        return transformed.x * pixel_scale, transformed.y * pixel_scale
+
+    def finish_path(*, close: bool) -> None:
+        nonlocal pending_path
+        if len(pending_path) < 2:
+            pending_path = []
+            return
+        first = pending_path[0]
+        last = pending_path[-1]
+        is_closed = math.hypot(last[0] - first[0], last[1] - first[1]) <= 0.02
+        if close and not is_closed:
+            pending_path.append(first)
+            is_closed = True
+        segments.extend(
+            (*to_pixel((x0, y0)), *to_pixel((x1, y1)))
+            for (x0, y0), (x1, y1) in zip(pending_path, pending_path[1:])
+        )
+        if is_closed:
+            fill_polygons.append([to_pixel(point) for point in pending_path[:-1]])
+        pending_path = []
+
     for item in drawing.get("items", []):
         if item[0] == "l":
             _, start, end = item
@@ -252,21 +281,65 @@ def _suspect_geometry(drawing: dict, pixel_scale: float) -> dict:
                     u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
                     u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
                 ))
+        elif item[0] == "re":
+            rect = item[1]
+            finish_path(close=False)
+            points = [
+                (rect.x0, rect.y0), (rect.x1, rect.y0),
+                (rect.x1, rect.y1), (rect.x0, rect.y1), (rect.x0, rect.y0),
+            ]
+            pending_path = points
+            finish_path(close=True)
+            continue
+        elif item[0] == "qu":
+            quad = item[1]
+            finish_path(close=False)
+            quad_points = [quad.ul, quad.ur, quad.lr, quad.ll]
+            points = [(point.x, point.y) for point in quad_points]
+            points.append(points[0])
+            pending_path = points
+            finish_path(close=True)
+            continue
         else:
-            points = []
-        if not points:
-            rect = drawing.get("rect")
-            if rect is None:
-                return {"segments": segments}
-            return {"bounds": (
-                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
-                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
-            )}
-        segments.extend(
-            (x0 * pixel_scale, y0 * pixel_scale, x1 * pixel_scale, y1 * pixel_scale)
-            for (x0, y0), (x1, y1) in zip(points, points[1:])
-        )
-    return {"segments": segments}
+            finish_path(close=False)
+            unsupported_item = True
+            continue
+        if pending_path and math.hypot(
+            pending_path[-1][0] - points[0][0],
+            pending_path[-1][1] - points[0][1],
+        ) > 0.02:
+            finish_path(close=False)
+        if pending_path:
+            pending_path.extend(points[1:])
+        else:
+            pending_path = points
+    finish_path(close=(
+        drawing.get("type") in {"f", "fs"} or bool(drawing.get("closePath"))
+    ))
+
+    result = {
+        "segments": segments,
+        "stroke_radius_px": (
+            max(0.0, float(drawing.get("width") or 0.0) * pixel_scale / 2.0)
+            if drawing.get("type") in {"s", "fs"}
+            else 0.0
+        ),
+    }
+    if drawing.get("type") in {"f", "fs"} and drawing.get("fill") is not None:
+        result["fill_polygons"] = fill_polygons
+        result["fill_even_odd"] = bool(drawing.get("even_odd"))
+    if unsupported_item:
+        rect = drawing.get("rect")
+        if rect is not None:
+            corners = [
+                to_pixel((rect.x0, rect.y0)), to_pixel((rect.x1, rect.y0)),
+                to_pixel((rect.x1, rect.y1)), to_pixel((rect.x0, rect.y1)),
+            ]
+            result["bounds"] = (
+                min(point[0] for point in corners), min(point[1] for point in corners),
+                max(point[0] for point in corners), max(point[1] for point in corners),
+            )
+    return result
 
 
 def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
@@ -355,6 +428,22 @@ def _clip_fully_contains_circle(
     )
 
 
+def _image_paint_operations(page: fitz.Page) -> list[tuple[int, fitz.Rect]]:
+    """Return image paint bounds keyed by their PDF paint-order sequence."""
+    operations: list[tuple[int, fitz.Rect]] = []
+    try:
+        for sequence, (kind, bounds) in enumerate(page.get_bboxlog()):
+            if kind.startswith("fill-image"):
+                operations.append((sequence, fitz.Rect(bounds)))
+    except (AttributeError, RuntimeError, ValueError):
+        # Older/unsupported PyMuPDF builds cannot prove order, so callers treat
+        # the available image rectangles conservatively as later paint.
+        for image in page.get_images():
+            for rect in page.get_image_rects(image[0]):
+                operations.append((-1, rect))
+    return operations
+
+
 def _page_circle_witnesses(
     page: fitz.Page, pixel_scale: float
 ) -> tuple[bool, list[tuple[float, float, float]], list[dict]]:
@@ -373,23 +462,12 @@ def _page_circle_witnesses(
     if not curve_drawings and not line_contour_indices:
         return False, [], []
     background_color = _page_background_color(page)
+    page_transform = page.rotation_matrix
 
-    # Keep PDF-to-render coordinates simple and reject page features that can
-    # alter which parts of a source stroke are visible to the raster detector.
-    if (
-        page.rotation != 0
-        or page.cropbox != page.mediabox
-        or page.mediabox.x0 != 0
-        or page.mediabox.y0 != 0
-    ):
-        return True, [], []
-
-    occluder_rects: list[fitz.Rect] = []
-    for image in page.get_images():
-        for rect in page.get_image_rects(image[0]):
-            occluder_rects.append(rect)
+    image_paint_operations = _image_paint_operations(page)
+    annotation_rects: list[fitz.Rect] = []
     for annotation in page.annots() or ():
-        occluder_rects.append(annotation.rect)
+        annotation_rects.append(annotation.rect)
 
     witnesses: list[tuple[float, float, float]] = []
     suspect_regions: list[dict] = []
@@ -397,32 +475,48 @@ def _page_circle_witnesses(
         if not any(item[0] == "c" for item in drawing.get("items", [])):
             drawing_rect = drawing.get("rect")
             if index in line_contour_indices and drawing_rect is not None:
-                suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
+                suspect_regions.append(
+                    _suspect_geometry(drawing, pixel_scale, page_transform)
+                )
             continue
         drawing_rect = drawing.get("rect")
         if drawing_rect is None:
             continue
         circle = _fit_full_circle_path(drawing, background_color)
         if circle is None:
-            suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
+            suspect_regions.append(
+                _suspect_geometry(drawing, pixel_scale, page_transform)
+            )
             continue
 
         cx, cy, radius = circle
+        witness_level = int(drawing.get("level") or 0)
         prior_clip_context = any(
-            prior.get("type") == "group"
-            or (
-                prior.get("type") == "clip"
-                and not _clip_fully_contains_circle(prior, cx, cy, radius)
+            int(prior.get("level") or 0) < witness_level
+            and (
+                prior.get("type") == "group"
+                or (
+                    prior.get("type") == "clip"
+                    and not _clip_fully_contains_circle(prior, cx, cy, radius)
+                )
             )
             for prior in drawings[:index]
         )
         if prior_clip_context:
-            suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
+            suspect_regions.append(
+                _suspect_geometry(drawing, pixel_scale, page_transform)
+            )
             continue
 
         # A later drawing/clip/group touching this perimeter can obscure or
         # alter the witness. Conservatively reject rather than infer visibility.
         occluded = False
+        drawing_sequence = drawing.get("seqno")
+        occluder_rects = annotation_rects + [
+            rect
+            for sequence, rect in image_paint_operations
+            if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
+        ]
         for rect in occluder_rects:
             dx = max(rect.x0 - cx, 0.0, cx - rect.x1)
             dy = max(rect.y0 - cy, 0.0, cy - rect.y1)
@@ -527,9 +621,16 @@ def _page_circle_witnesses(
                 occluded = True
                 break
         if not occluded:
-            witnesses.append((cx * pixel_scale, cy * pixel_scale, radius * pixel_scale))
+            rendered_center = fitz.Point(cx, cy) * page_transform
+            witnesses.append((
+                rendered_center.x * pixel_scale,
+                rendered_center.y * pixel_scale,
+                radius * pixel_scale,
+            ))
         else:
-            suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
+            suspect_regions.append(
+                _suspect_geometry(drawing, pixel_scale, page_transform)
+            )
     return False, witnesses, suspect_regions
 
 

@@ -36,7 +36,26 @@ def _circle_primitive_count(page_ir: Path) -> int:
     return sum(primitive["type"] == "circle" for primitive in payload["primitives"])
 
 
-def _rectangular_clip(rect: fitz.Rect) -> dict:
+def _circle_primitives(page_ir: Path) -> list[dict]:
+    payload = json.loads(page_ir.read_text(encoding="utf-8"))
+    return [primitive for primitive in payload["primitives"] if primitive["type"] == "circle"]
+
+
+def _has_circle_near(
+    circles: list[dict], center: tuple[float, float], radius: float,
+    *, center_tolerance: float = 8.0, radius_tolerance: float = 8.0,
+) -> bool:
+    return any(
+        math.hypot(
+            circle["geometry"]["center"]["x"] - center[0],
+            circle["geometry"]["center"]["y"] - center[1],
+        ) <= center_tolerance
+        and abs(circle["geometry"]["radius"] - radius) <= radius_tolerance
+        for circle in circles
+    )
+
+
+def _rectangular_clip(rect: fitz.Rect, *, level: int = 0) -> dict:
     corners = [
         fitz.Point(rect.x0, rect.y0),
         fitz.Point(rect.x1, rect.y0),
@@ -45,6 +64,7 @@ def _rectangular_clip(rect: fitz.Rect) -> dict:
     ]
     return {
         "type": "clip",
+        "level": level,
         "rect": None,
         "scissor": rect,
         "items": [
@@ -87,6 +107,40 @@ def test_later_black_crossing_line_preserves_full_circle_witness(tmp_path: Path)
     assert circle_count >= 1, "a visible full circle must survive a later non-erasing black stroke"
 
 
+def test_run_pdf_uses_only_later_images_as_circle_occluders(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "image-paint-order.pdf"
+    output_dir = tmp_path / "out"
+    background = np.full((600, 600, 3), 220, dtype=np.uint8)
+    success, encoded = cv2.imencode(".png", background)
+    assert success
+    document = fitz.open()
+
+    image_before_circle = document.new_page(width=600, height=600)
+    image_before_circle.insert_image(image_before_circle.rect, stream=encoded.tobytes())
+    image_before_circle.draw_circle(
+        (300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5
+    )
+
+    image_after_circle = document.new_page(width=600, height=600)
+    image_after_circle.draw_circle(
+        (300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5
+    )
+    image_after_circle.insert_image(image_after_circle.rect, stream=encoded.tobytes())
+
+    document.save(pdf_path)
+    document.close()
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    before_circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    after_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
+    assert _has_circle_near(before_circles, (600, 600), 425), (
+        "a background image painted before a visible vector circle must not invalidate that witness"
+    )
+    assert not _has_circle_near(after_circles, (600, 600), 425), (
+        "a later background image that erases the vector circle must invalidate its witness"
+    )
+
+
 def test_background_colored_crossing_line_invalidates_full_circle_witness() -> None:
     document = fitz.open()
     page = document.new_page(width=600, height=600)
@@ -123,7 +177,9 @@ def test_prior_clip_cutting_circle_does_not_supply_full_circle_witness() -> None
     page = document.new_page(width=600, height=600)
     page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
     drawings = page.get_drawings(extended=True)
-    drawings.insert(0, _rectangular_clip(fitz.Rect(0, 0, 400, 600)))
+    for drawing in drawings:
+        drawing["level"] = 1
+    drawings.insert(0, _rectangular_clip(fitz.Rect(0, 0, 400, 600), level=0))
 
     with patch.object(fitz.Page, "get_drawings", return_value=drawings):
         require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
@@ -132,6 +188,23 @@ def test_prior_clip_cutting_circle_does_not_supply_full_circle_witness() -> None
     assert require_all_witnesses is False
     assert witnesses == []
     assert suspect_regions
+
+
+def test_expired_clip_and_group_levels_do_not_invalidate_later_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    drawings = page.get_drawings(extended=True)
+    drawings.insert(0, _rectangular_clip(fitz.Rect(0, 0, 100, 600), level=0))
+    drawings.insert(1, {"type": "group", "level": 0, "rect": fitz.Rect(0, 0, 100, 600)})
+
+    with patch.object(fitz.Page, "get_drawings", return_value=drawings):
+        require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert require_all_witnesses is False
+    assert len(witnesses) == 1
+    assert suspect_regions == []
 
 
 def test_run_pdf_does_not_promote_chord_closed_partial_arc_to_circle(tmp_path: Path) -> None:
@@ -216,11 +289,195 @@ def test_run_pdf_keeps_raster_circle_enclosed_by_unrelated_curve_bounds(tmp_path
     )
     run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
 
-    baseline_count = _circle_primitive_count(baseline_dir / "primitive_ir.json")
-    gated_count = _circle_primitive_count(gated_dir / "primitive_ir" / "page_01.json")
+    baseline_circles = _circle_primitives(baseline_dir / "primitive_ir.json")
+    gated_circles = _circle_primitives(gated_dir / "primitive_ir" / "page_01.json")
 
-    assert baseline_count >= 1, "the same rendered raster circle must be found without PDF source gating"
-    assert gated_count >= 1, "an enclosing curve bound must not suppress an untouched raster circumference"
+    assert _has_circle_near(baseline_circles, (600, 600), 425), "baseline must find the source raster circle"
+    assert _has_circle_near(gated_circles, (600, 600), 425), (
+        "an unrelated curve bound must not suppress that same untouched raster circle"
+    )
+
+
+def test_run_pdf_preserves_raster_circle_inside_mixed_rectangle_curve_bounds(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "raster-circle-inside-mixed-vector-bounds.pdf"
+    image_path = tmp_path / "same-page-render.png"
+    baseline_dir = tmp_path / "baseline"
+    gated_dir = tmp_path / "gated"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+
+    source_image = np.full((1200, 1200, 3), 220, dtype=np.uint8)
+    cv2.circle(source_image, (600, 600), 425, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", source_image)
+    assert success
+    page.insert_image(page.rect, stream=encoded.tobytes())
+
+    # PyMuPDF returns this as one drawing with items ['re', 'c', 'l'];
+    # every actual vector path remains far from the raster circle perimeter.
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(40, 40, 560, 560))
+    shape.draw_bezier((25, 30), (35, 5), (50, 55), (65, 30))
+    shape.finish(color=(0.05, 0.05, 0.05), width=1.0)
+    shape.commit()
+
+    page.get_pixmap(dpi=144, alpha=False).save(image_path)
+    document.save(pdf_path)
+    document.close()
+
+    from primitive_ir_lib.run_image import run as run_image
+
+    run_image(
+        str(image_path), str(baseline_dir / "primitive_ir.json"),
+        scale_mm_per_px=1.0, preset="real_scan_tuned_v1",
+    )
+    run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    baseline_circles = _circle_primitives(baseline_dir / "primitive_ir.json")
+    gated_circles = _circle_primitives(gated_dir / "primitive_ir" / "page_01.json")
+    assert _has_circle_near(baseline_circles, (600, 600), 425), "baseline must find the source raster circle"
+    assert _has_circle_near(gated_circles, (600, 600), 425), (
+        "an unrelated rectangle item must not replace supported path geometry with its full bounds"
+    )
+
+
+def test_run_pdf_keeps_local_raster_circle_on_rotated_page(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "rotated-independent-raster-circle.pdf"
+    output_dir = tmp_path / "out"
+    source_image = np.full((600, 600, 3), 220, dtype=np.uint8)
+    cv2.circle(source_image, (150, 200), 70, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", source_image)
+    assert success
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.insert_image(page.rect, stream=encoded.tobytes())
+    _draw_circular_beziers(page, fitz.Point(450, 400), 40, 300.0)
+    page.set_rotation(90)
+    rendered_center = fitz.Point(150, 200) * page.rotation_matrix
+    expected_center = (rendered_center.x, page.rect.height - rendered_center.y)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert _has_circle_near(circles, expected_center, 70), (
+        "a local unsupported page rotation must not suppress an independent raster circle"
+    )
+
+
+def test_run_pdf_keeps_local_raster_circle_on_cropped_rotated_page(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "cropped-rotated-independent-raster-circle.pdf"
+    output_dir = tmp_path / "out"
+    source_image = np.full((600, 600, 3), 220, dtype=np.uint8)
+    cv2.circle(source_image, (200, 200), 70, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", source_image)
+    assert success
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.insert_image(page.rect, stream=encoded.tobytes())
+    _draw_circular_beziers(page, fitz.Point(400, 400), 40, 300.0)
+    page.set_cropbox(fitz.Rect(100, 100, 500, 500))
+    page.set_rotation(90)
+    rendered_center = fitz.Point(100, 100) * page.rotation_matrix
+    expected_center = (rendered_center.x, page.rect.height - rendered_center.y)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert _has_circle_near(circles, expected_center, 70), (
+        "crop and rotation must keep the suspect arc local to its transformed rendered position"
+    )
+
+
+def test_run_pdf_rejects_raster_circle_erased_by_wide_vector_arc(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "raster-circle-erased-by-wide-vector-arc.pdf"
+    image_path = tmp_path / "same-page-render.png"
+    baseline_dir = tmp_path / "baseline"
+    gated_dir = tmp_path / "gated"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+
+    source_image = np.full((600, 600, 3), 220, dtype=np.uint8)
+    cv2.circle(source_image, (200, 200), 70, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", source_image)
+    assert success
+    page.insert_image(page.rect, stream=encoded.tobytes())
+
+    # At x=276 the centerline misses the detected circumference by about
+    # 8 px, but the 18 px background-colored stroke erases part of the arc.
+    shape = page.new_shape()
+    shape.draw_bezier((276, 120), (276, 160), (276, 240), (276, 280))
+    shape.finish(color=(220 / 255, 220 / 255, 220 / 255), width=18.0)
+    shape.commit()
+
+    page.get_pixmap(dpi=72, alpha=False).save(image_path)
+    document.save(pdf_path)
+    document.close()
+
+    from primitive_ir_lib.run_image import run as run_image
+
+    run_image(
+        str(image_path), str(baseline_dir / "primitive_ir.json"),
+        scale_mm_per_px=1.0, preset="real_scan_tuned_v1",
+    )
+    run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    baseline_circles = _circle_primitives(baseline_dir / "primitive_ir.json")
+    gated_circles = _circle_primitives(gated_dir / "primitive_ir" / "page_01.json")
+    assert _has_circle_near(baseline_circles, (200, 400), 70), "baseline must find the source raster circle"
+    assert not _has_circle_near(gated_circles, (200, 400), 70), (
+        "a wide background-colored vector stroke must not leave the erased raster circle as a full circle"
+    )
+
+
+def test_run_pdf_rejects_circle_whose_perimeter_is_inside_a_filled_path(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "raster-circle-erased-by-filled-path.pdf"
+    image_path = tmp_path / "same-page-render.png"
+    baseline_dir = tmp_path / "baseline"
+    gated_dir = tmp_path / "gated"
+    source_image = np.full((600, 600, 3), 220, dtype=np.uint8)
+    center = (200.0, 200.0)
+    cv2.circle(source_image, (200, 200), 70, (20, 20, 20), 4, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", source_image)
+    assert success
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.insert_image(page.rect, stream=encoded.tobytes())
+    page.draw_circle(center, 70, color=(0.05, 0.05, 0.05), width=1.0)
+    sector_angles = [math.radians(degree) for degree in range(31)]
+    points = [
+        fitz.Point(center[0] + 80.0 * math.cos(angle), center[1] + 80.0 * math.sin(angle))
+        for angle in sector_angles
+    ]
+    points.extend(
+        fitz.Point(center[0] + 60.0 * math.cos(angle), center[1] + 60.0 * math.sin(angle))
+        for angle in reversed(sector_angles)
+    )
+    shape = page.new_shape()
+    shape.draw_polyline(points)
+    shape.finish(color=None, fill=(220 / 255, 220 / 255, 220 / 255), closePath=True)
+    shape.commit()
+    page.get_pixmap(dpi=72, alpha=False).save(image_path)
+    document.save(pdf_path)
+    document.close()
+
+    from primitive_ir_lib.run_image import run as run_image
+
+    run_image(
+        str(image_path), str(baseline_dir / "primitive_ir.json"),
+        scale_mm_per_px=1.0, preset="real_scan_tuned_v1",
+    )
+    run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    baseline_circles = _circle_primitives(baseline_dir / "primitive_ir.json")
+    gated_circles = _circle_primitives(gated_dir / "primitive_ir" / "page_01.json")
+    assert _has_circle_near(baseline_circles, (200, 400), 70), "baseline must find the source raster circle"
+    assert not _has_circle_near(gated_circles, (200, 400), 70), (
+        "filled vector paint over the circle perimeter must not leave a full-circle candidate"
+    )
 
 
 def test_run_pdf_rejects_white_on_white_circle_witness(tmp_path: Path) -> None:

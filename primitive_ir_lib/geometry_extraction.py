@@ -474,6 +474,109 @@ PRESETS = {
 }
 
 
+def _polygon_winding_number(
+    x: float, y: float, polygon: List[Tuple[float, float]]
+) -> int:
+    winding = 0
+    for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]):
+        cross = (x1 - x0) * (y - y0) - (x - x0) * (y1 - y0)
+        if (
+            abs(cross) <= 1e-7
+            and min(x0, x1) - 1e-7 <= x <= max(x0, x1) + 1e-7
+            and min(y0, y1) - 1e-7 <= y <= max(y0, y1) + 1e-7
+        ):
+            return 1
+        if y0 <= y < y1 and cross > 0:
+            winding += 1
+        elif y1 <= y < y0 and cross < 0:
+            winding -= 1
+    return winding
+
+
+def _circle_perimeter_intersects_fill(
+    center_x: float,
+    center_y: float,
+    radius: float,
+    polygons: List[List[Tuple[float, float]]],
+    *,
+    even_odd: bool,
+) -> bool:
+    if radius <= 0 or not polygons:
+        return False
+    sample_count = max(72, min(4096, int(np.ceil(2.0 * np.pi * radius))))
+    for angle in np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False):
+        x = center_x + radius * float(np.cos(angle))
+        y = center_y + radius * float(np.sin(angle))
+        windings = [_polygon_winding_number(x, y, polygon) for polygon in polygons]
+        if even_odd:
+            inside = sum(winding != 0 for winding in windings) % 2 == 1
+        else:
+            inside = sum(windings) != 0
+        if inside:
+            return True
+    return False
+
+
+def _suspect_region_intersects_circle(
+    suspect: dict | Tuple[float, float, float, float],
+    center_x: float,
+    center_y: float,
+    radius: float,
+    tolerance: float,
+) -> bool:
+    if isinstance(suspect, dict):
+        stroke_margin = max(0.0, float(suspect.get("stroke_radius_px") or 0.0))
+        for x0, y0, x1, y1 in suspect.get("segments", []):
+            dx = x1 - x0
+            dy = y1 - y0
+            length_squared = dx * dx + dy * dy
+            fraction = 0.0 if length_squared <= 0.0 else min(
+                1.0,
+                max(0.0, ((center_x - x0) * dx + (center_y - y0) * dy) / length_squared),
+            )
+            nearest_x = x0 + fraction * dx
+            nearest_y = y0 + fraction * dy
+            min_distance = float(np.hypot(nearest_x - center_x, nearest_y - center_y))
+            max_distance = max(
+                float(np.hypot(x0 - center_x, y0 - center_y)),
+                float(np.hypot(x1 - center_x, y1 - center_y)),
+            )
+            if (
+                min_distance <= radius + tolerance + stroke_margin
+                and max_distance >= radius - tolerance - stroke_margin
+            ):
+                return True
+
+        fill_polygons = suspect.get("fill_polygons", [])
+        if fill_polygons and _circle_perimeter_intersects_fill(
+            center_x,
+            center_y,
+            radius,
+            fill_polygons,
+            even_odd=bool(suspect.get("fill_even_odd")),
+        ):
+            return True
+
+        bounds = suspect.get("bounds")
+        if bounds is None:
+            return False
+    else:
+        bounds = suspect
+
+    x0, y0, x1, y1 = bounds
+    dx = max(x0 - center_x, 0.0, center_x - x1)
+    dy = max(y0 - center_y, 0.0, center_y - y1)
+    min_distance = float(np.hypot(dx, dy))
+    max_distance = max(
+        float(np.hypot(x - center_x, y - center_y))
+        for x, y in ((x0, y0), (x0, y1), (x1, y1), (x1, y0))
+    )
+    return (
+        min_distance <= radius + tolerance
+        and max_distance >= radius - tolerance
+    )
+
+
 def extract_raw_geometry(
     image_bgr: np.ndarray,
     preset: str = "default",
@@ -541,46 +644,9 @@ def extract_raw_geometry(
             suspect_tolerance = max(4.0, radius * 0.01)
             has_suspect_region = False
             for suspect in suspect_regions:
-                if isinstance(suspect, dict) and "segments" in suspect:
-                    intersects = False
-                    for x0, y0, x1, y1 in suspect["segments"]:
-                        dx = x1 - x0
-                        dy = y1 - y0
-                        length_squared = dx * dx + dy * dy
-                        fraction = 0.0 if length_squared <= 0.0 else min(
-                            1.0,
-                            max(0.0, ((center_x - x0) * dx + (center_y - y0) * dy) / length_squared),
-                        )
-                        nearest_x = x0 + fraction * dx
-                        nearest_y = y0 + fraction * dy
-                        min_distance = float(np.hypot(nearest_x - center_x, nearest_y - center_y))
-                        max_distance = max(
-                            float(np.hypot(x0 - center_x, y0 - center_y)),
-                            float(np.hypot(x1 - center_x, y1 - center_y)),
-                        )
-                        if (
-                            min_distance <= radius + suspect_tolerance
-                            and max_distance >= radius - suspect_tolerance
-                        ):
-                            intersects = True
-                            break
-                else:
-                    bounds = suspect.get("bounds") if isinstance(suspect, dict) else suspect
-                    if bounds is None:
-                        continue
-                    x0, y0, x1, y1 = bounds
-                    dx = max(x0 - center_x, 0.0, center_x - x1)
-                    dy = max(y0 - center_y, 0.0, center_y - y1)
-                    min_distance = float(np.hypot(dx, dy))
-                    max_distance = max(
-                        float(np.hypot(x - center_x, y - center_y))
-                        for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1))
-                    )
-                    intersects = (
-                        min_distance <= radius + suspect_tolerance
-                        and max_distance >= radius - suspect_tolerance
-                    )
-                if intersects:
+                if _suspect_region_intersects_circle(
+                    suspect, center_x, center_y, radius, suspect_tolerance
+                ):
                     has_suspect_region = True
                     break
             for index, (witness_x, witness_y, witness_radius) in enumerate(witnesses):
