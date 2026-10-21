@@ -694,7 +694,13 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
     output_dir = tmp_path / "out"
     page_size = 400
 
-    def add_partial_arc_and_chord(page: fitz.Page, center: fitz.Point, radius: float) -> None:
+    def add_partial_arc_and_chord(
+        page: fitz.Page,
+        center: fitz.Point,
+        radius: float,
+        *,
+        fragment_count: int = 1,
+    ) -> None:
         points = [
             fitz.Point(
                 center.x + radius * math.cos(math.radians(degree)),
@@ -702,11 +708,15 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
             )
             for degree in range(356)
         ]
-        arc = page.new_shape()
-        for start, end in zip(points, points[1:]):
-            arc.draw_line(start, end)
-        arc.finish(color=(0.05, 0.05, 0.05), width=1.5, closePath=False)
-        arc.commit()
+        segments = list(zip(points, points[1:]))
+        for fragment_index in range(fragment_count):
+            start_index = round(fragment_index * len(segments) / fragment_count)
+            end_index = round((fragment_index + 1) * len(segments) / fragment_count)
+            arc = page.new_shape()
+            for start, end in segments[start_index:end_index]:
+                arc.draw_line(start, end)
+            arc.finish(color=(0.05, 0.05, 0.05), width=1.5, closePath=False)
+            arc.commit()
         chord = page.new_shape()
         chord.draw_line(points[-1], points[0])
         chord.finish(color=(0.05, 0.05, 0.05), width=1.5, closePath=False)
@@ -715,6 +725,14 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
     document = fitz.open()
     split_page = document.new_page(width=page_size, height=page_size)
     add_partial_arc_and_chord(split_page, fitz.Point(200, 200), 70)
+
+    microfragment_page = document.new_page(width=page_size, height=page_size)
+    add_partial_arc_and_chord(
+        microfragment_page,
+        fitz.Point(200, 200),
+        70,
+        fragment_count=30,
+    )
 
     circle_page = document.new_page(width=page_size, height=page_size)
     circle_points = [
@@ -744,8 +762,12 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
 
     raster_document = fitz.open(pdf_path)
     split_render = tmp_path / "split-path.png"
+    microfragment_render = tmp_path / "microfragment-path.png"
     raster_document[0].get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False).save(
         split_render
+    )
+    raster_document[1].get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False).save(
+        microfragment_render
     )
     raster_document.close()
     pre_gate_ir = tmp_path / "pre-gate.json"
@@ -753,14 +775,23 @@ def test_run_pdf_rejects_split_path_partial_arc_and_chord(tmp_path: Path) -> Non
     assert _has_circle_near(_circle_primitives(pre_gate_ir), (200, 200), 70), (
         "the red control must prove raster Hough actually proposes the unsupported circle"
     )
+    microfragment_pre_gate_ir = tmp_path / "microfragment-pre-gate.json"
+    run_image(str(microfragment_render), str(microfragment_pre_gate_ir), scale_mm_per_px=1.0)
+    assert _has_circle_near(
+        _circle_primitives(microfragment_pre_gate_ir), (200, 200), 70
+    ), "the fragmented-path red control must prove Hough proposes the unsupported circle"
 
     run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
 
     split_circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
-    full_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
-    raster_circles = _circle_primitives(output_dir / "primitive_ir" / "page_03.json")
+    microfragment_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
+    full_circles = _circle_primitives(output_dir / "primitive_ir" / "page_03.json")
+    raster_circles = _circle_primitives(output_dir / "primitive_ir" / "page_04.json")
     assert split_circles == [], (
         "separate vector paths for an arc and chord cannot witness a full circle"
+    )
+    assert microfragment_circles == [], (
+        "many short open arc paths and a separate chord cannot bypass the full-circle witness gate"
     )
     assert _has_circle_near(full_circles, (200, 200), 70), "a complete source circle must survive"
     assert len(raster_circles) == 1, (

@@ -428,6 +428,130 @@ def _fit_open_line_circle_arc(
     return center_x, center_y, radius
 
 
+def _open_line_circle_fragment(
+    drawing: dict,
+) -> Optional[tuple[list[tuple], list[float], int, tuple]]:
+    """Describe a visible open line path fragment with one smooth turn direction."""
+    if (
+        drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("color") is None
+        or drawing.get("width", 0) <= 0
+        or float(drawing.get("stroke_opacity", 0.0)) <= 0.0
+    ):
+        return None
+    items = drawing.get("items", [])
+    if len(items) < 2 or any(item[0] != "l" for item in items):
+        return None
+
+    directions: list[float] = []
+    previous_end: Optional[fitz.Point] = None
+    first_start: Optional[fitz.Point] = None
+    for item in items:
+        _, start, end = item
+        if first_start is None:
+            first_start = start
+        if previous_end is not None and math.hypot(
+            start.x - previous_end.x, start.y - previous_end.y
+        ) > 0.02:
+            return None
+        dx, dy = end.x - start.x, end.y - start.y
+        length = math.hypot(dx, dy)
+        if not math.isfinite(length) or length <= 0.02:
+            return None
+        directions.append(math.atan2(dy, dx))
+        previous_end = end
+
+    if (
+        first_start is None
+        or previous_end is None
+        or math.hypot(first_start.x - previous_end.x, first_start.y - previous_end.y) <= 0.02
+    ):
+        return None
+    turns = [
+        math.atan2(math.sin(next_direction - direction), math.cos(next_direction - direction))
+        for direction, next_direction in zip(directions, directions[1:])
+    ]
+    if (
+        not turns
+        or not (all(turn > 1e-6 for turn in turns) or all(turn < -1e-6 for turn in turns))
+        or max(abs(turn) for turn in turns) > math.radians(45.0)
+    ):
+        return None
+
+    color = drawing["color"]
+    style = (
+        tuple(color) if isinstance(color, (tuple, list)) else color,
+        float(drawing["width"]),
+        float(drawing["stroke_opacity"]),
+        drawing.get("dashes"),
+    )
+    return items, directions, 1 if turns[0] > 0.0 else -1, style
+
+
+def _fit_fragmented_open_line_circle_arcs(drawings: list[dict]) -> list[dict]:
+    """Join only adjacent, style-matched, smoothly turning open paths as suspects."""
+    suspects: list[dict] = []
+    chain: list[dict] = []
+    chain_style: Optional[tuple] = None
+    chain_turn: Optional[int] = None
+    chain_end: Optional[fitz.Point] = None
+    chain_direction: Optional[float] = None
+
+    def finish_chain() -> None:
+        if len(chain) < 2:
+            return
+        merged = dict(chain[0])
+        merged["items"] = [item for fragment in chain for item in fragment["items"]]
+        merged["closePath"] = False
+        if _fit_open_line_circle_arc(merged) is not None:
+            suspects.append(merged)
+
+    for drawing in drawings:
+        fragment = _open_line_circle_fragment(drawing)
+        if fragment is None or _fit_open_line_circle_arc(drawing) is not None:
+            finish_chain()
+            chain = []
+            chain_style = None
+            chain_turn = None
+            chain_end = None
+            chain_direction = None
+            continue
+
+        items, directions, turn_sign, style = fragment
+        fragment_end = items[-1][2]
+        fragment_start = items[0][1]
+        compatible = False
+        if chain:
+            boundary_turn = math.atan2(
+                math.sin(directions[0] - chain_direction),
+                math.cos(directions[0] - chain_direction),
+            )
+            compatible = (
+                style == chain_style
+                and chain_turn == turn_sign
+                and math.hypot(fragment_start.x - chain_end.x, fragment_start.y - chain_end.y)
+                <= 0.02
+                and abs(boundary_turn) > 1e-6
+                and abs(boundary_turn) <= math.radians(45.0)
+                and (1 if boundary_turn > 0.0 else -1) == chain_turn
+            )
+        if chain and not compatible:
+            finish_chain()
+            chain = []
+        if not chain:
+            chain = [drawing]
+            chain_style = style
+            chain_turn = turn_sign
+        else:
+            chain.append(drawing)
+        chain_end = fragment_end
+        chain_direction = directions[-1]
+
+    finish_chain()
+    return suspects
+
+
 def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Matrix) -> dict:
     """Preserve supported path and paint footprints instead of using bounds alone."""
     segments: list[tuple[float, float, float, float]] = []
@@ -671,7 +795,13 @@ def _page_circle_witnesses(
     open_line_circle_arcs = {
         index: circle for index, circle in open_line_circle_arcs.items() if circle is not None
     }
-    if not curve_drawings and not line_contour_indices and not open_line_circle_arcs:
+    fragmented_open_line_circle_arcs = _fit_fragmented_open_line_circle_arcs(drawings)
+    if (
+        not curve_drawings
+        and not line_contour_indices
+        and not open_line_circle_arcs
+        and not fragmented_open_line_circle_arcs
+    ):
         return False, [], []
     background_color = _page_background_color(page)
     page_transform = page.rotation_matrix
@@ -682,7 +812,10 @@ def _page_circle_witnesses(
         annotation_rects.append(annotation.rect)
 
     witnesses: list[tuple[float, float, float]] = []
-    suspect_regions: list[dict] = []
+    suspect_regions: list[dict] = [
+        _suspect_geometry(drawing, pixel_scale, page_transform)
+        for drawing in fragmented_open_line_circle_arcs
+    ]
     for index, drawing in enumerate(drawings):
         has_curve = any(item[0] == "c" for item in drawing.get("items", []))
         has_line_contour = index in line_contour_indices
