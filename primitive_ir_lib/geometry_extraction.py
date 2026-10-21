@@ -479,7 +479,7 @@ def extract_raw_geometry(
     preset: str = "default",
     *,
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
-    pdf_vector_circle_suspect_regions: Optional[List[Tuple[float, float, float, float]]] = None,
+    pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
     **kwargs,
 ) -> RawGeometry:
@@ -538,16 +538,49 @@ def extract_raw_geometry(
             matches = []
             center_x, center_y = candidate.center_px
             radius = candidate.radius_px
+            suspect_tolerance = max(4.0, radius * 0.01)
             has_suspect_region = False
-            for x0, y0, x1, y1 in suspect_regions:
-                dx = max(x0 - center_x, 0.0, center_x - x1)
-                dy = max(y0 - center_y, 0.0, center_y - y1)
-                min_distance = float(np.hypot(dx, dy))
-                max_distance = max(
-                    float(np.hypot(x - center_x, y - center_y))
-                    for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1))
-                )
-                if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
+            for suspect in suspect_regions:
+                if isinstance(suspect, dict) and "segments" in suspect:
+                    intersects = False
+                    for x0, y0, x1, y1 in suspect["segments"]:
+                        dx = x1 - x0
+                        dy = y1 - y0
+                        length_squared = dx * dx + dy * dy
+                        fraction = 0.0 if length_squared <= 0.0 else min(
+                            1.0,
+                            max(0.0, ((center_x - x0) * dx + (center_y - y0) * dy) / length_squared),
+                        )
+                        nearest_x = x0 + fraction * dx
+                        nearest_y = y0 + fraction * dy
+                        min_distance = float(np.hypot(nearest_x - center_x, nearest_y - center_y))
+                        max_distance = max(
+                            float(np.hypot(x0 - center_x, y0 - center_y)),
+                            float(np.hypot(x1 - center_x, y1 - center_y)),
+                        )
+                        if (
+                            min_distance <= radius + suspect_tolerance
+                            and max_distance >= radius - suspect_tolerance
+                        ):
+                            intersects = True
+                            break
+                else:
+                    bounds = suspect.get("bounds") if isinstance(suspect, dict) else suspect
+                    if bounds is None:
+                        continue
+                    x0, y0, x1, y1 = bounds
+                    dx = max(x0 - center_x, 0.0, center_x - x1)
+                    dy = max(y0 - center_y, 0.0, center_y - y1)
+                    min_distance = float(np.hypot(dx, dy))
+                    max_distance = max(
+                        float(np.hypot(x - center_x, y - center_y))
+                        for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1))
+                    )
+                    intersects = (
+                        min_distance <= radius + suspect_tolerance
+                        and max_distance >= radius - suspect_tolerance
+                    )
+                if intersects:
                     has_suspect_region = True
                     break
             for index, (witness_x, witness_y, witness_radius) in enumerate(witnesses):

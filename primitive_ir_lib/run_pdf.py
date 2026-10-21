@@ -235,6 +235,40 @@ def _is_smooth_closed_line_contour(drawing: dict) -> bool:
     return bool(turns) and float(np.median(turns)) <= math.radians(20.0) and max(turns) > 1e-6
 
 
+def _suspect_geometry(drawing: dict, pixel_scale: float) -> dict:
+    """Preserve supported source paths instead of treating their bounds as paint."""
+    segments: list[tuple[float, float, float, float]] = []
+    for item in drawing.get("items", []):
+        if item[0] == "l":
+            _, start, end = item
+            points = [(start.x, start.y), (end.x, end.y)]
+        elif item[0] == "c":
+            _, p0, p1, p2, p3 = item
+            points = []
+            for step in range(33):
+                t = step / 32.0
+                u = 1.0 - t
+                points.append((
+                    u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
+                    u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
+                ))
+        else:
+            points = []
+        if not points:
+            rect = drawing.get("rect")
+            if rect is None:
+                return {"segments": segments}
+            return {"bounds": (
+                rect.x0 * pixel_scale, rect.y0 * pixel_scale,
+                rect.x1 * pixel_scale, rect.y1 * pixel_scale,
+            )}
+        segments.extend(
+            (x0 * pixel_scale, y0 * pixel_scale, x1 * pixel_scale, y1 * pixel_scale)
+            for (x0, y0), (x1, y1) in zip(points, points[1:])
+        )
+    return {"segments": segments}
+
+
 def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
     """Estimate a uniform page background from low-resolution corner samples."""
     pixmap = page.get_pixmap(matrix=fitz.Matrix(0.1, 0.1), alpha=False)
@@ -323,7 +357,7 @@ def _clip_fully_contains_circle(
 
 def _page_circle_witnesses(
     page: fitz.Page, pixel_scale: float
-) -> tuple[bool, list[tuple[float, float, float]], list[tuple[float, float, float, float]]]:
+) -> tuple[bool, list[tuple[float, float, float]], list[dict]]:
     """Return global fail-closed state, full-circle witnesses, and suspect regions."""
     drawings = page.get_drawings(extended=True)
     if not drawings:
@@ -358,25 +392,19 @@ def _page_circle_witnesses(
         occluder_rects.append(annotation.rect)
 
     witnesses: list[tuple[float, float, float]] = []
-    suspect_regions: list[tuple[float, float, float, float]] = []
+    suspect_regions: list[dict] = []
     for index, drawing in enumerate(drawings):
         if not any(item[0] == "c" for item in drawing.get("items", [])):
             drawing_rect = drawing.get("rect")
             if index in line_contour_indices and drawing_rect is not None:
-                suspect_regions.append((
-                    drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
-                    drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
-                ))
+                suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
             continue
         drawing_rect = drawing.get("rect")
         if drawing_rect is None:
             continue
         circle = _fit_full_circle_path(drawing, background_color)
         if circle is None:
-            suspect_regions.append((
-                drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
-                drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
-            ))
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
             continue
 
         cx, cy, radius = circle
@@ -389,10 +417,7 @@ def _page_circle_witnesses(
             for prior in drawings[:index]
         )
         if prior_clip_context:
-            suspect_regions.append((
-                drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
-                drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
-            ))
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
             continue
 
         # A later drawing/clip/group touching this perimeter can obscure or
@@ -504,10 +529,7 @@ def _page_circle_witnesses(
         if not occluded:
             witnesses.append((cx * pixel_scale, cy * pixel_scale, radius * pixel_scale))
         else:
-            suspect_regions.append((
-                drawing_rect.x0 * pixel_scale, drawing_rect.y0 * pixel_scale,
-                drawing_rect.x1 * pixel_scale, drawing_rect.y1 * pixel_scale,
-            ))
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale))
     return False, witnesses, suspect_regions
 
 

@@ -178,6 +178,51 @@ def test_run_pdf_does_not_promote_chord_closed_partial_arc_to_circle(tmp_path: P
     assert mixed_raster_count >= 1, "an unrelated local vector curve must not suppress a raster circle"
 
 
+def test_run_pdf_keeps_raster_circle_enclosed_by_unrelated_curve_bounds(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "raster-circle-enclosed-by-vector-bounds.pdf"
+    image_path = tmp_path / "same-page-render.png"
+    baseline_dir = tmp_path / "baseline"
+    gated_dir = tmp_path / "gated"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+
+    source_image = np.full((1200, 1200, 3), 210, dtype=np.uint8)
+    cv2.circle(source_image, (600, 600), 425, (30, 30, 30), 2, lineType=cv2.LINE_AA)
+    success, encoded = cv2.imencode(".png", source_image)
+    assert success
+    page.insert_image(page.rect, stream=encoded.tobytes())
+
+    # The four cubic sides enclose the raster circle, but remain well outside
+    # its circumference. Their PDF drawing rectangle alone overlaps it.
+    shape = page.new_shape()
+    corners = [fitz.Point(40, 40), fitz.Point(560, 40), fitz.Point(560, 560), fitz.Point(40, 560)]
+    for start, end in zip(corners, corners[1:] + corners[:1]):
+        delta = end - start
+        shape.draw_bezier(start, start + delta / 3, start + delta * (2 / 3), end)
+    shape.finish(color=(0.05, 0.05, 0.05), width=1.0, closePath=True)
+    shape.commit()
+
+    page.get_pixmap(dpi=144, alpha=False).save(image_path)
+    document.save(pdf_path)
+    document.close()
+
+    from primitive_ir_lib.run_image import run as run_image
+
+    run_image(
+        str(image_path),
+        str(baseline_dir / "primitive_ir.json"),
+        scale_mm_per_px=1.0,
+        preset="real_scan_tuned_v1",
+    )
+    run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    baseline_count = _circle_primitive_count(baseline_dir / "primitive_ir.json")
+    gated_count = _circle_primitive_count(gated_dir / "primitive_ir" / "page_01.json")
+
+    assert baseline_count >= 1, "the same rendered raster circle must be found without PDF source gating"
+    assert gated_count >= 1, "an enclosing curve bound must not suppress an untouched raster circumference"
+
+
 def test_run_pdf_rejects_white_on_white_circle_witness(tmp_path: Path) -> None:
     pdf_path = tmp_path / "invisible-circle-witness.pdf"
     output_dir = tmp_path / "out"

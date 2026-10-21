@@ -99,7 +99,7 @@ def run(
     calibration_status: str = "verified",
     calibration_source_sha256: Optional[str] = None,
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
-    pdf_vector_circle_suspect_regions: Optional[List[Tuple[float, float, float, float]]] = None,
+    pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
