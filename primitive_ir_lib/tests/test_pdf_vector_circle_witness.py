@@ -176,3 +176,60 @@ def test_run_pdf_does_not_promote_chord_closed_partial_arc_to_circle(tmp_path: P
     assert chord_closed_arc_count == 0, "a chord-closed 355-degree arc is not a full source circle"
     assert ellipse_circle_count == 0, "an ellipse must not be used as a full-circle witness"
     assert mixed_raster_count >= 1, "an unrelated local vector curve must not suppress a raster circle"
+
+
+def test_run_pdf_rejects_white_on_white_circle_witness(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "invisible-circle-witness.pdf"
+    output_dir = tmp_path / "out"
+    center = fitz.Point(300, 300)
+    radius = 212.5
+    black = (0.05, 0.05, 0.05)
+    document = fitz.open()
+
+    hidden_witness = document.new_page(width=600, height=600)
+    hidden_witness.draw_circle(center, radius, color=(1.0, 1.0, 1.0), width=1.5)
+    _draw_circular_beziers(hidden_witness, center, radius, 355.0)
+
+    visible_circle = document.new_page(width=600, height=600)
+    visible_circle.draw_circle(center, radius, color=black, width=1.5)
+
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    hidden_witness_count = _circle_primitive_count(output_dir / "primitive_ir" / "page_01.json")
+    visible_circle_count = _circle_primitive_count(output_dir / "primitive_ir" / "page_02.json")
+
+    assert hidden_witness_count == 0, "white-on-white vector geometry cannot witness a visible circle"
+    assert visible_circle_count >= 1, "a visible source circle must remain recognized"
+
+
+def test_run_pdf_rejects_circle_erased_by_white_paint_on_gray_paper(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "gray-paper-circle-erasure.pdf"
+    output_dir = tmp_path / "out"
+    center = fitz.Point(300, 300)
+    radius = 212.5
+    black = (0.05, 0.05, 0.05)
+    gray = (0.75, 0.75, 0.75)
+    document = fitz.open()
+
+    erased_witness = document.new_page(width=600, height=600)
+    erased_witness.draw_rect(erased_witness.rect, color=None, fill=gray)
+    erased_witness.draw_circle(center, radius, color=black, width=1.5)
+    erased_witness.draw_line((0, 300), (600, 300), color=(1.0, 1.0, 1.0), width=1.5)
+
+    gray_positive_control = document.new_page(width=600, height=600)
+    gray_positive_control.draw_rect(gray_positive_control.rect, color=None, fill=gray)
+    gray_positive_control.draw_circle(center, radius, color=black, width=1.5)
+
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    erased_witness_count = _circle_primitive_count(output_dir / "primitive_ir" / "page_01.json")
+    gray_positive_count = _circle_primitive_count(output_dir / "primitive_ir" / "page_02.json")
+
+    assert erased_witness_count == 0, "later white paint must invalidate a dark circle witness on gray paper"
+    assert gray_positive_count >= 1, "a visible dark circle on gray paper must remain recognized"

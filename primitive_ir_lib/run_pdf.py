@@ -113,8 +113,27 @@ def _is_valid_manual_scale(value: object) -> bool:
         return False
 
 
-def _fit_full_circle_path(drawing: dict) -> Optional[tuple[float, float, float]]:
-    """Return page-point center/radius only for a closed, visible solid cubic circle."""
+def _colors_match(left: object, right: object) -> Optional[bool]:
+    """Compare RGB colors conservatively, returning None for unknown values."""
+    try:
+        left_rgb = np.asarray(left, dtype=np.float64)
+        right_rgb = np.asarray(right, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if (
+        left_rgb.shape != (3,)
+        or right_rgb.shape != (3,)
+        or not np.all(np.isfinite(left_rgb))
+        or not np.all(np.isfinite(right_rgb))
+    ):
+        return None
+    return bool(float(np.max(np.abs(left_rgb - right_rgb))) <= 0.08)
+
+
+def _fit_full_circle_path(
+    drawing: dict, background: Optional[np.ndarray]
+) -> Optional[tuple[float, float, float]]:
+    """Return geometry only when a closed cubic circle contrasts with known paper."""
     if (
         drawing.get("type") != "s"
         or drawing.get("fill") is not None
@@ -123,6 +142,8 @@ def _fit_full_circle_path(drawing: dict) -> Optional[tuple[float, float, float]]
         or abs(float(drawing.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
         or str(drawing.get("dashes", "")).strip() not in {"[] 0", "[] 0.0"}
     ):
+        return None
+    if background is None or _colors_match(drawing.get("color"), background) is not False:
         return None
 
     items = drawing.get("items", [])
@@ -191,12 +212,8 @@ def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
     return background
 
 
-def _drawing_may_erase_circle(
-    drawing: dict, background: Optional[np.ndarray]
-) -> bool:
-    """Treat later paint as occlusion only when it can paint the page background."""
-    if background is None:
-        return True
+def _drawing_may_erase_circle(drawing: dict, witness_color: object) -> bool:
+    """Treat later paint in a different color as capable of hiding a circle stroke."""
     drawing_type = drawing.get("type")
     colors = []
     if drawing_type in {"s", "fs"}:
@@ -206,10 +223,7 @@ def _drawing_may_erase_circle(
     colors = [color for color in colors if color is not None]
     if not colors:
         return True
-    return any(
-        float(np.max(np.abs(np.asarray(color, dtype=np.float64) - background))) <= 0.08
-        for color in colors
-    )
+    return any(_colors_match(color, witness_color) is not True for color in colors)
 
 
 def _clip_fully_contains_circle(
@@ -306,7 +320,7 @@ def _page_circle_witnesses(
         rect = drawing.get("rect")
         if rect is None:
             continue
-        circle = _fit_full_circle_path(drawing)
+        circle = _fit_full_circle_path(drawing, background_color)
         if circle is None:
             suspect_regions.append((
                 rect.x0 * pixel_scale, rect.y0 * pixel_scale,
@@ -356,10 +370,14 @@ def _page_circle_witnesses(
                 occluded = True
                 break
             if later_type in {"s", "f", "fs"} and not _drawing_may_erase_circle(
-                later, background_color
+                later, drawing.get("color")
             ):
                 continue
-            later_circle = _fit_full_circle_path(later) if later_type == "s" else None
+            later_circle = (
+                _fit_full_circle_path(later, background_color)
+                if later_type == "s"
+                else None
+            )
             if later_circle is not None:
                 later_cx, later_cy, later_radius = later_circle
                 center_distance = math.hypot(later_cx - cx, later_cy - cy)
