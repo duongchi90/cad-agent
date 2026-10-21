@@ -813,8 +813,10 @@ def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
     return background
 
 
-def _drawing_may_erase_circle(drawing: dict, witness_color: object) -> bool:
-    """Treat later fills or contrasting strokes as capable of hiding a circle stroke."""
+def _drawing_may_erase_circle(
+    drawing: dict, witness_color: object, witness_radius: float
+) -> bool:
+    """Treat later fills, contrasting strokes, and broad same-color strokes as occluders."""
     drawing_type = drawing.get("type")
     if drawing_type in {"f", "fs"} and drawing.get("fill") is not None:
         # A same-color opaque fill can hide part of the perimeter just as
@@ -823,7 +825,20 @@ def _drawing_may_erase_circle(drawing: dict, witness_color: object) -> bool:
     stroke_color = drawing.get("color") if drawing_type in {"s", "fs"} else None
     if stroke_color is None:
         return True
-    return _colors_match(stroke_color, witness_color) is not True
+    if _colors_match(stroke_color, witness_color) is not True:
+        return True
+    if drawing_type in {"s", "fs"}:
+        try:
+            stroke_width = float(drawing.get("width") or 0.0)
+        except (TypeError, ValueError):
+            return True
+        if not math.isfinite(stroke_width) or stroke_width < 0.0:
+            return True
+        # Thin same-color drafting strokes are non-erasing. A broad stroke can
+        # merge with enough of the circle perimeter to conceal its contour, so
+        # let the existing path/radial-intersection check evaluate it.
+        return stroke_width >= witness_radius * 0.25
+    return False
 
 
 def _clip_fully_contains_circle(
@@ -1033,7 +1048,7 @@ def _page_circle_witnesses(
                 occluded = True
                 break
             if later_type in {"s", "f", "fs"} and not _drawing_may_erase_circle(
-                later, drawing.get("color")
+                later, drawing.get("color"), radius
             ):
                 continue
             later_circle = None

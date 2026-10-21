@@ -124,6 +124,33 @@ def test_later_black_crossing_line_preserves_full_circle_witness(tmp_path: Path)
     assert circle_count >= 1, "a visible full circle must survive a later non-erasing black stroke"
 
 
+def test_later_wide_same_color_crossing_stroke_invalidates_circle_witness(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "wide-same-color-crossing-circle.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    center = fitz.Point(300, 300)
+    page.draw_circle(center, 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_line(
+        (0, 300),
+        (600, 300),
+        color=(0.05, 0.05, 0.05),
+        width=100.0,
+    )
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    assert not _has_circle_near(circles, (600, 600), 425), (
+        "a later same-color stroke that covers a material part of the circle perimeter "
+        "must invalidate the full-circle witness"
+    )
+
+
 def test_run_pdf_uses_only_later_images_as_circle_occluders(tmp_path: Path) -> None:
     pdf_path = tmp_path / "image-paint-order.pdf"
     output_dir = tmp_path / "out"
