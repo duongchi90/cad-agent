@@ -814,9 +814,9 @@ def _page_background_color(page: fitz.Page) -> Optional[np.ndarray]:
 
 
 def _drawing_may_erase_circle(
-    drawing: dict, witness_color: object, witness_radius: float
+    drawing: dict, witness_color: object, witness_stroke_width: object
 ) -> bool:
-    """Treat later fills, contrasting strokes, and broad same-color strokes as occluders."""
+    """Treat fills, contrasting strokes, and wider same-color strokes as occluders."""
     drawing_type = drawing.get("type")
     if drawing_type in {"f", "fs"} and drawing.get("fill") is not None:
         # A same-color opaque fill can hide part of the perimeter just as
@@ -829,15 +829,26 @@ def _drawing_may_erase_circle(
         return True
     if drawing_type in {"s", "fs"}:
         try:
-            stroke_width = float(drawing.get("width") or 0.0)
-        except (TypeError, ValueError):
+            later_stroke_width = drawing.get("width")
+            if later_stroke_width is None or witness_stroke_width is None:
+                return True
+            if isinstance(later_stroke_width, bool) or isinstance(witness_stroke_width, bool):
+                return True
+            later_stroke_width = float(later_stroke_width)
+            witness_stroke_width = float(witness_stroke_width)
+        except (OverflowError, TypeError, ValueError):
             return True
-        if not math.isfinite(stroke_width) or stroke_width < 0.0:
+        if (
+            not math.isfinite(later_stroke_width)
+            or not math.isfinite(witness_stroke_width)
+            or later_stroke_width < 0.0
+            or witness_stroke_width < 0.0
+        ):
             return True
-        # Thin same-color drafting strokes are non-erasing. A broad stroke can
-        # merge with enough of the circle perimeter to conceal its contour, so
-        # let the existing path/radial-intersection check evaluate it.
-        return stroke_width >= witness_radius * 0.25
+        # Width alone cannot prove visibility. Only a same-color stroke no
+        # wider than the witness receives the thin-stroke exemption; otherwise
+        # the existing path/radial-intersection checks must evaluate it.
+        return later_stroke_width > witness_stroke_width + 1e-6
     return False
 
 
@@ -1048,7 +1059,7 @@ def _page_circle_witnesses(
                 occluded = True
                 break
             if later_type in {"s", "f", "fs"} and not _drawing_may_erase_circle(
-                later, drawing.get("color"), radius
+                later, drawing.get("color"), drawing.get("width")
             ):
                 continue
             later_circle = None

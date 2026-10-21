@@ -10,6 +10,7 @@ import fitz
 import numpy as np
 
 from primitive_ir_lib.run_pdf import (
+    _drawing_may_erase_circle,
     _fit_full_line_circle_path,
     _page_circle_witnesses,
     _single_line_record_paths,
@@ -1027,6 +1028,87 @@ def test_later_background_line_invalidates_single_record_circle_witness() -> Non
 
     assert witnesses == [], "later background-colored paint crossing the perimeter invalidates the cycle"
     assert suspects, "an occluded vector circle remains a bounded suspect region"
+
+
+def test_same_color_later_stroke_requires_width_and_intersection_evidence() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_rect(page.rect, color=None, fill=(0.75, 0.75, 0.75))
+    center = fitz.Point(300, 300)
+    radius = 212.5
+    circle_width = 1.5
+    circle_color = (0.05, 0.05, 0.05)
+    points = [
+        fitz.Point(
+            center.x + radius * math.cos(math.radians(360.0 * index / 128)),
+            center.y + radius * math.sin(math.radians(360.0 * index / 128)),
+        )
+        for index in range(128)
+    ]
+    circle = page.new_shape()
+    for start, end in zip(points, points[1:] + points[:1]):
+        circle.draw_line(start, end)
+    circle.finish(color=circle_color, width=circle_width)
+    circle.commit()
+
+    # Equal-width same-color drafting linework is the thin positive control.
+    page.draw_line(
+        (30, center.y), (570, center.y), color=circle_color, width=circle_width,
+    )
+    _, thin_witnesses, thin_suspects = _page_circle_witnesses(page, 1.0)
+    assert len(thin_witnesses) == 1
+    assert thin_suspects == []
+    document.close()
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_rect(page.rect, color=None, fill=(0.75, 0.75, 0.75))
+    circle = page.new_shape()
+    for start, end in zip(points, points[1:] + points[:1]):
+        circle.draw_line(start, end)
+    circle.finish(color=circle_color, width=circle_width)
+    circle.commit()
+    # This width is 0.245 * radius: it fell below the old 0.25 * radius
+    # exemption while still being far wider than the circle's source stroke.
+    page.draw_line(
+        (30, center.y), (570, center.y), color=circle_color, width=52.0625,
+    )
+    _, crossing_witnesses, crossing_suspects = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert crossing_witnesses == [], (
+        "a wider same-color stroke crossing the source contour must not be "
+        "skipped solely because it is below a radius-based threshold"
+    )
+    assert crossing_suspects, "a contour with uncertain occlusion remains a bounded suspect"
+
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_rect(page.rect, color=None, fill=(0.75, 0.75, 0.75))
+    circle = page.new_shape()
+    for start, end in zip(points, points[1:] + points[:1]):
+        circle.draw_line(start, end)
+    circle.finish(color=circle_color, width=circle_width)
+    circle.commit()
+    # Width alone cannot invalidate a witness when the line misses its perimeter.
+    page.draw_line((30, 30), (570, 30), color=circle_color, width=52.0625)
+    _, distant_witnesses, distant_suspects = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert len(distant_witnesses) == 1
+    assert distant_suspects == []
+
+
+def test_same_color_stroke_width_fails_closed_except_explicit_hairline() -> None:
+    hairline = {"type": "s", "color": (0.05, 0.05, 0.05), "width": 0.0}
+    assert not _drawing_may_erase_circle(hairline, hairline["color"], 0.0)
+
+    for width in (None, "invalid", float("nan"), float("inf"), -1.0, 10**1000):
+        drawing = {"type": "s", "color": (0.05, 0.05, 0.05), "width": width}
+        assert _drawing_may_erase_circle(drawing, drawing["color"], 1.5)
+
+    missing_width = {"type": "s", "color": (0.05, 0.05, 0.05)}
+    assert _drawing_may_erase_circle(missing_width, missing_width["color"], 1.5)
 
 
 def test_single_line_cycle_with_parser_gap_is_not_a_circle_witness() -> None:
