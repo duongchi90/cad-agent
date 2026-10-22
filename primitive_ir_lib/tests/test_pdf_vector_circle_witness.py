@@ -9,6 +9,7 @@ from unittest.mock import patch
 import cv2
 import fitz
 import numpy as np
+import pytest
 
 from primitive_ir_lib.run_pdf import (
     _drawing_may_erase_circle,
@@ -1084,6 +1085,40 @@ def test_geometry_owner_materializes_source_cycles_when_raster_candidates_alias(
     ], "exact source cycles should survive raster aliasing, while duplicates collapse"
     assert raw_geometry.circles[0] is independent_raster_circle, (
         "an unrelated source-supported raster circle must remain intact"
+    )
+
+
+@pytest.mark.parametrize(
+    ("witness", "max_radius", "rejection_reason"),
+    [
+        ((102.0, 100.0, 22.0), 20, "configured radius limit"),
+        ((102.0, 100.0, 23.0), 200, "distributed source support"),
+    ],
+)
+def test_rejected_vector_witness_does_not_suppress_supported_raster_circle(
+    monkeypatch, witness, max_radius, rejection_reason,
+) -> None:
+    image = np.full((240, 240, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (100, 100), 20, (0, 0, 0), thickness=2)
+    raster_circle = RawCircle(
+        id="raster", center_px=(100.0, 100.0), radius_px=20.0,
+        confidence=0.75, bbox_px=(80.0, 80.0, 120.0, 120.0),
+    )
+    monkeypatch.setattr(
+        geometry_extraction, "extract_circles", lambda *_args, **_kwargs: [raster_circle]
+    )
+    monkeypatch.setattr(geometry_extraction, "extract_lines", lambda *_args, **_kwargs: [])
+
+    raw_geometry = geometry_extraction.extract_raw_geometry(
+        image,
+        preset="default",
+        max_radius=max_radius,
+        pdf_vector_circle_witnesses=[witness],
+    )
+
+    assert raw_geometry.circles == [raster_circle], (
+        f"a witness rejected by {rejection_reason} must not suppress an "
+        "independently source-supported raster circle"
     )
 
 

@@ -636,7 +636,6 @@ def extract_raw_geometry(
         suspect_regions = pdf_vector_circle_suspect_regions or []
         source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         source_witnesses: list[Tuple[float, float, float]] = []
-        parsed_witnesses: list[Tuple[float, float, float]] = []
         min_radius = kwargs.get("min_radius")
         max_radius = kwargs.get("max_radius")
         for witness in witnesses:
@@ -651,7 +650,6 @@ def extract_raw_geometry(
             if witness_radius <= 0.0:
                 continue
             parsed = (witness_x, witness_y, witness_radius)
-            parsed_witnesses.append(parsed)
 
             # Deduplicate only effectively identical source cycles. Raster
             # tolerances are deliberately much wider and would erase valid
@@ -705,7 +703,7 @@ def extract_raw_geometry(
             # it once, then materialize each separately validated source cycle
             # below. An unassociated candidate retains the existing suspect
             # region and required-witness fail-closed behavior.
-            if any(matches_witness(candidate, witness) for witness in parsed_witnesses):
+            if any(matches_witness(candidate, witness) for witness in source_witnesses):
                 continue
             if (
                 not require_pdf_vector_circle_witness
