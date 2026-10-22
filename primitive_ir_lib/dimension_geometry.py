@@ -295,10 +295,15 @@ def _endpoint_flank_witnesses(binary: np.ndarray, dimension_line: Segment) -> tu
     shaft_width = shaft_interval[1] - shaft_interval[0] + 1
     height, width = binary.shape[:2]
     vertical = _is_vertical(dimension_line)
+    endpoints = (
+        tuple(sorted(dimension_line, key=lambda point: (point[1], point[0])))
+        if vertical
+        else dimension_line
+    )
     points: list[Point] = []
     endpoint_intervals: list[tuple[int, int]] = []
 
-    for endpoint_index, endpoint in enumerate(dimension_line):
+    for endpoint_index, endpoint in enumerate(endpoints):
         outward = -1 if endpoint_index == 0 else 1
         axial_endpoint = int(round(endpoint[1] if vertical else endpoint[0]))
         limit = height if vertical else width

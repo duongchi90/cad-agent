@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from primitive_ir_lib.dimension_geometry import (
+    _endpoint_flank_witnesses,
     _select_dimension_line,
     detect_dimension_geometry,
     detect_dimension_geometry_regions,
@@ -101,6 +102,25 @@ def test_dimension_region_discovers_two_source_supported_flanks(
         observations.append((line, arrows, (left, top, right, bottom)))
 
     assert observations, regions
+
+
+def test_nearly_vertical_flanks_follow_axis_order_when_x_order_reverses_y_order() -> None:
+    binary = np.zeros((140, 160), dtype=np.uint8)
+    cv2.line(binary, (72, 45), (70, 95), 255, 2)
+    cv2.fillConvexPoly(
+        binary,
+        np.array([[72, 32], [66, 42], [78, 42]], dtype=np.int32),
+        255,
+    )
+    cv2.fillConvexPoly(
+        binary,
+        np.array([[70, 108], [64, 98], [76, 98]], dtype=np.int32),
+        255,
+    )
+
+    witnesses = _endpoint_flank_witnesses(binary, ((70.0, 95.0), (72.0, 45.0)))
+
+    assert len(witnesses) == 2, witnesses
 
 
 @pytest.mark.parametrize(
