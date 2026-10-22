@@ -682,6 +682,7 @@ def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Ma
     fill_polygons: list[list[tuple[float, float]]] = []
     unsupported_item = False
     pending_path: list[tuple[float, float]] = []
+    close_subpaths = drawing.get("type") in {"f", "fs"} or bool(drawing.get("closePath"))
 
     def to_pixel(point: tuple[float, float]) -> tuple[float, float]:
         transformed = fitz.Point(point) * page_transform
@@ -724,7 +725,7 @@ def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Ma
                 )
         elif item[0] == "re":
             rect = item[1]
-            finish_path(close=False)
+            finish_path(close=close_subpaths)
             points = [
                 (rect.x0, rect.y0),
                 (rect.x1, rect.y0),
@@ -737,7 +738,7 @@ def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Ma
             continue
         elif item[0] == "qu":
             quad = item[1]
-            finish_path(close=False)
+            finish_path(close=close_subpaths)
             quad_points = [quad.ul, quad.ur, quad.lr, quad.ll]
             points = [(point.x, point.y) for point in quad_points]
             points.append(points[0])
@@ -745,7 +746,7 @@ def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Ma
             finish_path(close=True)
             continue
         else:
-            finish_path(close=False)
+            finish_path(close=close_subpaths)
             unsupported_item = True
             continue
         if (
@@ -756,12 +757,12 @@ def _suspect_geometry(drawing: dict, pixel_scale: float, page_transform: fitz.Ma
             )
             > 0.02
         ):
-            finish_path(close=False)
+            finish_path(close=close_subpaths)
         if pending_path:
             pending_path.extend(points[1:])
         else:
             pending_path = points
-    finish_path(close=(drawing.get("type") in {"f", "fs"} or bool(drawing.get("closePath"))))
+    finish_path(close=close_subpaths)
 
     result = {
         "segments": segments,

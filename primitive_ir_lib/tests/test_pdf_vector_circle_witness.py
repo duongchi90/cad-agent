@@ -16,6 +16,7 @@ from primitive_ir_lib.run_pdf import (
     _fit_full_line_circle_path,
     _page_circle_witnesses,
     _single_line_record_paths,
+    _suspect_geometry,
     run_pdf,
 )
 import primitive_ir_lib.geometry_extraction as geometry_extraction
@@ -211,6 +212,35 @@ def test_later_filled_quad_covering_circle_invalidates_full_circle_witness() -> 
 
     assert witnesses == []
     assert suspect_regions
+
+
+def test_filled_disconnected_subpath_closes_before_next_subpath() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    center = (300.0, 300.0)
+    radius = 100.0
+
+    # The first open fill subpath is implicitly closed by PDF fill semantics.
+    # Its closing edge crosses the circle, while its two explicit edges stay
+    # outside. A distant second subpath forces the item parser to flush it.
+    shape = page.new_shape()
+    shape.draw_polyline(
+        [fitz.Point(200, 399.99), fitz.Point(300, 500), fitz.Point(400, 399.99)]
+    )
+    shape.draw_polyline(
+        [fitz.Point(10, 10), fitz.Point(20, 10), fitz.Point(20, 20), fitz.Point(10, 20)]
+    )
+    shape.finish(color=None, fill=(0.75, 0.75, 0.75), closePath=False)
+    shape.commit()
+
+    drawing = next(d for d in page.get_drawings(extended=True) if d["type"] == "f")
+    suspect = _suspect_geometry(drawing, 1.0, page.rotation_matrix)
+
+    assert len(suspect["fill_polygons"]) == 2
+    assert geometry_extraction._suspect_region_intersects_circle(
+        suspect, center[0], center[1], radius, tolerance=2.0
+    ), "every disconnected fill subpath must include its implicit closing edge"
+    document.close()
 
 
 def test_later_black_crossing_line_preserves_full_circle_witness(tmp_path: Path) -> None:
