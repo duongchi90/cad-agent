@@ -971,6 +971,164 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+def test_native_pdf_observation_keeps_named_layer_and_trace_recovers_replacement_glyph() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    dimensions = document.add_ocg("Dimensions", on=1)
+    page.insert_text((40, 80), "639\u00b11", fontsize=18, oc=dimensions)
+
+    class ReplacementGlyphPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict":
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            if span.get("text") == "639\u00b11":
+                                span["text"] = "639\ufffd1"
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            ReplacementGlyphPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert len(records) == 1
+    assert records[0]["content"] == "639\u00b11"
+    assert records[0]["source_paint_evidence"]["layer"] == "Dimensions"
+    assert records[0]["visibility"] == "unverified"
+    assert records[0]["semantic_role"] is None
+
+
+def test_native_pdf_observation_refuses_conflicting_trace_character_mapping() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "639\u00b11", fontsize=18)
+
+    class ConflictingTextPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict":
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            if span.get("text") == "639\u00b11":
+                                span["text"] = "639X1"
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            ConflictingTextPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert records == []
+
+
+@pytest.mark.parametrize(
+    ("case", "expect_nominal"),
+    [
+        ("adjacent", True),
+        ("clear_trace_gap", True),
+        ("substantial_overlap", False),
+        ("different_baseline", False),
+        ("different_font_size", True),
+        ("different_font", False),
+        ("different_color", False),
+        ("degenerate_bounds", False),
+        ("wide_stroke_text", False),
+    ],
+)
+def test_native_pdf_observation_only_ignores_tiny_matching_text_edge(
+    case: str, expect_nominal: bool,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    font_size = 18
+    first_x = 40
+    first_y = 80
+    nominal = "639"
+    tolerance = "\u00b11"
+    first_width = fitz.get_text_length(nominal, fontname="helv", fontsize=font_size)
+    second_size = font_size - 1 if case == "different_font_size" else font_size
+    second_font = "tiro" if case == "different_font" else "helv"
+    overlap = 2.0 if case == "substantial_overlap" else -0.04 if case == "clear_trace_gap" else 0.02
+    second_x = first_x + first_width - overlap
+    second_y = first_y - 0.1 if case == "different_baseline" else first_y
+    render_mode = 1 if case == "wide_stroke_text" else 0
+    border_width = 10 if case == "wide_stroke_text" else 1
+    page.insert_text(
+        (first_x, first_y), nominal, fontname="helv", fontsize=font_size,
+        render_mode=render_mode, border_width=border_width,
+    )
+    text_color = (1, 0, 0) if case == "different_color" else (0, 0, 0)
+    page.insert_text(
+        (second_x, second_y), tolerance, fontname=second_font, fontsize=second_size,
+        color=text_color, render_mode=render_mode, border_width=border_width,
+    )
+
+    class SplitSpanPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict":
+                traces = page.get_texttrace()
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        spans = line.get("spans", [])
+                        if len(spans) == 1 and spans[0].get("text") == nominal + tolerance:
+                            source_span = spans[0]
+                            split = []
+                            for content, trace in zip((nominal, tolerance), traces):
+                                span = dict(source_span)
+                                span["text"] = content
+                                span["bbox"] = trace["bbox"]
+                                span["origin"] = trace["chars"][0][2]
+                                span["font"] = trace["font"]
+                                span["size"] = trace["size"]
+                                split.append(span)
+                            line["spans"] = split
+            return result
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            traces = page.get_texttrace()
+            if case == "degenerate_bounds" and len(traces) == 2:
+                traces[1] = dict(traces[1], bbox=(second_x, second_y, second_x, second_y))
+            return traces
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            SplitSpanPage(), 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    contents = [record["content"] for record in records]
+    assert (nominal in contents) is expect_nominal
+    if expect_nominal:
+        assert tolerance in contents
+        assert all(record["visibility"] == "unverified" for record in records)
+
+
 def test_native_pdf_observation_excludes_hidden_ocr_over_visible_raster_text(tmp_path: Path) -> None:
     source = tmp_path / "visible-raster-hidden-ocr.pdf"
     output = tmp_path / "private-staging"

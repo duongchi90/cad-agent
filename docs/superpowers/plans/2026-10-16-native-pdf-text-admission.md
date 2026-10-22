@@ -95,9 +95,26 @@
 
 - [x] Add failing regressions for hidden OCR over visible raster text, zero opacity, clipping-only text, later paint overlap, disabled optional-content text, and nonzero writing mode.
 - [x] Run those regressions and observe failures at the affected admission boundary.
-- [x] Add unique PDF paint-trace binding; exclude invisible, ambiguous, layered, later-obscured, or unsupported-writing-mode spans; persist paint and writing-mode evidence for fresh revalidation.
+- [x] Add unique PDF paint-trace binding; exclude invisible, ambiguous, disabled-layer, later-obscured, or unsupported-writing-mode spans; persist paint and writing-mode evidence for fresh revalidation.
 - [x] Run the complete focused fidelity test module: 97 passed.
 - [x] Run canonical `scripts/verify.ps1 -SkipAutoCADDotNet`: PASS; offline suite 3,672 passed, 23 deselected, 77 subtests; offline .NET IPC 128 passed; causal-RED oracle produced the expected marked failure; real-data probe skipped 2 and AutoCAD probe skipped 18. A first full attempt had one transient M2 hash-seed subprocess error; seed-0/seed-4 direct reproductions and the focused test passed, then the second full canonical run passed.
 - [x] Commit the correction as new commit `280cf61bd26e9f02b547f05ec2e6a6f0163a497b`; history was not rewritten. Push is pending.
 - [ ] Rerun terminal hosted checks and obtain new independent exact-head Security and Integration reviews.
 - [ ] Apply the current #392 V7 procedure only after hosted checks are terminal and the new review head is stable; keep the PR draft and unmerged.
+
+### Task 5: CASE03 named-layer and replacement-glyph observation
+
+**Decision:** Current PO approved one bounded design/regression package in the existing `cad_agent.fidelity` owner after a read-only CASE03 source diagnosis. This does not approve automatic visibility, semantic associations, Primitive IR wiring, native reconstruction, or merge.
+
+**Frozen input:** CASE03 PDF SHA-256 `8478908f9976480d5c9034de6e3354ac113555c2a6fd55550b6b42d29d78232f`.
+
+- [x] Confirm the enabled `Dimensions` layer and the `639±1` / `415±1` spans from rendered crops, texttrace, embedded-font ToUnicode mapping, and same-baseline geometry.
+- [x] Add a failing regression for named-layer observation and unique trace recovery where the text dictionary reports U+FFFD.
+- [x] Keep `visibility=unverified`, retain per-span human review, and add a conflicting-character fail-closed control.
+- [x] Permit only same-font/color/opacity/layer, same-baseline horizontal adjacent-text spans whose `fill-text` paint operation maps uniquely to its trace; cap the trace-bbox gap or overlap at 0.05 pt and 0.5% of the smaller font size. Exclude `stroke-text` because wide stroke expansion can cover earlier glyphs despite adjacent trace bboxes; cover it with a thick-stroke refusal regression.
+- [x] Update this design and plan with the narrowed boundary.
+- [x] Focused regressions: thick-stroke red reproduced before the fix; complete fidelity module: 109 passed; Ruff passed; `git diff --check` passed.
+- [x] CASE03 source-only observation on the PR worktree yielded separate `639`, `±1`, `415`, `±1` spans, each `visibility=unverified`; source SHA-256 remained `8478908f9976480d5c9034de6e3354ac113555c2a6fd55550b6b42d29d78232f` before and after.
+- [x] Inspect exact diff and confirm the only changed paths are the approved owner, test, spec, and plan files.
+- [ ] Run canonical repository verification on a clean committed head, then refresh PR/check identities before publication.
+- [ ] Keep any follow-up outside this approved boundary (visibility automation, semantic association, Primitive IR, native action) unimplemented pending separate authority.

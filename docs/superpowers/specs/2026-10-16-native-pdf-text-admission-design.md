@@ -17,7 +17,8 @@ The approval action is the existing explicit per-item approval operation. Identi
 ## Review and approval
 
 - The review page presents the source render and visibly marks native span bboxes, with each exact span's content, stable ID, bbox, source font metadata, and separate selection control.
-- A span enters that selectable collection only when normalized text and bbox overlap of at least 90% uniquely match one PDF paint trace that is actually painted, has nonzero opacity, uses horizontal writing mode, is not tied to an optional-content layer, and is not overlapped by later page paint. Unmatched or ambiguous traces remain excluded.
+- A span enters that selectable collection only when normalized text and bbox overlap of at least 90% uniquely match one PDF paint trace that is actually painted, has nonzero opacity, uses horizontal writing mode, and is not overlapped by later page paint. Named or optional-content layers may be observed, but their layer name/state never proves user-visible legibility; every native span remains `visibility=unverified` until explicit per-span human review. Disabled optional-content spans omitted by the PDF backend remain excluded.
+- If the text dictionary contains U+FFFD but the uniquely matched paint trace supplies a printable character at exactly the same compact-text position, the observation may use the trace-decoded character only when all other characters agree and the trace bbox still meets the 90% overlap rule. Record whether agreement was exact or recovered. Conflicting, ambiguous, differently sized, or unresolved mappings remain excluded; never infer semantic roles or join adjacent spans.
 - Exported selection keeps OCR candidate IDs and native span IDs in distinct typed fields. Native selections carry the reviewed source/render identity and exact span snapshot.
 - The approval writer rebinds each selected native span to the canonical current observation. It rejects an absent ID, duplicate ID, changed content/bbox/frame, stale source/render, or selection from another source/page.
 - The exact span snapshot includes source writing mode and paint-trace type, opacity, layer, sequence number, and bbox. Fresh reconstruction re-extraction must reproduce that evidence.
@@ -33,7 +34,7 @@ Emit one `TEXT` per approved span. Keep equal strings at distinct source positio
 
 ## Failure behavior
 
-Fail closed before output creation for stale or substituted source/render/span/paint evidence; unselected or duplicate span IDs; missing explicit item approval; hidden, ambiguous, optionally layered, later-obscured, clipped, off-page, zero-area, or invalid spans; vertical writing mode; unsupported page transforms; invalid coordinate/font-size values; unsupported glyphs; or mismatched audit frame. Do not infer visibility from pixel content. Preserve existing output-root containment and no-overwrite checks.
+Fail closed before output creation for stale or substituted source/render/span/paint evidence; unselected or duplicate span IDs; missing explicit item approval; hidden, ambiguous, later-obscured, clipped, off-page, zero-area, conflicting text mappings, or invalid spans; vertical writing mode; unsupported page transforms; invalid coordinate/font-size values; unsupported glyphs; or mismatched audit frame. A named layer is not itself grounds to infer visibility or reject an otherwise supported observation. Do not infer visibility from layer names, OCG state, or pixel content. Preserve existing output-root containment and no-overwrite checks.
 
 ## Verification
 
@@ -42,3 +43,9 @@ Focused regressions cover separate selection/approval provenance, selected-only 
 ## Explicit exclusions
 
 No automatic visibility inference, OCR relabeling, semantic-role inference, dimension or component association, `DIMENSION`/`MLEADER`/`MTEXT` generation, new trust/approval service, source/reference DWG access, candidate promotion, AutoCAD mutation, or change to PR #521's pinned head.
+
+## CASE03 diagnosis clarification (2026-10-23)
+
+The CASE03 source-only diagnosis established recoverable `639±1` and `415±1` text using rendered crops, texttrace glyphs, embedded-font ToUnicode mapping, and adjacent same-baseline span geometry. The existing observation path excluded these spans because it rejected named paint layers and treated the broader `get_bboxlog()` bounds of the following text operation as occlusion, even though the corresponding text-trace glyph bounds were merely adjacent. This clarification permits only uniquely mapped adjacent text-paint exceptions under the strict geometry/style limits below and records named-layer spans as unverified observations. A separate synthetic control covers U+FFFD recovery when the unique trace supplies the missing printable character. This does not assert OCG visibility, join tolerance spans, approve them, create semantic dimension associations, or connect them to Primitive IR.
+
+The adjacent-paint exception is limited to a unique later `fill-text` operation bound by sequence number and a corroborating trace/paint bbox overlap of at least 85%. Stroke-text is excluded because paint bounds may expand far beyond glyph-trace bounds according to line width. The adjacent traces must share font, color, opacity, layer, horizontal direction, and baseline; font sizes may differ. Their trace bboxes may have a small horizontal gap or overlap, bounded by both 0.05 pt and 0.5% of the smaller font size, with no more than 0.5% relative area overlap and at least 95% vertical overlap. Any other overlapping paint, ambiguous operation mapping, mismatched style, substantial overlap, or degenerate bounds remains a refusal. The text spans remain separate and unverified.

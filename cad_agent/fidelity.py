@@ -1420,12 +1420,122 @@ def _native_pdf_text_span_records(
     def compact_text(value: str) -> str:
         return "".join(value.split())
 
+    def trace_text_agreement(span_text: str, trace_text: str) -> str | None:
+        span_compact = compact_text(span_text)
+        trace_compact = compact_text(trace_text)
+        if span_compact == trace_compact:
+            return "exact"
+        if "\ufffd" not in span_compact or len(span_compact) != len(trace_compact):
+            return None
+        if any(
+            source_char != "\ufffd" and source_char != trace_char
+            for source_char, trace_char in zip(span_compact, trace_compact)
+        ):
+            return None
+        if any(
+            source_char == "\ufffd" and (not trace_char.isprintable() or trace_char == "\ufffd")
+            for source_char, trace_char in zip(span_compact, trace_compact)
+        ):
+            return None
+        return "trace_recovered_replacement_characters"
+
     def overlap_ratio(left: fitz.Rect, right: fitz.Rect) -> float:
         intersection = left & right
         if intersection.is_empty:
             return 0.0
         smaller_area = min(left.get_area(), right.get_area())
         return intersection.get_area() / smaller_area if smaller_area > 0 else 0.0
+
+    traces_by_sequence: dict[int, list[dict[str, Any]]] = {}
+    for trace in paint_traces:
+        if isinstance(trace, dict) and type(trace.get("seqno")) is int:
+            traces_by_sequence.setdefault(trace["seqno"], []).append(trace)
+
+    def is_safe_adjacent_text_overlap(left_trace: dict[str, Any], right_trace: dict[str, Any]) -> bool:
+        """Ignore only a tiny shared glyph edge between matching same-baseline text paints."""
+        def finite_pair(value: Any) -> bool:
+            return (
+                isinstance(value, (tuple, list)) and len(value) == 2
+                and all(isinstance(item, (int, float)) and math.isfinite(float(item)) for item in value)
+            )
+
+        def finite_quad(value: Any) -> bool:
+            return (
+                isinstance(value, (tuple, list)) and len(value) == 4
+                and all(isinstance(item, (int, float)) and math.isfinite(float(item)) for item in value)
+            )
+
+        left_chars = left_trace.get("chars")
+        right_chars = right_trace.get("chars")
+        left_bbox = left_trace.get("bbox")
+        right_bbox = right_trace.get("bbox")
+        if (
+            not isinstance(left_chars, (tuple, list)) or not left_chars
+            or not isinstance(right_chars, (tuple, list)) or not right_chars
+            or not finite_quad(left_bbox) or not finite_quad(right_bbox)
+            or left_trace.get("wmode") != 0 or right_trace.get("wmode") != 0
+            or left_trace.get("type") != right_trace.get("type")
+            or left_trace.get("type") not in (0, 1)
+            or left_trace.get("font") != right_trace.get("font")
+            or left_trace.get("layer") != right_trace.get("layer")
+            or left_trace.get("colorspace") != right_trace.get("colorspace")
+            or left_trace.get("color") != right_trace.get("color")
+            or left_trace.get("opacity") != right_trace.get("opacity")
+            or not isinstance(left_trace.get("opacity"), (int, float))
+            or not math.isfinite(float(left_trace["opacity"]))
+            or not isinstance(left_trace.get("size"), (int, float))
+            or not math.isfinite(float(left_trace["size"]))
+            or float(left_trace["size"]) <= 0
+            or not isinstance(right_trace.get("size"), (int, float))
+            or not math.isfinite(float(right_trace["size"]))
+            or float(right_trace["size"]) <= 0
+        ):
+            return False
+        left_dir = left_trace.get("dir")
+        right_dir = right_trace.get("dir")
+        if (
+            not finite_pair(left_dir) or not finite_pair(right_dir)
+            or abs(float(left_dir[0]) - 1.0) > 1e-6 or abs(float(left_dir[1])) > 1e-6
+            or abs(float(right_dir[0]) - 1.0) > 1e-6 or abs(float(right_dir[1])) > 1e-6
+        ):
+            return False
+        left_origin = left_chars[0][2] if isinstance(left_chars[0], (tuple, list)) and len(left_chars[0]) > 2 else None
+        right_origin = right_chars[0][2] if isinstance(right_chars[0], (tuple, list)) and len(right_chars[0]) > 2 else None
+        if (
+            not finite_pair(left_origin) or not finite_pair(right_origin)
+            or abs(float(left_origin[1]) - float(right_origin[1])) > 0.01
+            or float(right_origin[0]) <= float(left_origin[0])
+        ):
+            return False
+        left_rect = fitz.Rect(left_bbox)
+        right_rect = fitz.Rect(right_bbox)
+        intersection = left_rect & right_rect
+        if not left_rect.is_valid or not right_rect.is_valid:
+            return False
+        smaller_area = min(left_rect.get_area(), right_rect.get_area())
+        smaller_height = min(left_rect.height, right_rect.height)
+        smaller_font_size = min(float(left_trace["size"]), float(right_trace["size"]))
+        if intersection.is_empty:
+            if right_rect.x0 < left_rect.x1:
+                return False
+            adjoining_width = right_rect.x0 - left_rect.x1
+            overlap_area_ratio = 0.0
+            overlap_height_ratio = (
+                max(0.0, min(left_rect.y1, right_rect.y1) - max(left_rect.y0, right_rect.y0))
+                / smaller_height if smaller_height > 0 else 0.0
+            )
+        else:
+            adjoining_width = intersection.width
+            overlap_area_ratio = intersection.get_area() / smaller_area if smaller_area > 0 else 1.0
+            overlap_height_ratio = intersection.height / smaller_height if smaller_height > 0 else 0.0
+        return (
+            0 <= adjoining_width <= min(0.05, smaller_font_size * 0.005)
+            and smaller_area > 0
+            and smaller_height > 0
+            and overlap_area_ratio <= 0.005
+            and overlap_height_ratio >= 0.95
+            and right_rect.x0 >= left_rect.x0
+        )
 
     def has_later_paint_overlap(trace: dict[str, Any]) -> bool:
         sequence_number = trace.get("seqno")
@@ -1439,6 +1549,19 @@ def _native_pdf_text_span_records(
                     return True
                 paint_type, paint_bbox = paint_item
                 if index <= sequence_number or paint_type == "ignore-text":
+                    continue
+                if overlap_ratio(trace_rect, fitz.Rect(paint_bbox)) <= 0:
+                    continue
+                later_traces = traces_by_sequence.get(index, [])
+                later_trace = later_traces[0] if len(later_traces) == 1 else None
+                expected_trace_type = {"fill-text": 0}.get(paint_type)
+                if (
+                    isinstance(later_trace, dict)
+                    and expected_trace_type is not None
+                    and later_trace.get("type") == expected_trace_type
+                    and overlap_ratio(fitz.Rect(later_trace["bbox"]), fitz.Rect(paint_bbox)) >= 0.85
+                    and is_safe_adjacent_text_overlap(trace, later_trace)
+                ):
                     continue
                 if overlap_ratio(trace_rect, fitz.Rect(paint_bbox)) > 0:
                     return True
@@ -1464,25 +1587,25 @@ def _native_pdf_text_span_records(
                 if rect.is_empty or not rect.is_valid:
                     continue
                 compact_content = compact_text(content)
-                matching_traces = []
+                matching_traces: list[tuple[dict[str, Any], str, str]] = []
                 for trace in paint_traces:
                     chars = trace.get("chars")
                     trace_text = "".join(
                         chr(char[0]) for char in chars
                         if isinstance(char, (tuple, list)) and char and type(char[0]) is int
                     ) if isinstance(chars, (tuple, list)) else ""
+                    agreement = trace_text_agreement(content, trace_text)
                     trace_bbox = trace.get("bbox")
                     if (
-                        compact_content
-                        and compact_text(trace_text) == compact_content
+                        compact_content and agreement is not None
                         and isinstance(trace_bbox, (tuple, list))
                         and len(trace_bbox) == 4
                         and overlap_ratio(rect, fitz.Rect(trace_bbox)) >= 0.9
                     ):
-                        matching_traces.append(trace)
+                        matching_traces.append((trace, trace_text, agreement))
                 if len(matching_traces) != 1:
                     continue
-                paint_trace = matching_traces[0]
+                paint_trace, trace_text, text_agreement = matching_traces[0]
                 paint_type = paint_trace.get("type")
                 paint_opacity = paint_trace.get("opacity")
                 paint_wmode = paint_trace.get("wmode")
@@ -1493,7 +1616,6 @@ def _native_pdf_text_span_records(
                     or not math.isfinite(float(paint_opacity))
                     or paint_opacity <= 0
                     or paint_wmode != 0
-                    or paint_layer not in (None, "")
                     or has_later_paint_overlap(paint_trace)
                 ):
                     continue
@@ -1519,7 +1641,8 @@ def _native_pdf_text_span_records(
                 font_name = span.get("font")
                 records.append({
                     "id": f"native-pdf-p{page_number:02d}-b{block_index:03d}-l{line_index:03d}-s{span_index:03d}",
-                    "content": content,
+                    "content": trace_text if text_agreement == "trace_recovered_replacement_characters" else content,
+                    "source_text_agreement": text_agreement,
                     "bbox_px": [x0, y0, x1, y1],
                     "rotation_deg": math.degrees(math.atan2(float(direction[1]), float(direction[0]))),
                     "source_wmode": writing_mode,
