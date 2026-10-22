@@ -924,6 +924,199 @@ def _image_paint_operations(page: fitz.Page) -> list[tuple[int, fitz.Rect]]:
     return operations
 
 
+def _circle_fill_coverage_fraction(
+    circle: tuple[float, float, float],
+    polygon: list[tuple[float, float]],
+) -> float:
+    """Return the exact angular fraction of a circle perimeter inside a polygon."""
+    center_x, center_y, radius = circle
+    if (
+        not all(math.isfinite(value) for value in (center_x, center_y, radius))
+        or radius <= 0.0
+        or len(polygon) < 3
+        or any(not all(math.isfinite(value) for value in point) for point in polygon)
+    ):
+        return 0.0
+
+    intersections = [0.0, 2.0 * math.pi]
+    for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]):
+        dx = x1 - x0
+        dy = y1 - y0
+        fx = x0 - center_x
+        fy = y0 - center_y
+        a = dx * dx + dy * dy
+        if a <= 1e-18:
+            continue
+        b = 2.0 * (fx * dx + fy * dy)
+        c = fx * fx + fy * fy - radius * radius
+        discriminant = b * b - 4.0 * a * c
+        if discriminant < -1e-10:
+            continue
+        root = math.sqrt(max(0.0, discriminant))
+        for fraction in ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a)):
+            if -1e-10 <= fraction <= 1.0 + 1e-10:
+                x = x0 + min(1.0, max(0.0, fraction)) * dx - center_x
+                y = y0 + min(1.0, max(0.0, fraction)) * dy - center_y
+                intersections.append(math.atan2(y, x) % (2.0 * math.pi))
+
+    intersections.sort()
+    angles: list[float] = []
+    for angle in intersections:
+        if not angles or angle - angles[-1] > 1e-10:
+            angles.append(angle)
+    if angles[0] > 1e-10:
+        angles.insert(0, 0.0)
+    if angles[-1] < 2.0 * math.pi - 1e-10:
+        angles.append(2.0 * math.pi)
+
+    def inside(x: float, y: float) -> bool:
+        winding = 0
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]):
+            cross = (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0)
+            if (
+                abs(cross) <= 1e-8
+                and min(x0, x1) - 1e-8 <= x <= max(x0, x1) + 1e-8
+                and min(y0, y1) - 1e-8 <= y <= max(y0, y1) + 1e-8
+            ):
+                return True
+            if y0 <= y < y1 and cross > 0:
+                winding += 1
+            elif y1 <= y < y0 and cross < 0:
+                winding -= 1
+        return winding != 0
+
+    covered = 0.0
+    for start, end in zip(angles, angles[1:]):
+        if end - start <= 1e-12:
+            continue
+        angle = (start + end) / 2.0
+        if inside(
+            center_x + radius * math.cos(angle),
+            center_y + radius * math.sin(angle),
+        ):
+            covered += end - start
+    return min(1.0, max(0.0, covered / (2.0 * math.pi)))
+
+
+def _dimension_arrowhead_fill(
+    drawings: list[dict],
+    fill_index: int,
+    circle: tuple[float, float, float],
+) -> bool:
+    """Recognize only a small filled triangle joined to an axis and outward leader.
+
+    Tolerances are in PDF page points: 0.05 for closed-path continuity, 0.5
+    for stroke-to-fill attachment, and 10 degrees for opposite collinear axes.
+    The local overprint is capped at 8 percent of the candidate circumference;
+    triangle edges are capped at 12 points and its area at 40 square points.
+    """
+    if not 0 < fill_index < len(drawings) - 1:
+        return False
+    fill = drawings[fill_index]
+    if fill.get("type") not in {"f", "fs"} or fill.get("fill") is None:
+        return False
+    stroke_width = fill.get("width")
+    if fill.get("type") == "fs" and (
+        stroke_width is None
+        or not math.isfinite(float(stroke_width))
+        or float(stroke_width) < 0.0
+        or float(stroke_width) > 1.0
+    ):
+        return False
+    items = fill.get("items", [])
+    if len(items) != 3 or any(item[0] != "l" for item in items):
+        return False
+
+    points: list[tuple[float, float]] = []
+    for _, start, end in items:
+        if not all(math.isfinite(value) for value in (start.x, start.y, end.x, end.y)):
+            return False
+        if not points:
+            points.append((float(start.x), float(start.y)))
+        elif math.hypot(points[-1][0] - start.x, points[-1][1] - start.y) > 0.05:
+            return False
+        points.append((float(end.x), float(end.y)))
+    if math.hypot(points[-1][0] - points[0][0], points[-1][1] - points[0][1]) > 0.05:
+        return False
+    polygon = points[:-1]
+    if len(set(polygon)) != 3:
+        return False
+
+    edge_lengths = [
+        math.hypot(x1 - x0, y1 - y0)
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1])
+    ]
+    twice_area = abs(sum(
+        x0 * y1 - x1 * y0
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1])
+    ))
+    area = twice_area / 2.0
+    if min(edge_lengths) < 1.0 or max(edge_lengths) > 12.0 or not 1.0 <= area <= 40.0:
+        return False
+    coverage = _circle_fill_coverage_fraction(circle, polygon)
+    if not 0.0 < coverage <= 0.08:
+        return False
+    if fill.get("type") == "fs" and float(stroke_width) > 0.0:
+        stroke_radius = float(stroke_width) / 2.0
+        for adjusted_radius in (circle[2] - stroke_radius, circle[2] + stroke_radius):
+            if adjusted_radius <= 0.0 or _circle_fill_coverage_fraction(
+                (circle[0], circle[1], adjusted_radius), polygon
+            ) > 0.08:
+                return False
+
+    previous = drawings[fill_index - 1]
+    following = drawings[fill_index + 1]
+    if (
+        previous.get("type") != "s"
+        or len(previous.get("items", [])) != 1
+        or previous["items"][0][0] != "l"
+        or following.get("type") != "s"
+        or not following.get("items")
+        or following["items"][0][0] != "l"
+    ):
+        return False
+
+    _, prior_start, prior_end = previous["items"][0]
+    prior_start_xy = (float(prior_start.x), float(prior_start.y))
+    prior_end_xy = (float(prior_end.x), float(prior_end.y))
+    attachment_tolerance = 0.5
+    if math.hypot(prior_start_xy[0] - prior_end_xy[0], prior_start_xy[1] - prior_end_xy[1]) <= 1.0:
+        return False
+
+    def point_on_triangle_vertex(point: tuple[float, float]) -> bool:
+        return any(math.hypot(point[0] - x, point[1] - y) <= attachment_tolerance for x, y in polygon)
+
+    # The short axis must enter the triangle at a vertex; its other endpoint
+    # and the next leader's origin must be the same point inside the triangle.
+    if point_on_triangle_vertex(prior_start_xy) or not point_on_triangle_vertex(prior_end_xy):
+        return False
+    shared_x, shared_y = prior_start_xy
+    _, leader_start, leader_end = following["items"][0]
+    leader_start_xy = (float(leader_start.x), float(leader_start.y))
+    leader_end_xy = (float(leader_end.x), float(leader_end.y))
+    if math.hypot(shared_x - leader_start_xy[0], shared_y - leader_start_xy[1]) > attachment_tolerance:
+        return False
+
+    def point_in_triangle(x: float, y: float) -> bool:
+        signs = []
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]):
+            signs.append((x1 - x0) * (y - y0) - (y1 - y0) * (x - x0))
+        return all(value >= -0.5 for value in signs) or all(value <= 0.5 for value in signs)
+
+    if not point_in_triangle(shared_x, shared_y):
+        return False
+    axis_x = prior_end_xy[0] - shared_x
+    axis_y = prior_end_xy[1] - shared_y
+    leader_x = leader_end_xy[0] - shared_x
+    leader_y = leader_end_xy[1] - shared_y
+    axis_length = math.hypot(axis_x, axis_y)
+    leader_length = math.hypot(leader_x, leader_y)
+    if axis_length < 1.0 or leader_length < 6.0:
+        return False
+    cosine = (axis_x * leader_x + axis_y * leader_y) / (axis_length * leader_length)
+    return cosine <= -math.cos(math.radians(10.0))
+
+
 def _page_circle_witnesses(
     page: fitz.Page, pixel_scale: float
 ) -> tuple[bool, list[tuple[float, float, float]], list[dict]]:
@@ -1048,9 +1241,10 @@ def _page_circle_witnesses(
             if min_distance <= radius + 1.0 and max_distance >= radius - 1.0:
                 occluded = True
                 break
-        for later in drawings[index + 1 :]:
+        for later_index in range(index + 1, len(drawings)):
             if occluded:
                 break
+            later = drawings[later_index]
             later_type = later.get("type")
             if later_type == "clip":
                 # Extended drawing output reports clipping contexts separately;
@@ -1061,6 +1255,12 @@ def _page_circle_witnesses(
                 break
             if later_type in {"s", "f", "fs"} and not _drawing_may_erase_circle(
                 later, drawing.get("color"), drawing.get("width")
+            ):
+                continue
+            if later_type in {"f", "fs"} and _dimension_arrowhead_fill(
+                drawings,
+                later_index,
+                (cx, cy, radius),
             ):
                 continue
             later_circle = None

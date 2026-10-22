@@ -1,7 +1,9 @@
 """PDF-level controls for full-circle versus chord-closed partial-arc evidence."""
 
+import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,6 +16,8 @@ import pytest
 from primitive_ir_lib.run_pdf import (
     _drawing_may_erase_circle,
     _fit_full_line_circle_path,
+    _dimension_arrowhead_fill,
+    _circle_fill_coverage_fraction,
     _page_circle_witnesses,
     _single_line_record_paths,
     _suspect_geometry,
@@ -1602,3 +1606,147 @@ def test_run_pdf_rejects_open_line_ellipse_without_suppressing_crossed_raster_ci
     assert _has_circle_near(crossed_raster_circles, (200, 200), 65), (
         "a straight drafting line crossing an independent raster circle must not suppress it"
     )
+
+
+def _dimension_arrowhead_fixture(*, include_leader: bool = True) -> tuple[tuple[float, float, float], list[dict]]:
+    # Translated source-proven B041 topology: a short axis segment meets the
+    # closed filled triangle, and a longer leader continues from the same node.
+    dx, dy = -300.0, -170.0
+
+    def point(x: float, y: float) -> fitz.Point:
+        return fitz.Point(x + dx, y + dy)
+
+    triangle_points = [
+        point(355.32, 239.50),
+        point(348.84, 242.92),
+        point(356.04, 242.38),
+    ]
+    line = {
+        "type": "s",
+        "seqno": 1,
+        "items": [("l", point(355.68, 240.94), point(348.84, 242.92))],
+    }
+    fill = {
+        "type": "fs",
+        "fill": (0.0, 0.0, 0.0),
+        "width": 0.72,
+        "seqno": 2,
+        "items": [
+            ("l", triangle_points[i], triangle_points[(i + 1) % 3])
+            for i in range(3)
+        ],
+    }
+    drawings = [line, fill]
+    if include_leader:
+        drawings.append({
+            "type": "s",
+            "seqno": 4,
+            "items": [
+                ("l", point(355.68, 240.94), point(369.36, 237.16)),
+                ("l", point(369.36, 237.16), point(444.24, 216.64)),
+            ],
+        })
+    return (69.36, 67.16, 21.2657), drawings
+
+
+def test_dimension_arrowhead_overprint_requires_attached_axis_and_leader() -> None:
+    circle, drawings = _dimension_arrowhead_fixture()
+
+    assert _dimension_arrowhead_fill(drawings, 1, circle)
+
+    _, without_leader = _dimension_arrowhead_fixture(include_leader=False)
+    assert not _dimension_arrowhead_fill(without_leader, 1, circle)
+
+    _, misaligned = _dimension_arrowhead_fixture()
+    misaligned[2]["items"][0] = (
+        "l",
+        fitz.Point(55.68, 70.94),
+        fitz.Point(78.0, 80.0),
+    )
+    assert not _dimension_arrowhead_fill(misaligned, 1, circle)
+
+
+def test_dimension_arrowhead_overprint_uses_actual_polygon_and_local_limit() -> None:
+    circle, drawings = _dimension_arrowhead_fixture()
+    triangle = [
+        (point.x, point.y)
+        for _, point, _ in drawings[1]["items"]
+    ]
+
+    coverage = _circle_fill_coverage_fraction(circle, triangle)
+    assert 0.0 < coverage <= 0.08
+
+    oversized = [(39.0, 37.0), (99.0, 37.0), (69.0, 97.0)]
+    assert _circle_fill_coverage_fraction(circle, oversized) > 0.08
+
+    _, oversized_drawings = _dimension_arrowhead_fixture()
+    oversized_drawings[1]["items"] = [
+        ("l", fitz.Point(*oversized[i]), fitz.Point(*oversized[(i + 1) % 3]))
+        for i in range(3)
+    ]
+    assert not _dimension_arrowhead_fill(oversized_drawings, 1, circle)
+
+
+def test_unassociated_triangle_remains_a_circle_occluder() -> None:
+    document = fitz.open()
+    page = document.new_page(width=160, height=140)
+    page.draw_circle((69.36, 67.16), 21.2657, color=(0.05, 0.05, 0.05), width=0.72)
+    circle, drawings = _dimension_arrowhead_fixture(include_leader=False)
+    line, fill = drawings
+    page.draw_line(line["items"][0][1], line["items"][0][2], color=(0.0, 0.0, 0.0), width=0.5)
+    shape = page.new_shape()
+    points = [start for _, start, _ in fill["items"]]
+    shape.draw_polyline(points + [points[0]])
+    shape.finish(color=None, fill=(0.0, 0.0, 0.0), width=0.72, closePath=True)
+    shape.commit()
+
+    _, witnesses, suspects = _page_circle_witnesses(page, 1.0)
+
+    assert not witnesses
+    assert suspects
+    document.close()
+
+
+@pytest.mark.real_data
+def test_b041_pdf_preserves_three_source_supported_orthographic_circles(
+    tmp_path: Path,
+) -> None:
+    pdf_value = os.environ.get("CAD_AGENT_B041_CIRCLE_PDF")
+    if not pdf_value:
+        pytest.skip("set CAD_AGENT_B041_CIRCLE_PDF to the approved private B041 PDF")
+    pdf_path = Path(pdf_value)
+    assert pdf_path.is_file(), "CAD_AGENT_B041_CIRCLE_PDF must point to the approved PDF"
+    assert hashlib.sha256(pdf_path.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    ), "B041 source identity changed"
+
+    output_dir = tmp_path / "b041-circle-output"
+    # 25.4 / 144 converts rendered pixels to page millimetres only; this is not
+    # modelspace calibration or evidence of physical dimensions.
+    run_pdf(
+        pdf_path,
+        output_dir,
+        scale_mm_per_px=25.4 / 144.0,
+        dpi=144,
+        preset="real_scan_tuned_v1",
+    )
+
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    expected = (
+        ((56.99125, 68.23075), 15.97190, "source path 98 / outer Ø32"),
+        ((56.99125, 68.23075), 6.00137, "source path 99 / M12"),
+        ((130.30714, 126.23300), 7.50207, "source path 68 / R7.50"),
+    )
+    missing = [
+        label
+        for center, radius, label in expected
+        if not _has_circle_near(
+            circles,
+            center,
+            radius,
+            center_tolerance=1.0,
+            radius_tolerance=0.5,
+        )
+    ]
+    assert not missing, f"missing source-supported orthographic circles: {missing}"
+    assert len(circles) == 3, f"unexpected circle candidates, including isometric false positives: {circles}"
