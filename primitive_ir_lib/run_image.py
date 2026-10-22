@@ -28,12 +28,11 @@ from .assemble import build_document
 from .calibration import Calibration, auto_estimate_calibration
 from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
-from .geometry_extraction import RawCircle, extract_raw_geometry
+from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
 from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
-from .models import new_id
 
 Bbox = Tuple[int, int, int, int]
 
@@ -72,48 +71,6 @@ def _configure_tesseract(command: Optional[str]) -> None:
     if os.path.isfile(known_windows_path):
         pytesseract.pytesseract.tesseract_cmd = known_windows_path
 
-
-def _apply_pdf_vector_circle_witnesses(
-    raw_geometry,
-    witnesses: Optional[List[Tuple[float, float, float]]],
-) -> None:
-    """Keep one exact source circle per unique, already-validated PDF witness."""
-    if not witnesses:
-        return
-
-    # `_page_circle_witnesses` has already checked contrast, clipping, opacity,
-    # closure, and later paint. Suspect regions gate raster-only Hough circles;
-    # they must not discard an independently validated exact source cycle.
-    raster_circles = list(raw_geometry.circles)
-    accepted: list[tuple[float, float, float, float]] = []
-    for center_x, center_y, radius in witnesses:
-        if not all(math.isfinite(value) for value in (center_x, center_y, radius)) or radius <= 0.0:
-            continue
-        tolerance = max(4.0, radius * 0.01)
-        if any(
-            math.hypot(center_x - other_x, center_y - other_y) <= 0.04
-            and abs(radius - other_radius) <= 0.04
-            for other_x, other_y, other_radius, _ in accepted
-        ):
-            continue
-
-        matched = [
-            circle for circle in raster_circles
-            if math.hypot(circle.center_px[0] - center_x, circle.center_px[1] - center_y) <= tolerance
-            and abs(circle.radius_px - radius) <= tolerance
-        ]
-        confidence = max((circle.confidence for circle in matched), default=1.0)
-        raw_geometry.circles = [circle for circle in raw_geometry.circles if circle not in matched]
-        raw_geometry.circles.append(
-            RawCircle(
-                id=new_id("rawcirc_pdfvector"),
-                center_px=(center_x, center_y),
-                radius_px=radius,
-                confidence=confidence,
-                bbox_px=(center_x - radius, center_y - radius, center_x + radius, center_y + radius),
-            )
-        )
-        accepted.append((center_x, center_y, radius, confidence))
 
 def _sha256(path: str) -> str:
     digest = hashlib.sha256()
@@ -185,11 +142,6 @@ def run(
         )
     else:
         raw_geometry = extract_raw_geometry(image, preset=preset)
-    _apply_pdf_vector_circle_witnesses(
-        raw_geometry,
-        pdf_vector_circle_witnesses,
-    )
-
     effective_rois = list(ocr_rois) if ocr_rois else []
     if auto_ocr_roi or (auto_calibrate and not effective_rois):
         detected = detect_text_candidate_rois(image)

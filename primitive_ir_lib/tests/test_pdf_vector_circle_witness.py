@@ -17,9 +17,10 @@ from primitive_ir_lib.run_pdf import (
     _single_line_record_paths,
     run_pdf,
 )
-from primitive_ir_lib.geometry_extraction import RawGeometry
+import primitive_ir_lib.geometry_extraction as geometry_extraction
+import primitive_ir_lib.run_image as run_image_module
+from primitive_ir_lib.geometry_extraction import RawCircle, RawGeometry
 from primitive_ir_lib.run_image import (
-    _apply_pdf_vector_circle_witnesses,
     run as run_image,
 )
 
@@ -1045,15 +1046,94 @@ def test_run_pdf_keeps_consecutive_single_line_concentric_cycles_when_raster_ali
     )
 
 
-def test_validated_concentric_source_witnesses_survive_direct_materialization() -> None:
-    raw_geometry = RawGeometry()
-    witnesses = [(100.0, 100.0, radius) for radius in (20.0, 20.25, 21.0)]
-
-    _apply_pdf_vector_circle_witnesses(raw_geometry, witnesses)
-
-    assert sorted(circle.radius_px for circle in raw_geometry.circles) == [20.0, 20.25, 21.0], (
-        "already-validated exact source cycles must remain separate candidates"
+def test_geometry_owner_materializes_source_cycles_when_raster_candidates_alias(
+    monkeypatch,
+) -> None:
+    image = np.full((240, 240, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (100, 100), 21, (0, 0, 0), thickness=2)
+    cv2.circle(image, (180, 180), 15, (0, 0, 0), thickness=2)
+    aliased_raster_circle = RawCircle(
+        id="aliased", center_px=(100.0, 100.0), radius_px=20.5,
+        confidence=0.75, bbox_px=(79.5, 79.5, 120.5, 120.5),
     )
+    independent_raster_circle = RawCircle(
+        id="independent", center_px=(180.0, 180.0), radius_px=15.0,
+        confidence=0.75, bbox_px=(165.0, 165.0, 195.0, 195.0),
+    )
+    monkeypatch.setattr(
+        geometry_extraction,
+        "extract_circles",
+        lambda *_args, **_kwargs: [aliased_raster_circle, independent_raster_circle],
+    )
+    monkeypatch.setattr(geometry_extraction, "extract_lines", lambda *_args, **_kwargs: [])
+
+    raw_geometry = geometry_extraction.extract_raw_geometry(
+        image,
+        preset="default",
+        pdf_vector_circle_witnesses=[
+            (100.0, 100.0, 20.0),
+            (100.0, 100.0, 20.25),
+            (100.0, 100.0, 21.0),
+            (100.0, 100.0, 21.0),
+            (100.0, 100.0, float("nan")),
+        ],
+    )
+
+    assert sorted(circle.radius_px for circle in raw_geometry.circles) == [
+        15.0, 20.0, 20.25, 21.0,
+    ], "exact source cycles should survive raster aliasing, while duplicates collapse"
+    assert raw_geometry.circles[0] is independent_raster_circle, (
+        "an unrelated source-supported raster circle must remain intact"
+    )
+
+
+def test_run_image_only_forwards_pdf_circle_evidence_without_mutating_geometry(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    image_path = tmp_path / "input.png"
+    image_path.write_bytes(b"test image bytes")
+    image = np.full((30, 40, 3), 255, dtype=np.uint8)
+    raster_circle = RawCircle(
+        id="raster", center_px=(5.0, 5.0), radius_px=3.0,
+        confidence=0.75, bbox_px=(2.0, 2.0, 8.0, 8.0),
+    )
+    raw_geometry = RawGeometry(circles=[raster_circle])
+    captured: dict = {}
+
+    monkeypatch.setattr(run_image_module.cv2, "imread", lambda _path: image)
+
+    def extract(_image, **kwargs):
+        captured["extract_kwargs"] = kwargs
+        return raw_geometry
+
+    def build_document(**kwargs):
+        captured["raw_circles"] = kwargs["raw_circles"]
+        return SimpleNamespace(cross_validations=[])
+
+    monkeypatch.setattr(run_image_module, "extract_raw_geometry", extract)
+    monkeypatch.setattr(run_image_module, "build_document", build_document)
+    monkeypatch.setattr(run_image_module, "cross_validate", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(run_image_module, "save_document", lambda *_args, **_kwargs: None)
+
+    witnesses = [(25.0, 20.0, 8.0)]
+    suspect_regions = [(1.0, 2.0, 3.0, 4.0)]
+    run_image(
+        image_path=str(image_path),
+        output_path=str(tmp_path / "out" / "primitive_ir.json"),
+        scale_mm_per_px=1.0,
+        pdf_vector_circle_witnesses=witnesses,
+        pdf_vector_circle_suspect_regions=suspect_regions,
+        require_pdf_vector_circle_witness=True,
+    )
+
+    assert captured["extract_kwargs"] == {
+        "preset": "real_scan_tuned_v1",
+        "pdf_vector_circle_witnesses": witnesses,
+        "pdf_vector_circle_suspect_regions": suspect_regions,
+        "require_pdf_vector_circle_witness": True,
+    }
+    assert captured["raw_circles"] == [raster_circle]
+    assert captured["raw_circles"][0] is raster_circle
 
 
 def test_run_pdf_deduplicates_duplicate_single_line_circle_paint(tmp_path: Path) -> None:

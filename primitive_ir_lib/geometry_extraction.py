@@ -634,74 +634,104 @@ def extract_raw_geometry(
     ):
         witnesses = pdf_vector_circle_witnesses or []
         suspect_regions = pdf_vector_circle_suspect_regions or []
-        candidate_matches: list[list[int]] = []
-        candidate_has_suspect_region: list[bool] = []
-        witness_match_counts = [0] * len(witnesses)
-        for candidate in circles:
-            matches = []
-            center_x, center_y = candidate.center_px
-            radius = candidate.radius_px
-            suspect_tolerance = max(4.0, radius * 0.01)
-            has_suspect_region = False
-            for suspect in suspect_regions:
-                if _suspect_region_intersects_circle(
-                    suspect, center_x, center_y, radius, suspect_tolerance
-                ):
-                    has_suspect_region = True
-                    break
-            for index, (witness_x, witness_y, witness_radius) in enumerate(witnesses):
-                tolerance = max(4.0, witness_radius * 0.01)
-                center_error = float(np.hypot(
-                    candidate.center_px[0] - witness_x,
-                    candidate.center_px[1] - witness_y,
-                ))
-                if (
-                    center_error <= tolerance
-                    and abs(candidate.radius_px - witness_radius) <= tolerance
-                ):
-                    matches.append(index)
-                    witness_match_counts[index] += 1
-            candidate_matches.append(matches)
-            candidate_has_suspect_region.append(has_suspect_region)
-
         source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-        accepted_circles = []
+        source_witnesses: list[Tuple[float, float, float]] = []
+        parsed_witnesses: list[Tuple[float, float, float]] = []
         min_radius = kwargs.get("min_radius")
         max_radius = kwargs.get("max_radius")
-        for candidate, matches, has_suspect_region in zip(
-            circles, candidate_matches, candidate_has_suspect_region
-        ):
-            if len(matches) == 1 and witness_match_counts[matches[0]] == 1:
-                witness_x, witness_y, witness_radius = witnesses[matches[0]]
-                if (
-                    min_radius is not None and witness_radius < min_radius
-                ) or (
-                    max_radius is not None and max_radius > 0
-                    and witness_radius > max_radius
-                ):
+        for witness in witnesses:
+            try:
+                if len(witness) != 3:
                     continue
-                if not _circle_has_distributed_source_support(
-                    source_gray, witness_x, witness_y, witness_radius
-                ):
-                    continue
-                accepted_circles.append(RawCircle(
-                    id=candidate.id,
-                    center_px=(witness_x, witness_y),
-                    radius_px=witness_radius,
-                    confidence=candidate.confidence,
-                    bbox_px=(
-                        witness_x - witness_radius,
-                        witness_y - witness_radius,
-                        witness_x + witness_radius,
-                        witness_y + witness_radius,
-                    ),
-                ))
-            elif (
+                witness_x, witness_y, witness_radius = map(float, witness)
+            except (TypeError, ValueError):
+                continue
+            if not all(np.isfinite(value) for value in (witness_x, witness_y, witness_radius)):
+                continue
+            if witness_radius <= 0.0:
+                continue
+            parsed = (witness_x, witness_y, witness_radius)
+            parsed_witnesses.append(parsed)
+
+            # Deduplicate only effectively identical source cycles. Raster
+            # tolerances are deliberately much wider and would erase valid
+            # close concentric geometry here.
+            if any(
+                np.hypot(witness_x - prior_x, witness_y - prior_y) <= 0.04
+                and abs(witness_radius - prior_radius) <= 0.04
+                for prior_x, prior_y, prior_radius in source_witnesses
+            ):
+                continue
+            if (
+                min_radius is not None and witness_radius < min_radius
+            ) or (
+                max_radius is not None and max_radius > 0
+                and witness_radius > max_radius
+            ):
+                continue
+            if not _circle_has_distributed_source_support(
+                source_gray, witness_x, witness_y, witness_radius
+            ):
+                continue
+            source_witnesses.append(parsed)
+
+        def matches_witness(
+            circle: RawCircle, witness: Tuple[float, float, float]
+        ) -> bool:
+            witness_x, witness_y, witness_radius = witness
+            tolerance = max(4.0, witness_radius * 0.01)
+            return (
+                float(np.hypot(
+                    circle.center_px[0] - witness_x,
+                    circle.center_px[1] - witness_y,
+                )) <= tolerance
+                and abs(circle.radius_px - witness_radius) <= tolerance
+            )
+
+        accepted_circles: list[RawCircle] = []
+        for candidate in circles:
+            suspect_tolerance = max(4.0, candidate.radius_px * 0.01)
+            has_suspect_region = any(
+                _suspect_region_intersects_circle(
+                    suspect,
+                    candidate.center_px[0],
+                    candidate.center_px[1],
+                    candidate.radius_px,
+                    suspect_tolerance,
+                )
+                for suspect in suspect_regions
+            )
+            # A raster candidate may alias several close source cycles. Remove
+            # it once, then materialize each separately validated source cycle
+            # below. An unassociated candidate retains the existing suspect
+            # region and required-witness fail-closed behavior.
+            if any(matches_witness(candidate, witness) for witness in parsed_witnesses):
+                continue
+            if (
                 not require_pdf_vector_circle_witness
                 and not has_suspect_region
-                and not matches
             ):
                 accepted_circles.append(candidate)
+
+        for witness_x, witness_y, witness_radius in source_witnesses:
+            matched_confidence = [
+                candidate.confidence
+                for candidate in circles
+                if matches_witness(candidate, (witness_x, witness_y, witness_radius))
+            ]
+            confidence = max(matched_confidence, default=1.0)
+            accepted_circles.append(RawCircle(
+                id=new_id("rawcirc_pdfvector"),
+                center_px=(witness_x, witness_y),
+                radius_px=witness_radius,
+                confidence=confidence,
+                bbox_px=(
+                    witness_x - witness_radius,
+                    witness_y - witness_radius,
+                    witness_x + witness_radius,
+                    witness_y + witness_radius,
+                ),
+            ))
         circles = accepted_circles
 
     return RawGeometry(
