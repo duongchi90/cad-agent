@@ -1118,6 +1118,40 @@ def _page_circle_witnesses(
                                     + t**3 * p3.y,
                                 )
                             )
+                    elif item[0] == "qu":
+                        try:
+                            quad = item[1]
+                            # PyMuPDF exposes Quad fields by corner name; walk
+                            # the perimeter clockwise, including its closing edge.
+                            quad_points = [quad.ul, quad.ur, quad.lr, quad.ll]
+                            points = [(float(point.x), float(point.y)) for point in quad_points]
+                            if any(
+                                not math.isfinite(coordinate)
+                                for point in points
+                                for coordinate in point
+                            ):
+                                raise ValueError("non-finite quad point")
+                            for edge_index, (start_x, start_y) in enumerate(points):
+                                end_x, end_y = points[(edge_index + 1) % len(points)]
+                                dx = end_x - start_x
+                                dy = end_y - start_y
+                                length_squared = dx * dx + dy * dy
+                                if not math.isfinite(length_squared) or length_squared <= 0.0:
+                                    raise ValueError("degenerate quad edge")
+                                fraction = min(
+                                    1.0,
+                                    max(
+                                        0.0,
+                                        ((cx - start_x) * dx + (cy - start_y) * dy)
+                                        / length_squared,
+                                    ),
+                                )
+                                closest_x = start_x + fraction * dx
+                                closest_y = start_y + fraction * dy
+                                radial_samples.append(math.hypot(closest_x - cx, closest_y - cy))
+                        except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
+                            unsupported_item = True
+                            points = []
                     else:
                         unsupported_item = True
                         points = []

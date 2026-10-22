@@ -3,6 +3,7 @@
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -104,6 +105,108 @@ def test_later_crossing_line_invalidates_full_circle_witness() -> None:
     document.close()
 
     assert require_all_witnesses is False
+    assert witnesses == []
+    assert suspect_regions
+
+
+def test_later_remote_stroke_only_quad_frame_preserves_full_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_quad(
+        fitz.Quad(
+            fitz.Point(10, 10),
+            fitz.Point(590, 10),
+            fitz.Point(10, 590),
+            fitz.Point(590, 590),
+        ),
+        color=(0.05, 0.05, 0.05),
+        width=2.0,
+    )
+    drawings = page.get_drawings(extended=True)
+    drawings[-1]["items"].append(("l", fitz.Point(20, 20), fitz.Point(30, 30)))
+
+    with patch.object(fitz.Page, "get_drawings", return_value=drawings):
+        _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert len(witnesses) == 1, "remote quad edges must not occlude a circle by their bbox alone"
+    assert suspect_regions == []
+
+
+def test_later_crossing_stroke_only_quad_invalidates_full_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_quad(
+        fitz.Quad(
+            fitz.Point(100, 100),
+            fitz.Point(500, 100),
+            fitz.Point(100, 500),
+            fitz.Point(500, 500),
+        ),
+        color=(0.05, 0.05, 0.05),
+        width=2.0,
+    )
+
+    _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert witnesses == []
+    assert suspect_regions
+
+
+def test_malformed_nonfinite_quad_stays_fail_closed() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    drawings = page.get_drawings(extended=True)
+    invalid_point = SimpleNamespace(x=math.nan, y=10.0)
+    valid_point = SimpleNamespace(x=20.0, y=20.0)
+    invalid_quad = SimpleNamespace(
+        ul=invalid_point,
+        ur=valid_point,
+        lr=SimpleNamespace(x=30.0, y=30.0),
+        ll=SimpleNamespace(x=10.0, y=30.0),
+    )
+    drawings.append(
+        {
+            "type": "s",
+            "items": [("qu", invalid_quad)],
+            "rect": fitz.Rect(10, 10, 30, 30),
+            "color": (0.05, 0.05, 0.05),
+            "fill": None,
+            "width": 2.0,
+            "stroke_opacity": 1.0,
+        }
+    )
+
+    with patch.object(fitz.Page, "get_drawings", return_value=drawings):
+        _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert witnesses == []
+    assert suspect_regions
+
+
+def test_later_filled_quad_covering_circle_invalidates_full_circle_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.draw_quad(
+        fitz.Quad(
+            fitz.Point(20, 20),
+            fitz.Point(580, 20),
+            fitz.Point(20, 580),
+            fitz.Point(580, 580),
+        ),
+        color=None,
+        fill=(1.0, 1.0, 1.0),
+    )
+
+    _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
     assert witnesses == []
     assert suspect_regions
 
