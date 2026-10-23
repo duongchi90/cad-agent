@@ -10,6 +10,21 @@ import pytest
 from primitive_ir_lib.run_pdf import run_pdf
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_pdf_workflows_request_installed_english(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use the existing explicit OCR-language option for English fixtures."""
+    import importlib
+
+    runner = importlib.import_module("primitive_ir_lib.run_pdf")
+    original = runner.run
+
+    def run_english(*args: object, **kwargs: object):
+        kwargs.setdefault("ocr_lang", "eng")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "run", run_english)
+
+
 def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
     pdf_path = tmp_path / "fixture.pdf"
     output_dir = tmp_path / "output"
