@@ -420,7 +420,12 @@ class FileIPCLiveMCPClient:
                         pass
 
     def entity_list(self, layer: Optional[str] = None) -> List[Dict[str, Any]]:
-        return self._dispatch("entity-list", {k: v for k, v in {"layer": layer}.items() if v is not None}).get("entities", [])
+        payload = self._dispatch(
+            "entity-list", {k: v for k, v in {"layer": layer}.items() if v is not None}
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("entities"), list):
+            raise MCPToolError("ENTITY_LIST_INVALID")
+        return payload["entities"]
 
     def drawing_open(self, path: str) -> Dict[str, Any]:
         if self._raw_lisp_trigger is not None and self._bootstrap_lisp_path is not None:
