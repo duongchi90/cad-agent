@@ -461,15 +461,27 @@ def merge_collinear_lines(
 
         if barrier_ts:
             clipped_segs = []
-            for t_min, t_max, line, _, _ in segs:
+            for t_min, t_max, line, p_at_min, p_at_max in segs:
                 cuts = [t_min] + [
                     barrier for barrier in barrier_ts
                     if t_min + 1e-6 < barrier < t_max - 1e-6
                 ] + [t_max]
-                dx, dy = math.cos(ref_angle), math.sin(ref_angle)
+                source_span = t_max - t_min
+                if source_span <= 1e-12:
+                    continue
+                source_dx = p_at_max[0] - p_at_min[0]
+                source_dy = p_at_max[1] - p_at_min[1]
                 for start, end in zip(cuts[:-1], cuts[1:]):
-                    p_start = (ref_x0 + dx * start, ref_y0 + dy * start)
-                    p_end = (ref_x0 + dx * end, ref_y0 + dy * end)
+                    start_fraction = (start - t_min) / source_span
+                    end_fraction = (end - t_min) / source_span
+                    p_start = (
+                        p_at_min[0] + source_dx * start_fraction,
+                        p_at_min[1] + source_dy * start_fraction,
+                    )
+                    p_end = (
+                        p_at_min[0] + source_dx * end_fraction,
+                        p_at_min[1] + source_dy * end_fraction,
+                    )
                     clipped_segs.append((start, end, line, p_start, p_end))
             segs = sorted(clipped_segs, key=lambda s: s[0])
 

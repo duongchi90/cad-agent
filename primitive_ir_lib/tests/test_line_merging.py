@@ -147,6 +147,40 @@ def test_singleton_barrier_clips_keep_geometry_unique_ids_and_dxf_inventory(
     assert review.passed, review.mismatches
 
 
+def test_off_axis_singleton_clip_preserves_source_line_geometry():
+    """Clipping an offset singleton must not snap it to the cluster axis."""
+    image = np.full((240, 560, 3), 255, dtype=np.uint8)
+    cv2.line(image, (100, 95), (300, 115), (0, 0, 0), 1)
+    cv2.line(image, (200, 80), (200, 135), (0, 0, 0), 1)
+    cv2.line(image, (198, 105), (250, 105), (0, 0, 0), 1)
+
+    reference = _line((400, 100), (500, 100), "reference")
+    target = _line((198, 105), (250, 105), "target")
+    barrier_source = _line((100, 95), (300, 115), "barrier-source")
+
+    merged = merge_collinear_lines(
+        [reference, target, barrier_source],
+        blocking_texts=[],
+        image_bgr=image,
+        use_tick_mark_detection=False,
+    )
+
+    clipped = [line for line in merged if line.id.startswith("rawline-clipped-")]
+    assert len(clipped) == 2
+    segments = sorted(
+        (min(line.p1_px[0], line.p2_px[0]), max(line.p1_px[0], line.p2_px[0]))
+        for line in clipped
+    )
+    assert abs(segments[0][0] - 198.0) < 1e-6
+    assert abs(segments[0][1] - segments[1][0]) < 1e-6
+    assert abs(segments[1][1] - 250.0) < 1e-6
+    assert all(
+        abs(line.p1_px[1] - 105.0) < 1e-6
+        and abs(line.p2_px[1] - 105.0) < 1e-6
+        for line in clipped
+    ), [(line.p1_px, line.p2_px) for line in clipped]
+
+
 def test_does_not_merge_across_dimension_chain_boundary():
     # 2 witness-line liền kề của 2760mm và 1525mm, gap ranh giới thật ~22px,
     # có text "1525" nằm ngay trong khoảng trống đó (đúng vị trí witness-line của chính nó bắt đầu)
