@@ -433,8 +433,6 @@ def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
     monkeypatch: pytest.MonkeyPatch,
     damage: str,
 ) -> None:
-    import ezdxf
-
     image_module = importlib.import_module("primitive_ir_lib.run_image")
     monkeypatch.setattr(
         image_module,
@@ -496,8 +494,11 @@ def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
     assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
 
     dxf_path = output / resumed["pages"][0]["stages"]["dxf"]["artifact"]
-    dxf_text = [entity.dxf.text for entity in ezdxf.readfile(dxf_path).modelspace().query("TEXT")]
-    assert "R7,50" in dxf_text
+    dxf_lines = dxf_path.read_text(encoding="utf-8").splitlines()
+    assert any(
+        group_code.strip() == "1" and value == "R7,50"
+        for group_code, value in zip(dxf_lines, dxf_lines[1:])
+    )
     assert {
         artifact: sha256_file(output / artifact) for artifact in second_page_files
     } == second_page_files
