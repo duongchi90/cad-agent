@@ -988,7 +988,8 @@ public sealed class CommandContext
             if (includeInventory)
             {
                 EnsureActiveDocument();
-                if (!ReferenceEquals(_document.Database, database))
+                var currentDatabase = _document.Database;
+                if (currentDatabase is null || !database.Equals(currentDatabase))
                 {
                     throw new InvalidOperationException("The active AutoCAD database changed during ModelSpace inventory.");
                 }

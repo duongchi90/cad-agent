@@ -118,8 +118,12 @@ def test_drawing_setup_audit_ipc_contract_is_versioned_and_read_only() -> None:
     dispatcher = (
         ROOT / "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs"
     ).read_text(encoding="utf-8")
+    command_context = (
+        ROOT / "autocad_plugin/CadAgent.AutoCAD2027/Commands/CommandContext.cs"
+    ).read_text(encoding="utf-8")
     assert '"drawing_setup_audit"' in contract_models
     assert "include_model_space_inventory" in validator
     assert "drawing_setup_audit results must be read-only" in validator
     assert '"drawing_setup_audit" => DispatchDrawingSetupAudit' in dispatcher
     assert "DrawingSetupPayload.Create(snapshot)" in dispatcher
+    assert "currentDatabase is null || !database.Equals(currentDatabase)" in command_context
