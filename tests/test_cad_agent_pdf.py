@@ -10,7 +10,7 @@ import fitz
 import pytest
 
 from cad_agent.cli import main
-from cad_agent.manifest import ManifestError, sha256_file
+from cad_agent.manifest import ManifestError, sha256_file, write_manifest
 from cad_agent.pdf import (
     _resolve_pdf_resume_artifact,
     _validate_pdf_resume_artifacts,
@@ -726,6 +726,30 @@ def test_pdf_resume_refuses_hardlinked_run_manifest_before_render_write(
 
     assert outside.read_bytes() == sentinel
     assert not (output / "pdf" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_manifest_write_preserves_external_bytes_at_preexisting_temp_alias(
+    tmp_path: Path,
+    link_kind: str,
+) -> None:
+    manifest_path = tmp_path / "pdf-run-manifest.json"
+    temporary = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    outside = tmp_path / "outside-manifest.json"
+    sentinel = b"protected external bytes"
+    outside.write_bytes(sentinel)
+    try:
+        if link_kind == "symlink":
+            temporary.symlink_to(outside)
+        else:
+            os.link(outside, temporary)
+    except OSError as exc:
+        pytest.skip(f"{link_kind} unavailable on this workstation: {exc}")
+
+    write_manifest(manifest_path, {"state": "updated"})
+
+    assert outside.read_bytes() == sentinel
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == {"state": "updated"}
 
 
 def test_pdf_pending_render_refuses_later_page_symlink_before_renderer_write(

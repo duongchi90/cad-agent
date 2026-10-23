@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from contextlib import contextmanager
 from collections.abc import Mapping
 from ctypes import wintypes
@@ -799,15 +800,25 @@ def _manifest_lock(path: Path):
 
 def _write_manifest_unlocked(path: Path, manifest: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary: Path | None = None
     try:
-        temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
         os.replace(temporary, path)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
