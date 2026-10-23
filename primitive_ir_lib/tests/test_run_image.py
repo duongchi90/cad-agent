@@ -110,7 +110,7 @@ def test_confirmed_validation_references_a_serialized_line(tmp_path):
     )
 
 
-def test_run_image_deduplicates_only_same_span_exact_pdf_text_and_prefers_vector(tmp_path):
+def test_run_image_deduplicates_same_span_without_dangling_ocr_references(tmp_path):
     image_path = tmp_path / "drawing.png"
     output_path = tmp_path / "primitive_ir.json"
     assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
@@ -136,11 +136,46 @@ def test_run_image_deduplicates_only_same_span_exact_pdf_text_and_prefers_vector
     document = json.loads(output_path.read_text(encoding="utf-8"))
     texts = [item for item in document["primitives"] if item["type"] == "text"]
     assert [(item["text_data"]["content"], item["source"]) for item in texts] == [
-        ("R7,50", "text_pdfvector"),
+        ("R7,50", "text_tesseract"),
         ("R7,50", "text_tesseract"),
         ("R7,50", "text_tesseract"),
         ("Ø14", "text_tesseract"),
     ]
+
+
+def test_run_image_cross_validation_references_saved_text_after_pdf_dedup(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 140, 3), 255, dtype=np.uint8))
+    line = RawLine(
+        "dimension-line", (10.0, 40.0), (110.0, 40.0), 1.0,
+        (10.0, 40.0, 110.0, 40.0),
+    )
+    ocr_text = RawText(
+        "ocr-dimension", "100", (50, 20, 70, 35), 0.0, 1.0,
+        "text_tesseract", parsed_value=100.0, semantic_role="dimension_value",
+    )
+    vector_text = RawText(
+        "pdf-dimension", "100", (50, 20, 70, 35), 0.0, 1.0,
+        "text_pdfvector", parsed_value=100.0, semantic_role="dimension_value",
+    )
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry(lines=[line])),
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr_text]),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 140, 80)],
+            pdf_vector_texts=[vector_text],
+        )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    primitive_ids = {item["id"] for item in payload["primitives"]}
+    assert payload["cross_validations"]
+    assert all(
+        item["text_primitive_id"] in primitive_ids
+        for item in payload["cross_validations"]
+    )
 
 
 def test_pdf_vector_numeric_text_is_not_used_for_automatic_calibration(tmp_path):

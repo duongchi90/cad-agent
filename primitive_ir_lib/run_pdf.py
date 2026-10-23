@@ -97,7 +97,7 @@ def _page_vector_texts(
                     if left >= right or top >= bottom:
                         raise ValueError("span is outside the rendered page")
 
-                    direction = span.get("dir", (1.0, 0.0))
+                    direction = line.get("dir", (1.0, 0.0))
                     dx, dy = float(direction[0]), float(direction[1])
                     if not math.isfinite(dx) or not math.isfinite(dy) or (dx == 0.0 and dy == 0.0):
                         raise ValueError("invalid span direction")

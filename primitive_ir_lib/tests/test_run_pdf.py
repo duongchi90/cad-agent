@@ -63,6 +63,27 @@ def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path
     source_doc.close()
 
 
+def test_run_pdf_preserves_text_rotation_from_line_direction(tmp_path: Path):
+    pdf_path = tmp_path / "independently-rotated-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    origin = fitz.Point(50, 60)
+    page.insert_text(origin, "ROTATED", fontsize=12, morph=(origin, fitz.Matrix(45)))
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    text = next(p for p in payload["primitives"] if p["type"] == "text")
+    assert text["text_data"]["rotation_deg"] == pytest.approx(45.0, abs=0.5)
+
+
 def test_run_pdf_geometry_only_mode_does_not_emit_embedded_text(tmp_path: Path):
     pdf_path = tmp_path / "geometry-only.pdf"
     output_dir = tmp_path / "output"

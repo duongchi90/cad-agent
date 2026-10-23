@@ -96,9 +96,9 @@ def _intersection_over_smaller_bbox(a: RawText, b: RawText) -> float:
 def _combine_pdf_vector_texts(
     pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText]
 ) -> List[RawText]:
-    """Retain PDF text and remove only exact same-span OCR/PDF duplicates."""
+    """Retain OCR identities for same-span duplicates referenced by validation."""
     combined: List[RawText] = []
-    for candidate in [*(pdf_vector_texts or []), *ocr_texts]:
+    for candidate in [*ocr_texts, *(pdf_vector_texts or [])]:
         duplicate_index = next(
             (
                 index for index, prior in enumerate(combined)
@@ -110,8 +110,6 @@ def _combine_pdf_vector_texts(
         )
         if duplicate_index is None:
             combined.append(candidate)
-        elif candidate.source == "text_pdfvector" and combined[duplicate_index].source != "text_pdfvector":
-            combined[duplicate_index] = candidate
     return combined
 
 
