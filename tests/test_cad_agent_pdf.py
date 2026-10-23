@@ -427,6 +427,140 @@ def test_pdf_resume_regenerates_missing_primitive_from_verified_render() -> None
         assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
 
 
+@pytest.mark.parametrize("damage", ["missing", "hash-invalid"], ids=["missing", "hash-invalid"])
+def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    import ezdxf
+
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    monkeypatch.setattr(
+        image_module,
+        "detect_text_candidate_rois",
+        lambda image: [(0, 0, image.shape[1], image.shape[0])],
+    )
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "embedded-text.pdf"
+    document = fitz.open()
+    first = document.new_page(width=400, height=300)
+    first.draw_line((25, 50), (350, 50), width=1)
+    first.insert_text((40, 100), "R7,50", fontsize=14)
+    second = document.new_page(width=400, height=300)
+    second.draw_line((25, 60), (350, 60), width=1)
+    second.insert_text((40, 110), "PAGE TWO", fontsize=14)
+    document.save(source)
+    document.close()
+
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest = new_pdf_manifest(source, 0.5, "synthetic-scale", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_page, second_page = persisted["pages"]
+    first_primitive = output / first_page["stages"]["primitive_ir"]["artifact"]
+    second_page_files = {
+        artifact: sha256_file(output / artifact)
+        for artifact in [
+            second_page["rendered_png"]["artifact"],
+            *(stage["artifact"] for stage in second_page["stages"].values()),
+        ]
+    }
+
+    original_primitive = json.loads(first_primitive.read_text(encoding="utf-8"))
+    original_text = [
+        item for item in original_primitive["primitives"]
+        if item["type"] == "text" and item["text_data"]["content"] == "R7,50"
+    ]
+    assert len(original_text) == 1
+    assert original_text[0]["source"] == "text_pdfvector"
+    if damage == "missing":
+        first_primitive.unlink()
+    else:
+        first_primitive.write_text("invalid cached primitive", encoding="utf-8")
+
+    run_pdf_stages(source, output, manifest_path, persisted)
+
+    resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    regenerated = output / resumed["pages"][0]["stages"]["primitive_ir"]["artifact"]
+    primitive = json.loads(regenerated.read_text(encoding="utf-8"))
+    vector_text = [
+        item for item in primitive["primitives"]
+        if item["type"] == "text" and item["text_data"]["content"] == "R7,50"
+    ]
+    assert len(vector_text) == 1
+    assert vector_text[0]["source"] == "text_pdfvector"
+    assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
+
+    dxf_path = output / resumed["pages"][0]["stages"]["dxf"]["artifact"]
+    dxf_text = [entity.dxf.text for entity in ezdxf.readfile(dxf_path).modelspace().query("TEXT")]
+    assert "R7,50" in dxf_text
+    assert {
+        artifact: sha256_file(output / artifact) for artifact in second_page_files
+    } == second_page_files
+
+    primitive_sha256 = sha256_file(regenerated)
+    manifest_bytes = manifest_path.read_bytes()
+
+    def reject_unexpected_regeneration(*args: object, **kwargs: object) -> None:
+        raise AssertionError("valid PDF page artifacts were regenerated during resume")
+
+    monkeypatch.setattr("primitive_ir_lib.run_pdf.run_pdf", reject_unexpected_regeneration)
+    run_pdf_stages(source, output, manifest_path, resumed)
+    assert sha256_file(regenerated) == primitive_sha256
+    assert manifest_path.read_bytes() == manifest_bytes
+
+
+def test_pdf_resume_does_not_complete_stages_when_source_render_identity_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    pdf_module = importlib.import_module("primitive_ir_lib.run_pdf")
+    monkeypatch.setattr(
+        image_module,
+        "detect_text_candidate_rois",
+        lambda image: [(0, 0, image.shape[1], image.shape[0])],
+    )
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "identity-change.pdf"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 100), "R7,50", fontsize=14)
+    document.save(source)
+    document.close()
+
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest = new_pdf_manifest(source, 0.5, "synthetic-scale", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page_record = persisted["pages"][0]
+    primitive_path = output / page_record["stages"]["primitive_ir"]["artifact"]
+    primitive_path.unlink()
+
+    original_run_pdf = pdf_module.run_pdf
+
+    def changed_render(*args: object, **kwargs: object) -> dict[str, object]:
+        regenerated = original_run_pdf(*args, **kwargs)
+        rendered_path = Path(args[1]) / regenerated["pages"][0]["rendered_png"]
+        rendered_path.write_bytes(b"changed render identity")
+        return regenerated
+
+    monkeypatch.setattr(pdf_module, "run_pdf", changed_render)
+    with pytest.raises(ManifestError, match="render differs"):
+        run_pdf_stages(source, output, manifest_path, persisted)
+
+    failed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert all(stage["state"] == "pending" for stage in failed["pages"][0]["stages"].values())
+    assert not primitive_path.exists()
+
+
 @pytest.mark.parametrize(
     ("ocr_policy", "expected_text", "expected_dimensions"),
     [

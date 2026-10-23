@@ -137,6 +137,171 @@ def _requires_auto_ocr_checkpoint_regeneration(primitive_path: Path) -> bool:
     )
 
 
+def _pdf_page_identity(page: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "page_index",
+        "page",
+        "page_rotation",
+        "page_cropbox",
+        "page_rotation_matrix",
+        "render_scale_px_per_point",
+        "pixmap_origin_px",
+    )
+    if any(key not in page for key in keys):
+        raise ManifestError("PDF page render identity is incomplete.")
+    return {key: page[key] for key in keys}
+
+
+def _regenerate_primitive_from_pdf(
+    source: Path,
+    output_dir: Path,
+    page: dict[str, Any],
+    primitive: Path,
+    manifest: dict[str, Any],
+) -> None:
+    """Regenerate one invalid page IR through the source-aware PDF owner."""
+    import os
+    import shutil
+    import tempfile
+
+    from primitive_ir_lib.run_pdf import run_pdf
+
+    config = manifest["configuration"]
+    source_info = manifest.get("source")
+    source_sha256 = source_info.get("sha256") if isinstance(source_info, dict) else None
+    render_stage = manifest.get("render")
+    if (
+        not isinstance(source_sha256, str)
+        or not isinstance(render_stage, dict)
+        or not _completed(output_dir, render_stage)
+    ):
+        raise ManifestError("PDF source or render checkpoint is invalid for Primitive IR recovery.")
+
+    existing_render_manifest_path = output_dir / render_stage["artifact"]
+    try:
+        existing_render_manifest = json.loads(
+            existing_render_manifest_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError("PDF render manifest cannot be read for Primitive IR recovery.") from exc
+    if (
+        existing_render_manifest.get("status") != "complete"
+        or existing_render_manifest.get("source_pdf_sha256") != source_sha256
+        or existing_render_manifest.get("render_dpi") != int(config["dpi"])
+        or existing_render_manifest.get("scale_mm_per_px") != float(config["scale_mm_per_px"])
+    ):
+        raise ManifestError("PDF render manifest identity does not match the run configuration.")
+
+    page_number = page.get("page")
+    page_index = page_number - 1 if isinstance(page_number, int) else None
+    existing_pages = [
+        item for item in existing_render_manifest.get("pages", [])
+        if isinstance(item, dict)
+        and item.get("page") == page_number
+        and item.get("page_index") == page_index
+    ]
+    if len(existing_pages) != 1:
+        raise ManifestError("PDF render manifest does not identify exactly one requested page.")
+    existing_page = existing_pages[0]
+    old_rendered = output_dir / page["rendered_png"]["artifact"]
+    if (
+        not _completed(output_dir, page.get("rendered_png", {}))
+        or existing_page.get("rendered_png_sha256") != page["rendered_png"].get("sha256")
+        or sha256_file(old_rendered) != page["rendered_png"].get("sha256")
+    ):
+        raise ManifestError("Verified rendered page does not match its PDF source identity.")
+
+    identity = _pdf_page_identity(existing_page)
+    if identity["page"] != page_number or identity["page_index"] != page_index:
+        raise ManifestError("PDF render manifest page identity does not match the requested page.")
+
+    with tempfile.TemporaryDirectory(
+        prefix="cad-agent-pdf-resume-",
+        dir=output_dir.parent,
+    ) as temporary_directory:
+        temporary_root = Path(temporary_directory)
+        regenerated_manifest = run_pdf(
+            source,
+            temporary_root / "pdf",
+            scale_mm_per_px=float(config["scale_mm_per_px"]),
+            dpi=int(config["dpi"]),
+            preset="real_scan_tuned_v1",
+            merge_lines=True,
+            auto_ocr_roi=bool(config.get("auto_ocr_roi", False)),
+        )
+        if (
+            sha256_file(source) != source_sha256
+            or regenerated_manifest.get("status") != "complete"
+            or regenerated_manifest.get("source_pdf_sha256") != source_sha256
+            or regenerated_manifest.get("render_dpi") != int(config["dpi"])
+            or regenerated_manifest.get("scale_mm_per_px") != float(config["scale_mm_per_px"])
+        ):
+            raise ManifestError("Source PDF changed or regenerated extraction identity is invalid.")
+
+        regenerated_pages = [
+            item for item in regenerated_manifest.get("pages", [])
+            if isinstance(item, dict)
+            and item.get("page") == page_number
+            and item.get("page_index") == page_index
+        ]
+        if len(regenerated_pages) != 1:
+            raise ManifestError("Regenerated PDF does not identify exactly one requested page.")
+        regenerated_page = regenerated_pages[0]
+        if _pdf_page_identity(regenerated_page) != identity:
+            raise ManifestError("Regenerated PDF page transform does not match the verified page.")
+
+        regenerated_render = temporary_root / "pdf" / regenerated_page["rendered_png"]
+        regenerated_render_sha256 = sha256_file(regenerated_render)
+        if (
+            regenerated_page.get("rendered_png_sha256") != regenerated_render_sha256
+            or regenerated_render_sha256 != page["rendered_png"].get("sha256")
+        ):
+            raise ManifestError("Regenerated PDF page render differs from its verified checkpoint.")
+
+        regenerated_primitive = temporary_root / "pdf" / regenerated_page["primitive_ir"]
+        try:
+            regenerated_payload = json.loads(regenerated_primitive.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ManifestError("Regenerated Primitive IR cannot be read.") from exc
+        primitives = regenerated_payload.get("primitives") if isinstance(regenerated_payload, dict) else None
+        source_document = (
+            regenerated_payload.get("source_document")
+            if isinstance(regenerated_payload, dict)
+            else None
+        )
+        if (
+            not isinstance(source_document, dict)
+            or source_document.get("page_index") != page_index
+            or not isinstance(primitives, list)
+            or len(primitives) != regenerated_page.get("primitive_count")
+        ):
+            raise ManifestError("Regenerated Primitive IR does not match its PDF page record.")
+
+        primitive.parent.mkdir(parents=True, exist_ok=True)
+        temporary_primitive: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{primitive.name}.",
+                suffix=".tmp",
+                dir=primitive.parent,
+                delete=False,
+            ) as target:
+                temporary_primitive = Path(target.name)
+                with regenerated_primitive.open("rb") as source_file:
+                    shutil.copyfileobj(source_file, target)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary_primitive, primitive)
+            temporary_primitive = None
+        finally:
+            if temporary_primitive is not None:
+                temporary_primitive.unlink(missing_ok=True)
+
+        if sha256_file(primitive) != sha256_file(regenerated_primitive):
+            raise ManifestError("Regenerated Primitive IR promotion failed hash verification.")
+
+
 def _page_record(
     number: int,
     primitive: Path,
@@ -371,7 +536,7 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
     _ensure_rendered(source, output_dir, manifest_path, manifest)
 
     # Import late to keep the PDF module usable independently of CLI argument parsing.
-    from .cli import _run_dxf, _run_primitive, _run_semantic
+    from .cli import _run_dxf, _run_semantic
 
     for page in manifest["pages"]:
         stages = page["stages"]
@@ -389,15 +554,7 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
             stages["dxf"] = _stage(artifact=stages["dxf"].get("artifact"))
             stages["build_evidence"] = _stage(artifact=stages["build_evidence"].get("artifact"))
             write_manifest(manifest_path, manifest)
-            rendered = output_dir / page["rendered_png"]["artifact"]
-            if not _completed(output_dir, page.get("rendered_png", {})):
-                raise ManifestError(f"PDF page {page['page']} rendered-page checkpoint is invalid.")
-            _run_primitive(
-                rendered,
-                primitive,
-                float(manifest["configuration"]["scale_mm_per_px"]),
-                auto_ocr_roi=bool(manifest["configuration"].get("auto_ocr_roi", False)),
-            )
+            _regenerate_primitive_from_pdf(source, output_dir, page, primitive, manifest)
             _write_page_stage(manifest_path, manifest, page, "primitive_ir", primitive, "Primitive IR regenerated from verified rendered page.")
         semantic = output_dir / "semantic_ir" / f"page_{page['page']:02d}.json"
         dxf = output_dir / "dxf" / f"page_{page['page']:02d}.dxf"
