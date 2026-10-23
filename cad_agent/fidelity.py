@@ -1275,6 +1275,113 @@ def _approved_region_text_candidates(
     return candidates, {"detector_roi_count": detector_roi_count, "ocr_call_count": ocr_call_count}
 
 
+def _approved_region_selection(
+    output_root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+) -> tuple[int, list[dict[str, Any]]]:
+    if not _is_within(approval_path, output_root) or not approval_path.is_file():
+        raise FidelityError("Region approval must reside inside the private fidelity output root.")
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Region approval is invalid JSON.") from exc
+    if (
+        approval.get("schema_version") != "fidelity-region-approval-1.0"
+        or approval.get("private_artifact") is not True
+        or approval.get("state") != "approved-layout-reconstruction-only"
+        or approval.get("source") != manifest.get("source")
+    ):
+        raise FidelityError("Region approval is not valid for fresh OCR reconstruction.")
+    page_record = approval.get("page")
+    page_number = page_record.get("number") if isinstance(page_record, dict) else None
+    if page_number != 1:
+        raise FidelityError("Approved-region text reconstruction is page 1 only.")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
+    if page is None:
+        raise FidelityError("Region approval page is absent from the fidelity manifest.")
+    rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    if page_record.get("render_sha256") != sha256_file(rendered):
+        raise FidelityError("Region approval render hash no longer matches the page artifact.")
+    proposal_record = approval.get("proposal")
+    if not isinstance(proposal_record, dict):
+        raise FidelityError("Region approval is missing its proposal provenance.")
+    proposal_path = _safe_artifact_path(output_root, proposal_record)
+    proposal = _validate_approved_region_text_proposal(
+        json.loads(proposal_path.read_text(encoding="utf-8")),
+        proposal_record,
+        manifest,
+        page,
+        rendered,
+        output_root,
+        page_number,
+    )
+    approved_ids = approval.get("approved_region_ids")
+    if not isinstance(approved_ids, list) or not approved_ids:
+        raise FidelityError("Region approval must name approved regions.")
+    selected = [item for item in proposal.get("regions", []) if isinstance(item, dict) and item.get("id") in approved_ids]
+    if len(selected) != len(approved_ids):
+        raise FidelityError("Region approval names an unknown region.")
+    return page_number, selected
+
+
+def _fresh_fidelity_ocr_candidates(
+    source: Path,
+    output_root: Path,
+    manifest: dict[str, Any],
+    page: dict[str, Any],
+    observation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    page_number = page.get("page")
+    dpi = manifest.get("configuration", {}).get("dpi")
+    if type(page_number) is not int or page_number < 1 or type(dpi) is not int or dpi <= 0:
+        raise FidelityError("Fresh OCR requires valid source page and render DPI metadata.")
+    try:
+        with fitz.open(source) as document:
+            if page_number > len(document):
+                raise FidelityError("Fresh OCR page is absent from the source PDF.")
+            pixmap = document[page_number - 1].get_pixmap(
+                matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False,
+            )
+        fresh_image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), dtype=np.uint8), cv2.IMREAD_COLOR)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise FidelityError("Could not render the source PDF page for fresh OCR.") from exc
+    if fresh_image is None:
+        raise FidelityError("Fresh OCR could not decode the source PDF page render.")
+
+    rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+    stored_image = cv2.imread(str(rendered_path))
+    if stored_image is None or stored_image.shape != fresh_image.shape or not np.array_equal(stored_image, fresh_image):
+        raise FidelityError("Fresh OCR source render does not match the reviewed page frame.")
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    source_page = audit.get("source_page", {})
+    if (
+        type(source_page.get("page")) is not int
+        or
+        source_page.get("page") != page_number
+        or source_page.get("render_width_px") != fresh_image.shape[1]
+        or source_page.get("render_height_px") != fresh_image.shape[0]
+    ):
+        raise FidelityError("Fresh OCR source page does not match the reviewed audit frame.")
+
+    candidates = _fidelity_text_candidate_records(fresh_image)
+    region_record = observation.get("region_approval")
+    if region_record is None:
+        regions = []
+    elif not isinstance(region_record, dict):
+        raise FidelityError("Text observation has invalid approved-region provenance.")
+    else:
+        region_path = _safe_artifact_path(output_root, region_record)
+        region_page, regions = _approved_region_selection(output_root, manifest, region_path)
+        if region_page != page_number:
+            raise FidelityError("Text observation approved-region page does not match fresh OCR page.")
+    if regions:
+        extra, _ = _approved_region_text_candidates(fresh_image, regions)
+        candidates.extend(extra)
+    return candidates
+
+
 def run_fidelity_text_observations(
     source: Path,
     output_root: Path,
@@ -1290,51 +1397,7 @@ def run_fidelity_text_observations(
     approved_regions_by_page: dict[int, list[dict[str, Any]]] = {}
     region_approval_record: dict[str, str] | None = None
     if region_approval_path is not None:
-        if not _is_within(region_approval_path, output_root) or not region_approval_path.is_file():
-            raise FidelityError("Region approval must reside inside the private fidelity output root.")
-        try:
-            approval = json.loads(region_approval_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise FidelityError("Region approval is invalid JSON.") from exc
-        if (
-            approval.get("schema_version") != "fidelity-region-approval-1.0"
-            or approval.get("private_artifact") is not True
-            or approval.get("state") != "approved-layout-reconstruction-only"
-            or approval.get("source") != manifest.get("source")
-        ):
-            raise FidelityError("Region approval is not valid for text observation.")
-        page_record = approval.get("page")
-        page_number = page_record.get("number") if isinstance(page_record, dict) else None
-        if page_number != 1:
-            raise FidelityError("Approved-region text observation is page 1 only.")
-        page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
-        if page is None:
-            raise FidelityError("Region approval page is absent from the fidelity manifest.")
-        rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
-        if page_record.get("render_sha256") != sha256_file(rendered):
-            raise FidelityError("Region approval render hash no longer matches the page artifact.")
-        proposal_record = approval.get("proposal")
-        if not isinstance(proposal_record, dict):
-            raise FidelityError("Region approval is missing its proposal provenance.")
-        proposal_path = _safe_artifact_path(output_root, proposal_record)
-        proposal = _validate_approved_region_text_proposal(
-            json.loads(proposal_path.read_text(encoding="utf-8")),
-            proposal_record,
-            manifest,
-            page,
-            rendered,
-            output_root,
-            page_number,
-        )
-        approved_ids = approval.get("approved_region_ids")
-        if not isinstance(approved_ids, list) or not approved_ids:
-            raise FidelityError("Region approval must name approved regions.")
-        selected = [
-            item for item in proposal.get("regions", [])
-            if isinstance(item, dict) and item.get("id") in approved_ids
-        ]
-        if len(selected) != len(approved_ids):
-            raise FidelityError("Region approval names an unknown region.")
+        page_number, selected = _approved_region_selection(output_root, manifest, region_approval_path)
         approved_regions_by_page[page_number] = selected
         region_approval_record = _artifact(region_approval_path, output_root)
     outputs: list[Path] = []
@@ -1357,6 +1420,80 @@ def run_fidelity_text_observations(
             for item in raw_texts
             if isinstance(item, dict) and isinstance(item.get("content"), str) and item["content"].strip()
         ]
+        native_candidates: list[dict[str, Any]] = []
+        source_document = fitz.open(source)
+        try:
+            page_number = page.get("page")
+            if type(page_number) is not int or page_number < 1 or page_number > len(source_document):
+                raise FidelityError("Native PDF text mapping has invalid manifest page metadata.")
+            source_page = source_document[page_number - 1]
+            cropbox = source_page.cropbox
+            mediabox = source_page.mediabox
+            displayed = source_page.rect
+            if source_page.get_text("text").strip():
+                if (
+                    source_page.rotation != 0
+                    or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(cropbox, mediabox))
+                    or any(abs(float(left) - float(right)) > 1e-6 for left, right in zip(cropbox, displayed))
+                    or manifest.get("configuration", {}).get("transform") != "displayed-page-box-v1"
+                ):
+                    raise FidelityError("Unsupported native PDF text mapping frame.")
+                source_page_audit = audit.get("source_page", {})
+                rendered_path = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
+                rendered_image = cv2.imread(str(rendered_path))
+                if rendered_image is None:
+                    raise FidelityError("Native PDF text mapping cannot read the rendered page.")
+                render_sha256 = sha256_file(rendered_path)
+                render_width = source_page_audit.get("render_width_px")
+                render_height = source_page_audit.get("render_height_px")
+                if (
+                    type(source_page_audit.get("page")) is not int
+                    or source_page_audit.get("page") != page_number
+                    or source_page_audit.get("render_sha256") != render_sha256
+                    or type(render_width) is not int or type(render_height) is not int
+                    or render_width <= 0 or render_height <= 0
+                    or rendered_image.shape[1] != render_width
+                    or rendered_image.shape[0] != render_height
+                ):
+                    raise FidelityError("Native PDF text mapping is missing current render provenance.")
+                scale_x = render_width / displayed.width
+                scale_y = render_height / displayed.height
+                for block_index, block in enumerate(source_page.get_text("dict").get("blocks", [])):
+                    for line_index, line in enumerate(block.get("lines", [])):
+                        for span_index, span in enumerate(line.get("spans", [])):
+                            content = span.get("text")
+                            bbox = span.get("bbox")
+                            if not isinstance(content, str) or not content or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                                continue
+                            rect = fitz.Rect(bbox)
+                            if rect.is_empty or not rect.is_valid:
+                                continue
+                            corners = [
+                                fitz.Point(rect.x0, rect.y0), fitz.Point(rect.x1, rect.y0),
+                                fitz.Point(rect.x1, rect.y1), fitz.Point(rect.x0, rect.y1),
+                            ]
+                            mapped = [point * source_page.rotation_matrix for point in corners]
+                            x0 = (min(point.x for point in mapped) - displayed.x0) * scale_x
+                            y0 = (min(point.y for point in mapped) - displayed.y0) * scale_y
+                            x1 = (max(point.x for point in mapped) - displayed.x0) * scale_x
+                            y1 = (max(point.y for point in mapped) - displayed.y0) * scale_y
+                            if x0 < 0 or y0 < 0 or x1 > render_width or y1 > render_height or x1 <= x0 or y1 <= y0:
+                                continue
+                            native_candidates.append({
+                                "id": f"native-pdf-p{page['page']:02d}-b{block_index:03d}-l{line_index:03d}-s{span_index:03d}",
+                                "content": content,
+                                "bbox_px": [x0, y0, x1, y1],
+                                "rotation_deg": math.degrees(math.atan2(line.get("dir", (1.0, 0.0))[1], line.get("dir", (1.0, 0.0))[0])),
+                                "evidence_kind": "native_pdf",
+                                "visibility": "unverified",
+                                "source_span_bbox_pt": [float(value) for value in bbox],
+                                "source_sha256": manifest["source"]["sha256"],
+                                "render_sha256": render_sha256,
+                                "mapping_version": "displayed-page-box-v1",
+                                "semantic_role": None,
+                            })
+        finally:
+            source_document.close()
         approved_region_ocr: dict[str, Any] | None = None
         if page["page"] in approved_regions_by_page:
             rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
@@ -1384,8 +1521,13 @@ def run_fidelity_text_observations(
             "page": page["page"],
             "source_layout_audit": audit_record,
             "candidates": candidates,
+            "native_pdf_spans": native_candidates,
             "unresolved": ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"],
         }
+        if native_candidates:
+            payload["unresolved"].append(
+                "native PDF spans are separate unverified evidence; they are not OCR approval or reconstruction candidates"
+            )
         if region_approval_record is not None and page["page"] in approved_regions_by_page:
             payload["region_approval"] = region_approval_record
             payload["approved_region_ocr"] = approved_region_ocr
@@ -2209,12 +2351,94 @@ def run_fidelity_text_reconstruct(
     verify_source(manifest, source)
     if not _is_within(approval_path, output_root) or not approval_path.is_file():
         raise FidelityError("Text approval must reside inside the private fidelity output root.")
-    approval = json.loads(approval_path.read_text(encoding="utf-8"))
-    if approval.get("state") != "approved-text-candidates-only" or approval.get("source") != manifest.get("source"):
-        raise FidelityError("Text approval is not valid for reconstruction.")
-    page = next((item for item in manifest["pages"] if item["page"] == approval.get("page")), None)
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Text approval is invalid JSON.") from exc
+    if (
+        not isinstance(approval, dict)
+        or approval.get("schema_version") != "fidelity-text-approval-1.0"
+        or approval.get("private_artifact") is not True
+        or approval.get("state") != "approved-text-candidates-only"
+        or approval.get("source") != manifest.get("source")
+        or not isinstance(approval.get("approval_reference"), str)
+        or not approval["approval_reference"].strip()
+    ):
+        raise FidelityError("Text approval has an unsupported or incomplete schema.")
+    page_number = approval.get("page")
+    if type(page_number) is not int or page_number <= 0:
+        raise FidelityError("Text approval page must be a positive integer.")
+    page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
     if page is None:
         raise FidelityError("Text approval page is absent from the fidelity manifest.")
+
+    observation_record = approval.get("observation")
+    if not isinstance(observation_record, dict):
+        raise FidelityError("Text approval is missing hash-bound OCR observation provenance.")
+    canonical_observation = output_root / "fidelity_text_observations" / f"page_{page_number:02d}.json"
+    canonical_record_path = canonical_observation.resolve().relative_to(output_root.resolve()).as_posix()
+    if observation_record.get("artifact") != canonical_record_path:
+        raise FidelityError("Text approval must reference the canonical OCR observation.")
+    observation_path = _safe_artifact_path(output_root, observation_record)
+    try:
+        observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FidelityError("Text observation is invalid JSON.") from exc
+    if (
+        not isinstance(observation, dict)
+        or observation.get("schema_version") != "fidelity-text-observation-1.0"
+        or observation.get("private_artifact") is not True
+        or observation.get("state") != "needs_human_approval"
+        or observation.get("source") != manifest.get("source")
+        or type(observation.get("page")) is not int
+        or observation.get("page") != page_number
+        or observation.get("source_layout_audit") != page.get("artifacts", {}).get("layout_audit")
+    ):
+        raise FidelityError("Text observation does not match the approval source and page.")
+
+    observation_candidates = observation.get("candidates")
+    if not isinstance(observation_candidates, list):
+        raise FidelityError("Text observation has no OCR candidate list.")
+    fresh_candidates = _fresh_fidelity_ocr_candidates(source, output_root, manifest, page, observation)
+    fresh_candidate_evidence = Counter(_ocr_candidate_evidence_key(item) for item in fresh_candidates)
+    ocr_candidates: dict[str, dict[str, Any]] = {}
+    for item in observation_candidates:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            raise FidelityError("Text observation contains an invalid OCR candidate.")
+        if item.get("source") != "text_tesseract":
+            raise FidelityError("Text observation contains evidence that is not from the OCR path.")
+        if item["id"] in ocr_candidates:
+            raise FidelityError("Text observation contains duplicate OCR candidate ids.")
+        ocr_candidates[item["id"]] = item
+    approved_records = approval.get("approved_candidates")
+    if not isinstance(approved_records, list) or not approved_records:
+        raise FidelityError("Text approval requires approved OCR candidates.")
+    approved_candidates = []
+    approved_ids: set[str] = set()
+    for approved in approved_records:
+        candidate = approved.get("candidate") if isinstance(approved, dict) else None
+        candidate_id = candidate.get("id") if isinstance(candidate, dict) else None
+        if not isinstance(candidate_id, str) or candidate_id not in ocr_candidates:
+            raise FidelityError("Text approval references an unknown OCR candidate.")
+        if candidate_id in approved_ids or candidate != ocr_candidates[candidate_id]:
+            raise FidelityError("Text approval candidate does not match its hash-bound OCR observation.")
+        glyph_render = approved.get("glyph_render")
+        content = candidate.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise FidelityError("Text approval contains an invalid OCR candidate.")
+        evidence_key = _ocr_candidate_evidence_key(candidate)
+        if fresh_candidate_evidence[evidence_key] <= 0:
+            raise FidelityError("Text approval candidate does not match fresh OCR evidence from the source PDF.")
+        fresh_candidate_evidence[evidence_key] -= 1
+        current_glyph_render = _unicode_glyph_render_check(content)
+        if (
+            not isinstance(glyph_render, dict)
+            or not current_glyph_render["passed"]
+            or glyph_render != current_glyph_render
+        ):
+            raise FidelityError("Text approval is missing matching passing Unicode glyph-render evidence.")
+        approved_ids.add(candidate_id)
+        approved_candidates.append({"candidate": ocr_candidates[candidate_id], "glyph_render": glyph_render})
     if base_dxf is not None and (not _is_within(base_dxf, output_root) or not base_dxf.is_file()):
         raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
     import ezdxf
@@ -2231,7 +2455,7 @@ def run_fidelity_text_reconstruct(
         raise FidelityError("Cannot read rendered page for text reconstruction sizing.")
     emitted = 0
     sizing_records: list[dict[str, Any]] = []
-    for approved in approval.get("approved_candidates", []):
+    for approved in approved_candidates:
         candidate = approved.get("candidate", {})
         content = candidate.get("content")
         bbox = candidate.get("bbox_px")
@@ -2806,9 +3030,8 @@ def _observe_hatch_candidates(image: np.ndarray) -> list[dict[str, Any]]:
     return [{"id": f"hatch-{index:03d}", **candidate} for index, candidate in enumerate(candidates, start=1)]
 
 
-def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
+def _fidelity_page_text_rois(image: np.ndarray) -> tuple[int, list[tuple[int, int, int, int]]]:
     height, width = image.shape[:2]
-    _configure_tesseract(None)
     page_area = width * height
     detected = [
         roi for roi in detect_text_candidate_rois(image)
@@ -2819,7 +3042,47 @@ def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: 
     # review instead of letting a private batch hang indefinitely.
     detected.sort(key=lambda roi: (roi[2] - roi[0]) * (roi[3] - roi[1]), reverse=True)
     rois = _deduplicate_rois([_title_block_roi(width, height), *detected[:8]])
-    texts = extract_text_tesseract(image, roi_boxes=rois, min_confidence=20, psm=11)
+    return len(detected), rois
+
+
+def _fidelity_page_text_ocr(
+    image: np.ndarray,
+    rois: list[tuple[int, int, int, int]] | None = None,
+) -> list[Any]:
+    _configure_tesseract(None)
+    if rois is None:
+        _, rois = _fidelity_page_text_rois(image)
+    return extract_text_tesseract(image, roi_boxes=rois, min_confidence=20, psm=11)
+
+
+def _fidelity_text_candidate_records(image: np.ndarray) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": item.id,
+            "content": item.content.strip(),
+            "bbox_px": list(item.bbox_px),
+            "rotation_deg": item.rotation_deg,
+            "confidence": item.confidence,
+            "source": item.source,
+            "semantic_role": item.semantic_role,
+            "parsed_value": item.parsed_value,
+        }
+        for item in _fidelity_page_text_ocr(image)
+        if isinstance(item.content, str) and item.content.strip()
+    ]
+
+
+def _ocr_candidate_evidence_key(candidate: dict[str, Any]) -> str:
+    # Candidate IDs are run-local labels; OCR provenance is the exact recognized
+    # content and geometry produced again from the current source render.
+    evidence = {key: value for key, value in candidate.items() if key != "id"}
+    return json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: Path) -> dict[str, Any]:
+    height, width = image.shape[:2]
+    detected_count, rois = _fidelity_page_text_rois(image)
+    texts = _fidelity_page_text_ocr(image, rois)
     scale_candidates = detect_view_candidates(texts, raw_geometry.lines, width, height, dpi=dpi)
     return {
         "schema_version": "layout-audit-1.0",
@@ -2831,7 +3094,7 @@ def _audit_page(image, raw_geometry, dpi: int, page_number: int, rendered_path: 
             "render_height_px": height,
             "dpi": dpi,
         },
-        "ocr": {"engine": "tesseract-local", "psm": 11, "roi_limit": 9, "detected_roi_count": len(detected), "rois_px": [list(roi) for roi in rois], "texts": [_raw_text_payload(text) for text in texts]},
+        "ocr": {"engine": "tesseract-local", "psm": 11, "roi_limit": 9, "detected_roi_count": detected_count, "rois_px": [list(roi) for roi in rois], "texts": [_raw_text_payload(text) for text in texts]},
         "table_audit": {"status": "not_evaluated", "reason": "table-region approval is required before per-cell OCR"},
         "scale_candidates": scale_candidates,
         "unresolved": ["OCR output is sidecar-only", "No model-space view is authorized"],
