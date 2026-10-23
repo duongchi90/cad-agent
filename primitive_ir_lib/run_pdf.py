@@ -23,7 +23,9 @@ import fitz
 import numpy as np
 
 from .calibration_registry import get_verified_scale
+from .models import new_id
 from .run_image import run
+from .text_extraction import RawText
 
 
 def _candidate_crop_bbox(
@@ -35,6 +37,97 @@ def _candidate_crop_bbox(
     x1 = min(width, int(max(box[2] for box in boxes)) + padding_px)
     y1 = min(height, int(max(box[3] for box in boxes)) + padding_px)
     return x0, y0, x1, y1
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _matrix_values(matrix: fitz.Matrix) -> list[float]:
+    values = [float(matrix.a), float(matrix.b), float(matrix.c), float(matrix.d), float(matrix.e), float(matrix.f)]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("PDF page transform contains a non-finite value")
+    return [round(value, 8) for value in values]
+
+
+def _page_vector_texts(
+    page: fitz.Page,
+    pixel_scale: float,
+    pixmap_origin: tuple[int, int],
+    image_size: tuple[int, int],
+) -> tuple[list[RawText], str, int]:
+    """Extract embedded PDF spans in the exact page-render pixel frame."""
+    if page.rotation not in {0, 90, 180, 270}:
+        return [], "unsupported_page_rotation", 0
+    try:
+        _matrix_values(page.rotation_matrix)
+        blocks = page.get_text("dict")["blocks"]
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+        return [], f"unavailable:{type(exc).__name__}", 0
+
+    width_px, height_px = image_size
+    origin_x, origin_y = pixmap_origin
+    extracted: list[RawText] = []
+    skipped = 0
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                content = span.get("text")
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                try:
+                    bbox = tuple(float(value) for value in span["bbox"])
+                    if len(bbox) != 4 or not all(math.isfinite(value) for value in bbox):
+                        raise ValueError("invalid span bbox")
+                    x0, y0, x1, y1 = bbox
+                    if x0 >= x1 or y0 >= y1:
+                        raise ValueError("degenerate span bbox")
+                    transformed = [
+                        fitz.Point(x, y) * page.rotation_matrix
+                        for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1))
+                    ]
+                    left = max(0, math.floor(min(point.x for point in transformed) * pixel_scale - origin_x))
+                    top = max(0, math.floor(min(point.y for point in transformed) * pixel_scale - origin_y))
+                    right = min(width_px, math.ceil(max(point.x for point in transformed) * pixel_scale - origin_x))
+                    bottom = min(height_px, math.ceil(max(point.y for point in transformed) * pixel_scale - origin_y))
+                    if left >= right or top >= bottom:
+                        raise ValueError("span is outside the rendered page")
+
+                    direction = span.get("dir", (1.0, 0.0))
+                    dx, dy = float(direction[0]), float(direction[1])
+                    if not math.isfinite(dx) or not math.isfinite(dy) or (dx == 0.0 and dy == 0.0):
+                        raise ValueError("invalid span direction")
+                    vector_start = fitz.Point(0, 0) * page.rotation_matrix
+                    vector_end = fitz.Point(dx, dy) * page.rotation_matrix
+                    rotation_deg = math.degrees(
+                        math.atan2(-(vector_end.y - vector_start.y), vector_end.x - vector_start.x)
+                    )
+                    if not math.isfinite(rotation_deg):
+                        raise ValueError("invalid transformed span direction")
+                except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+                    skipped += 1
+                    continue
+
+                extracted.append(
+                    RawText(
+                        id=new_id("pdf-text"),
+                        content=content,
+                        bbox_px=(left, top, right, bottom),
+                        rotation_deg=rotation_deg,
+                        confidence=1.0,
+                        source="text_pdfvector",
+                        semantic_role="unknown",
+                    )
+                )
+    if skipped:
+        status = "partial_unsupported_spans" if extracted else "unsupported_spans"
+    else:
+        status = "available" if extracted else "no_text"
+    return extracted, status, skipped
 
 
 def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
@@ -1448,8 +1541,10 @@ def run_pdf(
     scale = dpi / 72.0
     manifest = {
         "source_pdf": pdf_path.name,
+        "source_pdf_sha256": _sha256_file(pdf_path),
         "render_dpi": dpi,
         "scale_mm_per_px": scale_mm_per_px if scale_mm_per_px is not None else "auto",
+        "pdf_vector_text_visibility": "not_assessed",
         "pages": [],
     }
     document = fitz.open(str(pdf_path))
@@ -1459,7 +1554,14 @@ def run_pdf(
                 _page_circle_witnesses(page, scale)
             )
             image_path = render_dir / f"page_{index:02d}.png"
-            page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(str(image_path))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            pixmap.save(str(image_path))
+            pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
+                page,
+                scale,
+                (pixmap.x, pixmap.y),
+                (pixmap.width, pixmap.height),
+            )
             output_path = ir_dir / f"page_{index:02d}.json"
             view_candidates_path = ir_dir / f"page_{index:02d}.view_candidates.json"
             page_calibration_id = (
@@ -1486,6 +1588,8 @@ def run_pdf(
                 calibration_id=page_calibration_id,
                 view_candidates_output_path=str(view_candidates_path),
                 view_candidates_dpi=dpi,
+                pdf_vector_texts=pdf_vector_texts,
+                source_page_index=index - 1,
                 **vector_kwargs,
             )
             payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -1504,9 +1608,18 @@ def run_pdf(
             )
             manifest["pages"].append(
                 {
+                    "page_index": index - 1,
                     "page": index,
+                    "page_rotation": page.rotation,
+                    "page_cropbox": [round(float(value), 8) for value in page.cropbox],
+                    "page_rotation_matrix": _matrix_values(page.rotation_matrix),
+                    "render_scale_px_per_point": scale,
+                    "pixmap_origin_px": [pixmap.x, pixmap.y],
                     "rendered_png": str(image_path.relative_to(output_dir)),
+                    "rendered_png_sha256": _sha256_file(image_path),
                     "primitive_ir": str(output_path.relative_to(output_dir)),
+                    "pdf_vector_text_status": pdf_text_status,
+                    "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
                     "primitive_count": len(payload["primitives"]),
                     "cross_validation_count": len(payload["cross_validations"]),
                     "calibration_method": payload["calibration"]["method"],

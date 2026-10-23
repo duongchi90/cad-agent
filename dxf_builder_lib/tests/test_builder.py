@@ -110,6 +110,24 @@ def test_build_line_circle_text_assigns_handles_and_writes_file():
     print("OK   test_build_line_circle_text_assigns_handles_and_writes_file")
 
 
+def test_build_dxf_accepts_pdf_vector_text_without_changing_text_content():
+    if not _HAS_EZDXF:
+        pytest.skip("ezdxf prerequisite unavailable")
+    vector_text = Primitive(
+        id="pdf-label", type="text", source="text_pdfvector", confidence=1.0,
+        trace=Trace(bbox_px=(10, 10, 30, 20), extraction_tool="pymupdf"),
+        text_data=TextData("R7,50", Point2D(10, 20), rotation_deg=0.0, height=12.0),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "pdf-vector-text.dxf")
+        result = build_dxf(_doc(vector_text), out_path)
+        assert result.entity_count == 1
+        reopened = ezdxf.readfile(out_path)
+        text_entities = list(reopened.modelspace().query("TEXT"))
+        assert len(text_entities) == 1
+        assert text_entities[0].dxf.text == "R7,50"
+
+
 def test_layer_assigned_by_part_type_from_semantic_doc():
     if not _HAS_EZDXF:
         print("SKIP test_layer_assigned_by_part_type_from_semantic_doc — chưa cài ezdxf")

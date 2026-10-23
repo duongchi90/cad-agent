@@ -31,7 +31,7 @@ from .cross_validation import cross_validate
 from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
-from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
+from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
@@ -80,6 +80,41 @@ def _sha256(path: str) -> str:
     return digest.hexdigest()
 
 
+def _intersection_over_smaller_bbox(a: RawText, b: RawText) -> float:
+    ax0, ay0, ax1, ay1 = a.bbox_px
+    bx0, by0, bx1, by1 = b.bbox_px
+    area_a = max(0, ax1 - ax0) * max(0, ay1 - ay0)
+    area_b = max(0, bx1 - bx0) * max(0, by1 - by0)
+    smaller_area = min(area_a, area_b)
+    if smaller_area <= 0:
+        return 0.0
+    overlap_width = max(0, min(ax1, bx1) - max(ax0, bx0))
+    overlap_height = max(0, min(ay1, by1) - max(ay0, by0))
+    return (overlap_width * overlap_height) / smaller_area
+
+
+def _combine_pdf_vector_texts(
+    pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText]
+) -> List[RawText]:
+    """Retain PDF text and remove only exact same-span OCR/PDF duplicates."""
+    combined: List[RawText] = []
+    for candidate in [*(pdf_vector_texts or []), *ocr_texts]:
+        duplicate_index = next(
+            (
+                index for index, prior in enumerate(combined)
+                if (candidate.source == "text_pdfvector" or prior.source == "text_pdfvector")
+                and candidate.content == prior.content
+                and _intersection_over_smaller_bbox(candidate, prior) >= 0.90
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            combined.append(candidate)
+        elif candidate.source == "text_pdfvector" and combined[duplicate_index].source != "text_pdfvector":
+            combined[duplicate_index] = candidate
+    return combined
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -100,6 +135,8 @@ def run(
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
+    pdf_vector_texts: Optional[List[RawText]] = None,
+    source_page_index: int = 0,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -148,10 +185,10 @@ def run(
         effective_rois = list({*effective_rois, *detected}) if effective_rois else detected
         print(f"[run-image] auto-ocr-roi: {len(detected)} vùng ứng viên được phát hiện tự động.")
 
-    raw_texts = []
+    ocr_texts: List[RawText] = []
     if effective_rois:
         _configure_tesseract(tesseract_cmd)
-        raw_texts = extract_text_tesseract(image, roi_boxes=effective_rois, lang=ocr_lang)
+        ocr_texts = extract_text_tesseract(image, roi_boxes=effective_rois, lang=ocr_lang)
 
     if view_candidates_output_path is not None:
         _configure_tesseract(tesseract_cmd)
@@ -162,16 +199,19 @@ def run(
             psm=11,
             lang=ocr_lang,
         )
-        raw_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
+        ocr_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
+
+    raw_texts = _combine_pdf_vector_texts(pdf_vector_texts, ocr_texts)
+    decision_texts = [text for text in raw_texts if text.source != "text_pdfvector"]
 
     raw_lines = raw_geometry.lines
     if merge_lines:
-        raw_lines = merge_collinear_lines(raw_lines, blocking_texts=raw_texts, image_bgr=image)
+        raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:
             raise ValueError("view_candidates_dpi is required with view_candidates_output_path")
-        candidates = detect_view_candidates(raw_texts, raw_lines, image.shape[1], image.shape[0], dpi=view_candidates_dpi)
+        candidates = detect_view_candidates(decision_texts, raw_lines, image.shape[1], image.shape[0], dpi=view_candidates_dpi)
         candidates_path = Path(view_candidates_output_path)
         candidates_path.parent.mkdir(parents=True, exist_ok=True)
         candidates_path.write_text(json.dumps(candidates, indent=2) + "\n", encoding="utf-8")
@@ -190,7 +230,7 @@ def run(
             source_sha256=calibration_source_sha256,
         )
     else:
-        calibration = auto_estimate_calibration(raw_texts, raw_lines, image.shape[0], unit="mm")
+        calibration = auto_estimate_calibration(decision_texts, raw_lines, image.shape[0], unit="mm")
         if calibration is None:
             raise CalibrationCandidateUnavailableError(
                 "auto_calibrate không tìm được cặp (dimension_value, line gần "
@@ -225,7 +265,7 @@ def run(
             )
     document = build_document(
         file_name=os.path.basename(image_path),
-        page_index=0,
+        page_index=source_page_index,
         image_width_px=image.shape[1],
         image_height_px=image.shape[0],
         calibration=calibration,
@@ -235,7 +275,7 @@ def run(
         sha256=_sha256(image_path),
     )
     document.cross_validations = cross_validate(
-        raw_texts,
+        decision_texts,
         raw_lines,
         calibration,
         merge_collinear=False,

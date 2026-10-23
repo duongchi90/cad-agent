@@ -16,7 +16,8 @@ from typing import List
 
 _VALID_TYPES = {"line", "circle", "arc", "text"}
 _VALID_SOURCES = {
-    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision"
+    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision",
+    "text_pdfvector",
 }
 _VALID_ROLES = {"dimension_value", "title_block_field", "drawing_code", "general_note", "table_cell", "unknown"}
 _VALID_VALIDATION_STATUS = {"unreviewed", "reviewer1_pass", "reviewer1_fail", "reviewer2_pass", "reviewer2_fail", "repaired"}

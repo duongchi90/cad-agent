@@ -1,13 +1,98 @@
 """Regression test for the multi-page PDF to Primitive IR runner."""
 
 import json
+import hashlib
+import math
 from pathlib import Path
 from unittest.mock import patch
 
 import fitz
 import pytest
+import cv2
+import numpy as np
 
 from primitive_ir_lib.run_pdf import run_pdf
+
+
+def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path):
+    pdf_path = tmp_path / "vector-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text((50, 60), "R7,50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default"
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    texts = [p for p in payload["primitives"] if p["type"] == "text"]
+    assert [(p["text_data"]["content"], p["source"]) for p in texts] == [
+        ("R7,50", "text_pdfvector")
+    ]
+    assert texts[0]["trace"]["extraction_tool"] == "pymupdf"
+
+    rendered_path = output_dir / manifest["pages"][0]["rendered_png"]
+    assert payload["source_document"]["sha256"] == hashlib.sha256(
+        rendered_path.read_bytes()
+    ).hexdigest()
+    assert manifest["source_pdf_sha256"] == hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    page_record = manifest["pages"][0]
+    assert page_record["page_index"] == 0
+    assert page_record["rendered_png_sha256"] == payload["source_document"]["sha256"]
+    assert page_record["render_scale_px_per_point"] == 1.0
+    assert page_record["page_rotation_matrix"] == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+    source_doc = fitz.open(pdf_path)
+    span = next(
+        span
+        for block in source_doc[0].get_text("dict")["blocks"]
+        if "lines" in block
+        for line in block["lines"]
+        for span in line["spans"]
+        if span["text"] == "R7,50"
+    )
+    x0, y0, x1, y1 = span["bbox"]
+    assert texts[0]["trace"]["bbox_px"] == [
+        math.floor(x0), math.floor(y0), math.ceil(x1), math.ceil(y1)
+    ]
+    source_doc.close()
+
+
+@pytest.mark.parametrize("rotation", [90, 180, 270])
+def test_run_pdf_vector_text_bbox_matches_rendered_text_after_rotation_and_crop(
+    tmp_path: Path, rotation: int
+):
+    pdf_path = tmp_path / f"rotated-cropped-{rotation}.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=220, height=140)
+    page.insert_text((70, 70), "R7,50", fontsize=14)
+    page.set_cropbox(fitz.Rect(20, 15, 205, 125))
+    page.set_rotation(rotation)
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default"
+        )
+
+    page_record = manifest["pages"][0]
+    payload = json.loads((output_dir / page_record["primitive_ir"]).read_text())
+    text = next(p for p in payload["primitives"] if p["type"] == "text")
+    rendered = cv2.imread(str(output_dir / page_record["rendered_png"]))
+    ys, xs = np.where(np.any(rendered < 200, axis=2))
+    ink_bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+    x0, y0, x1, y1 = text["trace"]["bbox_px"]
+    assert x0 <= ink_bbox[0] + 2
+    assert y0 <= ink_bbox[1] + 2
+    assert x1 >= ink_bbox[2] - 2
+    assert y1 >= ink_bbox[3] - 2
+    assert page_record["page_rotation_matrix"] != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
 
 def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
@@ -30,6 +115,7 @@ def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
         assert ir_path.is_file()
         payload = json.loads(ir_path.read_text(encoding="utf-8"))
         assert payload["source_document"]["image_width_px"] == 200
+        assert payload["source_document"]["page_index"] == page["page_index"]
         assert page["primitive_count"] == len(payload["primitives"])
 
 
@@ -141,13 +227,16 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
-                 calibration_status="verified", calibration_source_sha256=None):
+                 calibration_status="verified", calibration_source_sha256=None,
+                 pdf_vector_texts=None, source_page_index=0):
         captured_calls.append(dict(
             auto_ocr_roi=auto_ocr_roi, auto_calibrate=auto_calibrate,
             calibration_registry_path=calibration_registry_path,
             calibration_id=calibration_id,
                 view_candidates_output_path=view_candidates_output_path,
                 view_candidates_dpi=view_candidates_dpi,
+            pdf_vector_texts=pdf_vector_texts,
+            source_page_index=source_page_index,
         ))
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
@@ -175,6 +264,7 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
 
     assert len(captured_calls) == 2
     assert [c["calibration_id"] for c in captured_calls] == ["tau190_page01", "tau190_page02"]
+    assert [c["source_page_index"] for c in captured_calls] == [0, 1]
     for c in captured_calls:
         assert c["auto_ocr_roi"] is True
         assert c["auto_calibrate"] is True
@@ -203,7 +293,8 @@ def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: 
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
-                 calibration_status="verified", calibration_source_sha256=None):
+                 calibration_status="verified", calibration_source_sha256=None,
+                 pdf_vector_texts=None, source_page_index=0):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
             "primitives": [], "cross_validations": [],

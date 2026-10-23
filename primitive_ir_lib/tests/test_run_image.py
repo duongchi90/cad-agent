@@ -14,7 +14,7 @@ import pytest
 from primitive_ir_lib.calibration_registry import add_record, get_verified_scale
 from primitive_ir_lib.assemble import build_document as assemble_document
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
-from primitive_ir_lib.run_image import main, run
+from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError, main, run
 from primitive_ir_lib.text_extraction import RawText
 from primitive_ir_lib.validator import validate_document
 
@@ -108,6 +108,60 @@ def test_confirmed_validation_references_a_serialized_line(tmp_path):
     assert all(
         item["geometry_primitive_id"] in primitive_ids for item in confirmed
     )
+
+
+def test_run_image_deduplicates_only_same_span_exact_pdf_text_and_prefers_vector(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    vector = RawText("pdf-1", "R7,50", (10, 10, 30, 20), 0.0, 1.0, "text_pdfvector")
+    duplicate = RawText("ocr-1", "R7,50", (9, 10, 31, 20), 0.0, 0.9, "text_tesseract")
+    repeated = RawText("ocr-2", "R7,50", (50, 10, 70, 20), 0.0, 0.9, "text_tesseract")
+    near_overlap = RawText("ocr-4", "R7,50", (13, 10, 33, 20), 0.0, 0.9, "text_tesseract")
+    different = RawText("ocr-3", "Ø14", (10, 10, 30, 20), 0.0, 0.9, "text_tesseract")
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
+        patch(
+            "primitive_ir_lib.run_image.extract_text_tesseract",
+            return_value=[duplicate, repeated, near_overlap, different],
+        ),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
+            pdf_vector_texts=[vector],
+        )
+
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    texts = [item for item in document["primitives"] if item["type"] == "text"]
+    assert [(item["text_data"]["content"], item["source"]) for item in texts] == [
+        ("R7,50", "text_pdfvector"),
+        ("R7,50", "text_tesseract"),
+        ("R7,50", "text_tesseract"),
+        ("Ø14", "text_tesseract"),
+    ]
+
+
+def test_pdf_vector_numeric_text_is_not_used_for_automatic_calibration(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    line = RawLine("line-1", (10.0, 40.0), (110.0, 40.0), 1.0, (10, 40, 110, 40))
+    vector_dimension = RawText(
+        "pdf-dimension", "100", (50, 20, 70, 35), 0.0, 1.0,
+        "text_pdfvector", parsed_value=100.0, semantic_role="dimension_value",
+    )
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry(lines=[line])),
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]),
+        pytest.raises(CalibrationCandidateUnavailableError),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            auto_calibrate=True, preset="default", ocr_rois=[(0, 0, 120, 80)],
+            pdf_vector_texts=[vector_dimension],
+        )
 
 
 def test_run_image_passes_ocr_lang_override_to_tesseract(tmp_path):
