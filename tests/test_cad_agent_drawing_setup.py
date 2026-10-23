@@ -26,7 +26,12 @@ from drawing_setup_fixtures import (
     matching_setup_ipc_result,
     write_approved_setup_inputs,
 )
-from mcp_integration_lib.dotnet_ipc import DotNetIPCClient, DotNetIPCResultError
+from mcp_integration_lib.dotnet_ipc import (
+    DotNetIPCClient,
+    DotNetIPCResultError,
+    atomic_write_json,
+    result_path,
+)
 
 
 def _approved_mappings(root: Path) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object], Path]:
@@ -895,6 +900,46 @@ def test_drawing_setup_audit_cli_reports_ipc_failure_without_output(
         "--output", str(output),
     ]) == 2
     assert "active drawing mismatch" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_drawing_setup_audit_cli_rejects_missing_opt_in_inventory_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_legacy_success() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            atomic_write_json(
+                result_path(ipc_dir, request["request_id"]),
+                response,
+            )
+
+        return respond_with_legacy_success
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "model_space_inventory" in capsys.readouterr().err
     assert not output.exists()
 
 

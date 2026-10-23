@@ -812,6 +812,18 @@ class DotNetIPCClient:
                     else self.max_read_bytes
                 ),
             )
+            if (
+                normalized_operation == "drawing_setup_audit"
+                and normalized_parameters.get("include_model_space_inventory") is True
+                and result["success"] is True
+            ):
+                payload = result.get("payload")
+                if not isinstance(payload, dict) or not isinstance(
+                    payload.get("model_space_inventory"), dict
+                ):
+                    raise DotNetIPCProtocolError(
+                        "drawing_setup_audit result is missing requested model_space_inventory"
+                    )
             if result["success"] is not True:
                 errors = result.get("errors", [])
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"
