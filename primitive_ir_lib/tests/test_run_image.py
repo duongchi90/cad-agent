@@ -184,6 +184,60 @@ def test_run_image_cross_validation_references_saved_text_after_pdf_dedup(tmp_pa
     )
 
 
+@pytest.mark.parametrize("pdf_rotation", [5.0, 10.0, 180.0])
+def test_run_image_rejects_same_span_text_with_conflicting_rotation(
+    tmp_path, pdf_rotation
+):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    ocr = RawText("ocr-1", "ROTATED", (10, 10, 80, 30), 0.0, 0.9, "text_tesseract")
+    vector = RawText(
+        "pdf-1", "ROTATED", (10, 10, 80, 30), pdf_rotation, 1.0, "text_pdfvector"
+    )
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr]),
+        pytest.raises(ValueError, match=r"ocr-1.*0.*pdf-1") as error,
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
+            pdf_vector_texts=[vector],
+        )
+
+    assert "rotation" in str(error.value).lower()
+    assert "5" in str(error.value) or "10" in str(error.value) or "180" in str(error.value)
+    assert not output_path.exists()
+
+
+def test_run_image_deduplicates_equivalent_rotation_modulo_360(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    ocr = RawText("ocr-1", "ROTATED", (10, 10, 80, 30), 5.0, 0.9, "text_tesseract")
+    vector = RawText(
+        "pdf-1", "ROTATED", (10, 10, 80, 30), 365.0, 1.0, "text_pdfvector"
+    )
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr]),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
+            pdf_vector_texts=[vector],
+        )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    text_primitives = [item for item in payload["primitives"] if item["type"] == "text"]
+    assert len(text_primitives) == 1
+    assert text_primitives[0]["id"] == "ocr-1"
+    assert text_primitives[0]["text_data"]["rotation_deg"] == 5.0
+
+
 def test_pdf_vector_numeric_text_is_not_used_for_automatic_calibration(tmp_path):
     image_path = tmp_path / "drawing.png"
     output_path = tmp_path / "primitive_ir.json"

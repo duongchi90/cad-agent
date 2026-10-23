@@ -97,23 +97,37 @@ def _same_span_bbox_match(a: RawText, b: RawText) -> bool:
     )
 
 
+def _rotation_equivalent(a: RawText, b: RawText) -> bool:
+    if not math.isfinite(a.rotation_deg) or not math.isfinite(b.rotation_deg):
+        return False
+    difference = abs((a.rotation_deg - b.rotation_deg + 180.0) % 360.0 - 180.0)
+    return difference <= 1e-6
+
+
 def _combine_pdf_vector_texts(
     pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText]
 ) -> List[RawText]:
-    """Retain OCR identities for same-span duplicates referenced by validation."""
+    """Retain OCR identity, but reject same-span source rotation conflicts."""
     combined: List[RawText] = []
     for candidate in [*ocr_texts, *(pdf_vector_texts or [])]:
-        duplicate_index = next(
-            (
-                index for index, prior in enumerate(combined)
-                if (candidate.source == "text_pdfvector" or prior.source == "text_pdfvector")
-                and candidate.content == prior.content
-                and _same_span_bbox_match(candidate, prior)
-            ),
-            None,
-        )
-        if duplicate_index is None:
+        duplicate = next((
+            prior for prior in combined
+            if (candidate.source == "text_pdfvector" or prior.source == "text_pdfvector")
+            and candidate.content == prior.content
+            and _same_span_bbox_match(candidate, prior)
+        ), None)
+        if duplicate is None:
             combined.append(candidate)
+            continue
+        if (
+            candidate.source != duplicate.source
+            and not _rotation_equivalent(candidate, duplicate)
+        ):
+            raise ValueError(
+                "PDF/OCR same-span rotation conflict: "
+                f"{duplicate.id}={duplicate.rotation_deg}°, "
+                f"{candidate.id}={candidate.rotation_deg}°"
+            )
     return combined
 
 

@@ -1540,6 +1540,7 @@ def run_pdf(
     ir_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0
     manifest = {
+        "status": "in_progress",
         "source_pdf": pdf_path.name,
         "source_pdf_sha256": _sha256_file(pdf_path),
         "render_dpi": dpi,
@@ -1547,9 +1548,14 @@ def run_pdf(
         "pdf_vector_text_visibility": "not_assessed",
         "pages": [],
     }
-    document = fitz.open(str(pdf_path))
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    document = None
+    current_page_index = None
     try:
+        document = fitz.open(str(pdf_path))
         for index, page in enumerate(document, start=1):
+            current_page_index = index - 1
             require_all_vector_witnesses, vector_circle_witnesses, suspect_regions = (
                 _page_circle_witnesses(page, scale)
             )
@@ -1632,9 +1638,18 @@ def run_pdf(
                     "scale_label_candidates": scale_label_candidates,
                 }
             )
+    except Exception as exc:
+        manifest["status"] = "failed"
+        manifest["failed_page_index"] = current_page_index
+        manifest["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        raise
     finally:
-        document.close()
-    manifest_path = output_dir / "manifest.json"
+        if document is not None:
+            document.close()
+    manifest["status"] = "complete"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 

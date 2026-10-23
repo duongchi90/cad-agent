@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from primitive_ir_lib.run_pdf import run_pdf
+from primitive_ir_lib.text_extraction import RawText
 
 
 def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path):
@@ -30,6 +31,7 @@ def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path
         )
 
     payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert manifest["status"] == "complete"
     texts = [p for p in payload["primitives"] if p["type"] == "text"]
     assert [(p["text_data"]["content"], p["source"]) for p in texts] == [
         ("R7,50", "text_pdfvector")
@@ -82,6 +84,54 @@ def test_run_pdf_preserves_text_rotation_from_line_direction(tmp_path: Path):
     payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
     text = next(p for p in payload["primitives"] if p["type"] == "text")
     assert text["text_data"]["rotation_deg"] == pytest.approx(45.0, abs=0.5)
+
+
+def test_run_pdf_marks_manifest_failed_when_same_span_rotation_conflicts(
+    tmp_path: Path, monkeypatch
+):
+    pdf_path = tmp_path / "rotated-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    origin = fitz.Point(50, 60)
+    page.insert_text(origin, "ROTATED", fontsize=12, morph=(origin, fitz.Matrix(5)))
+    document.save(pdf_path)
+    document.close()
+    (output_dir / "primitive_ir").mkdir(parents=True)
+    (output_dir / "primitive_ir" / "page_01.json").write_text(
+        '{"primitives": [{"id": "old-success"}]}', encoding="utf-8"
+    )
+    (output_dir / "manifest.json").write_text(
+        json.dumps({"status": "complete", "pages": [{"page_index": 0}]}),
+        encoding="utf-8",
+    )
+
+    vector = RawText("pdf-1", "ROTATED", (10, 10, 80, 30), 5.0, 1.0, "text_pdfvector")
+    ocr = RawText("ocr-1", "ROTATED", (10, 10, 80, 30), 0.0, 0.9, "text_tesseract")
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_pdf._page_vector_texts",
+        lambda *args, **kwargs: ([vector], "extracted", 0),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_text_tesseract", lambda *args, **kwargs: [ocr]
+    )
+
+    with pytest.raises(ValueError, match="rotation"):
+        run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["pages"] == []
+    assert manifest["failed_page_index"] == 0
+    assert manifest["error"]["type"] == "ValueError"
+    # The old generated page file is retained for diagnostics, but the current
+    # manifest explicitly invalidates it as a result of this failed run.
+    assert json.loads(
+        (output_dir / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )["primitives"][0]["id"] == "old-success"
 
 
 def test_run_pdf_geometry_only_mode_does_not_emit_embedded_text(tmp_path: Path):
