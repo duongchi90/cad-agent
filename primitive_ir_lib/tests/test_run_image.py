@@ -238,6 +238,66 @@ def test_run_image_deduplicates_equivalent_rotation_modulo_360(tmp_path):
     assert text_primitives[0]["text_data"]["rotation_deg"] == 5.0
 
 
+@pytest.mark.parametrize("reverse_pdf_order", [False, True])
+def test_run_image_rejects_ambiguous_repeated_pdf_spans(tmp_path, reverse_pdf_order):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    nested = [
+        RawText("pdf-small", "R7,50", (10, 10, 68, 30), 0.0, 1.0, "text_pdfvector"),
+        RawText("pdf-large", "R7,50", (10, 10, 92, 40), 0.0, 1.0, "text_pdfvector"),
+    ]
+    if reverse_pdf_order:
+        nested.reverse()
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]),
+        pytest.raises(ValueError, match="PDF/PDF same-span identity ambiguous") as error,
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", pdf_vector_texts=nested,
+        )
+    assert "pdf-small" in str(error.value) and "pdf-large" in str(error.value)
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("pdf_count,ocr_count", [(2, 1), (1, 2)])
+def test_run_image_rejects_non_one_to_one_pdf_ocr_matches(
+    tmp_path, pdf_count, ocr_count
+):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    if pdf_count == 2:
+        pdf_boxes = [(10, 10, 50, 30), (70, 10, 110, 30)]
+        ocr_boxes = [(10, 10, 110, 30)]
+    else:
+        pdf_boxes = [(10, 10, 110, 30)]
+        ocr_boxes = [(10, 10, 50, 30), (70, 10, 110, 30)]
+    pdf_texts = [
+        RawText(f"pdf-{i}", "R7,50", pdf_boxes[i], 0.0, 1.0, "text_pdfvector")
+        for i in range(pdf_count)
+    ]
+    ocr_texts = [
+        RawText(f"ocr-{i}", "R7,50", ocr_boxes[i], 0.0, 0.9, "text_tesseract")
+        for i in range(ocr_count)
+    ]
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
+        patch(
+            "primitive_ir_lib.run_image.extract_text_tesseract", return_value=ocr_texts
+        ),
+        pytest.raises(ValueError, match="ambiguous OCR/PDF span match"),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
+            pdf_vector_texts=pdf_texts,
+        )
+    assert not output_path.exists()
+
+
 def test_pdf_vector_numeric_text_is_not_used_for_automatic_calibration(tmp_path):
     image_path = tmp_path / "drawing.png"
     output_path = tmp_path / "primitive_ir.json"

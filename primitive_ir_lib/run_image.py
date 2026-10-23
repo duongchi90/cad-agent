@@ -107,28 +107,81 @@ def _rotation_equivalent(a: RawText, b: RawText) -> bool:
 def _combine_pdf_vector_texts(
     pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText]
 ) -> List[RawText]:
-    """Retain OCR identity, but reject same-span source rotation conflicts."""
-    combined: List[RawText] = []
-    for candidate in [*ocr_texts, *(pdf_vector_texts or [])]:
-        duplicate = next((
-            prior for prior in combined
-            if (candidate.source == "text_pdfvector" or prior.source == "text_pdfvector")
-            and candidate.content == prior.content
-            and _same_span_bbox_match(candidate, prior)
-        ), None)
-        if duplicate is None:
-            combined.append(candidate)
+    """Suppress only unambiguous one-to-one OCR/PDF observations."""
+    pdf_texts = pdf_vector_texts or []
+
+    for first_index, first in enumerate(pdf_texts):
+        for second in pdf_texts[first_index + 1:]:
+            if (
+                first.content == second.content
+                and _same_span_bbox_match(first, second)
+            ):
+                raise ValueError(
+                    "PDF/PDF same-span identity ambiguous: "
+                    f"{first.id}={first.rotation_deg}°, "
+                    f"{second.id}={second.rotation_deg}°"
+                )
+
+    pdf_matches = {
+        pdf_index: [
+            ocr_index for ocr_index, ocr in enumerate(ocr_texts)
+            if pdf.content == ocr.content and _same_span_bbox_match(pdf, ocr)
+        ]
+        for pdf_index, pdf in enumerate(pdf_texts)
+    }
+    ocr_matches = {
+        ocr_index: [
+            pdf_index for pdf_index, pdf in enumerate(pdf_texts)
+            if pdf.content == ocr.content and _same_span_bbox_match(pdf, ocr)
+        ]
+        for ocr_index, ocr in enumerate(ocr_texts)
+    }
+
+    ambiguous_pairs = [
+        (pdf_index, ocr_index)
+        for pdf_index, ocr_indexes in pdf_matches.items()
+        if len(ocr_indexes) > 1
+        for ocr_index in ocr_indexes
+    ] + [
+        (pdf_index, ocr_index)
+        for ocr_index, pdf_indexes in ocr_matches.items()
+        if len(pdf_indexes) > 1
+        for pdf_index in pdf_indexes
+    ]
+    if ambiguous_pairs:
+        pdf_indexes = sorted({pdf_index for pdf_index, _ in ambiguous_pairs})
+        ocr_indexes = sorted({ocr_index for _, ocr_index in ambiguous_pairs})
+        pdf_details = ", ".join(
+            f"{pdf_texts[index].id}={pdf_texts[index].rotation_deg}°"
+            for index in pdf_indexes
+        )
+        ocr_details = ", ".join(
+            f"{ocr_texts[index].id}={ocr_texts[index].rotation_deg}°"
+            for index in ocr_indexes
+        )
+        raise ValueError(
+            "ambiguous OCR/PDF span match: "
+            f"OCR [{ocr_details}]; PDF [{pdf_details}]"
+        )
+
+    matched_pdf_indexes: set[int] = set()
+    for pdf_index, ocr_indexes in pdf_matches.items():
+        if not ocr_indexes:
             continue
-        if (
-            candidate.source != duplicate.source
-            and not _rotation_equivalent(candidate, duplicate)
-        ):
+        ocr = ocr_texts[ocr_indexes[0]]
+        pdf = pdf_texts[pdf_index]
+        if not _rotation_equivalent(ocr, pdf):
             raise ValueError(
                 "PDF/OCR same-span rotation conflict: "
-                f"{duplicate.id}={duplicate.rotation_deg}°, "
-                f"{candidate.id}={candidate.rotation_deg}°"
+                f"{ocr.id}={ocr.rotation_deg}°, "
+                f"{pdf.id}={pdf.rotation_deg}°"
             )
-    return combined
+        matched_pdf_indexes.add(pdf_index)
+
+    return [
+        *ocr_texts,
+        *(pdf for index, pdf in enumerate(pdf_texts) if index not in matched_pdf_indexes),
+    ]
 
 
 def run(
