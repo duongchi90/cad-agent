@@ -12,6 +12,7 @@ import pytest
 from cad_agent.cli import main
 from cad_agent.manifest import ManifestError, sha256_file
 from cad_agent.pdf import (
+    _resolve_pdf_resume_artifact,
     _validate_pdf_resume_artifacts,
     new_pdf_manifest,
     read_pdf_manifest,
@@ -62,6 +63,12 @@ def test_pdf_resume_accepts_windows_short_path_alias_for_manifest_root(tmp_path:
         manifest,
     )
     assert paths[("run", "render")] == output / "pdf" / "manifest.json"
+    assert _resolve_pdf_resume_artifact(
+        short_output,
+        "pdf/primitive_ir/page_01.json",
+        "pdf/primitive_ir/page_01.json",
+        "test",
+    ) == output / "pdf" / "primitive_ir" / "page_01.json"
 
 
 def _dimension_pdf(path: Path, label: str = "1077") -> None:

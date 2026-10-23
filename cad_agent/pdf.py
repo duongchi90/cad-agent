@@ -133,6 +133,34 @@ def _completed(
     return artifact_path.is_file() and sha256_file(artifact_path) == digest
 
 
+def _canonical_pdf_resume_path(path: Path) -> Path:
+    resolved = path.resolve()
+    if os.name != "nt":
+        return resolved
+
+    # Windows can resolve two aliases of the same path to inconsistent 8.3
+    # spellings. Expand the deepest existing prefix, then retain any missing
+    # leaf components for destinations that have not been created yet.
+    missing: list[str] = []
+    existing = resolved
+    while not existing.exists():
+        if existing.parent == existing:
+            raise ManifestError("Cannot canonicalize PDF artifact path.")
+        missing.append(existing.name)
+        existing = existing.parent
+
+    import ctypes
+
+    get_long_path = ctypes.windll.kernel32.GetLongPathNameW
+    get_long_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint)
+    get_long_path.restype = ctypes.c_uint
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = get_long_path(str(existing), buffer, len(buffer))
+    if not length or length >= len(buffer):
+        raise ManifestError("Cannot canonicalize PDF artifact path.")
+    return Path(buffer.value).joinpath(*reversed(missing))
+
+
 def _resolve_pdf_resume_artifact(
     output_root: Path,
     artifact: object,
@@ -146,12 +174,13 @@ def _resolve_pdf_resume_artifact(
         raise ManifestError(f"PDF {owner} artifact path must be relative to the output root.")
     if os.path.normcase(relative.as_posix()) != os.path.normcase(expected_relative_path):
         raise ManifestError(f"PDF {owner} artifact path does not match its canonical destination.")
-    resolved = (output_root / relative).resolve()
+    resolved_root = _canonical_pdf_resume_path(output_root)
+    resolved = _canonical_pdf_resume_path(output_root / relative)
     try:
-        resolved.relative_to(output_root)
+        resolved.relative_to(resolved_root)
     except ValueError as exc:
         raise ManifestError(f"PDF {owner} artifact path escapes the output root.") from exc
-    expected_destination = output_root / expected_relative_path
+    expected_destination = _canonical_pdf_resume_path(output_root / expected_relative_path)
     if os.path.normcase(str(resolved)) != os.path.normcase(str(expected_destination)):
         raise ManifestError(f"PDF {owner} artifact path aliases a different filesystem destination.")
     return resolved
