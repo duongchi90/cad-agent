@@ -1156,6 +1156,27 @@ def test_rejected_vector_witness_does_not_suppress_supported_raster_circle(
     )
 
 
+def test_extreme_source_circle_radius_is_rejected_before_unbounded_sampling(
+    monkeypatch,
+) -> None:
+    source_gray = np.full((100, 100), 255, dtype=np.uint8)
+    original_linspace = geometry_extraction.np.linspace
+    requested_sample_counts: list[int] = []
+
+    def bounded_linspace(*args, **kwargs):
+        sample_count = int(kwargs.get("num", args[2] if len(args) > 2 else 50))
+        requested_sample_counts.append(sample_count)
+        assert sample_count <= 32_768, "circle witness exceeded the sample budget"
+        return original_linspace(*args, **kwargs)
+
+    monkeypatch.setattr(geometry_extraction.np, "linspace", bounded_linspace)
+
+    assert not geometry_extraction._circle_has_distributed_source_support(
+        source_gray, 50.0, 50.0, 10_000_000.0
+    )
+    assert requested_sample_counts == []
+
+
 def test_run_image_only_forwards_pdf_circle_evidence_without_mutating_geometry(
     tmp_path: Path, monkeypatch,
 ) -> None:

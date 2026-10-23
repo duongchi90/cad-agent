@@ -314,6 +314,9 @@ def extract_circles(
 
 _LARGE_CIRCLE_WORK_MAX_SIDE_PX = 1200
 _LARGE_CIRCLE_RADIUS_BAND_RATIO = 1.25
+_SOURCE_CIRCLE_SAMPLE_SPACING_PX = 3.0
+_SOURCE_CIRCLE_MIN_SAMPLE_COUNT = 180
+_SOURCE_CIRCLE_MAX_SAMPLE_COUNT = 32_768
 
 
 def _circle_has_distributed_source_support(
@@ -323,10 +326,37 @@ def _circle_has_distributed_source_support(
     radius: float,
 ) -> bool:
     """Require a dark ridge around nearly the whole proposed circumference."""
-    if radius <= 0:
+    if (
+        not np.isfinite(center_x)
+        or not np.isfinite(center_y)
+        or not np.isfinite(radius)
+        or radius <= 0
+    ):
         return False
 
-    sample_count = max(180, int(np.ceil(2.0 * np.pi * radius / 3.0)))
+    height, width = source_gray.shape[:2]
+    if height <= 0 or width <= 0:
+        return False
+
+    # Bound work by the available image extent and a fixed allocation budget.
+    # The radius precheck also avoids overflowing while computing sample_count.
+    sample_budget = min(
+        _SOURCE_CIRCLE_MAX_SAMPLE_COUNT,
+        max(_SOURCE_CIRCLE_MIN_SAMPLE_COUNT, 4 * (height + width)),
+    )
+    max_sampled_radius = (
+        sample_budget * _SOURCE_CIRCLE_SAMPLE_SPACING_PX / (2.0 * np.pi)
+    )
+    if radius > max_sampled_radius:
+        return False
+
+    sample_count = max(
+        _SOURCE_CIRCLE_MIN_SAMPLE_COUNT,
+        int(np.ceil(2.0 * np.pi * radius / _SOURCE_CIRCLE_SAMPLE_SPACING_PX)),
+    )
+    if sample_count > sample_budget:
+        return False
+
     angles = np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False)
     radial_offsets = np.arange(-7, 8, dtype=np.float64)
     sample_radii = radius + radial_offsets[None, :]
