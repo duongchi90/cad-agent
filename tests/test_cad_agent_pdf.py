@@ -631,6 +631,66 @@ def test_pdf_resume_refuses_artifact_paths_outside_output_root_without_io(
     } == outputs_before
 
 
+def test_pdf_resume_refuses_hardlinked_semantic_artifact_before_overwrite(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = read_pdf_manifest(manifest_path)
+    semantic = output / persisted["pages"][0]["stages"]["semantic_ir"]["artifact"]
+    semantic.unlink()
+    outside = tmp_path / "outside-semantic.json"
+    sentinel = b"protected external content"
+    outside.write_bytes(sentinel)
+    try:
+        os.link(outside, semantic)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable on this workstation: {exc}")
+
+    persisted["pages"][0]["stages"]["semantic_ir"].update(
+        {"state": "pending", "sha256": None}
+    )
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="hard link|multiple links"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert outside.read_bytes() == sentinel
+    after = read_pdf_manifest(manifest_path)
+    assert after["pages"][0]["stages"]["semantic_ir"]["state"] == "pending"
+
+
+def test_pdf_pending_render_refuses_later_page_symlink_before_renderer_write(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    outside = tmp_path / "outside-page-two.json"
+    sentinel = b"protected external content"
+    outside.write_bytes(sentinel)
+    _pdf(source)
+
+    page_two = output / "pdf" / "primitive_ir" / "page_02.json"
+    page_two.parent.mkdir(parents=True)
+    try:
+        page_two.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable on this workstation: {exc}")
+
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    with pytest.raises(ManifestError, match="redirect|reparse|symbolic link|escapes"):
+        run_pdf_stages(source, output, manifest_path, manifest)
+
+    assert outside.read_bytes() == sentinel
+    assert not (output / "pdf" / "manifest.json").exists()
+
+
 def test_pdf_resume_refuses_cross_page_artifact_alias_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

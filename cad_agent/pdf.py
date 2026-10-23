@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -186,6 +187,36 @@ def _resolve_pdf_resume_artifact(
     return resolved
 
 
+def _validate_pdf_write_roots(output_root: Path) -> None:
+    """Reject redirected or multiply-linked existing targets before PDF writes."""
+    reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    pending = [
+        output_root / relative
+        for relative in ("pdf", "semantic_ir", "dxf", "build_evidence")
+    ]
+    while pending:
+        path = pending.pop()
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ManifestError(f"Cannot verify PDF output destination: {path}") from exc
+
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & reparse_point:
+            raise ManifestError(f"PDF output artifact path contains a symlink or reparse point: {path}")
+        if stat.S_ISREG(info.st_mode):
+            if getattr(info, "st_nlink", 1) > 1:
+                raise ManifestError(f"PDF output file has multiple hard links: {path}")
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise ManifestError(f"PDF output destination is not a regular file or directory: {path}")
+        try:
+            pending.extend(path.iterdir())
+        except OSError as exc:
+            raise ManifestError(f"Cannot inspect PDF output directory: {path}") from exc
+
+
 def _validate_pdf_resume_artifacts(
     output_root: Path,
     manifest_path: Path,
@@ -199,6 +230,7 @@ def _validate_pdf_resume_artifacts(
     # be checked. `Path.resolve()` can retain a Windows 8.3 alias on one path
     # while returning the long path on another, even when both name this root.
     resolved_root.mkdir(parents=True, exist_ok=True)
+    _validate_pdf_write_roots(resolved_root)
     try:
         manifest_parent_matches = os.path.samefile(manifest_lexical.parent, resolved_root)
     except OSError:
