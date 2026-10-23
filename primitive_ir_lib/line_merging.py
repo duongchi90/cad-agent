@@ -541,7 +541,29 @@ def merge_collinear_lines(
 
         for group in merged_groups:
             if len(group) == 1:
-                result.append(group[0][2])
+                t_min, t_max, line, p_start, p_end = group[0]
+                source_ts = sorted((
+                    _project_point(*line.p1_px, ref_x0, ref_y0, ref_angle),
+                    _project_point(*line.p2_px, ref_x0, ref_y0, ref_angle),
+                ))
+                if (
+                    abs(t_min - source_ts[0]) <= 1e-6
+                    and abs(t_max - source_ts[1]) <= 1e-6
+                ):
+                    result.append(line)
+                else:
+                    result.append(RawLine(
+                        id=new_id("rawline-clipped"),
+                        p1_px=p_start,
+                        p2_px=p_end,
+                        confidence=line.confidence,
+                        bbox_px=(
+                            min(p_start[0], p_end[0]),
+                            min(p_start[1], p_end[1]),
+                            max(p_start[0], p_end[0]),
+                            max(p_start[1], p_end[1]),
+                        ),
+                    ))
                 continue
             t_min = min(s[0] for s in group)
             t_max = max(s[1] for s in group)

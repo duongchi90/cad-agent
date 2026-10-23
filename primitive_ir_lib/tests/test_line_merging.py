@@ -28,6 +28,10 @@ from primitive_ir_lib.line_merging import merge_collinear_lines
 from primitive_ir_lib.line_merging import _source_dash_gap_intervals
 from primitive_ir_lib.run_image import run as run_image
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
+from primitive_ir_lib.assemble import build_document
+from primitive_ir_lib.calibration import Calibration
+from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.reviewer import review_dxf
 
 
 def _line(p1, p2, id_, confidence=0.9):
@@ -79,6 +83,68 @@ def test_internal_witness_barrier_survives_overlapping_hough_segments():
     assert len(segments) == 2, segments
     assert segments[0][1] == segments[1][0]
     assert abs(segments[0][1] - 200) <= 3
+
+
+def test_singleton_barrier_clips_keep_geometry_unique_ids_and_dxf_inventory(
+    monkeypatch, tmp_path,
+):
+    """A nearby split witness must clip a lone overlapping interval exactly once."""
+    barrier_left = _line((150, 80), (200, 100), "barrier-left")
+    barrier_right = _line((200, 100), (250, 120), "barrier-right")
+    long_line = _line((100, 100), (300, 100), "long-horizontal")
+    separate_collinear_line = _line((450, 100), (500, 100), "separate-horizontal")
+
+    def split_only_the_oblique_witness(line, image):
+        if line.id == long_line.id:
+            return [line]
+        if line.id == "oblique-barrier":
+            return [barrier_left, barrier_right]
+        return [line]
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.line_merging.split_raw_line_at_internal_witness_lines",
+        split_only_the_oblique_witness,
+    )
+    image = np.full((220, 520, 3), 255, dtype=np.uint8)
+    oblique = _line((150, 80), (250, 120), "oblique-barrier")
+
+    merged = merge_collinear_lines(
+        [oblique, long_line, separate_collinear_line],
+        blocking_texts=[],
+        image_bgr=image,
+        use_tick_mark_detection=False,
+    )
+
+    horizontal = sorted(
+        (tuple(line.p1_px), tuple(line.p2_px), line.id)
+        for line in merged
+        if abs(line.p1_px[1] - line.p2_px[1]) < 1e-9
+        and abs(line.p1_px[1] - 100) < 1e-9
+        and min(line.p1_px[0], line.p2_px[0]) >= 100
+        and max(line.p1_px[0], line.p2_px[0]) <= 300
+    )
+    assert [(a, b) for a, b, _ in horizontal] == [
+        ((100.0, 100.0), (200.0, 100.0)),
+        ((200.0, 100.0), (300.0, 100.0)),
+    ]
+    assert len({identity for _, _, identity in horizontal}) == len(horizontal)
+
+    document = build_document(
+        file_name="barrier-fixture.png",
+        page_index=0,
+        image_width_px=520,
+        image_height_px=220,
+        calibration=Calibration(
+            unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0),
+            method="manual_override",
+        ),
+        raw_lines=merged,
+        raw_circles=[],
+        raw_texts=[],
+    )
+    built = build_dxf(document, str(tmp_path / "barrier-candidate.dxf"))
+    review = review_dxf(built, strict_primitive_inventory=True)
+    assert review.passed, review.mismatches
 
 
 def test_does_not_merge_across_dimension_chain_boundary():
