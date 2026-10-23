@@ -1556,12 +1556,17 @@ def run_pdf(
             image_path = render_dir / f"page_{index:02d}.png"
             pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             pixmap.save(str(image_path))
-            pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
-                page,
-                scale,
-                (pixmap.x, pixmap.y),
-                (pixmap.width, pixmap.height),
-            )
+            if auto_ocr_roi:
+                pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
+                    page,
+                    scale,
+                    (pixmap.x, pixmap.y),
+                    (pixmap.width, pixmap.height),
+                )
+            else:
+                # The existing auto-OCR opt-out is the explicit geometry-only
+                # mode; keep that contract free of newly surfaced text.
+                pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = [], "disabled", 0
             output_path = ir_dir / f"page_{index:02d}.json"
             view_candidates_path = ir_dir / f"page_{index:02d}.view_candidates.json"
             page_calibration_id = (

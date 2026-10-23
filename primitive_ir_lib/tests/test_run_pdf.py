@@ -25,7 +25,8 @@ def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path
 
     with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
         manifest = run_pdf(
-            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default"
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
         )
 
     payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
@@ -62,6 +63,26 @@ def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path
     source_doc.close()
 
 
+def test_run_pdf_geometry_only_mode_does_not_emit_embedded_text(tmp_path: Path):
+    pdf_path = tmp_path / "geometry-only.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text((50, 60), "R7,50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=False,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert not [primitive for primitive in payload["primitives"] if primitive["type"] == "text"]
+    assert manifest["pages"][0]["pdf_vector_text_status"] == "disabled"
+
+
 @pytest.mark.parametrize("rotation", [90, 180, 270])
 def test_run_pdf_vector_text_bbox_matches_rendered_text_after_rotation_and_crop(
     tmp_path: Path, rotation: int
@@ -78,7 +99,8 @@ def test_run_pdf_vector_text_bbox_matches_rendered_text_after_rotation_and_crop(
 
     with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
         manifest = run_pdf(
-            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default"
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
         )
 
     page_record = manifest["pages"][0]

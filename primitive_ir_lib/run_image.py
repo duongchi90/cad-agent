@@ -202,7 +202,10 @@ def run(
         ocr_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
 
     raw_texts = _combine_pdf_vector_texts(pdf_vector_texts, ocr_texts)
-    decision_texts = [text for text in raw_texts if text.source != "text_pdfvector"]
+    # Keep OCR as the only decision-grade text source. Embedded PDF text can
+    # be invisible or stale relative to the rendered page and must not replace
+    # OCR evidence used by existing geometry association gates.
+    decision_texts = ocr_texts
 
     raw_lines = raw_geometry.lines
     if merge_lines:
