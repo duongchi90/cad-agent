@@ -1,8 +1,8 @@
 # CASE02 ModelSpace Readback Implementation Plan
 
-**Status:** executing
+**Status:** implementation complete; live CASE02 readback pending
 **Base SHA:** `abfb60ea7d9cf2012e0ea30b68b9fef8b5fb0512`
-**Completion Head SHA:** pending
+**Completion Head SHA:** `c7437dd8729418d947f6389ebaeaa22bf47377ed`
 **Design:** `docs/superpowers/specs/2026-10-24-case02-modelspace-readback-design.md`
 
 ## Frozen boundary
@@ -37,6 +37,6 @@ No new subsystem, transport, database, external-source code, drawing mutation, o
 - Oversized response test: PASS; 17 MiB opted-in response is replaced with a small failure and empty payload.
 - `scripts/check_environment.py requirements/windows-py311.lock`: PASS (40 locked distributions); Tesseract 5.4.0.20240606 present.
 - `git diff --check`: PASS.
-- Canonical verifier: pending.
+- Canonical verifier: PASS on `c7437dd8729418d947f6389ebaeaa22bf47377ed`; 265 .NET tests passed, dotnet IPC 77 passed/52 subtests, offline 3,737 passed/24 deselected/86 subtests, unavailable-state probes matched expected skips, and the causal-RED negative oracle matched its expected single failure.
 - Private/real-data gate: CASE02 candidate readback pending; no drawing opened during offline implementation.
-- AutoCAD/.NET live gate: pending and distinct from offline tests.
+- AutoCAD/.NET live gate: NOT RUN; verifier found no AutoCAD Mechanical File IPC session. This remains separate from offline tests.
