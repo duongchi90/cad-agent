@@ -113,7 +113,7 @@ def _write_page_stage(
 ) -> None:
     page["stages"][stage_name] = _stage(
         "completed",
-        str(artifact.relative_to(manifest_path.parent)).replace("\\", "/"),
+        _relative_pdf_artifact_path(artifact, manifest_path.parent),
         sha256_file(artifact),
     )
     page["stages"][stage_name]["details"] = details
@@ -160,6 +160,17 @@ def _canonical_pdf_resume_path(path: Path) -> Path:
     if not length or length >= len(buffer):
         raise ManifestError("Cannot canonicalize PDF artifact path.")
     return Path(buffer.value).joinpath(*reversed(missing))
+
+
+def _relative_pdf_artifact_path(artifact: Path, output_root: Path) -> str:
+    """Store a stable relative path even when Windows aliases differ."""
+    canonical_root = _canonical_pdf_resume_path(output_root)
+    canonical_artifact = _canonical_pdf_resume_path(artifact)
+    try:
+        relative = canonical_artifact.relative_to(canonical_root)
+    except ValueError as exc:
+        raise ManifestError("PDF stage artifact escapes the output root.") from exc
+    return str(relative).replace("\\", "/")
 
 
 def _resolve_pdf_resume_artifact(

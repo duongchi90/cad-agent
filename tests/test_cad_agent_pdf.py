@@ -14,6 +14,7 @@ from cad_agent.manifest import ManifestError, sha256_file
 from cad_agent.pdf import (
     _resolve_pdf_resume_artifact,
     _validate_pdf_resume_artifacts,
+    _write_page_stage,
     new_pdf_manifest,
     read_pdf_manifest,
     run_pdf_stages,
@@ -69,6 +70,44 @@ def test_pdf_resume_accepts_windows_short_path_alias_for_manifest_root(tmp_path:
         "pdf/primitive_ir/page_01.json",
         "test",
     ) == output / "pdf" / "primitive_ir" / "page_01.json"
+
+
+def test_pdf_stage_checkpoint_accepts_mixed_windows_path_aliases(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows short-path aliases are only available on Windows")
+
+    import ctypes
+
+    output = tmp_path / "run"
+    output.mkdir()
+    short_buffer = ctypes.create_unicode_buffer(32768)
+    get_short_path = ctypes.windll.kernel32.GetShortPathNameW
+    get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint)
+    get_short_path.restype = ctypes.c_uint
+    length = get_short_path(str(output), short_buffer, len(short_buffer))
+    if not length or length >= len(short_buffer):
+        pytest.skip("The temporary directory has no Windows short-path alias")
+    short_output = Path(short_buffer.value)
+    if os.path.normcase(str(short_output)) == os.path.normcase(str(output)):
+        pytest.skip("8.3 short paths are unavailable for the temporary directory")
+
+    artifact = output / "semantic_ir" / "page_01.json"
+    artifact.parent.mkdir()
+    artifact.write_text("{}", encoding="utf-8")
+    manifest_path = short_output / "pdf-run-manifest.json"
+    manifest: dict[str, object] = {}
+    page = {"stages": {}}
+
+    _write_page_stage(
+        manifest_path,
+        manifest,
+        page,
+        "semantic_ir",
+        artifact,
+        "Semantic IR generated.",
+    )
+
+    assert page["stages"]["semantic_ir"]["artifact"] == "semantic_ir/page_01.json"
 
 
 def _dimension_pdf(path: Path, label: str = "1077") -> None:
