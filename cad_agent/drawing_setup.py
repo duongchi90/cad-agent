@@ -9,7 +9,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .drawing_contracts import DrawingContractError, canonical_json_sha256
+from .drawing_contracts import (
+    DrawingContractError,
+    canonical_json_sha256,
+    validate_contract_payload,
+)
 from .manifest import sha256_file
 
 
@@ -318,7 +322,7 @@ def create_setup_audit(
         json.dumps(audit, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise _fail("drawing setup audit IPC payload is not strict JSON") from exc
-    return audit
+    return validate_contract_payload(audit, contract="drawing_setup_audit")
 
 
 def _required_mapping(

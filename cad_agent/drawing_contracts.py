@@ -635,15 +635,20 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
 
 def read_contract(path: Path, *, contract: str) -> dict[str, object]:
     """Read, validate, and return a Drawing Setup contract from JSON."""
-    key = contract.replace("-", "_")
-    validator = _VALIDATORS.get(key)
-    if validator is None:
-        raise DrawingContractError(f"unsupported contract kind: {contract}")
     source = Path(path)
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise DrawingContractError(f"Cannot read {contract}: {source}") from exc
+    return validate_contract_payload(payload, contract=contract)
+
+
+def validate_contract_payload(payload: object, *, contract: str) -> dict[str, object]:
+    """Validate an in-memory Drawing Setup contract with its canonical validator."""
+    key = contract.replace("-", "_")
+    validator = _VALIDATORS.get(key)
+    if validator is None:
+        raise DrawingContractError(f"unsupported contract kind: {contract}")
     if not isinstance(payload, dict):
         raise DrawingContractError(f"{contract}: root must be an object")
     validator(payload)

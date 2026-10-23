@@ -943,6 +943,51 @@ def test_drawing_setup_audit_cli_rejects_missing_opt_in_inventory_without_output
     assert not output.exists()
 
 
+def test_drawing_setup_audit_cli_rejects_partial_opt_in_inventory_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_partial_inventory() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            response["payload"]["model_space_inventory"] = {
+                "drawing_full_path": request["drawing_full_path"],
+                "drawing_sha256_before": request["drawing_sha256"],
+                "drawing_sha256_after": request["drawing_sha256"],
+            }
+            atomic_write_json(
+                result_path(ipc_dir, request["request_id"]),
+                response,
+            )
+
+        return respond_with_partial_inventory
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "missing required properties" in capsys.readouterr().err
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("output_kind", ["drawing", "existing_json"])
 def test_drawing_setup_audit_cli_never_overwrites_an_existing_file(
     tmp_path: Path,
