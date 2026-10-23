@@ -33,6 +33,23 @@ class GuidanceContractTests(unittest.TestCase):
         self.assertIn("Do not infer", claude)
         self.assertIn("review packet", claude.lower())
 
+    def test_chat_mode_review_delivery_keeps_ui_and_verdict_states_distinct(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        operating_model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        guidance = f"{agents}\n{operating_model}".lower()
+
+        self.assertIn("stay in chat", guidance)
+        self.assertIn("at most once", guidance)
+        self.assertIn("correct reviewer conversation", guidance)
+        self.assertIn("request is visible", guidance)
+        for state in ("submitted", "generating", "completed", "error", "unobservable"):
+            self.assertIn(state, guidance)
+        self.assertIn("opaque content reference", guidance)
+        self.assertIn("does not prove", guidance)
+        self.assertIn("captcha", guidance)
+        self.assertIn("same-role", guidance)
+        self.assertIn("one controlling attempt per role", guidance)
+
     def test_every_review_template_has_its_required_contract(self) -> None:
         requirements = {
             "TASK_BRIEF.md": ("Task ID", "Acceptance criteria", "Risk tier", "Base SHA"),

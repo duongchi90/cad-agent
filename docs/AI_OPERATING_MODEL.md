@@ -246,6 +246,12 @@ Accepted prior evidence should be reused when owners and decision-relevant bytes
 - No amend, rebase, squash, force-push, or direct-main write as a routine shortcut.
 - Main movement should not invalidate an active exact-main-sensitive live epoch; batch disjoint maintenance merges at safe checkpoints.
 
+### Chat-mode review delivery
+
+When ChatGPT Web offers “Stay in chat” before switching to Work mode, select it at most once, then verify the correct reviewer conversation. The UI choice alone does not prove that a request was delivered or a verdict received. Never automate through a CAPTCHA or an actual anti-bot/security challenge.
+
+For the existing controlling review packet, confirm that the request is visible in the intended conversation and distinguish `SUBMITTED`, `GENERATING`, `COMPLETED`, `ERROR`, and `UNOBSERVABLE`. Do not resend while it is generating. When complete, read the full verdict and findings. An opaque content reference is not a verdict: try one safe available readback or canonical GitHub receipt, then keep the review `PENDING` if the result remains unobservable. Do not repeat UI retries or duplicate the request. Security and Integration remain separate roles; preserve the exact packet identity and one-controlling-attempt rules above during same-role failover.
+
 ## 13. Human-away operating rule
 
 When the Human Owner is away:
