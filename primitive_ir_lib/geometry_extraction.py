@@ -41,6 +41,8 @@ from .models import new_id
 # at most 2,000 x 2,000 pixels while retaining a full-radius halo at seams.
 _HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
 _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
+_CLOSED_RING_MAX_PIXELS = 4_000_000
+_CLOSED_RING_MAX_FITS = 256
 
 
 @dataclass
@@ -312,6 +314,147 @@ def extract_circles(
     return raw_circles
 
 
+def _canonical_point_set(contour: np.ndarray) -> tuple[tuple[int, int], ...]:
+    """Return exact, order-independent identity for integer contour points."""
+    points = np.asarray(contour).reshape(-1, 2)
+    unique = np.unique(points.astype(np.int64, copy=False), axis=0)
+    return tuple((int(x), int(y)) for x, y in unique)
+
+
+def _closed_ring_circles(image_bgr: np.ndarray) -> List[RawCircle]:
+    """Propose circles from bounded, exactly nested binary ring contours.
+
+    confidence=0.75 is an uncalibrated proposal heuristic retained for the
+    existing RawCircle contract. It is not probability, accuracy, or approval.
+    """
+    if (
+        not isinstance(image_bgr, np.ndarray)
+        or image_bgr.dtype != np.uint8
+        or image_bgr.ndim != 3
+        or image_bgr.shape[2] != 3
+        or image_bgr.shape[0] <= 0
+        or image_bgr.shape[1] <= 0
+    ):
+        raise ValueError("closed-ring strategy requires a non-empty uint8 three-channel BGR image")
+    height, width = image_bgr.shape[:2]
+    if height * width > _CLOSED_RING_MAX_PIXELS:
+        raise ValueError("closed-ring strategy exceeds the 4,000,000-pixel workload limit")
+
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(
+        gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU
+    )
+    contours, hierarchy = cv2.findContours(
+        binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
+    )
+    if hierarchy is None or not contours:
+        return []
+
+    tree = hierarchy[0]
+    fit_indices = [index for index, contour in enumerate(contours) if len(contour) >= 5]
+    if len(fit_indices) > _CLOSED_RING_MAX_FITS:
+        raise ValueError("closed-ring strategy exceeds the 256 ellipse-fit workload limit")
+
+    fits: dict[int, tuple[tuple[float, float], tuple[float, float], float] | None] = {}
+    for index in fit_indices:
+        try:
+            fit = cv2.fitEllipse(contours[index])
+        except cv2.error:
+            fits[index] = None
+            continue
+        center, axes, angle = fit
+        values = (*center, *axes, angle)
+        if not all(np.isfinite(value) for value in values):
+            fits[index] = None
+        else:
+            fits[index] = (
+                (float(center[0]), float(center[1])),
+                (float(axes[0]), float(axes[1])),
+                float(angle),
+            )
+
+    proposals: List[RawCircle] = []
+    for outer_index, outer in enumerate(contours):
+        _next_index, _previous_index, first_child, parent_index = tree[outer_index]
+        if parent_index != -1 or first_child == -1:
+            continue
+        inner_index = int(first_child)
+        inner_link = tree[inner_index]
+        # CCOMP's first-child chain must contain exactly one direct hole.
+        if int(inner_link[3]) != outer_index or int(inner_link[0]) != -1 or int(inner_link[1]) != -1:
+            continue
+        if len(outer) < 5 or len(contours[inner_index]) < 5:
+            continue
+        outer_fit = fits.get(outer_index)
+        inner_fit = fits.get(inner_index)
+        if outer_fit is None or inner_fit is None:
+            continue
+
+        outer_center, outer_axes, _ = outer_fit
+        inner_center, inner_axes, _ = inner_fit
+        if min(*outer_axes, *inner_axes) <= 0:
+            continue
+        if abs(outer_axes[0] - outer_axes[1]) > 1.0:
+            continue
+        if abs(inner_axes[0] - inner_axes[1]) > 1.0:
+            continue
+        center_distance = float(np.hypot(
+            outer_center[0] - inner_center[0],
+            outer_center[1] - inner_center[1],
+        ))
+        if center_distance > 1.0:
+            continue
+
+        outer_radius = float(sum(outer_axes) / 4.0)
+        inner_radius = float(sum(inner_axes) / 4.0)
+        outer_points = outer.reshape(-1, 2).astype(np.float64, copy=False)
+        inner_points = contours[inner_index].reshape(-1, 2).astype(np.float64, copy=False)
+        outer_residual = float(np.max(np.abs(
+            np.hypot(outer_points[:, 0] - outer_center[0], outer_points[:, 1] - outer_center[1])
+            - outer_radius
+        )))
+        inner_residual = float(np.max(np.abs(
+            np.hypot(inner_points[:, 0] - inner_center[0], inner_points[:, 1] - inner_center[1])
+            - inner_radius
+        )))
+        if outer_residual > 1.5 or inner_residual > 1.5:
+            continue
+
+        if any(
+            point[0] <= 0 or point[0] >= width - 1
+            or point[1] <= 0 or point[1] >= height - 1
+            for point in outer.reshape(-1, 2)
+        ) or any(
+            point[0] <= 0 or point[0] >= width - 1
+            or point[1] <= 0 or point[1] >= height - 1
+            for point in contours[inner_index].reshape(-1, 2)
+        ):
+            continue
+
+        if not (
+            inner_radius < outer_radius
+            or _canonical_point_set(outer) == _canonical_point_set(contours[inner_index])
+        ):
+            continue
+
+        center = (
+            (outer_center[0] + inner_center[0]) / 2.0,
+            (outer_center[1] + inner_center[1]) / 2.0,
+        )
+        radius = (outer_radius + inner_radius) / 2.0
+        if not np.isfinite(radius) or radius <= 0:
+            continue
+        proposals.append(RawCircle(
+            id=new_id("rawcircle"),
+            center_px=center,
+            radius_px=radius,
+            confidence=0.75,
+            bbox_px=(center[0] - radius, center[1] - radius,
+                     center[0] + radius, center[1] + radius),
+        ))
+    return proposals
+
+
 # Bộ tham số tinh chỉnh từ ảnh scan thật đầu tiên (mục 3 báo cáo kiểm thử
 # Phase 1, 18/07/2026, bản vẽ "TP-TL-A001/07/26"): giảm nhiễu hatch (circle
 # giả) và loại nét hatch ngắn khỏi kết quả line. Xem cảnh báo ở docstring đầu
@@ -341,8 +484,30 @@ def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwarg
     preset, để tinh chỉnh thêm nếu cần (vd threshold khác nhau tùy ảnh scan
     cụ thể).
     """
+    circle_strategy = kwargs.pop("circle_strategy", "hough")
+    if type(circle_strategy) is not str or circle_strategy not in (
+        "hough", "closed_ring_identity_v1"
+    ):
+        raise ValueError(
+            "circle_strategy must be exactly 'hough' or 'closed_ring_identity_v1'"
+        )
     if preset not in PRESETS:
         raise ValueError(f"preset không hợp lệ: {preset!r}. Chọn 1 trong {sorted(PRESETS)}")
+
+    if circle_strategy == "closed_ring_identity_v1":
+        # Validate the contour route before line acquisition as required by the
+        # opt-in workload contract. Hough's legacy input behavior is unchanged.
+        if (
+            not isinstance(image_bgr, np.ndarray)
+            or image_bgr.dtype != np.uint8
+            or image_bgr.ndim != 3
+            or image_bgr.shape[2] != 3
+            or image_bgr.shape[0] <= 0
+            or image_bgr.shape[1] <= 0
+        ):
+            raise ValueError("closed-ring strategy requires a non-empty uint8 three-channel BGR image")
+        if image_bgr.shape[0] * image_bgr.shape[1] > _CLOSED_RING_MAX_PIXELS:
+            raise ValueError("closed-ring strategy exceeds the 4,000,000-pixel workload limit")
 
     merged = dict(PRESETS[preset])
     merged.update(kwargs)
@@ -351,7 +516,10 @@ def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwarg
         "canny_low", "canny_high", "hough_threshold", "min_line_length", "max_line_gap")}
     circle_kwargs = {k: v for k, v in merged.items() if k in (
         "min_radius", "max_radius", "param1", "param2", "min_dist")}
-    return RawGeometry(
-        lines=extract_lines(image_bgr, **line_kwargs),
-        circles=extract_circles(image_bgr, **circle_kwargs),
+    lines = extract_lines(image_bgr, **line_kwargs)
+    circles = (
+        extract_circles(image_bgr, **circle_kwargs)
+        if circle_strategy == "hough"
+        else _closed_ring_circles(image_bgr)
     )
+    return RawGeometry(lines=lines, circles=circles)
