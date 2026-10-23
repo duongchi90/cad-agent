@@ -515,6 +515,111 @@ def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
     assert manifest_path.read_bytes() == manifest_bytes
 
 
+@pytest.mark.parametrize("path_kind", ["parent-traversal", "absolute", "symlink"])
+def test_pdf_resume_refuses_artifact_paths_outside_output_root_without_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_kind: str,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    outside = tmp_path / "outside.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page = persisted["pages"][0]
+    outside.write_text("protected sentinel", encoding="utf-8")
+
+    if path_kind == "parent-traversal":
+        artifact = "../outside.json"
+    elif path_kind == "absolute":
+        artifact = str(outside.resolve())
+    else:
+        link = output / "pdf" / "primitive_ir" / "escape.json"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+        artifact = link.relative_to(output).as_posix()
+
+    page["stages"]["primitive_ir"]["artifact"] = artifact
+    page["stages"]["primitive_ir"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+    manifest_before = manifest_path.read_bytes()
+    outputs_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    }
+    sentinel_before = outside.read_bytes()
+
+    manifest_module = importlib.import_module("cad_agent.manifest")
+    actual_sha256_file = manifest_module.sha256_file
+    external_reads: list[Path] = []
+
+    def observe_external_reads(path: Path) -> str:
+        if Path(path).resolve() == outside.resolve():
+            external_reads.append(Path(path))
+        return actual_sha256_file(path)
+
+    monkeypatch.setattr(manifest_module, "sha256_file", observe_external_reads)
+
+    def reject_extraction(*args: object, **kwargs: object) -> None:
+        raise AssertionError("PDF extraction started before unsafe artifact-path refusal")
+
+    monkeypatch.setattr("primitive_ir_lib.run_pdf.run_pdf", reject_extraction)
+    with pytest.raises(ManifestError, match="artifact|path|output root"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert external_reads == []
+    assert outside.read_bytes() == sentinel_before
+    assert manifest_path.read_bytes() == manifest_before
+    assert {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    } == outputs_before
+
+
+def test_pdf_resume_refuses_cross_page_artifact_alias_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_page, second_page = persisted["pages"]
+    first_page["stages"]["primitive_ir"]["artifact"] = second_page["stages"]["primitive_ir"]["artifact"]
+    first_page["stages"]["primitive_ir"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+    manifest_before = manifest_path.read_bytes()
+    outputs_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    }
+
+    def reject_extraction(*args: object, **kwargs: object) -> None:
+        raise AssertionError("PDF extraction started before cross-page alias refusal")
+
+    monkeypatch.setattr("primitive_ir_lib.run_pdf.run_pdf", reject_extraction)
+    with pytest.raises(ManifestError, match="artifact|page|alias|destination"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert manifest_path.read_bytes() == manifest_before
+    assert {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    } == outputs_before
+
+
 def test_pdf_resume_does_not_complete_stages_when_source_render_identity_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
