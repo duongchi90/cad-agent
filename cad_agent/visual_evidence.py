@@ -11,7 +11,7 @@ import re
 import uuid
 from collections.abc import Mapping
 from ctypes import wintypes
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from .drawing_contracts import canonical_json_sha256
 from .visual_contracts import VisualContractError, validate_visual_contract
@@ -19,6 +19,18 @@ from .visual_contracts import VisualContractError, validate_visual_contract
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _EXTERNAL_ROOT_CURRENTNESS_SCHEMA_VERSION = "external-root-visual-currentness-1.0"
+_PDFIMPORT_OBSERVATION_ROOT_SCHEMA_VERSION = "pdfimport-observation-root-1.0"
+_PDFIMPORT_OBSERVATION_ROOT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "provenance_mode",
+        "source_pdf_sha256",
+        "import_script_sha256",
+        "completed_receipt_sha256",
+        "candidate_path",
+        "candidate_sha256",
+    }
+)
 _EXTERNAL_ROOT_IDENTITY_FIELDS = (
     "candidate_id",
     "candidate_sha256",
@@ -73,6 +85,54 @@ def derive_external_root_visual_currentness_sha256(
         "provenance_mode": "EXTERNAL_GEOMETRY_ONLY",
         **{field: validated_identity[field] for field in _EXTERNAL_ROOT_IDENTITY_FIELDS},
     }
+    return canonical_json_sha256(material)
+
+
+def derive_pdfimport_observation_root_currentness_sha256(
+    observation_identity: Mapping[str, object],
+) -> str:
+    """Derive an identity digest for a closed initial PDFIMPORT observation.
+
+    This binds only the supplied identity fields. It does not verify artifact
+    bytes, receipt authenticity/completion, path aliases, native document
+    custody, or current on-disk DWG identity, and it is not mutation evidence
+    or product acceptance.
+    """
+
+    if not isinstance(observation_identity, Mapping):
+        raise VisualEvidenceError("PDFIMPORT observation identity must be an object")
+    if set(observation_identity) != _PDFIMPORT_OBSERVATION_ROOT_FIELDS:
+        raise VisualEvidenceError(
+            "PDFIMPORT observation identity fields are incomplete or unexpected"
+        )
+    if observation_identity.get("schema_version") != _PDFIMPORT_OBSERVATION_ROOT_SCHEMA_VERSION:
+        raise VisualEvidenceError("PDFIMPORT observation schema_version is invalid")
+    if observation_identity.get("provenance_mode") != "INITIAL_PDFIMPORT_OBSERVATION_ROOT":
+        raise VisualEvidenceError("PDFIMPORT observation provenance_mode is invalid")
+
+    for field in (
+        "source_pdf_sha256",
+        "import_script_sha256",
+        "completed_receipt_sha256",
+        "candidate_sha256",
+    ):
+        value = observation_identity.get(field)
+        if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+            raise VisualEvidenceError(f"PDFIMPORT observation {field} is invalid")
+
+    candidate_path = observation_identity.get("candidate_path")
+    if not isinstance(candidate_path, str) or not candidate_path:
+        raise VisualEvidenceError("PDFIMPORT observation candidate_path is invalid")
+    path = PureWindowsPath(candidate_path)
+    if (
+        not path.is_absolute()
+        or "\x00" in candidate_path
+        or ".." in path.parts
+        or str(path) != candidate_path
+    ):
+        raise VisualEvidenceError("PDFIMPORT observation candidate_path is not canonical")
+
+    material = {field: observation_identity[field] for field in sorted(_PDFIMPORT_OBSERVATION_ROOT_FIELDS)}
     return canonical_json_sha256(material)
 
 
@@ -890,6 +950,7 @@ __all__ = [
     "build_dimension_register_datum_bindings",
     "canonical_region_config_sha256",
     "derive_external_root_visual_currentness_sha256",
+    "derive_pdfimport_observation_root_currentness_sha256",
     "sha256_file",
     "snapshot_publication_file",
     "prepare_publication_replacement",
