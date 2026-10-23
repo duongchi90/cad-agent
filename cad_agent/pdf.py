@@ -187,13 +187,14 @@ def _resolve_pdf_resume_artifact(
     return resolved
 
 
-def _validate_pdf_write_roots(output_root: Path) -> None:
+def _validate_pdf_write_roots(output_root: Path, manifest_path: Path) -> None:
     """Reject redirected or multiply-linked existing targets before PDF writes."""
     reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     pending = [
         output_root / relative
         for relative in ("pdf", "semantic_ir", "dxf", "build_evidence")
     ]
+    pending.append(manifest_path)
     while pending:
         path = pending.pop()
         try:
@@ -230,7 +231,14 @@ def _validate_pdf_resume_artifacts(
     # be checked. `Path.resolve()` can retain a Windows 8.3 alias on one path
     # while returning the long path on another, even when both name this root.
     resolved_root.mkdir(parents=True, exist_ok=True)
-    _validate_pdf_write_roots(resolved_root)
+    _validate_pdf_write_roots(resolved_root, manifest_path)
+    if manifest_path.exists() and source.exists():
+        try:
+            manifest_aliases_source = os.path.samefile(manifest_path, source)
+        except OSError as exc:
+            raise ManifestError("Cannot verify PDF run manifest identity.") from exc
+        if manifest_aliases_source:
+            raise ManifestError("PDF run manifest aliases the source PDF.")
     try:
         manifest_parent_matches = os.path.samefile(manifest_lexical.parent, resolved_root)
     except OSError:

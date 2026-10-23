@@ -665,6 +665,30 @@ def test_pdf_resume_refuses_hardlinked_semantic_artifact_before_overwrite(
     assert after["pages"][0]["stages"]["semantic_ir"]["state"] == "pending"
 
 
+def test_pdf_resume_refuses_hardlinked_run_manifest_before_render_write(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    outside = tmp_path / "outside-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    output.mkdir()
+    outside.write_text(json.dumps(manifest), encoding="utf-8")
+    try:
+        os.link(outside, manifest_path)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable on this workstation: {exc}")
+    sentinel = outside.read_bytes()
+
+    with pytest.raises(ManifestError, match="hard link|multiple links"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert outside.read_bytes() == sentinel
+    assert not (output / "pdf" / "manifest.json").exists()
+
+
 def test_pdf_pending_render_refuses_later_page_symlink_before_renderer_write(
     tmp_path: Path,
 ) -> None:
