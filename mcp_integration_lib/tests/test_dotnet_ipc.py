@@ -1027,6 +1027,36 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertFalse(result["changed"])
             self.assertEqual(payload, result["payload"])
 
+    def test_drawing_setup_audit_supports_explicit_model_space_inventory_opt_in(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "changed": False,
+                "model_space_inventory": {
+                    "enumeration_complete": True,
+                    "entity_count": 0,
+                    "entities": [],
+                },
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.drawing_setup_audit(
+                r"C:\temp\setup-lite.dwg",
+                drawing_sha256="a" * 64,
+                include_model_space_inventory=True,
+                request_id="setup-lite-inventory-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual(
+                {"include_model_space_inventory": True},
+                request["parameters"],
+            )
+            self.assertTrue(result["payload"]["model_space_inventory"]["enumeration_complete"])
+
     def test_drawing_setup_audit_rejects_a_mutating_result(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)

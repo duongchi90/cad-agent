@@ -703,6 +703,32 @@ public sealed class OperationDispatcherTests
     }
 
     [Fact]
+    public void DrawingSetupAuditInventoryOptInUsesExistingGatewayWithRequestedHash()
+    {
+        const string path = @"C:\temp\setup-lite.dwg";
+        var sha256 = new string('a', 64);
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = path,
+            DrawingSetup = DrawingSetupFixtures.VerifiedSnapshot(path)
+        };
+        var request = Request(
+            "drawing_setup_audit",
+            "setup-inventory-001",
+            path,
+            Parameters(("include_model_space_inventory", JsonSerializer.SerializeToElement(true))),
+            sha256);
+
+        var result = CreateDispatcher(gateway).Dispatch(request);
+
+        Assert.True(result.Success, string.Join("; ", result.Errors!));
+        Assert.Equal(0, gateway.ReadDrawingSetupCallCount);
+        Assert.Equal(1, gateway.ReadDrawingSetupInventoryCallCount);
+        Assert.Equal(sha256, gateway.LastInventoryExpectedSha256);
+        Assert.True(result.Payload!["model_space_inventory"].GetProperty("enumeration_complete").GetBoolean());
+    }
+
+    [Fact]
     public void DrawingSetupAuditRejectsParametersBeforeReadingTheDrawing()
     {
         var path = @"C:\temp\setup-lite.dwg";
@@ -1617,6 +1643,10 @@ public sealed class OperationDispatcherTests
 
         public DrawingSetupSnapshot? DrawingSetup { get; init; }
 
+        public int ReadDrawingSetupInventoryCallCount { get; private set; }
+
+        public string? LastInventoryExpectedSha256 { get; private set; }
+
         public Exception? ExceptionToThrow { get; init; }
 
         public VisualEvidenceSnapshot? VisualEvidence { get; init; }
@@ -1663,6 +1693,29 @@ public sealed class OperationDispatcherTests
             ReadDrawingSetupCallCount++;
             return DrawingSetup
                 ?? throw new InvalidOperationException("No drawing setup fixture was configured.");
+        }
+
+        public DrawingSetupSnapshot ReadDrawingSetupWithModelSpaceInventory(string expectedDrawingSha256)
+        {
+            ReadDrawingSetupInventoryCallCount++;
+            LastInventoryExpectedSha256 = expectedDrawingSha256;
+            var snapshot = DrawingSetup
+                ?? throw new InvalidOperationException("No drawing setup fixture was configured.");
+            var inventory = new ModelSpaceInventorySnapshot(
+                snapshot.DrawingFullPath,
+                expectedDrawingSha256,
+                expectedDrawingSha256,
+                0,
+                0,
+                100,
+                "test",
+                @"C:\\plugin.dll",
+                new string('b', 64),
+                0,
+                true,
+                true,
+                Array.Empty<ModelSpaceEntityBoundsSnapshot>());
+            return snapshot with { ModelSpaceInventory = inventory };
         }
 
         public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request)

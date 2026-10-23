@@ -507,7 +507,11 @@ def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
             ipc_dir=args.ipc_dir,
             timeout_s=args.timeout_s,
             trigger=make_windows_dotnet_dispatch_trigger(args.hwnd),
-        ).drawing_setup_audit(drawing, drawing_sha256=before)
+        ).drawing_setup_audit(
+            drawing,
+            drawing_sha256=before,
+            include_model_space_inventory=args.include_model_space_inventory,
+        )
     except DotNetIPCError as exc:
         raise CommandError(f"drawing_setup_audit IPC failed: {exc}") from exc
     try:
@@ -1090,6 +1094,11 @@ def build_parser() -> argparse.ArgumentParser:
     drawing_setup_audit.add_argument("--ipc-dir", type=Path, required=True)
     drawing_setup_audit.add_argument("--output", type=Path, required=True)
     drawing_setup_audit.add_argument("--timeout-s", type=float, default=10.0)
+    drawing_setup_audit.add_argument(
+        "--include-model-space-inventory",
+        action="store_true",
+        help="Opt in to a hash-bound read-only ModelSpace inventory (up to 50,000 entities)",
+    )
     drawing_setup_verify = subcommands.add_parser(
         "drawing-setup-verify", help="Verify Drawing Setup audit evidence"
     )

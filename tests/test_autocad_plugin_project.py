@@ -102,7 +102,7 @@ def test_drawing_setup_audit_ipc_contract_is_versioned_and_read_only() -> None:
     assert result_properties["entity_handles"]["maxItems"] == 0
     assert operation_schema["type"] == "object"
     assert operation_schema["additionalProperties"] is False
-    assert operation_schema["maxProperties"] == 0
+    assert operation_schema["properties"]["include_model_space_inventory"]["type"] == "boolean"
     assert request_example["operation"] == "drawing_setup_audit"
     assert request_example["parameters"] == {}
     assert result_example["operation"] == "drawing_setup_audit"
@@ -119,7 +119,7 @@ def test_drawing_setup_audit_ipc_contract_is_versioned_and_read_only() -> None:
         ROOT / "autocad_plugin/CadAgent.AutoCAD2027/Ipc/OperationDispatcher.cs"
     ).read_text(encoding="utf-8")
     assert '"drawing_setup_audit"' in contract_models
-    assert "drawing_setup_audit parameters must be an empty object" in validator
+    assert "include_model_space_inventory" in validator
     assert "drawing_setup_audit results must be read-only" in validator
     assert '"drawing_setup_audit" => DispatchDrawingSetupAudit' in dispatcher
     assert "DrawingSetupPayload.Create(snapshot)" in dispatcher

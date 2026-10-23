@@ -812,11 +812,47 @@ public sealed class CommandContext
             return snapshots;
         }
 
-        public DrawingSetupSnapshot ReadDrawingSetup()
+        public DrawingSetupSnapshot ReadDrawingSetup() => ReadDrawingSetupCore(expectedDrawingSha256: null);
+
+        public DrawingSetupSnapshot ReadDrawingSetupWithModelSpaceInventory(string expectedDrawingSha256)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedDrawingSha256);
+            return ReadDrawingSetupCore(expectedDrawingSha256);
+        }
+
+        private DrawingSetupSnapshot ReadDrawingSetupCore(string? expectedDrawingSha256)
+        {
+            var includeInventory = expectedDrawingSha256 is not null;
+            if (includeInventory)
+            {
+                EnsureActiveDocument();
+            }
             var database = _document.Database
                 ?? throw new InvalidOperationException("The active document has no database.");
+            var documentPath = includeInventory
+                ? Path.GetFullPath(database.Filename)
+                : database.Filename;
+            var inventoryHashBefore = includeInventory
+                ? ComputeSha256(documentPath)
+                : null;
+            if (includeInventory
+                && !string.Equals(
+                    inventoryHashBefore,
+                    expectedDrawingSha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("ModelSpace inventory drawing SHA-256 does not match the request.");
+            }
+
             var dbModBefore = Convert.ToInt32(ReadSystemNumber("DBMOD"));
+            if (includeInventory && dbModBefore != 0)
+            {
+                throw new InvalidOperationException("ModelSpace inventory requires DBMOD=0 before reading.");
+            }
+
+            var pluginIdentity = includeInventory
+                ? LoadedPluginIdentity.Capture(typeof(OperationDispatcher).Assembly)
+                : null;
             var variables = new Dictionary<string, double>(StringComparer.Ordinal)
             {
                 ["INSUNITS"] = ReadSystemNumber("INSUNITS"),
@@ -837,6 +873,7 @@ public sealed class CommandContext
             string currentLayer;
             string[] mLeaderStyles;
             string[] tableStyles;
+            IReadOnlyList<ModelSpaceEntityBoundsSnapshot>? inventoryEntities = null;
 
             using (var transaction = _document.TransactionManager.StartOpenCloseTransaction())
             {
@@ -933,6 +970,10 @@ public sealed class CommandContext
                 tableStyles = ReadDictionaryNames(
                     transaction,
                     database.TableStyleDictionaryId);
+                if (includeInventory)
+                {
+                    inventoryEntities = ReadModelSpaceEntityBounds(database, transaction);
+                }
             }
 
             var customProperties = ReadCustomProperties(database);
@@ -943,8 +984,56 @@ public sealed class CommandContext
                     $"Drawing setup audit changed DBMOD from {dbModBefore} to {dbModAfter}.");
             }
 
+            ModelSpaceInventorySnapshot? inventory = null;
+            if (includeInventory)
+            {
+                EnsureActiveDocument();
+                if (!ReferenceEquals(_document.Database, database))
+                {
+                    throw new InvalidOperationException("The active AutoCAD database changed during ModelSpace inventory.");
+                }
+                if (dbModAfter != 0)
+                {
+                    throw new InvalidOperationException("ModelSpace inventory requires DBMOD=0 after reading.");
+                }
+
+                var inventoryHashAfter = ComputeSha256(documentPath);
+                if (!string.Equals(
+                        inventoryHashBefore,
+                        inventoryHashAfter,
+                        StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(
+                        inventoryHashAfter,
+                        expectedDrawingSha256,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("ModelSpace inventory drawing SHA-256 changed during reading.");
+                }
+
+                var entities = inventoryEntities
+                    ?? throw new InvalidOperationException("ModelSpace enumeration did not complete.");
+                if (entities.Count > ContractConstants.ModelSpaceInventoryMaxEntityCount)
+                {
+                    throw new InvalidOperationException("INVENTORY_ENTITY_LIMIT_EXCEEDED");
+                }
+                inventory = new ModelSpaceInventorySnapshot(
+                    documentPath,
+                    inventoryHashBefore!,
+                    inventoryHashAfter,
+                    dbModBefore,
+                    dbModAfter,
+                    Environment.ProcessId,
+                    OperationDispatcher.PluginVersion,
+                    pluginIdentity!.BinaryPath,
+                    pluginIdentity.Sha256,
+                    entities.Count,
+                    EnumerationComplete: true,
+                    BoundsComplete: entities.All(entity => entity.BoundsStatus == "BOUNDS_READ"),
+                    Entities: entities);
+            }
+
             return new DrawingSetupSnapshot(
-                database.Filename,
+                documentPath,
                 dbModBefore,
                 dbModAfter,
                 variables,
@@ -957,7 +1046,79 @@ public sealed class CommandContext
                 tableStyles,
                 layouts.OrderBy(layout => layout.Name, StringComparer.Ordinal).ToArray(),
                 missingFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray(),
-                substitutedFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+                substitutedFonts.Distinct(StringComparer.Ordinal).OrderBy(name => name, StringComparer.Ordinal).ToArray(),
+                inventory);
+        }
+
+        private static IReadOnlyList<ModelSpaceEntityBoundsSnapshot> ReadModelSpaceEntityBounds(
+            Database database,
+            Transaction transaction)
+        {
+            var blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+            var modelSpace = (BlockTableRecord)transaction.GetObject(
+                blockTable[BlockTableRecord.ModelSpace],
+                OpenMode.ForRead);
+            var entities = new List<ModelSpaceEntityBoundsSnapshot>(1024);
+            foreach (ObjectId objectId in modelSpace)
+            {
+                if (entities.Count >= ContractConstants.ModelSpaceInventoryMaxEntityCount)
+                {
+                    throw new InvalidOperationException("INVENTORY_ENTITY_LIMIT_EXCEEDED");
+                }
+
+                var handle = objectId.Handle.ToString().ToUpperInvariant();
+                var type = objectId.ObjectClass?.DxfName;
+                if (string.IsNullOrWhiteSpace(handle) || string.IsNullOrWhiteSpace(type))
+                {
+                    throw new InvalidDataException("ModelSpace enumeration could not identify an entity handle and type.");
+                }
+
+                string boundsStatus;
+                double[]? bounds = null;
+                try
+                {
+                    if (transaction.GetObject(objectId, OpenMode.ForRead, openErased: false) is not Entity entity)
+                    {
+                        boundsStatus = "UNSUPPORTED";
+                    }
+                    else
+                    {
+                        type = entity.GetRXClass().DxfName;
+                        var extents = entity.GeometricExtents;
+                        var minimum = extents.MinPoint;
+                        var maximum = extents.MaxPoint;
+                        var values = new[]
+                        {
+                            minimum.X, minimum.Y, minimum.Z,
+                            maximum.X, maximum.Y, maximum.Z
+                        };
+                        if (values.Any(value => !double.IsFinite(value)))
+                        {
+                            boundsStatus = "NONFINITE";
+                        }
+                        else if (minimum.X > maximum.X
+                            || minimum.Y > maximum.Y
+                            || minimum.Z > maximum.Z)
+                        {
+                            boundsStatus = "UNREADABLE";
+                        }
+                        else
+                        {
+                            boundsStatus = "BOUNDS_READ";
+                            bounds = values;
+                        }
+                    }
+                }
+                catch (Autodesk.AutoCAD.Runtime.Exception)
+                {
+                    boundsStatus = "UNREADABLE";
+                    bounds = null;
+                }
+
+                entities.Add(new ModelSpaceEntityBoundsSnapshot(handle, type, boundsStatus, bounds));
+            }
+
+            return entities;
         }
 
         public VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request) =>

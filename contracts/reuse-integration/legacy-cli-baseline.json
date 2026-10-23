@@ -65,6 +65,11 @@
           "nargs": null,
           "required": true
         },
+        "--include-model-space-inventory": {
+          "dest": "include_model_space_inventory",
+          "nargs": 0,
+          "required": false
+        },
         "--ipc-dir": {
           "dest": "ipc_dir",
           "nargs": null,
@@ -552,6 +557,25 @@
         }
       }
     },
+    "fidelity-semantic-region-handoff": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
     "fidelity-table-text-approve": {
       "options": {
         "--approval-reference": {
@@ -720,25 +744,6 @@
         }
       }
     },
-    "fidelity-semantic-region-handoff": {
-      "options": {
-        "--approval": {
-          "dest": "approval",
-          "nargs": null,
-          "required": true
-        },
-        "--input": {
-          "dest": "input",
-          "nargs": null,
-          "required": true
-        },
-        "--manifest": {
-          "dest": "manifest",
-          "nargs": null,
-          "required": true
-        }
-      }
-    },
     "fidelity-text-review-index": {
       "options": {
         "--input": {
@@ -890,45 +895,45 @@
     },
     "run-pdf": {
       "options": {
-        "--input": {
-          "dest": "input",
-          "required": true,
-          "nargs": null
-        },
-        "--output-dir": {
-          "dest": "output_dir",
-          "required": true,
-          "nargs": null
-        },
-        "--scale-mm-per-px": {
-          "dest": "scale_mm_per_px",
-          "required": false,
-          "nargs": null
-        },
-        "--calibration-approval": {
-          "dest": "calibration_approval",
-          "required": false,
-          "nargs": null
-        },
         "--auto-calibrate": {
           "dest": "auto_calibrate",
-          "required": false,
-          "nargs": 0
-        },
-        "--dpi": {
-          "dest": "dpi",
-          "required": false,
-          "nargs": null
+          "nargs": 0,
+          "required": false
         },
         "--auto-ocr-roi": {
           "dest": "auto_ocr_roi",
-          "required": false,
-          "nargs": 0
+          "nargs": 0,
+          "required": false
+        },
+        "--calibration-approval": {
+          "dest": "calibration_approval",
+          "nargs": null,
+          "required": false
+        },
+        "--dpi": {
+          "dest": "dpi",
+          "nargs": null,
+          "required": false
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
         },
         "--no-auto-ocr-roi": {
           "dest": "auto_ocr_roi",
-          "required": false,
-          "nargs": 0
+          "nargs": 0,
+          "required": false
+        },
+        "--output-dir": {
+          "dest": "output_dir",
+          "nargs": null,
+          "required": true
+        },
+        "--scale-mm-per-px": {
+          "dest": "scale_mm_per_px",
+          "nargs": null,
+          "required": false
         }
       }
     }

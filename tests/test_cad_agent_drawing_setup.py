@@ -730,6 +730,52 @@ def test_create_setup_audit_output_round_trips_with_empty_text_style(
     assert read_contract(output, contract="drawing_setup_audit") == audit
 
 
+def test_create_setup_audit_preserves_hash_bound_model_space_inventory(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": digest,
+        "drawing_sha256_after": digest,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "process_id": 123,
+        "plugin_version": "test",
+        "plugin_binary_path": r"C:\\plugin.dll",
+        "plugin_binary_sha256": "a" * 64,
+        "entity_count": 0,
+        "enumeration_complete": True,
+        "bounds_complete": True,
+        "entities": [],
+    }
+
+    audit = create_setup_audit(drawing, digest, result)
+
+    assert audit["model_space_inventory"]["drawing_sha256_before"] == digest
+    output = tmp_path / "audit-with-model-space-inventory.json"
+    output.write_text(json.dumps(audit), encoding="utf-8")
+    assert read_contract(output, contract="drawing_setup_audit") == audit
+
+
+def test_create_setup_audit_rejects_model_space_hash_mismatch(tmp_path: Path) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": "b" * 64,
+        "drawing_sha256_after": "b" * 64,
+    }
+
+    with pytest.raises(DrawingSetupError, match="path/hash"):
+        create_setup_audit(drawing, digest, result)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -775,10 +821,12 @@ def test_drawing_setup_audit_cli_writes_a_hash_bound_contract(
         drawing_full_path: str | Path,
         *,
         drawing_sha256: str,
+        include_model_space_inventory: bool = False,
         request_id: str | None = None,
     ) -> dict[str, object]:
         observed["path"] = Path(drawing_full_path)
         observed["sha256"] = drawing_sha256
+        observed["include_model_space_inventory"] = include_model_space_inventory
         return matching_setup_ipc_result(
             approved_setup_plan(), str(Path(drawing_full_path).resolve())
         )
@@ -794,7 +842,11 @@ def test_drawing_setup_audit_cli_writes_a_hash_bound_contract(
     ]) == 0
 
     artifact = read_contract(output, contract="drawing_setup_audit")
-    assert observed == {"path": drawing.resolve(), "sha256": sha256_file(drawing)}
+    assert observed == {
+        "path": drawing.resolve(),
+        "sha256": sha256_file(drawing),
+        "include_model_space_inventory": False,
+    }
     assert artifact["drawing_sha256"] == sha256_file(drawing)
     assert artifact["drawing_full_path"] == str(drawing.resolve())
 
