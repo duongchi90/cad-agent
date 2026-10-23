@@ -26,7 +26,7 @@ KHÔNG tự động thay thế "default" (tham số gốc, giữ để không ph
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -312,6 +312,182 @@ def extract_circles(
     return raw_circles
 
 
+_LARGE_CIRCLE_WORK_MAX_SIDE_PX = 1200
+_LARGE_CIRCLE_RADIUS_BAND_RATIO = 1.25
+_SOURCE_CIRCLE_SAMPLE_SPACING_PX = 3.0
+_SOURCE_CIRCLE_MIN_SAMPLE_COUNT = 180
+_SOURCE_CIRCLE_MAX_SAMPLE_COUNT = 32_768
+
+
+def _circle_has_distributed_source_support(
+    source_gray: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+) -> bool:
+    """Require a dark ridge around nearly the whole proposed circumference."""
+    if (
+        not np.isfinite(center_x)
+        or not np.isfinite(center_y)
+        or not np.isfinite(radius)
+        or radius <= 0
+    ):
+        return False
+
+    height, width = source_gray.shape[:2]
+    if height <= 0 or width <= 0:
+        return False
+
+    # Bound work by the available image extent and a fixed allocation budget.
+    # The radius precheck also avoids overflowing while computing sample_count.
+    sample_budget = min(
+        _SOURCE_CIRCLE_MAX_SAMPLE_COUNT,
+        max(_SOURCE_CIRCLE_MIN_SAMPLE_COUNT, 4 * (height + width)),
+    )
+    max_sampled_radius = (
+        sample_budget * _SOURCE_CIRCLE_SAMPLE_SPACING_PX / (2.0 * np.pi)
+    )
+    if radius > max_sampled_radius:
+        return False
+
+    sample_count = max(
+        _SOURCE_CIRCLE_MIN_SAMPLE_COUNT,
+        int(np.ceil(2.0 * np.pi * radius / _SOURCE_CIRCLE_SAMPLE_SPACING_PX)),
+    )
+    if sample_count > sample_budget:
+        return False
+
+    angles = np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False)
+    radial_offsets = np.arange(-7, 8, dtype=np.float64)
+    sample_radii = radius + radial_offsets[None, :]
+    xs = np.rint(center_x + np.cos(angles)[:, None] * sample_radii).astype(int)
+    ys = np.rint(center_y + np.sin(angles)[:, None] * sample_radii).astype(int)
+
+    inside = (
+        (xs >= 0)
+        & (xs < source_gray.shape[1])
+        & (ys >= 0)
+        & (ys < source_gray.shape[0])
+    )
+    sampled = source_gray[
+        np.clip(ys, 0, source_gray.shape[0] - 1),
+        np.clip(xs, 0, source_gray.shape[1] - 1),
+    ].astype(np.int16)
+
+    supported = np.zeros(sample_count, dtype=bool)
+    for center_index in range(4, 11):
+        left_index = center_index - 4
+        right_index = center_index + 4
+        supported |= (
+            inside[:, center_index]
+            & inside[:, left_index]
+            & inside[:, right_index]
+            & (sampled[:, left_index] - sampled[:, center_index] >= 10)
+            & (sampled[:, right_index] - sampled[:, center_index] >= 10)
+        )
+
+    if float(np.mean(supported)) < 0.90:
+        return False
+
+    # Overall coverage and fixed sectors can hide a short, contiguous opening.
+    # Permit only a small raster-sampling gap; a visible 5-degree opening must
+    # not be promoted to a complete circle by this supplemental path.
+    first_supported = int(np.flatnonzero(supported)[0])
+    unsupported = np.roll(~supported, -first_supported)
+    transitions = np.diff(np.r_[False, unsupported, False].astype(np.int8))
+    gap_starts = np.flatnonzero(transitions == 1)
+    gap_ends = np.flatnonzero(transitions == -1)
+    largest_gap = int(np.max(gap_ends - gap_starts)) if gap_starts.size else 0
+    max_sampling_gap = max(2, int(np.ceil(sample_count * 0.01)))
+    if largest_gap > max_sampling_gap:
+        return False
+
+    return all(float(np.mean(section)) >= 0.70 for section in np.array_split(supported, 16))
+
+
+def _extract_supplemental_large_circles(
+    image_bgr: np.ndarray,
+    circle_kwargs: dict,
+) -> List[RawCircle]:
+    """Find supported large circles on a bounded raster using narrow Hough bands."""
+    height, width = image_bgr.shape[:2]
+    scale = min(1.0, _LARGE_CIRCLE_WORK_MAX_SIDE_PX / float(max(height, width)))
+    work_width = max(1, int(round(width * scale)))
+    work_height = max(1, int(round(height * scale)))
+    if (work_width, work_height) == (width, height):
+        work_image = image_bgr
+    else:
+        work_image = cv2.resize(
+            image_bgr, (work_width, work_height), interpolation=cv2.INTER_AREA
+        )
+
+    scale_x = work_width / float(width)
+    scale_y = work_height / float(height)
+    source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    max_work_radius = min(work_width, work_height) // 2 - 2
+    effective_max_radius = int(circle_kwargs.get("max_radius", 200))
+    first_radius = max(1, int(np.floor(effective_max_radius * min(scale_x, scale_y))) + 1)
+    if first_radius > max_work_radius:
+        return []
+
+    supplemental: List[RawCircle] = []
+    band_min = first_radius
+    param1 = int(circle_kwargs.get("param1", 100))
+    param2 = int(circle_kwargs.get("param2", 30))
+
+    while band_min <= max_work_radius:
+        band_max = min(
+            max_work_radius,
+            max(band_min, int(np.floor(band_min * _LARGE_CIRCLE_RADIUS_BAND_RATIO))),
+        )
+        candidates = extract_circles(
+            work_image,
+            min_radius=band_min,
+            max_radius=band_max,
+            param1=param1,
+            param2=param2,
+            min_dist=1,
+        )
+
+        radius_scale = (scale_x + scale_y) / 2.0
+        for candidate in candidates:
+            center_x = candidate.center_px[0] / scale_x
+            center_y = candidate.center_px[1] / scale_y
+            radius = candidate.radius_px / radius_scale
+            if not _circle_has_distributed_source_support(
+                source_gray, center_x, center_y, radius
+            ):
+                continue
+
+            duplicate = any(
+                np.hypot(
+                    center_x - existing.center_px[0],
+                    center_y - existing.center_px[1],
+                ) <= 8.0
+                and abs(radius - existing.radius_px) <= 8.0
+                for existing in supplemental
+            )
+            if duplicate:
+                continue
+
+            supplemental.append(RawCircle(
+                id=candidate.id,
+                center_px=(center_x, center_y),
+                radius_px=radius,
+                confidence=candidate.confidence,
+                bbox_px=(
+                    center_x - radius,
+                    center_y - radius,
+                    center_x + radius,
+                    center_y + radius,
+                ),
+            ))
+
+        band_min = band_max + 1
+
+    return supplemental
+
+
 # Bộ tham số tinh chỉnh từ ảnh scan thật đầu tiên (mục 3 báo cáo kiểm thử
 # Phase 1, 18/07/2026, bản vẽ "TP-TL-A001/07/26"): giảm nhiễu hatch (circle
 # giả) và loại nét hatch ngắn khỏi kết quả line. Xem cảnh báo ở docstring đầu
@@ -328,7 +504,118 @@ PRESETS = {
 }
 
 
-def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwargs) -> RawGeometry:
+def _polygon_winding_number(
+    x: float, y: float, polygon: List[Tuple[float, float]]
+) -> int:
+    winding = 0
+    for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]):
+        cross = (x1 - x0) * (y - y0) - (x - x0) * (y1 - y0)
+        if (
+            abs(cross) <= 1e-7
+            and min(x0, x1) - 1e-7 <= x <= max(x0, x1) + 1e-7
+            and min(y0, y1) - 1e-7 <= y <= max(y0, y1) + 1e-7
+        ):
+            return 1
+        if y0 <= y < y1 and cross > 0:
+            winding += 1
+        elif y1 <= y < y0 and cross < 0:
+            winding -= 1
+    return winding
+
+
+def _circle_perimeter_intersects_fill(
+    center_x: float,
+    center_y: float,
+    radius: float,
+    polygons: List[List[Tuple[float, float]]],
+    *,
+    even_odd: bool,
+) -> bool:
+    if radius <= 0 or not polygons:
+        return False
+    sample_count = max(72, min(4096, int(np.ceil(2.0 * np.pi * radius))))
+    for angle in np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False):
+        x = center_x + radius * float(np.cos(angle))
+        y = center_y + radius * float(np.sin(angle))
+        windings = [_polygon_winding_number(x, y, polygon) for polygon in polygons]
+        if even_odd:
+            inside = sum(winding != 0 for winding in windings) % 2 == 1
+        else:
+            inside = sum(windings) != 0
+        if inside:
+            return True
+    return False
+
+
+def _suspect_region_intersects_circle(
+    suspect: dict | Tuple[float, float, float, float],
+    center_x: float,
+    center_y: float,
+    radius: float,
+    tolerance: float,
+) -> bool:
+    if isinstance(suspect, dict):
+        stroke_margin = max(0.0, float(suspect.get("stroke_radius_px") or 0.0))
+        for x0, y0, x1, y1 in suspect.get("segments", []):
+            dx = x1 - x0
+            dy = y1 - y0
+            length_squared = dx * dx + dy * dy
+            fraction = 0.0 if length_squared <= 0.0 else min(
+                1.0,
+                max(0.0, ((center_x - x0) * dx + (center_y - y0) * dy) / length_squared),
+            )
+            nearest_x = x0 + fraction * dx
+            nearest_y = y0 + fraction * dy
+            min_distance = float(np.hypot(nearest_x - center_x, nearest_y - center_y))
+            max_distance = max(
+                float(np.hypot(x0 - center_x, y0 - center_y)),
+                float(np.hypot(x1 - center_x, y1 - center_y)),
+            )
+            if (
+                min_distance <= radius + tolerance + stroke_margin
+                and max_distance >= radius - tolerance - stroke_margin
+            ):
+                return True
+
+        fill_polygons = suspect.get("fill_polygons", [])
+        if fill_polygons and _circle_perimeter_intersects_fill(
+            center_x,
+            center_y,
+            radius,
+            fill_polygons,
+            even_odd=bool(suspect.get("fill_even_odd")),
+        ):
+            return True
+
+        bounds = suspect.get("bounds")
+        if bounds is None:
+            return False
+    else:
+        bounds = suspect
+
+    x0, y0, x1, y1 = bounds
+    dx = max(x0 - center_x, 0.0, center_x - x1)
+    dy = max(y0 - center_y, 0.0, center_y - y1)
+    min_distance = float(np.hypot(dx, dy))
+    max_distance = max(
+        float(np.hypot(x - center_x, y - center_y))
+        for x, y in ((x0, y0), (x0, y1), (x1, y1), (x1, y0))
+    )
+    return (
+        min_distance <= radius + tolerance
+        and max_distance >= radius - tolerance
+    )
+
+
+def extract_raw_geometry(
+    image_bgr: np.ndarray,
+    preset: str = "default",
+    *,
+    pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
+    pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
+    require_pdf_vector_circle_witness: bool = False,
+    **kwargs,
+) -> RawGeometry:
     """Entry point chính của module.
 
     preset: bộ tham số nền dùng trước khi áp kwargs override lên trên — xem
@@ -351,7 +638,131 @@ def extract_raw_geometry(image_bgr: np.ndarray, preset: str = "default", **kwarg
         "canny_low", "canny_high", "hough_threshold", "min_line_length", "max_line_gap")}
     circle_kwargs = {k: v for k, v in merged.items() if k in (
         "min_radius", "max_radius", "param1", "param2", "min_dist")}
+    circles = extract_circles(image_bgr, **circle_kwargs)
+    if (
+        preset == "real_scan_tuned_v1"
+        and "min_radius" not in kwargs
+        and "max_radius" not in kwargs
+    ):
+        supplemental = _extract_supplemental_large_circles(image_bgr, circle_kwargs)
+        for candidate in supplemental:
+            duplicate = any(
+                np.hypot(
+                    candidate.center_px[0] - existing.center_px[0],
+                    candidate.center_px[1] - existing.center_px[1],
+                ) <= 8.0
+                and abs(candidate.radius_px - existing.radius_px) <= 8.0
+                for existing in circles
+            )
+            if not duplicate:
+                circles.append(candidate)
+
+    if (
+        require_pdf_vector_circle_witness
+        or pdf_vector_circle_witnesses
+        or pdf_vector_circle_suspect_regions
+    ):
+        witnesses = pdf_vector_circle_witnesses or []
+        suspect_regions = pdf_vector_circle_suspect_regions or []
+        source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        source_witnesses: list[Tuple[float, float, float]] = []
+        min_radius = kwargs.get("min_radius")
+        max_radius = kwargs.get("max_radius")
+        for witness in witnesses:
+            try:
+                if len(witness) != 3:
+                    continue
+                witness_x, witness_y, witness_radius = map(float, witness)
+            except (TypeError, ValueError):
+                continue
+            if not all(np.isfinite(value) for value in (witness_x, witness_y, witness_radius)):
+                continue
+            if witness_radius <= 0.0:
+                continue
+            parsed = (witness_x, witness_y, witness_radius)
+
+            # Deduplicate only effectively identical source cycles. Raster
+            # tolerances are deliberately much wider and would erase valid
+            # close concentric geometry here.
+            if any(
+                np.hypot(witness_x - prior_x, witness_y - prior_y) <= 0.04
+                and abs(witness_radius - prior_radius) <= 0.04
+                for prior_x, prior_y, prior_radius in source_witnesses
+            ):
+                continue
+            if (
+                min_radius is not None and witness_radius < min_radius
+            ) or (
+                max_radius is not None and max_radius > 0
+                and witness_radius > max_radius
+            ):
+                continue
+            if not _circle_has_distributed_source_support(
+                source_gray, witness_x, witness_y, witness_radius
+            ):
+                continue
+            source_witnesses.append(parsed)
+
+        def matches_witness(
+            circle: RawCircle, witness: Tuple[float, float, float]
+        ) -> bool:
+            witness_x, witness_y, witness_radius = witness
+            tolerance = max(4.0, witness_radius * 0.01)
+            return (
+                float(np.hypot(
+                    circle.center_px[0] - witness_x,
+                    circle.center_px[1] - witness_y,
+                )) <= tolerance
+                and abs(circle.radius_px - witness_radius) <= tolerance
+            )
+
+        accepted_circles: list[RawCircle] = []
+        for candidate in circles:
+            suspect_tolerance = max(4.0, candidate.radius_px * 0.01)
+            has_suspect_region = any(
+                _suspect_region_intersects_circle(
+                    suspect,
+                    candidate.center_px[0],
+                    candidate.center_px[1],
+                    candidate.radius_px,
+                    suspect_tolerance,
+                )
+                for suspect in suspect_regions
+            )
+            # A raster candidate may alias several close source cycles. Remove
+            # it once, then materialize each separately validated source cycle
+            # below. An unassociated candidate retains the existing suspect
+            # region and required-witness fail-closed behavior.
+            if any(matches_witness(candidate, witness) for witness in source_witnesses):
+                continue
+            if (
+                not require_pdf_vector_circle_witness
+                and not has_suspect_region
+            ):
+                accepted_circles.append(candidate)
+
+        for witness_x, witness_y, witness_radius in source_witnesses:
+            matched_confidence = [
+                candidate.confidence
+                for candidate in circles
+                if matches_witness(candidate, (witness_x, witness_y, witness_radius))
+            ]
+            confidence = max(matched_confidence, default=1.0)
+            accepted_circles.append(RawCircle(
+                id=new_id("rawcirc_pdfvector"),
+                center_px=(witness_x, witness_y),
+                radius_px=witness_radius,
+                confidence=confidence,
+                bbox_px=(
+                    witness_x - witness_radius,
+                    witness_y - witness_radius,
+                    witness_x + witness_radius,
+                    witness_y + witness_radius,
+                ),
+            ))
+        circles = accepted_circles
+
     return RawGeometry(
         lines=extract_lines(image_bgr, **line_kwargs),
-        circles=extract_circles(image_bgr, **circle_kwargs),
+        circles=circles,
     )
