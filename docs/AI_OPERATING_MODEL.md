@@ -103,6 +103,14 @@ The standard five SOL sentry roles are:
 
 These roles are advisory/lookahead, not a second execution control plane.
 
+### Chat-mode recovery and review result observability
+
+- If ChatGPT Web offers `Stay in chat` while inviting a switch to Work mode, select it at most once to remain in the current reviewer conversation, then verify the UI is back in that same conversation and inspect its state. This choice is only UI recovery; it does not prove submission, delivery, or receipt of a verdict.
+- After sending a review packet, verify it appears in the intended same-role conversation. Distinguish `SUBMITTED`, `GENERATING`, `COMPLETED`, `ERROR`, and `UNOBSERVABLE`; a thread ID or opaque `content-reference` placeholder alone is not inspectable reviewer output.
+- A completed response is a terminal review only when the complete verdict is readable and bound to `ROLE`, `REQUEST_ID`, `CONTROLLING_ATTEMPT_ID`, `BASE`, `HEAD`, and `TREE`. If output is only an opaque reference, try one safe existing read path or inspect the canonical GitHub review receipt. If neither exposes the verdict, keep the review `PENDING` and classify observability as `UNKNOWN`; do not infer PASS from CI, thread state, or delivery metadata.
+- Do not repeatedly click, poll, wake, or resend the same attempt. Do not bypass CAPTCHA, identity verification, or anti-automation/security challenges; stop and classify the required user interaction as a UI/Human Gate.
+- Preserve the same role and controlling request/attempt through permitted same-role failover. Retire the old channel for that packet before transfer; a late response is non-controlling. On a HEAD change, treat old results as historical and follow current #429 for new exact-head review identity.
+
 ## 5. Reuse-first implementation law
 
 Use this order for every capability or repair:
