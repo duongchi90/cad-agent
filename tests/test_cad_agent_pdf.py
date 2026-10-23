@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -10,7 +11,12 @@ import pytest
 
 from cad_agent.cli import main
 from cad_agent.manifest import ManifestError, sha256_file
-from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
+from cad_agent.pdf import (
+    _validate_pdf_resume_artifacts,
+    new_pdf_manifest,
+    read_pdf_manifest,
+    run_pdf_stages,
+)
 
 
 def _pdf(path: Path, label: str = "A") -> None:
@@ -21,6 +27,41 @@ def _pdf(path: Path, label: str = "A") -> None:
         page.insert_text((50, 100), f"{label}-{index + 1}")
     document.save(path)
     document.close()
+
+
+def test_pdf_resume_accepts_windows_short_path_alias_for_manifest_root(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows short-path aliases are only available on Windows")
+
+    import ctypes
+
+    output = tmp_path / "run"
+    output.mkdir()
+    short_buffer = ctypes.create_unicode_buffer(32768)
+    get_short_path = ctypes.windll.kernel32.GetShortPathNameW
+    get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint)
+    get_short_path.restype = ctypes.c_uint
+    length = get_short_path(str(output), short_buffer, len(short_buffer))
+    if not length or length >= len(short_buffer):
+        pytest.skip("The temporary directory has no Windows short-path alias")
+    short_output = Path(short_buffer.value)
+    if os.path.normcase(str(short_output)) == os.path.normcase(str(output)):
+        pytest.skip("8.3 short paths are unavailable for the temporary directory")
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"source")
+    manifest = {
+        "render": {"state": "pending", "artifact": "pdf/manifest.json"},
+        "pages": [],
+    }
+
+    paths = _validate_pdf_resume_artifacts(
+        output.resolve(),
+        short_output / "pdf-run-manifest.json",
+        source,
+        manifest,
+    )
+    assert paths[("run", "render")] == output / "pdf" / "manifest.json"
 
 
 def _dimension_pdf(path: Path, label: str = "1077") -> None:

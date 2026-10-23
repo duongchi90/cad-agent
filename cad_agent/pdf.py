@@ -166,7 +166,19 @@ def _validate_pdf_resume_artifacts(
     """Resolve and validate every PDF checkpoint destination before it is consumed."""
     resolved_root = output_root.resolve()
     manifest_lexical = manifest_path.absolute()
-    if manifest_lexical.parent.resolve() != resolved_root or manifest_path.resolve() != manifest_lexical:
+    # Create only the requested output root so physical directory identity can
+    # be checked. `Path.resolve()` can retain a Windows 8.3 alias on one path
+    # while returning the long path on another, even when both name this root.
+    resolved_root.mkdir(parents=True, exist_ok=True)
+    try:
+        manifest_parent_matches = os.path.samefile(manifest_lexical.parent, resolved_root)
+    except OSError:
+        manifest_parent_matches = False
+    if (
+        not manifest_parent_matches
+        or manifest_path.is_symlink()
+        or (manifest_path.exists() and not manifest_path.is_file())
+    ):
         raise ManifestError("PDF run manifest must be a regular file in the output root.")
     paths: dict[tuple[int | str, str], Path] = {}
     owners: list[tuple[str, Path]] = []
