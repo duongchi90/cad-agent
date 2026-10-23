@@ -56,6 +56,8 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 - Human approval remains required for unverified calibration; ambiguous recognition requiring product judgment; credentials, billing, or private-data authority; unknown executable or trust expansion; source/customer/accepted-drawing mutation; destructive or irreversible high-cost action; and genuinely ambiguous product requirements. Production DXF mutation outside the active package’s explicit disposable-candidate authority remains subject to human approval.
 - Preserve the original DXF and establish rollback before AutoCAD Mechanical repair. Keep live AutoCAD/FileIPC work exclusive; bind actions to the verified process, document, and configured IPC path. Do not infer that FileIPC moved from `C:\temp`; verify `CAD_AGENT_DOTNET_IPC_DIR` and current process configuration.
 - Prefer `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when the owning tool allows it. On repository refresh, verify the current scratch and IPC locations before use.
+- Keep local resource use bounded: one heavy local job by default; one Luna-managed Edge window by default, maximum two; one Luna-managed DWG by default, maximum two, with one exclusive mutable AutoCAD lane. Do not open a third window/drawing or count/close user-owned resources.
+- Reuse valid sessions and evidence. Before recovery, identify the owned process/document, active command, unsaved state, and rollback path; never blindly retry or terminate user-owned work. A blocked lane does not stop independent authorized work.
 - Do not alter architecture, public schemas, or package boundaries outside the approved task.
 
 ## Executor and hard-reasoning consultation
@@ -85,3 +87,4 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 - Confirm `git diff --check` is clean and verification did not change repository status.
 - Leave no unresolved P0/P1 finding; give deferred P2 findings a reason and owner.
 - Route durable acceptance through `docs/STATUS.md`; keep transient state on GitHub.
+- Do not claim durable policy adoption from a document edit alone: require merge to canonical `main`, a fresh repository-only session recovery without chat history, and policy contract plus evidence-backed scenario checks. Otherwise report `PERSISTENCE_ACCEPTANCE_GATE=NOT_VERIFIED`.
