@@ -119,18 +119,22 @@ def test_run_image_deduplicates_same_span_without_dangling_ocr_references(tmp_pa
     repeated = RawText("ocr-2", "R7,50", (50, 10, 70, 20), 0.0, 0.9, "text_tesseract")
     near_overlap = RawText("ocr-4", "R7,50", (13, 10, 33, 20), 0.0, 0.9, "text_tesseract")
     different = RawText("ocr-3", "Ø14", (10, 10, 30, 20), 0.0, 0.9, "text_tesseract")
+    contained_ocr = RawText("ocr-5", "R7,50", (80, 40, 90, 50), 0.0, 0.9, "text_tesseract")
+    containing_vector = RawText(
+        "pdf-2", "R7,50", (70, 30, 110, 70), 0.0, 1.0, "text_pdfvector"
+    )
 
     with (
         patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
         patch(
             "primitive_ir_lib.run_image.extract_text_tesseract",
-            return_value=[duplicate, repeated, near_overlap, different],
+                return_value=[duplicate, repeated, near_overlap, different, contained_ocr],
         ),
     ):
         run(
             image_path=str(image_path), output_path=str(output_path),
             scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
-            pdf_vector_texts=[vector],
+            pdf_vector_texts=[vector, containing_vector],
         )
 
     document = json.loads(output_path.read_text(encoding="utf-8"))
@@ -140,6 +144,8 @@ def test_run_image_deduplicates_same_span_without_dangling_ocr_references(tmp_pa
         ("R7,50", "text_tesseract"),
         ("R7,50", "text_tesseract"),
         ("Ø14", "text_tesseract"),
+        ("R7,50", "text_tesseract"),
+        ("R7,50", "text_pdfvector"),
     ]
 
 

@@ -80,17 +80,18 @@ def _sha256(path: str) -> str:
     return digest.hexdigest()
 
 
-def _intersection_over_smaller_bbox(a: RawText, b: RawText) -> float:
+def _bbox_iou(a: RawText, b: RawText) -> float:
     ax0, ay0, ax1, ay1 = a.bbox_px
     bx0, by0, bx1, by1 = b.bbox_px
     area_a = max(0, ax1 - ax0) * max(0, ay1 - ay0)
     area_b = max(0, bx1 - bx0) * max(0, by1 - by0)
-    smaller_area = min(area_a, area_b)
-    if smaller_area <= 0:
-        return 0.0
     overlap_width = max(0, min(ax1, bx1) - max(ax0, bx0))
     overlap_height = max(0, min(ay1, by1) - max(ay0, by0))
-    return (overlap_width * overlap_height) / smaller_area
+    intersection_area = overlap_width * overlap_height
+    union_area = area_a + area_b - intersection_area
+    if union_area <= 0:
+        return 0.0
+    return intersection_area / union_area
 
 
 def _combine_pdf_vector_texts(
@@ -104,7 +105,7 @@ def _combine_pdf_vector_texts(
                 index for index, prior in enumerate(combined)
                 if (candidate.source == "text_pdfvector" or prior.source == "text_pdfvector")
                 and candidate.content == prior.content
-                and _intersection_over_smaller_bbox(candidate, prior) >= 0.90
+                and _bbox_iou(candidate, prior) >= 0.90
             ),
             None,
         )
