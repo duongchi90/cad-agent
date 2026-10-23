@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+import math
+
 import cv2
 import numpy as np
 import pytest
@@ -11,6 +14,7 @@ from primitive_ir_lib.dimension_observer import (
     build_dimension_register,
     detect_dimension_clusters,
     observe_dimension_cluster,
+    observe_radial_leader_attachment,
 )
 from primitive_ir_lib.tests.dimension_test_helpers import (
     fake_ocr_4500,
@@ -26,6 +30,356 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
     synthetic_page_with_two_unreadable_dimensions_and_note,
 )
 from primitive_ir_lib.text_extraction import RawText
+
+
+def _radial_source_drawing_inventory(pdf_sha: str) -> dict[str, object]:
+    circle_points = [
+        [30.0 + 10.0 * math.cos(2.0 * math.pi * index / 64.0),
+         30.0 + 10.0 * math.sin(2.0 * math.pi * index / 64.0)]
+        for index in range(64)
+    ]
+    circle_items = [
+        ("l", circle_points[index], circle_points[(index + 1) % len(circle_points)])
+        for index in range(len(circle_points))
+    ]
+    return {
+        "source_sha256": pdf_sha,
+        "page_index": 0,
+        "complete": True,
+        "drawings": [
+            {
+                "ref": "page0-drawing1",
+                "type": "s",
+                "fill": None,
+                "items": [("l", [0.0, 0.0], [60.0, 100.0])],
+                "bounds_pt": [0.0, 0.0, 60.0, 100.0],
+            },
+            {
+                "ref": "page0-drawing2",
+                "type": "s",
+                "fill": None,
+                "items": [("l", [30.0, 30.0], [70.0, 35.0])],
+                "bounds_pt": [30.0, 30.0, 70.0, 35.0],
+            },
+            {
+                "ref": "page0-drawing3",
+                "type": "f",
+                "fill": [0.0, 0.0, 0.0],
+                "items": [
+                    ("l", [30.0, 29.0], [20.0, 30.0]),
+                    ("l", [20.0, 30.0], [30.0, 31.0]),
+                    ("l", [30.0, 31.0], [30.0, 29.0]),
+                ],
+                "bounds_pt": [20.0, 29.0, 30.0, 31.0],
+            },
+            {
+                "ref": "page0-drawing4",
+                "type": "s",
+                "fill": None,
+                "items": circle_items,
+                "bounds_pt": [20.0, 20.0, 40.0, 40.0],
+            },
+            {
+                "ref": "page0-drawing5",
+                "type": "s",
+                "fill": None,
+                "items": [("l", [60.0, 0.0], [100.0, 100.0])],
+                "bounds_pt": [60.0, 0.0, 100.0, 100.0],
+            },
+        ],
+    }
+
+
+def _radial_witness_inputs():
+    pdf_sha = "a" * 64
+    return {
+        "source_sha256": pdf_sha,
+        "page_index": 0,
+        "extraction_complete": True,
+        "source_drawing_inventory": _radial_source_drawing_inventory(pdf_sha),
+        "view": {
+            "view_id": "front-upper",
+            "source_sha256": pdf_sha,
+            "page_index": 0,
+            "bounds_pt": [0.0, 0.0, 100.0, 100.0],
+            "derivation": "caller-verified source view record",
+            "source_drawing_refs": ["page0-drawing1", "page0-drawing5"],
+            "source_drawing_bounds_pt": {
+                "page0-drawing1": [0.0, 0.0, 60.0, 100.0],
+                "page0-drawing5": [60.0, 0.0, 100.0, 100.0],
+            },
+        },
+        "text_spans": [{
+            "id": "page0:text1",
+            "source_sha256": pdf_sha,
+            "page_index": 0,
+            "text": "R7,50",
+            "bbox_pt": [70.0, 30.0, 90.0, 40.0],
+        }],
+        "leader_witnesses": [{
+            "id": "page0-drawing2",
+            "source_sha256": pdf_sha,
+            "page_index": 0,
+            "view_id": "front-upper",
+            "ordered_path_refs": ["page0-drawing2"],
+            "points_pt": [[30.0, 30.0], [70.0, 35.0]],
+            "arrowhead_ref": "page0-drawing3",
+            "arrowhead_base_pt": [30.0, 30.0],
+            "arrow_tip_pt": [20.0, 30.0],
+            "uncertainty_pt": {
+                "arrow_tip": 0.05,
+                "target_contour": 0.05,
+                "transform": 0.05,
+                "fit": 0.05,
+            },
+        }],
+        "circle_candidates": [{
+            "id": "rawcirc-1",
+            "source_sha256": pdf_sha,
+            "page_index": 0,
+            "view_id": "front-upper",
+            "center_pt": [30.0, 30.0],
+            "radius_pt": 10.0,
+            "bounds_pt": [20.0, 20.0, 40.0, 40.0],
+            "source_path_refs": ["page0-drawing4"],
+        }],
+    }
+
+
+def test_radial_leader_observation_requires_identity_and_unique_source_witness() -> None:
+    result = observe_radial_leader_attachment(**_radial_witness_inputs())
+
+    assert result["status"] == "UNIQUE_CANDIDATE"
+    assert result["target_ref"]["primitive_id"] == "rawcirc-1"
+    assert result["annotation_parse"]["designation"] == "RADIUS"
+    assert result["annotation_parse"]["nominal"] is None
+    assert result["annotation_parse"]["unit"] == "UNRESOLVED"
+    assert result["geometry_consumed"] is False
+    assert math.isclose(
+        result["attachment_witness"]["uncertainty_pdf_pt"], 0.15, abs_tol=1e-12
+    )
+
+
+@pytest.mark.parametrize("arrowhead_ref", ["page0-drawing999999", "page0-drawing5"])
+def test_radial_leader_observation_rejects_missing_or_unrelated_arrowhead_reference(
+    arrowhead_ref: str,
+) -> None:
+    inputs = _radial_witness_inputs()
+    inputs["leader_witnesses"][0]["arrowhead_ref"] = arrowhead_ref
+
+    assert "source_drawing_inventory" in inspect.signature(
+        observe_radial_leader_attachment
+    ).parameters
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_point"),
+    [("arrow_tip_pt", [21.0, 30.0]), ("arrowhead_base_pt", [31.0, 30.0])],
+)
+def test_radial_leader_observation_rejects_arrowhead_geometry_mismatch(
+    field: str, wrong_point: list[float]
+) -> None:
+    inputs = _radial_witness_inputs()
+    inputs["leader_witnesses"][0][field] = wrong_point
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+@pytest.mark.parametrize("source_ref", ["page0-drawing999999", "page0-drawing5"])
+def test_radial_leader_observation_rejects_missing_or_unrelated_path_reference(
+    source_ref: str,
+) -> None:
+    inputs = _radial_witness_inputs()
+    inputs["leader_witnesses"][0]["ordered_path_refs"] = [source_ref]
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+@pytest.mark.parametrize("source_ref", ["page0-drawing999999", "page0-drawing5"])
+def test_radial_leader_observation_rejects_missing_or_unrelated_circle_contour(
+    source_ref: str,
+) -> None:
+    inputs = _radial_witness_inputs()
+    inputs["circle_candidates"][0]["source_path_refs"] = [source_ref]
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_observation_rejects_duplicate_or_incomplete_inventory() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["source_drawing_inventory"]["drawings"].append(
+        dict(inputs["source_drawing_inventory"]["drawings"][0])
+    )
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+    inputs = _radial_witness_inputs()
+    inputs["source_drawing_inventory"]["complete"] = False
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_inventory_allows_non_geometric_entries_without_bounds() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["source_drawing_inventory"]["drawings"].append({
+        "ref": "page0-drawing6",
+        "type": "clip",
+        "fill": None,
+        "items": [],
+        "bounds_pt": None,
+    })
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNIQUE_CANDIDATE"
+    assert result["target_ref"]["primitive_id"] == "rawcirc-1"
+
+
+def test_radial_leader_observation_rejects_circle_outside_source_fit_bound() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["circle_candidates"][0]["radius_pt"] = 9.5
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_observation_rejects_duplicate_circle_ids() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["circle_candidates"].append({
+        "id": "rawcirc-1",
+        "source_sha256": "a" * 64,
+        "page_index": 0,
+        "view_id": "front-upper",
+        "center_pt": [70.0, 70.0],
+        "radius_pt": 5.0,
+        "bounds_pt": [65.0, 65.0, 75.0, 75.0],
+        "source_path_refs": ["page0-drawing5"],
+    })
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_text_outside_view_is_allowed_when_complete_path_connects_it() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["text_spans"][0]["bbox_pt"] = [101.0, 30.0, 120.0, 40.0]
+    inputs["leader_witnesses"][0]["points_pt"] = [
+        [30.0, 30.0], [70.0, 35.0], [110.0, 35.0],
+    ]
+    path = inputs["source_drawing_inventory"]["drawings"][1]
+    path["items"] = [
+        ("l", [30.0, 30.0], [70.0, 35.0]),
+        ("l", [70.0, 35.0], [110.0, 35.0]),
+    ]
+    path["bounds_pt"] = [30.0, 30.0, 110.0, 35.0]
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNIQUE_CANDIDATE"
+    assert result["target_ref"]["primitive_id"] == "rawcirc-1"
+
+
+def test_radial_leader_observation_refuses_incomplete_or_cross_source_evidence() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["extraction_complete"] = False
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_observation_refuses_unproven_view_bounds_and_detached_arrowhead() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["view"]["bounds_pt"] = [0.0, 0.0, 99.0, 100.0]
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_observation_refuses_circle_bounds_that_disagree_with_geometry() -> None:
+    inputs = _radial_witness_inputs()
+    inputs["circle_candidates"][0]["bounds_pt"] = [21.0, 20.0, 39.0, 40.0]
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+def test_radial_leader_observation_refuses_competing_circle_and_missing_uncertainty() -> None:
+    inputs = _radial_witness_inputs()
+    source_circle = inputs["source_drawing_inventory"]["drawings"][3]
+    competing_items = [
+        (operation, [first[0] - 20.0, first[1]], [second[0] - 20.0, second[1]])
+        for operation, first, second in source_circle["items"]
+    ]
+    inputs["source_drawing_inventory"]["drawings"].append({
+        "ref": "page0-drawing6",
+        "type": "s",
+        "fill": None,
+        "items": competing_items,
+        "bounds_pt": [0.0, 20.0, 20.0, 40.0],
+    })
+    inputs["circle_candidates"].append({
+        "id": "rawcirc-2",
+        "source_sha256": "a" * 64,
+        "page_index": 0,
+        "view_id": "front-upper",
+        "center_pt": [10.0, 30.0],
+        "radius_pt": 10.0,
+        "bounds_pt": [0.0, 20.0, 20.0, 40.0],
+        "source_path_refs": ["page0-drawing6"],
+    })
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "AMBIGUOUS"
+    assert result.get("target_ref") is None
+
+    inputs = _radial_witness_inputs()
+    del inputs["leader_witnesses"][0]["uncertainty_pt"]["transform"]
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+
+@pytest.mark.parametrize("callout", ["⌀7,50", "7,50"])
+def test_radial_leader_observation_does_not_accept_diameter_or_bare_value(callout: str) -> None:
+    inputs = _radial_witness_inputs()
+    inputs["text_spans"][0]["text"] = callout
+
+    result = observe_radial_leader_attachment(**inputs)
+
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+    inputs = _radial_witness_inputs()
+    inputs["leader_witnesses"][0]["arrowhead_base_pt"] = [60.0, 60.0]
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
+
+    inputs = _radial_witness_inputs()
+    inputs["text_spans"][0]["source_sha256"] = "b" * 64
+    result = observe_radial_leader_attachment(**inputs)
+    assert result["status"] == "UNRESOLVED"
+    assert result.get("target_ref") is None
 
 
 def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
