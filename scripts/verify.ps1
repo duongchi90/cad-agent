@@ -262,6 +262,8 @@ try {
 
     $specializedVariables = @(
         "CAD_AGENT_REAL_IMAGE",
+        "CAD_AGENT_CASE01_LINE_IMAGE",
+        "CAD_AGENT_FTC11_IMAGE",
         "CAD_AGENT_FILE_IPC",
         "CAD_AGENT_AUTOCAD_HWND",
         "CAD_AGENT_AUTOCAD_LISP_PATH",

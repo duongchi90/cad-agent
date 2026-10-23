@@ -42,6 +42,14 @@ from .models import new_id
 _HOUGH_CIRCLE_DIRECT_MAX_PIXELS = 4_000_000
 _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 
+# Bound source-raster endpoint recovery for the tuned line detector. The
+# CASE01 render has dark line ink (grayscale <= 31) against paper (>= 220);
+# focused interruption and adjacency controls guard this operating range.
+_LINE_ENDPOINT_MAX_EXTENSION_PX = 30
+_LINE_ENDPOINT_DARK_THRESHOLD = 180
+_LINE_ENDPOINT_PERP_HALF_WIDTH_PX = 2
+_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX = 8
+
 
 @dataclass
 class RawLine:
@@ -76,6 +84,152 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     return blurred
 
 
+def _extend_line_endpoints_along_ink(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    gray: np.ndarray,
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Extend Hough endpoints only while a narrow source-ink corridor continues."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    length = float(np.hypot(dx, dy))
+    if not np.isfinite(length) or length == 0 or gray.ndim != 2:
+        return p1, p2
+
+    height, width = gray.shape
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux
+
+    def has_source_ridge(point: Tuple[float, float], center_offset: int) -> bool:
+        """Require the splitter's source-relative support at one anchored center."""
+        center_x = int(round(point[0] + nx * center_offset))
+        center_y = int(round(point[1] + ny * center_offset))
+        if not (0 <= center_x < width and 0 <= center_y < height):
+            return False
+        center = int(gray[center_y, center_x])
+
+        def flank(offset: int) -> tuple[bool, int]:
+            px = int(round(point[0] + nx * (center_offset + offset)))
+            py = int(round(point[1] + ny * (center_offset + offset)))
+            if not (0 <= px < width and 0 <= py < height):
+                return False, center
+            return True, int(gray[py, px])
+
+        left_near, left_far = flank(-3), flank(-4)
+        right_near, right_far = flank(3), flank(4)
+        left_available = left_near[0] and left_far[0]
+        right_available = right_near[0] and right_far[0]
+        if left_available and right_available:
+            return left_near[1] - center >= 10 and right_near[1] - center >= 10
+        if left_available and not right_available:
+            return left_near[1] - center >= 10 and left_far[1] - center >= 10
+        if right_available and not left_available:
+            return right_near[1] - center >= 10 and right_far[1] - center >= 10
+        return False
+
+    def profile_samples(point: Tuple[float, float]) -> List[Tuple[int, int]]:
+        samples_by_position = {}
+        for offset in range(
+            -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
+            _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX + 1,
+        ):
+            px = int(round(point[0] + nx * offset))
+            py = int(round(point[1] + ny * offset))
+            if 0 <= px < width and 0 <= py < height:
+                position = (px, py)
+                previous = samples_by_position.get(position)
+                if previous is None or abs(offset) < abs(previous[0]):
+                    samples_by_position[position] = (offset, int(gray[py, px]))
+        return list(samples_by_position.values())
+
+    def supported_profile_samples(
+        point: Tuple[float, float], *, corridor_only: bool = False
+    ) -> List[Tuple[int, int]]:
+        samples = profile_samples(point)
+        outer = _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX - 1
+        left = [
+            value for offset, value in samples
+            if -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX <= offset <= -outer
+        ]
+        right = [
+            value for offset, value in samples
+            if outer <= offset <= _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX
+        ]
+        backgrounds = [max(side) for side in (left, right) if side]
+        if not backgrounds:
+            return []
+        background = min(backgrounds)
+        return [
+            (offset, value)
+            for offset, value in samples
+            if (not corridor_only or abs(offset) <= _LINE_ENDPOINT_PERP_HALF_WIDTH_PX)
+            and value <= _LINE_ENDPOINT_DARK_THRESHOLD
+            and background - value >= 10
+        ]
+
+    def profile_ink_count(point: Tuple[float, float]) -> int:
+        return len(supported_profile_samples(point))
+
+    def march(endpoint: Tuple[float, float], direction: float) -> Tuple[float, float]:
+        best = endpoint
+        if length < 2:
+            return best
+        baseline_points = [
+            (
+                endpoint[0] - direction * ux * length * fraction,
+                endpoint[1] - direction * uy * length * fraction,
+            )
+            for fraction in (0.2, 0.35, 0.5, 0.65, 0.8)
+        ]
+        baseline_counts = [profile_ink_count(point) for point in baseline_points]
+        # Lock the continuation to a source-relative center already observed
+        # inside this Hough segment. Prefer offset 0 for thick strokes; permit
+        # one adjacent center only when that is where the source ridge lies.
+        ridge_offsets = [
+            offset
+            for offset in (-1, 0, 1)
+            if sum(has_source_ridge(point, offset) for point in baseline_points) >= 3
+        ]
+        center_offset = (
+            min(ridge_offsets, key=lambda offset: (abs(offset), offset))
+            if ridge_offsets
+            else None
+        )
+        # Keep the allowance near the candidate's observed width so partial
+        # perpendicular junctions cannot hide just below the finite window.
+        profile_limit = min(
+            max(baseline_counts) + 1,
+            2 * _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
+        )
+        for distance in range(1, _LINE_ENDPOINT_MAX_EXTENSION_PX + 1):
+            x = endpoint[0] + direction * ux * distance
+            y = endpoint[1] + direction * uy * distance
+            center_x = int(round(x))
+            center_y = int(round(y))
+            if not (0 <= center_x < width and 0 <= center_y < height):
+                break
+            if gray[center_y, center_x] > _LINE_ENDPOINT_DARK_THRESHOLD:
+                break
+            if profile_ink_count((x, y)) > profile_limit:
+                break
+
+            dark_samples = len(supported_profile_samples((x, y), corridor_only=True))
+
+            anchored_source = (
+                center_offset is not None
+                and has_source_ridge((x, y), center_offset)
+            )
+            one_pixel_source = (
+                dark_samples == 1
+                and max(baseline_counts, default=0) == 1
+            )
+            if anchored_source and (dark_samples >= 2 or one_pixel_source):
+                best = (x, y)
+            else:
+                break
+        return best
+
+    return march(p1, -1.0), march(p2, 1.0)
 def _split_line_at_source_gaps(
     source_gray: np.ndarray,
     x1: int,
@@ -195,8 +349,8 @@ def extract_lines(
 ) -> List[RawLine]:
     """HoughLinesP trên ảnh sau Canny. confidence ước lượng thô từ độ dài
     đoạn so với min_line_length (đoạn càng dài, vote Hough càng chắc)."""
-    gray = _preprocess(image_bgr)
     source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    gray = _preprocess(image_bgr)
     edges = cv2.Canny(gray, canny_low, canny_high)
     segments = cv2.HoughLinesP(
         edges, rho=1, theta=np.pi / 180, threshold=hough_threshold,
@@ -228,12 +382,15 @@ def extract_lines(
     # Confidence describes the Hough candidate, so splitting its geometry at
     # source gaps must not change its score or renormalize unrelated lines.
     for (x1, y1, x2, y2), hough_length in source_intervals:
+        p1, p2 = _extend_line_endpoints_along_ink(
+            (float(x1), float(y1)), (float(x2), float(y2)), source_gray,
+        )
         confidence = min(1.0, 0.5 + 0.5 * (hough_length / max_hough_len))
-        bbox = (float(min(x1, x2)), float(min(y1, y2)), float(max(x1, x2)), float(max(y1, y2)))
+        bbox = (float(min(p1[0], p2[0])), float(min(p1[1], p2[1])), float(max(p1[0], p2[0])), float(max(p1[1], p2[1])))
         raw_lines.append(RawLine(
             id=new_id("rawline"),
-            p1_px=(float(x1), float(y1)),
-            p2_px=(float(x2), float(y2)),
+            p1_px=p1,
+            p2_px=p2,
             confidence=round(confidence, 3),
             bbox_px=bbox,
         ))
