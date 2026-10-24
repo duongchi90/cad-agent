@@ -12,6 +12,7 @@ import pytest
 from cad_agent.cli import main
 from cad_agent.manifest import ManifestError, sha256_file, write_manifest
 from cad_agent.pdf import (
+    _requires_auto_ocr_checkpoint_regeneration,
     _resolve_pdf_resume_artifact,
     _validate_pdf_resume_artifacts,
     _write_page_stage,
@@ -515,7 +516,7 @@ def test_pdf_resume_regenerates_missing_primitive_from_verified_render() -> None
 
 
 @pytest.mark.parametrize("damage", ["missing", "hash-invalid"], ids=["missing", "hash-invalid"])
-def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
+def test_pdf_resume_excludes_unverified_embedded_text_and_preserves_unaffected_pages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     damage: str,
@@ -560,8 +561,9 @@ def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
         item for item in original_primitive["primitives"]
         if item["type"] == "text" and item["text_data"]["content"] == "R7,50"
     ]
-    assert len(original_text) == 1
-    assert original_text[0]["source"] == "text_pdfvector"
+    assert original_text == []
+    assert first_page["pdf_vector_text_visibility"] == "not_assessed"
+    assert first_page["excluded_unverified_pdf_vector_text_span_count"] == 1
     if damage == "missing":
         first_primitive.unlink()
     else:
@@ -576,13 +578,14 @@ def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
         item for item in primitive["primitives"]
         if item["type"] == "text" and item["text_data"]["content"] == "R7,50"
     ]
-    assert len(vector_text) == 1
-    assert vector_text[0]["source"] == "text_pdfvector"
+    assert vector_text == []
+    assert resumed["pages"][0]["pdf_vector_text_visibility"] == "not_assessed"
+    assert resumed["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
     assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
 
     dxf_path = output / resumed["pages"][0]["stages"]["dxf"]["artifact"]
     dxf_lines = dxf_path.read_text(encoding="utf-8").splitlines()
-    assert any(
+    assert not any(
         group_code.strip() == "1" and value == "R7,50"
         for group_code, value in zip(dxf_lines, dxf_lines[1:])
     )
@@ -600,6 +603,16 @@ def test_pdf_resume_preserves_embedded_vector_text_and_unaffected_pages(
     run_pdf_stages(source, output, manifest_path, resumed)
     assert sha256_file(regenerated) == primitive_sha256
     assert manifest_path.read_bytes() == manifest_bytes
+
+
+def test_pdf_auto_ocr_resume_rejects_cached_unverified_pdf_text(tmp_path: Path) -> None:
+    primitive = tmp_path / "primitive.json"
+    primitive.write_text(json.dumps({
+        "cross_validations": [],
+        "primitives": [{"id": "pdf-old", "source": "text_pdfvector"}],
+    }), encoding="utf-8")
+
+    assert _requires_auto_ocr_checkpoint_regeneration(primitive)
 
 
 @pytest.mark.parametrize("path_kind", ["parent-traversal", "absolute", "symlink"])
