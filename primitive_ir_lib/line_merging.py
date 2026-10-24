@@ -461,15 +461,27 @@ def merge_collinear_lines(
 
         if barrier_ts:
             clipped_segs = []
-            for t_min, t_max, line, _, _ in segs:
+            for t_min, t_max, line, p_at_min, p_at_max in segs:
                 cuts = [t_min] + [
                     barrier for barrier in barrier_ts
                     if t_min + 1e-6 < barrier < t_max - 1e-6
                 ] + [t_max]
-                dx, dy = math.cos(ref_angle), math.sin(ref_angle)
+                source_span = t_max - t_min
+                if source_span <= 1e-12:
+                    continue
+                source_dx = p_at_max[0] - p_at_min[0]
+                source_dy = p_at_max[1] - p_at_min[1]
                 for start, end in zip(cuts[:-1], cuts[1:]):
-                    p_start = (ref_x0 + dx * start, ref_y0 + dy * start)
-                    p_end = (ref_x0 + dx * end, ref_y0 + dy * end)
+                    start_fraction = (start - t_min) / source_span
+                    end_fraction = (end - t_min) / source_span
+                    p_start = (
+                        p_at_min[0] + source_dx * start_fraction,
+                        p_at_min[1] + source_dy * start_fraction,
+                    )
+                    p_end = (
+                        p_at_min[0] + source_dx * end_fraction,
+                        p_at_min[1] + source_dy * end_fraction,
+                    )
                     clipped_segs.append((start, end, line, p_start, p_end))
             segs = sorted(clipped_segs, key=lambda s: s[0])
 
@@ -541,7 +553,29 @@ def merge_collinear_lines(
 
         for group in merged_groups:
             if len(group) == 1:
-                result.append(group[0][2])
+                t_min, t_max, line, p_start, p_end = group[0]
+                source_ts = sorted((
+                    _project_point(*line.p1_px, ref_x0, ref_y0, ref_angle),
+                    _project_point(*line.p2_px, ref_x0, ref_y0, ref_angle),
+                ))
+                if (
+                    abs(t_min - source_ts[0]) <= 1e-6
+                    and abs(t_max - source_ts[1]) <= 1e-6
+                ):
+                    result.append(line)
+                else:
+                    result.append(RawLine(
+                        id=new_id("rawline-clipped"),
+                        p1_px=p_start,
+                        p2_px=p_end,
+                        confidence=line.confidence,
+                        bbox_px=(
+                            min(p_start[0], p_end[0]),
+                            min(p_start[1], p_end[1]),
+                            max(p_start[0], p_end[0]),
+                            max(p_start[1], p_end[1]),
+                        ),
+                    ))
                 continue
             t_min = min(s[0] for s in group)
             t_max = max(s[1] for s in group)
