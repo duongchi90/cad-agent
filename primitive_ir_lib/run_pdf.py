@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -572,6 +573,7 @@ def _fit_full_circle_path(
         or not math.isfinite(float(drawing.get("width", math.nan)))
         or drawing.get("width", -1) < 0
         or abs(float(drawing.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
+        or drawing.get("blendmode") not in {None, "Normal"}
         or str(drawing.get("dashes", "")).strip() not in {"[] 0", "[] 0.0"}
     ):
         return None
@@ -1469,10 +1471,197 @@ def _circle_fill_coverage_fraction(
     return min(1.0, max(0.0, covered / (2.0 * math.pi)))
 
 
+def _dimension_arrowhead_context(
+    drawings: list[dict],
+    fill_index: int,
+    circle: tuple[float, float, float],
+    witness_color: Optional[tuple[float, float, float]],
+) -> Optional[tuple[tuple[float, float], tuple[float, float]]]:
+    """Return the base and circle-touching tip of a small matching dimension arrow."""
+    if not 0 < fill_index < len(drawings):
+        return None
+    fill = drawings[fill_index]
+    if fill.get("type") not in {"f", "fs"} or fill.get("fill") is None:
+        return None
+    if (
+        fill.get("blendmode") not in {None, "Normal"}
+        or abs(float(fill.get("fill_opacity", 1.0)) - 1.0) > 1e-9
+        or (witness_color is not None and _colors_match(fill.get("fill"), witness_color) is not True)
+    ):
+        return None
+    stroke_width = fill.get("width")
+    if fill.get("type") == "fs" and (
+        stroke_width is None
+        or not math.isfinite(float(stroke_width))
+        or float(stroke_width) < 0.0
+        or float(stroke_width) > 1.0
+        or abs(float(fill.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
+    ):
+        return None
+
+    points: list[tuple[float, float]] = []
+    previous_end: Optional[tuple[float, float]] = None
+    for item in fill.get("items", []):
+        if item[0] != "l":
+            return None
+        _, start, end = item
+        start_xy = (float(start.x), float(start.y))
+        end_xy = (float(end.x), float(end.y))
+        if not all(math.isfinite(value) for value in (*start_xy, *end_xy)):
+            return None
+        if previous_end is not None and math.hypot(
+            previous_end[0] - start_xy[0], previous_end[1] - start_xy[1]
+        ) > 0.05:
+            return None
+        previous_end = end_xy
+        if not points:
+            points.append(start_xy)
+        if math.hypot(start_xy[0] - end_xy[0], start_xy[1] - end_xy[1]) > 0.05:
+            points.append(end_xy)
+    if (
+        len(points) != 4
+        or math.hypot(points[-1][0] - points[0][0], points[-1][1] - points[0][1]) > 0.05
+        or len(set(points[:-1])) != 3
+    ):
+        return None
+
+    polygon = points[:-1]
+    edge_lengths = [
+        math.hypot(x1 - x0, y1 - y0)
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1])
+    ]
+    area = abs(
+        sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1]))
+    ) / 2.0
+    if min(edge_lengths) < 1.0 or max(edge_lengths) > 12.0 or not 1.0 <= area <= 40.0:
+        return None
+    if _circle_fill_coverage_fraction(circle, polygon) > 0.08:
+        return None
+    if fill.get("type") == "fs" and float(stroke_width) > 0.0:
+        stroke_radius = float(stroke_width) / 2.0
+        for adjusted_radius in (circle[2] - stroke_radius, circle[2] + stroke_radius):
+            if adjusted_radius <= 0.0 or _circle_fill_coverage_fraction(
+                (circle[0], circle[1], adjusted_radius), polygon
+            ) > 0.08:
+                return None
+
+    previous = drawings[fill_index - 1]
+    if (
+        previous.get("type") != "s"
+        or len(previous.get("items", [])) != 1
+        or previous["items"][0][0] != "l"
+        or previous.get("blendmode") not in {None, "Normal"}
+        or abs(float(previous.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
+        or (witness_color is not None and _colors_match(previous.get("color"), witness_color) is not True)
+    ):
+        return None
+    _, axis_start, axis_end = previous["items"][0]
+    shared = (float(axis_start.x), float(axis_start.y))
+    tip = (float(axis_end.x), float(axis_end.y))
+
+    def point_on_triangle_vertex(point: tuple[float, float]) -> bool:
+        return any(math.hypot(point[0] - x, point[1] - y) <= 0.5 for x, y in polygon)
+
+    def point_in_triangle(x: float, y: float) -> bool:
+        signs = [
+            (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0)
+            for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1])
+        ]
+        return all(value >= -0.5 for value in signs) or all(value <= 0.5 for value in signs)
+
+    axis_length = math.hypot(tip[0] - shared[0], tip[1] - shared[1])
+    if (
+        point_on_triangle_vertex(shared)
+        or not point_on_triangle_vertex(tip)
+        or not point_in_triangle(*shared)
+        or not 1.0 <= axis_length <= 12.0
+        or abs(math.hypot(tip[0] - circle[0], tip[1] - circle[1]) - circle[2])
+        > max(1.0, circle[2] * 0.005)
+    ):
+        return None
+    return shared, tip
+
+
+def _paired_circle_dimension_arrowhead(
+    drawings: list[dict],
+    fill_index: int,
+    circle: tuple[float, float, float],
+    witness_color: Optional[tuple[float, float, float]],
+) -> bool:
+    current = _dimension_arrowhead_context(drawings, fill_index, circle, witness_color)
+    if current is None:
+        return False
+    current_shared, current_tip = current
+    current_axis = (current_tip[0] - current_shared[0], current_tip[1] - current_shared[1])
+    current_axis_length = math.hypot(*current_axis)
+
+    for other_index, other in enumerate(drawings):
+        if other_index == fill_index:
+            continue
+        other_context = _dimension_arrowhead_context(drawings, other_index, circle, witness_color)
+        if other_context is None:
+            continue
+        other_shared, other_tip = other_context
+        other_axis = (other_tip[0] - other_shared[0], other_tip[1] - other_shared[1])
+        other_axis_length = math.hypot(*other_axis)
+        for line_index in range(max(fill_index, other_index) + 1, len(drawings)):
+            line = drawings[line_index]
+            if (
+                line.get("type") != "s"
+                or len(line.get("items", [])) != 1
+                or line["items"][0][0] != "l"
+                or line.get("blendmode") not in {None, "Normal"}
+                or abs(float(line.get("stroke_opacity", 0.0)) - 1.0) > 1e-9
+                or not math.isfinite(float(line.get("width", math.nan)))
+                or not 0.0 <= float(line.get("width", -1.0)) <= 1.0
+                or (witness_color is not None and _colors_match(line.get("color"), witness_color) is not True)
+            ):
+                continue
+            _, start, end = line["items"][0]
+            start_xy = (float(start.x), float(start.y))
+            end_xy = (float(end.x), float(end.y))
+            if (
+                math.hypot(start_xy[0] - current_shared[0], start_xy[1] - current_shared[1]) <= 0.5
+                and math.hypot(end_xy[0] - other_shared[0], end_xy[1] - other_shared[1]) <= 0.5
+            ):
+                connector = (end_xy[0] - start_xy[0], end_xy[1] - start_xy[1])
+            elif (
+                math.hypot(end_xy[0] - current_shared[0], end_xy[1] - current_shared[1]) <= 0.5
+                and math.hypot(start_xy[0] - other_shared[0], start_xy[1] - other_shared[1]) <= 0.5
+            ):
+                connector = (start_xy[0] - end_xy[0], start_xy[1] - end_xy[1])
+            else:
+                continue
+            connector_length = math.hypot(*connector)
+            center_distance = abs(
+                (connector[0] * (current_shared[1] - circle[1])
+                 - connector[1] * (current_shared[0] - circle[0]))
+                / max(connector_length, 1e-9)
+            )
+            current_cosine = -(
+                current_axis[0] * connector[0] + current_axis[1] * connector[1]
+            ) / max(current_axis_length * connector_length, 1e-9)
+            opposite_connector = (-connector[0], -connector[1])
+            other_cosine = -(
+                other_axis[0] * opposite_connector[0] + other_axis[1] * opposite_connector[1]
+            ) / max(other_axis_length * connector_length, 1e-9)
+            if (
+                connector_length >= 1.8 * circle[2]
+                and center_distance <= max(1.0, circle[2] * 0.005)
+                and current_cosine >= math.cos(math.radians(10.0))
+                and other_cosine >= math.cos(math.radians(10.0))
+                and abs(math.hypot(other_tip[0] - circle[0], other_tip[1] - circle[1]) - circle[2])
+                <= max(1.0, circle[2] * 0.005)
+            ):
+                return True
+    return False
+
+
 def _dimension_arrowhead_fill(
     drawings: list[dict],
     fill_index: int,
     circle: tuple[float, float, float],
+    witness_color: Optional[tuple[float, float, float]] = None,
 ) -> bool:
     """Recognize only a small filled triangle joined to an axis and outward leader.
 
@@ -1481,10 +1670,18 @@ def _dimension_arrowhead_fill(
     The local overprint is capped at 8 percent of the candidate circumference;
     triangle edges are capped at 12 points and its area at 40 square points.
     """
+    if _paired_circle_dimension_arrowhead(drawings, fill_index, circle, witness_color):
+        return True
     if not 0 < fill_index < len(drawings) - 1:
         return False
     fill = drawings[fill_index]
-    if fill.get("type") not in {"f", "fs"} or fill.get("fill") is None:
+    if (
+        fill.get("type") not in {"f", "fs"}
+        or fill.get("fill") is None
+        or fill.get("blendmode") not in {None, "Normal"}
+        or abs(float(fill.get("fill_opacity", 1.0)) - 1.0) > 1e-9
+        or (witness_color is not None and _colors_match(fill.get("fill"), witness_color) is not True)
+    ):
         return False
     stroke_width = fill.get("width")
     if fill.get("type") == "fs" and (
@@ -1588,6 +1785,51 @@ def _dimension_arrowhead_fill(
     return cosine <= -math.cos(math.radians(10.0))
 
 
+def _full_page_transparency_group_index(page: fitz.Page, drawings: list[dict]) -> Optional[int]:
+    """Identify only the exact, full-page transparency wrapper verified for page content.
+
+    A page-level transparency group is compositing context, not a local paint
+    or clipping operation. Only the exact full-page DeviceRGB group with raw
+    default attributes is ignored as context. PDF page groups have special
+    isolation semantics when rendered directly; do not generalize this rule
+    to nested, partial, explicitly decorated, or other transparency groups.
+    """
+    group_indices = [index for index, drawing in enumerate(drawings) if drawing.get("type") == "group"]
+    if group_indices != [0]:
+        return None
+    group = drawings[0]
+    group_rect = group.get("rect")
+    page_rect = page.rect
+    if (
+        group.get("level") != 0
+        or group.get("scissor") is not None
+        or group.get("blendmode") != "Normal"
+        or group.get("knockout") is not False
+        or group_rect is None
+        or any(
+            abs(left - right) > 0.02
+            for left, right in zip(
+                (group_rect.x0, group_rect.y0, group_rect.x1, group_rect.y1),
+                (page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1),
+            )
+        )
+    ):
+        return None
+    try:
+        key_type, group_value = page.parent.xref_get_key(page.xref, "Group")
+    except (AttributeError, RuntimeError, ValueError):
+        return None
+    if key_type != "dict":
+        return None
+    normalized_group = re.sub(r"\s+", "", group_value)
+    if normalized_group not in {
+        "<</S/Transparency/CS/DeviceRGB>>",
+        "<</CS/DeviceRGB/S/Transparency>>",
+    }:
+        return None
+    return 0
+
+
 def _page_circle_witnesses(
     page: fitz.Page, pixel_scale: float
 ) -> tuple[bool, list[tuple[float, float, float]], list[dict]]:
@@ -1595,6 +1837,7 @@ def _page_circle_witnesses(
     drawings = page.get_drawings(extended=True)
     if not drawings:
         return False, [], []
+    full_page_group_index = _full_page_transparency_group_index(page, drawings)
     curve_drawings = [
         drawing for drawing in drawings if any(item[0] == "c" for item in drawing.get("items", []))
     ]
@@ -1675,13 +1918,13 @@ def _page_circle_witnesses(
         prior_clip_context = any(
             int(prior.get("level") or 0) < witness_level
             and (
-                prior.get("type") == "group"
+                (prior.get("type") == "group" and prior_index != full_page_group_index)
                 or (
                     prior.get("type") == "clip"
                     and not _clip_fully_contains_circle(prior, cx, cy, radius)
                 )
             )
-            for prior in drawings[:path_start_index]
+            for prior_index, prior in enumerate(drawings[:path_start_index])
         )
         if prior_clip_context:
             suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
@@ -1732,6 +1975,7 @@ def _page_circle_witnesses(
                 drawings,
                 later_index,
                 (cx, cy, radius),
+                drawing.get("color"),
             ):
                 continue
             later_circle = None
