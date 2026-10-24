@@ -110,6 +110,21 @@ def _write_quarter_arc_pdf(
     document.close()
 
 
+def _wrap_page_in_triangle_clip(path: Path) -> None:
+    """Apply a triangular PDF clip whose scissor contains the full quarter arc."""
+    document = fitz.open(path)
+    page = document[0]
+    content_xref = page.get_contents()[0]
+    original_stream = document.xref_stream(content_xref)
+    # Page coordinates are converted to PDF's bottom-up coordinate system.
+    # The diagonal cuts through the quarter arc, while its scissor rectangle
+    # fully contains the arc path and its stroke width.
+    clip_prefix = b"q 97 148 m 148 148 l 148 97 l h W n\n"
+    document.update_stream(content_xref, clip_prefix + original_stream + b"\nQ")
+    document.save(path.with_name(f"{path.stem}-triangle-clipped.pdf"))
+    document.close()
+
+
 def test_visible_open_pdf_vector_arc_reaches_primitive_ir(tmp_path: Path) -> None:
     source = tmp_path / "visible-quarter-arc.pdf"
     output = tmp_path / "result"
@@ -297,6 +312,21 @@ def test_clipped_pdf_vector_arc_is_not_admitted(tmp_path: Path) -> None:
     )
     document.close()
     assert arcs == []
+
+
+def test_nonrectangular_clip_cannot_hide_arc_behind_its_scissor_bbox(tmp_path: Path) -> None:
+    source = tmp_path / "triangle-clipped.pdf"
+    _write_quarter_arc_pdf(source)
+    _wrap_page_in_triangle_clip(source)
+    clipped_source = source.with_name("triangle-clipped-triangle-clipped.pdf")
+    output = tmp_path / "triangle-clipped-result"
+
+    run_pdf(clipped_source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["type"] == "arc" for primitive in payload["primitives"])
 
 
 def test_only_short_line_fragments_on_the_arc_locus_are_suppressed() -> None:

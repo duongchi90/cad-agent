@@ -1797,11 +1797,6 @@ def _page_vector_arcs(
         # Any intersecting clip/group ancestry or later-painted operation is
         # unresolved visibility. Reject conservatively, including image paint.
         level = drawing["level"]
-        parent_clips = [
-            prior.get("scissor")
-            for prior in drawings[:index]
-            if prior.get("type") == "clip" and int(prior.get("level") or 0) < level
-        ]
         prior_group = any(
             prior.get("type") == "group"
             and int(prior.get("level") or 0) < level
@@ -1809,14 +1804,11 @@ def _page_vector_arcs(
             and fitz.Rect(prior["rect"]).intersects(path_rect)
             for prior in drawings[:index]
         )
-        clip_unresolved = level > 0 and (
-            not parent_clips
-            or any(
-                clip is None
-                or not fitz.Rect(clip).contains(path_rect)
-                for clip in parent_clips
-            )
-        )
+        # PyMuPDF's scissor is only the clip's rectangular bounding box. It
+        # cannot prove that a nonrectangular clip path leaves this arc intact.
+        # Reject nested drawing content until the actual clip geometry can be
+        # proven to contain the candidate.
+        clip_unresolved = level > 0
         paint_margin = max(0.25, float(width_pt) / 2.0)
         if seqno >= len(bboxlog) or len(bboxlog[seqno]) != 2:
             continue
