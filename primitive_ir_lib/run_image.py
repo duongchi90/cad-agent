@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
+import numpy as np
 import pytesseract
 
 from .assemble import build_document
@@ -35,6 +36,7 @@ from .text_extraction import RawText, detect_text_candidate_rois, extract_text_t
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
+PDF_TEXT_CONFLICT_POLICY_VERSION = "ocr-pdf-conflict-exclusion-v1"
 
 
 class CalibrationCandidateUnavailableError(ValueError):
@@ -393,6 +395,7 @@ def run(
     pdf_vector_arcs: Optional[List[RawArc]] = None,
     pdf_vector_line_witnesses: Optional[List[RawLine]] = None,
     source_page_index: int = 0,
+    image_bytes: Optional[bytes] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -417,7 +420,14 @@ def run(
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Không thấy ảnh đầu vào: {image_path}")
 
-    image = cv2.imread(image_path)
+    if image_bytes is None:
+        image = cv2.imread(image_path)
+        image_sha256 = _sha256(image_path)
+    else:
+        if not isinstance(image_bytes, bytes) or not image_bytes:
+            raise ValueError("image_bytes must be non-empty bytes")
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        image_sha256 = hashlib.sha256(image_bytes).hexdigest()
     if image is None:
         raise ValueError(f"Không đọc được ảnh bằng OpenCV: {image_path}")
 
@@ -525,9 +535,7 @@ def run(
                 "kích thước đã biết."
             )
         calibration.status = "needs_verification"
-        calibration.source_sha256 = calibration_source_sha256 or _sha256(
-            image_path
-        )
+        calibration.source_sha256 = calibration_source_sha256 or image_sha256
         print(
             "[run-image] CẢNH BÁO: scale được suy tự động "
             f"({calibration.pixel_to_unit_scale} mm/px, method="
@@ -542,6 +550,7 @@ def run(
                 calibration.pixel_to_unit_scale,
                 evidence=calibration.reference_note or "auto_estimate_calibration",
                 status="needs_verification",
+                image_sha256=image_sha256,
             )
             print(
                 f"[run-image] Đã ghi bản ghi calibration '{calibration_id}' "
@@ -559,7 +568,7 @@ def run(
         raw_circles=raw_geometry.circles,
         raw_texts=raw_texts,
         raw_arcs=pdf_vector_arcs,
-        sha256=_sha256(image_path),
+        sha256=image_sha256,
     )
     document.cross_validations = cross_validate(
         decision_texts,

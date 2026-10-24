@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -7,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import fitz
+import numpy as np
 import pytest
 
 from cad_agent.cli import main
@@ -20,6 +22,69 @@ from cad_agent.pdf import (
     read_pdf_manifest,
     run_pdf_stages,
 )
+
+
+def test_pdf_run_image_consumes_the_rendered_source_bytes_when_shared_png_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_module = importlib.import_module("primitive_ir_lib.run_pdf")
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    source = tmp_path / "source.pdf"
+    replacement = tmp_path / "replacement.pdf"
+    output = tmp_path / "run"
+
+    source_document = fitz.open()
+    source_page = source_document.new_page(width=400, height=300)
+    source_page.draw_line((30, 50), (350, 50), width=3)
+    source_document.save(source)
+    source_document.close()
+
+    replacement_document = fitz.open()
+    replacement_page = replacement_document.new_page(width=400, height=300)
+    replacement_page.draw_line((30, 250), (350, 250), width=3)
+    replacement_document.save(replacement)
+    replacement_document.close()
+
+    with fitz.open(source) as source_document:
+        source_bytes = source_document[0].get_pixmap(alpha=False).tobytes("png")
+    with fitz.open(replacement) as replacement_document:
+        replacement_bytes = replacement_document[0].get_pixmap(alpha=False).tobytes("png")
+    expected_pixels = image_module.cv2.imdecode(
+        np.frombuffer(source_bytes, dtype=np.uint8),
+        image_module.cv2.IMREAD_COLOR,
+    )
+    expected_pixels_sha256 = hashlib.sha256(expected_pixels.tobytes()).hexdigest()
+    observed_geometry_input_hashes: list[str] = []
+    original_extract = image_module.extract_raw_geometry
+    original_run = pdf_module.run
+
+    def observe_geometry_input(image, **kwargs):
+        observed_geometry_input_hashes.append(hashlib.sha256(image.tobytes()).hexdigest())
+        return original_extract(image, **kwargs)
+
+    def replace_shared_png_before_image_read(*args, **kwargs):
+        Path(kwargs["image_path"]).write_bytes(replacement_bytes)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(image_module, "extract_raw_geometry", observe_geometry_input)
+    monkeypatch.setattr(pdf_module, "run", replace_shared_png_before_image_read)
+
+    with pytest.raises(ValueError, match="rendered page changed"):
+        pdf_module.run_pdf(
+            source,
+            output,
+            scale_mm_per_px=0.5,
+            dpi=72,
+            auto_ocr_roi=False,
+        )
+
+    assert observed_geometry_input_hashes == [expected_pixels_sha256]
+    failed_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert failed_manifest["status"] == "failed"
+    assert failed_manifest["pages"] == []
+    assert hashlib.sha256(source_bytes).hexdigest() != hashlib.sha256(replacement_bytes).hexdigest()
+    assert not (output / "primitive_ir" / "page_01.json").exists()
 
 
 def _pdf(path: Path, label: str = "A") -> None:
@@ -613,6 +678,45 @@ def test_pdf_auto_ocr_resume_rejects_cached_unverified_pdf_text(tmp_path: Path) 
     }), encoding="utf-8")
 
     assert _requires_auto_ocr_checkpoint_regeneration(primitive)
+
+
+def test_pdf_auto_ocr_resume_rebuilds_legacy_ocr_cache_with_empty_validations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    monkeypatch.setattr(image_module, "detect_text_candidate_rois", lambda image: [])
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page = persisted["pages"][0]
+    primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+    primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+    primitive["cross_validations"] = []
+    primitive["primitives"] = [{
+        "id": "legacy-stale-ocr",
+        "source": "text_tesseract",
+        "text_data": {"content": "STALE OCR"},
+    }]
+    primitive_path.write_text(json.dumps(primitive), encoding="utf-8")
+    page["stages"]["primitive_ir"]["sha256"] = sha256_file(primitive_path)
+    page.pop("pdf_text_conflict_policy_version", None)
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    run_pdf_stages(source, output, manifest_path, persisted)
+
+    resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rebuilt = json.loads(primitive_path.read_text(encoding="utf-8"))
+    assert all(item.get("id") != "legacy-stale-ocr" for item in rebuilt["primitives"])
+    assert resumed["pages"][0]["pdf_text_conflict_policy_version"] == "ocr-pdf-conflict-exclusion-v1"
 
 
 @pytest.mark.parametrize("path_kind", ["parent-traversal", "absolute", "symlink"])
