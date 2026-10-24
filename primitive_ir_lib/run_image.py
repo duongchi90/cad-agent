@@ -28,7 +28,7 @@ from .assemble import build_document
 from .calibration import Calibration, auto_estimate_calibration
 from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
-from .geometry_extraction import extract_raw_geometry
+from .geometry_extraction import RawArc, extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
 from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
@@ -184,6 +184,29 @@ def _combine_pdf_vector_texts(
     ]
 
 
+def _line_is_explained_by_pdf_arc(line, arc: RawArc) -> bool:
+    tolerance = max(2.0, arc.radius_px * 0.002)
+    if line.length_px() > max(5.0, arc.radius_px * 0.12):
+        return False
+    start_angle = math.degrees(
+        math.atan2(arc.start_px[1] - arc.center_px[1], arc.start_px[0] - arc.center_px[0])
+    )
+    sweep = arc.signed_sweep_deg
+    progresses = []
+    for fraction in (0.0, 0.5, 1.0):
+        x = line.p1_px[0] + fraction * (line.p2_px[0] - line.p1_px[0])
+        y = line.p1_px[1] + fraction * (line.p2_px[1] - line.p1_px[1])
+        radial_error = abs(math.hypot(x - arc.center_px[0], y - arc.center_px[1]) - arc.radius_px)
+        if radial_error > tolerance:
+            return False
+        angle = math.degrees(math.atan2(y - arc.center_px[1], x - arc.center_px[0]))
+        progress = (angle - start_angle) % 360.0 if sweep >= 0 else (start_angle - angle) % 360.0
+        if progress > abs(sweep) + 2.0:
+            return False
+        progresses.append(progress)
+    return max(progresses) - min(progresses) <= 15.0
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -205,6 +228,7 @@ def run(
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
     pdf_vector_texts: Optional[List[RawText]] = None,
+    pdf_vector_arcs: Optional[List[RawArc]] = None,
     source_page_index: int = 0,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
@@ -276,7 +300,11 @@ def run(
     # OCR evidence used by existing geometry association gates.
     decision_texts = ocr_texts
 
-    raw_lines = raw_geometry.lines
+    pdf_vector_arcs = pdf_vector_arcs or []
+    raw_lines = [
+        line for line in raw_geometry.lines
+        if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs)
+    ]
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
 
@@ -344,6 +372,7 @@ def run(
         raw_lines=raw_lines,
         raw_circles=raw_geometry.circles,
         raw_texts=raw_texts,
+        raw_arcs=pdf_vector_arcs,
         sha256=_sha256(image_path),
     )
     document.cross_validations = cross_validate(

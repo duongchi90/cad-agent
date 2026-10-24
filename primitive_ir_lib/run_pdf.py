@@ -23,6 +23,7 @@ import fitz
 import numpy as np
 
 from .calibration_registry import get_verified_scale
+from .geometry_extraction import RawArc
 from .models import new_id
 from .run_image import run
 from .text_extraction import RawText
@@ -1502,6 +1503,262 @@ def _page_circle_witnesses(
     return False, witnesses, suspect_regions
 
 
+def _page_vector_arcs(
+    page: fitz.Page,
+    rendered_path: Path,
+    pixel_scale: float,
+    pixmap_origin: tuple[int, int],
+    render_dpi: int,
+    source_pdf_sha256: str,
+    source_page_index: int,
+) -> list[RawArc]:
+    """Admit only visible, opaque, unclipped, isolated open cubic PDF arcs."""
+    if page.rotation not in {0, 90, 180, 270}:
+        return []
+    import cv2
+
+    image = cv2.imread(str(rendered_path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        return []
+    height, width = image.shape
+    drawings = page.get_drawings(extended=True)
+    bboxlog = page.get_bboxlog()
+    transform = page.rotation_matrix
+    transform_values = (
+        transform.a * pixel_scale,
+        transform.b * pixel_scale,
+        transform.c * pixel_scale,
+        transform.d * pixel_scale,
+        transform.e * pixel_scale - pixmap_origin[0],
+        transform.f * pixel_scale - pixmap_origin[1],
+    )
+    if not all(math.isfinite(float(value)) for value in transform_values):
+        return []
+    results: list[RawArc] = []
+
+    def cubic_points(item: tuple, steps: int = 32) -> list[tuple[float, float]]:
+        _, p0, p1, p2, p3 = item
+        points = []
+        for step in range(steps + 1):
+            t = step / steps
+            u = 1.0 - t
+            points.append((
+                u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
+                u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
+            ))
+        return points
+
+    for index, drawing in enumerate(drawings):
+        items = drawing.get("items", [])
+        color = drawing.get("color")
+        width_pt = drawing.get("width")
+        seqno = drawing.get("seqno")
+        if (
+            drawing.get("type") != "s"
+            or drawing.get("fill") is not None
+            or not isinstance(color, (tuple, list))
+            or len(color) != 3
+            or any(not math.isfinite(float(channel)) or float(channel) > 0.45 for channel in color)
+            or not isinstance(width_pt, (int, float))
+            or not math.isfinite(float(width_pt))
+            or width_pt <= 0
+            or drawing.get("stroke_opacity") != 1.0
+            or drawing.get("dashes") != "[] 0"
+            or not isinstance(drawing.get("level"), int)
+            or drawing.get("level", -1) < 0
+            or not isinstance(seqno, int)
+            or seqno < 0
+            or not items
+            or any(item[0] != "c" for item in items)
+        ):
+            continue
+
+        samples: list[tuple[float, float]] = []
+        connected = True
+        previous_end = None
+        for item in items:
+            try:
+                sampled = cubic_points(item)
+            except (IndexError, TypeError, ValueError, OverflowError):
+                connected = False
+                break
+            if previous_end is not None and math.dist(previous_end, sampled[0]) > 0.02:
+                connected = False
+                break
+            if samples:
+                sampled = sampled[1:]
+            samples.extend(sampled)
+            previous_end = sampled[-1] if sampled else previous_end
+        if not connected or len(samples) < 8 or math.dist(samples[0], samples[-1]) <= 0.02:
+            continue
+        if any(not math.isfinite(value) for point in samples for value in point):
+            continue
+
+        x0, y0 = samples[0]
+        x1, y1 = samples[-1]
+        min_x, max_x = min(x for x, _ in samples), max(x for x, _ in samples)
+        min_y, max_y = min(y for _, y in samples), max(y for _, y in samples)
+        source_rect = fitz.Rect(min_x, min_y, max_x, max_y)
+        path_rect = fitz.Rect(min_x - width_pt, min_y - width_pt, max_x + width_pt, max_y + width_pt)
+
+        # Any intersecting clip/group ancestry or later-painted operation is
+        # unresolved visibility. Reject conservatively, including image paint.
+        level = drawing["level"]
+        parent_clips = [
+            prior.get("scissor")
+            for prior in drawings[:index]
+            if prior.get("type") == "clip" and int(prior.get("level") or 0) < level
+        ]
+        prior_group = any(
+            prior.get("type") == "group"
+            and int(prior.get("level") or 0) < level
+            and prior.get("rect") is not None
+            and fitz.Rect(prior["rect"]).intersects(path_rect)
+            for prior in drawings[:index]
+        )
+        clip_unresolved = level > 0 and (
+            not parent_clips
+            or any(
+                clip is None
+                or not fitz.Rect(clip).contains(path_rect)
+                for clip in parent_clips
+            )
+        )
+        paint_margin = max(0.25, float(width_pt) / 2.0)
+        if seqno >= len(bboxlog) or len(bboxlog[seqno]) != 2:
+            continue
+        try:
+            current_paint = bboxlog[seqno]
+            current_rect = fitz.Rect(current_paint[1])
+            current_matches_source = current_paint[0] == "stroke-path" and current_rect.contains(source_rect)
+        except (IndexError, TypeError, ValueError, OverflowError):
+            continue
+        if not current_matches_source:
+            continue
+        later_paint = False
+        for record in bboxlog[seqno + 1 :]:
+            if len(record) != 2:
+                later_paint = True
+                break
+            try:
+                paint_rect = fitz.Rect(record[1])
+            except (IndexError, TypeError, ValueError, OverflowError):
+                later_paint = True
+                break
+            if any(
+                paint_rect.x0 - paint_margin <= x <= paint_rect.x1 + paint_margin
+                and paint_rect.y0 - paint_margin <= y <= paint_rect.y1 + paint_margin
+                for x, y in samples
+            ):
+                later_paint = True
+                break
+        if prior_group or clip_unresolved or later_paint:
+            continue
+
+        points = np.asarray(samples, dtype=np.float64)
+        centered = points - points.mean(axis=0)
+        matrix = np.column_stack((centered[:, 0], centered[:, 1], np.ones(len(centered))))
+        if not np.isfinite(matrix).all() or np.linalg.cond(matrix) > 1.0e6:
+            continue
+        target = -(centered[:, 0] ** 2 + centered[:, 1] ** 2)
+        try:
+            a, b, c = np.linalg.lstsq(matrix, target, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            continue
+        center_local = (-a / 2.0, -b / 2.0)
+        center = (center_local[0] + float(points.mean(axis=0)[0]), center_local[1] + float(points.mean(axis=0)[1]))
+        radius_squared = center_local[0] ** 2 + center_local[1] ** 2 - c
+        if not math.isfinite(radius_squared) or radius_squared <= 0:
+            continue
+        radius = math.sqrt(radius_squared)
+        radial_errors = [abs(math.dist(point, center) - radius) for point in samples]
+        if max(radial_errors) > max(0.02, min(float(width_pt) * 0.15, radius * 0.001)):
+            continue
+
+        angles = [math.atan2(y - center[1], x - center[0]) for x, y in samples]
+        turns = [
+            math.atan2(math.sin(b - a), math.cos(b - a))
+            for a, b in zip(angles, angles[1:])
+        ]
+        sweep = sum(turns)
+        if (
+            not turns
+            or not (all(turn > 0 for turn in turns) or all(turn < 0 for turn in turns))
+            or max(abs(turn) for turn in turns) > math.radians(15)
+            or not math.radians(15) <= abs(sweep) < math.radians(150)
+        ):
+            continue
+
+        def to_pixel(point: tuple[float, float]) -> tuple[float, float]:
+            transformed = fitz.Point(*point) * transform
+            return (
+                transformed.x * pixel_scale - pixmap_origin[0],
+                transformed.y * pixel_scale - pixmap_origin[1],
+            )
+
+        pixel_samples = [to_pixel(point) for point in samples]
+        pixel_center = to_pixel(center)
+        pixel_start, pixel_end = pixel_samples[0], pixel_samples[-1]
+        pixel_angles = [math.atan2(y - pixel_center[1], x - pixel_center[0]) for x, y in pixel_samples]
+        pixel_turns = [math.atan2(math.sin(b - a), math.cos(b - a)) for a, b in zip(pixel_angles, pixel_angles[1:])]
+        pixel_sweep = math.degrees(sum(pixel_turns))
+
+        # Require source stroke to be present in the rendered image along most
+        # of its actual path, relative to both local flanks.
+        supported = 0
+        checked = 0
+        for sample_index in range(0, len(pixel_samples), 4):
+            px, py = pixel_samples[sample_index]
+            before = pixel_samples[max(0, sample_index - 1)]
+            after = pixel_samples[min(len(pixel_samples) - 1, sample_index + 1)]
+            tx, ty = after[0] - before[0], after[1] - before[1]
+            length = math.hypot(tx, ty)
+            if length <= 0:
+                continue
+            nx, ny = -ty / length, tx / length
+            ix, iy = int(round(px)), int(round(py))
+            if not (1 <= ix < width - 1 and 1 <= iy < height - 1):
+                continue
+            center_value = min(int(image[iy, ix]), int(image[iy, ix - 1]), int(image[iy, ix + 1]))
+            side_values = []
+            for direction in (-1, 1):
+                sx = int(round(px + direction * 3.0 * nx))
+                sy = int(round(py + direction * 3.0 * ny))
+                if 0 <= sx < width and 0 <= sy < height:
+                    side_values.append(int(image[sy, sx]))
+            if len(side_values) < 2:
+                continue
+            checked += 1
+            supported += int(min(side_values) - center_value >= 20 and center_value <= 210)
+        if checked < 8 or supported / checked < 0.75:
+            continue
+
+        pixel_radius = radius * pixel_scale
+        bbox = (
+            min(point[0] for point in pixel_samples),
+            min(point[1] for point in pixel_samples),
+            max(point[0] for point in pixel_samples),
+            max(point[1] for point in pixel_samples),
+        )
+        results.append(RawArc(
+            id=new_id("pdf-arc"),
+            center_px=pixel_center,
+            radius_px=pixel_radius,
+            start_px=pixel_start,
+            end_px=pixel_end,
+            signed_sweep_deg=pixel_sweep,
+            confidence=max(0.8, 1.0 - max(radial_errors) / max(float(width_pt), 0.1)),
+            bbox_px=bbox,
+            source_pdf_sha256=source_pdf_sha256,
+            source_page_index=source_page_index,
+            source_transform=tuple(float(value) for value in transform_values),
+            render_sha256=_sha256_file(rendered_path),
+            render_dpi=render_dpi,
+            render_origin_px=pixmap_origin,
+        ))
+    return results
+
+
 def run_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -1562,6 +1819,15 @@ def run_pdf(
             image_path = render_dir / f"page_{index:02d}.png"
             pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             pixmap.save(str(image_path))
+            pdf_vector_arcs = _page_vector_arcs(
+                page,
+                image_path,
+                scale,
+                (pixmap.x, pixmap.y),
+                dpi,
+                manifest["source_pdf_sha256"],
+                index - 1,
+            )
             if auto_ocr_roi:
                 pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
                     page,
@@ -1587,6 +1853,8 @@ def run_pdf(
                     "pdf_vector_circle_suspect_regions": suspect_regions,
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
+            if pdf_vector_arcs:
+                vector_kwargs["pdf_vector_arcs"] = pdf_vector_arcs
             run(
                 image_path=str(image_path),
                 output_path=str(output_path),
@@ -1630,6 +1898,7 @@ def run_pdf(
                     "rendered_png_sha256": _sha256_file(image_path),
                     "primitive_ir": str(output_path.relative_to(output_dir)),
                     "pdf_vector_text_status": pdf_text_status,
+                    "pdf_vector_arc_count": len(pdf_vector_arcs),
                     "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
                     "primitive_count": len(payload["primitives"]),
                     "cross_validation_count": len(payload["cross_validations"]),

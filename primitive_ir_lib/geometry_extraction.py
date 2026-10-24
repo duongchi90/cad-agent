@@ -73,6 +73,26 @@ class RawCircle:
 
 
 @dataclass
+class RawArc:
+    """PDF vector arc already transformed into the rendered image pixel frame."""
+
+    id: str
+    center_px: Tuple[float, float]
+    radius_px: float
+    start_px: Tuple[float, float]
+    end_px: Tuple[float, float]
+    signed_sweep_deg: float
+    confidence: float
+    bbox_px: Tuple[float, float, float, float]
+    source_pdf_sha256: str
+    source_page_index: int
+    source_transform: Tuple[float, float, float, float, float, float]
+    render_sha256: str
+    render_dpi: int
+    render_origin_px: Tuple[int, int]
+
+
+@dataclass
 class RawGeometry:
     lines: List[RawLine] = field(default_factory=list)
     circles: List[RawCircle] = field(default_factory=list)
