@@ -275,9 +275,26 @@ def _directory_identity(path: Path) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
+def _pdf_output_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _cleanup_owned_pdf_output_temp(
+    temporary: Path, expected_identity: tuple[int, int]
+) -> None:
+    if _pdf_output_identity(temporary) == expected_identity:
+        temporary.unlink(missing_ok=True)
+
+
 def _create_pdf_output_temp(
     destination: Path, output_root: Path, source_pdf: Path
-) -> tuple[Path, tuple[int, int], int]:
+) -> tuple[Path, tuple[int, int], int, tuple[int, int]]:
     _validate_pdf_output_path(destination, output_root, source_pdf)
     _validate_pdf_output_directory(output_root, destination.parent)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -289,6 +306,8 @@ def _create_pdf_output_temp(
         dir=destination.parent,
     )
     temporary = Path(name)
+    created_stat = os.fstat(descriptor)
+    created_identity = (created_stat.st_dev, created_stat.st_ino)
     try:
         if _directory_identity(destination.parent) != parent_identity:
             raise _pdf_output_error(
@@ -297,14 +316,73 @@ def _create_pdf_output_temp(
         _validate_pdf_output_path(temporary, output_root, source_pdf)
     except Exception:
         os.close(descriptor)
-        temporary.unlink(missing_ok=True)
+        _cleanup_owned_pdf_output_temp(temporary, created_identity)
         raise
     # Keep the exclusive mkstemp handle open while pathname-based artifact
     # writers run. On the supported Windows filesystem, that prevents another
     # process from unlinking/replacing this entry with a symlink before a
     # writer opens the path. Close only after the writer finishes; publication
     # itself remains the existing atomic replace step.
-    return temporary, parent_identity, descriptor
+    return temporary, parent_identity, descriptor, created_identity
+
+
+def _descriptor_sha256(descriptor: int) -> tuple[os.stat_result, int, str]:
+    before = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or getattr(before, "st_nlink", 1) != 1
+        or getattr(before, "st_file_attributes", 0) & 0x0400
+    ):
+        raise ValueError("PDF artifact writer output is not a single-link regular file.")
+    original_offset = os.lseek(descriptor, 0, os.SEEK_CUR)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    finally:
+        os.lseek(descriptor, original_offset, os.SEEK_SET)
+    after = os.fstat(descriptor)
+    if (
+        not os.path.samestat(before, after)
+        or before.st_size != after.st_size
+        or size != after.st_size
+    ):
+        raise ValueError("PDF artifact changed while its writer output was being bound.")
+    return after, size, digest.hexdigest()
+
+
+def _verify_published_pdf_output(
+    destination: Path,
+    expected_stat: os.stat_result,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    from cad_agent.file_integrity import assert_path_identity, open_bound_file
+
+    descriptor, published_stat = open_bound_file(
+        destination,
+        flags=os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        label="PDF artifact",
+    )
+    try:
+        if not os.path.samestat(expected_stat, published_stat):
+            raise ValueError("Published PDF artifact is not the writer-owned file.")
+        actual_stat, actual_size, actual_sha256 = _descriptor_sha256(descriptor)
+        if (
+            not os.path.samestat(expected_stat, actual_stat)
+            or actual_size != expected_size
+            or actual_sha256 != expected_sha256
+        ):
+            raise ValueError("Published PDF artifact does not match writer-bound bytes.")
+        assert_path_identity(destination, actual_stat, label="PDF artifact")
+    finally:
+        os.close(descriptor)
 
 
 def _publish_pdf_output_temp(
@@ -313,13 +391,36 @@ def _publish_pdf_output_temp(
     output_root: Path,
     source_pdf: Path,
     parent_identity: tuple[int, int],
+    expected_stat: os.stat_result,
+    expected_size: int,
+    expected_sha256: str,
 ) -> None:
     _validate_pdf_output_path(destination, output_root, source_pdf)
     _validate_pdf_output_path(temporary, output_root, source_pdf)
     if _directory_identity(destination.parent) != parent_identity:
         raise _pdf_output_error(destination.parent, "parent changed before publication")
+    from cad_agent.file_integrity import open_bound_file
+
+    descriptor, temporary_stat = open_bound_file(
+        temporary,
+        flags=os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        label="PDF temporary artifact",
+    )
+    try:
+        if not os.path.samestat(expected_stat, temporary_stat):
+            raise ValueError("PDF temporary artifact is not the writer-owned file.")
+        actual_stat, actual_size, actual_sha256 = _descriptor_sha256(descriptor)
+        if (
+            not os.path.samestat(expected_stat, actual_stat)
+            or actual_size != expected_size
+            or actual_sha256 != expected_sha256
+        ):
+            raise ValueError("PDF temporary artifact does not match writer-bound bytes.")
+    finally:
+        os.close(descriptor)
     os.replace(temporary, destination)
     _validate_pdf_output_path(destination, output_root, source_pdf)
+    _verify_published_pdf_output(destination, expected_stat, expected_size, expected_sha256)
 
 
 def _write_pdf_output(
@@ -328,22 +429,34 @@ def _write_pdf_output(
     source_pdf: Path,
     writer,
 ) -> None:
-    temporary, parent_identity, descriptor = _create_pdf_output_temp(
-        destination, output_root, source_pdf
-    )
-    try:
-        result = writer(temporary)
-        if result is False:
-            raise ValueError(f"PDF artifact writer rejected destination: {destination}")
-        os.close(descriptor)
-        descriptor = -1
-        _publish_pdf_output_temp(
-            temporary, destination, output_root, source_pdf, parent_identity
+    from cad_agent.file_integrity import pin_directory_chain
+
+    output_parent = Path(os.path.abspath(destination.parent))
+    with pin_directory_chain(output_parent):
+        temporary, parent_identity, descriptor, created_identity = _create_pdf_output_temp(
+            destination, output_root, source_pdf
         )
-    finally:
-        if descriptor >= 0:
+        try:
+            result = writer(temporary)
+            if result is False:
+                raise ValueError(f"PDF artifact writer rejected destination: {destination}")
+            expected_stat, expected_size, expected_sha256 = _descriptor_sha256(descriptor)
             os.close(descriptor)
-        temporary.unlink(missing_ok=True)
+            descriptor = -1
+            _publish_pdf_output_temp(
+                temporary,
+                destination,
+                output_root,
+                source_pdf,
+                parent_identity,
+                expected_stat,
+                expected_size,
+                expected_sha256,
+            )
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            _cleanup_owned_pdf_output_temp(temporary, created_identity)
 
 
 def _materialize_view_children(
@@ -1830,6 +1943,7 @@ def run_pdf(
                     candidates_temp,
                     candidates_parent_identity,
                     candidates_descriptor,
+                    candidates_created_identity,
                 ) = _create_pdf_output_temp(view_candidates_path, output_dir, pdf_path)
                 try:
                     run(
@@ -1848,6 +1962,9 @@ def run_pdf(
                         source_page_index=index - 1,
                         **vector_kwargs,
                     )
+                    candidates_stat, candidates_size, candidates_sha256 = (
+                        _descriptor_sha256(candidates_descriptor)
+                    )
                     os.close(candidates_descriptor)
                     candidates_descriptor = -1
                     _validate_pdf_output_path(
@@ -1859,11 +1976,16 @@ def run_pdf(
                         output_dir,
                         pdf_path,
                         candidates_parent_identity,
+                        candidates_stat,
+                        candidates_size,
+                        candidates_sha256,
                     )
                 finally:
                     if candidates_descriptor >= 0:
                         os.close(candidates_descriptor)
-                    candidates_temp.unlink(missing_ok=True)
+                    _cleanup_owned_pdf_output_temp(
+                        candidates_temp, candidates_created_identity
+                    )
 
             _write_pdf_output(output_path, output_dir, pdf_path, process_page_ir)
             payload = json.loads(output_path.read_text(encoding="utf-8"))

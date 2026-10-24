@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -461,6 +462,96 @@ def test_pdf_output_temp_custody_blocks_symlink_swap_before_writer(
 
     assert protected_path.read_bytes() == protected_bytes
     assert not destination.exists()
+
+
+def test_pdf_output_temp_custody_rejects_same_content_file_swap_before_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import primitive_ir_lib.run_pdf as run_pdf_module
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    source_pdf = tmp_path / "source.pdf"
+    source_pdf.write_bytes(b"source")
+    destination = output_dir / "artifact.bin"
+    substituted_bytes = b"writer output"
+    original_publish = run_pdf_module._publish_pdf_output_temp
+
+    def substitute_then_publish(
+        temporary: Path,
+        publish_destination: Path,
+        publish_output_root: Path,
+        publish_source_pdf: Path,
+        parent_identity: tuple[int, int],
+        expected_stat,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> None:
+        replacement = output_dir / "replacement.bin"
+        replacement.write_bytes(substituted_bytes)
+        temporary.unlink()
+        replacement.replace(temporary)
+        original_publish(
+            temporary,
+            publish_destination,
+            publish_output_root,
+            publish_source_pdf,
+            parent_identity,
+            expected_stat,
+            expected_size,
+            expected_sha256,
+        )
+
+    monkeypatch.setattr(
+        run_pdf_module, "_publish_pdf_output_temp", substitute_then_publish
+    )
+
+    with pytest.raises((OSError, ValueError)):
+        _write_pdf_output(
+            destination,
+            output_dir,
+            source_pdf,
+            lambda temporary: temporary.write_bytes(substituted_bytes),
+        )
+
+    assert not destination.exists()
+
+
+def test_pdf_output_temp_custody_records_failed_manifest_on_publish_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import primitive_ir_lib.run_pdf as run_pdf_module
+
+    pdf_path = tmp_path / "source.pdf"
+    document = fitz.open()
+    page = document.new_page(width=120, height=80)
+    page.draw_line((10, 10), (100, 70))
+    document.save(pdf_path)
+    document.close()
+    output_dir = tmp_path / "output"
+    original_replace = run_pdf_module.os.replace
+    replaced = False
+
+    def substitute_at_replace(source: Path, destination: Path) -> None:
+        nonlocal replaced
+        source_path = Path(source)
+        if not replaced and source_path.parent == output_dir / "rendered":
+            replaced = True
+            replacement = source_path.with_name("replacement" + source_path.suffix)
+            replacement.write_bytes(source_path.read_bytes())
+            source_path.unlink()
+            os.rename(replacement, source_path)
+        original_replace(source, destination)
+
+    monkeypatch.setattr(run_pdf_module.os, "replace", substitute_at_replace)
+
+    with pytest.raises(ValueError, match="writer-owned file|writer-bound bytes"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72)
+
+    assert replaced
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["failed_page_index"] == 0
 
 
 def _make_blank_pdf(pdf_path: Path) -> None:
