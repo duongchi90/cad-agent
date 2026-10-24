@@ -1633,6 +1633,7 @@ def run_pdf(
                     "primitive_ir": str(output_path.relative_to(output_dir)),
                     "pdf_vector_text_status": pdf_text_status,
                     "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
+                    "excluded_unverified_pdf_vector_text_span_count": len(pdf_vector_texts),
                     "primitive_count": len(payload["primitives"]),
                     "cross_validation_count": len(payload["cross_validations"]),
                     "calibration_method": payload["calibration"]["method"],

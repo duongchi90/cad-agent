@@ -107,7 +107,7 @@ def _rotation_equivalent(a: RawText, b: RawText) -> bool:
 def _combine_pdf_vector_texts(
     pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText]
 ) -> List[RawText]:
-    """Suppress only unambiguous one-to-one OCR/PDF observations."""
+    """Validate PDF/OCR spans; only OCR text is admissible for visible output."""
     pdf_texts = pdf_vector_texts or []
 
     for first_index, first in enumerate(pdf_texts):
@@ -121,6 +121,20 @@ def _combine_pdf_vector_texts(
                     f"{first.id}={first.rotation_deg}°, "
                     f"{second.id}={second.rotation_deg}°"
                 )
+
+    content_conflicts = [
+        (pdf, ocr)
+        for pdf in pdf_texts
+        for ocr in ocr_texts
+        if _same_span_bbox_match(pdf, ocr) and pdf.content != ocr.content
+    ]
+    if content_conflicts:
+        details = "; ".join(
+            f"OCR {ocr.id}={ocr.content[:80]!r}, "
+            f"PDF {pdf.id}={pdf.content[:80]!r}"
+            for pdf, ocr in content_conflicts
+        )
+        raise ValueError(f"OCR/PDF same-span content conflict: {details}")
 
     pdf_matches = {
         pdf_index: [
@@ -164,7 +178,6 @@ def _combine_pdf_vector_texts(
             f"OCR [{ocr_details}]; PDF [{pdf_details}]"
         )
 
-    matched_pdf_indexes: set[int] = set()
     for pdf_index, ocr_indexes in pdf_matches.items():
         if not ocr_indexes:
             continue
@@ -176,12 +189,7 @@ def _combine_pdf_vector_texts(
                 f"{ocr.id}={ocr.rotation_deg}°, "
                 f"{pdf.id}={pdf.rotation_deg}°"
             )
-        matched_pdf_indexes.add(pdf_index)
-
-    return [
-        *ocr_texts,
-        *(pdf for index, pdf in enumerate(pdf_texts) if index not in matched_pdf_indexes),
-    ]
+    return list(ocr_texts)
 
 
 def run(
