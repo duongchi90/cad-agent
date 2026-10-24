@@ -215,4 +215,3 @@ def test_only_short_line_fragments_on_the_arc_locus_are_suppressed() -> None:
 
     assert _line_is_explained_by_pdf_arc(duplicate_fragment, arc)
     assert not _line_is_explained_by_pdf_arc(crossing_line, arc)
-
