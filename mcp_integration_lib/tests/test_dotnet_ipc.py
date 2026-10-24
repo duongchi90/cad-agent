@@ -1027,6 +1027,86 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertFalse(result["changed"])
             self.assertEqual(payload, result["payload"])
 
+    def test_drawing_setup_audit_supports_explicit_model_space_inventory_opt_in(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "schema_version": "drawing-setup-audit-1.0",
+                "drawing_full_path": r"C:\\temp\\setup-lite.dwg",
+                "drawing_sha256": "a" * 64,
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "changed": False,
+                "variables": {},
+                "current_layer": "0",
+                "custom_properties": {},
+                "layers": [],
+                "styles": {"text": ["Standard"], "dimension": ["Standard"], "mleader": ["Standard"], "table": ["Standard"]},
+                "layouts": [],
+                "font_report": {"missing": [], "substituted": []},
+                "model_space_inventory": {
+                    "drawing_full_path": r"C:\\temp\\setup-lite.dwg",
+                    "drawing_sha256_before": "a" * 64,
+                    "drawing_sha256_after": "a" * 64,
+                    "dbmod_before": 0,
+                    "dbmod_after": 0,
+                    "process_id": 123,
+                    "plugin_version": "test",
+                    "plugin_binary_path": r"C:\\plugin.dll",
+                    "plugin_binary_sha256": "b" * 64,
+                    "enumeration_complete": True,
+                    "entity_count": 0,
+                    "bounds_complete": True,
+                    "entities": [],
+                },
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.drawing_setup_audit(
+                r"C:\temp\setup-lite.dwg",
+                drawing_sha256="a" * 64,
+                include_model_space_inventory=True,
+                request_id="setup-lite-inventory-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual(
+                {"include_model_space_inventory": True},
+                request["parameters"],
+            )
+            self.assertTrue(result["payload"]["model_space_inventory"]["enumeration_complete"])
+
+    def test_drawing_setup_audit_rejects_incomplete_requested_inventory(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "schema_version": "drawing-setup-audit-1.0",
+                "drawing_full_path": r"C:\\temp\\setup-lite.dwg",
+                "drawing_sha256": "a" * 64,
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "changed": False,
+                "variables": {},
+                "current_layer": "0",
+                "custom_properties": {},
+                "layers": [],
+                "styles": {"text": ["Standard"], "dimension": ["Standard"], "mleader": ["Standard"], "table": ["Standard"]},
+                "layouts": [],
+                "font_report": {"missing": [], "substituted": []},
+                "model_space_inventory": {"entity_count": 0},
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "invalid ModelSpace inventory"):
+                client.drawing_setup_audit(
+                    r"C:\temp\setup-lite.dwg",
+                    drawing_sha256="a" * 64,
+                    include_model_space_inventory=True,
+                    request_id="setup-lite-inventory-incomplete-001",
+                )
+
     def test_drawing_setup_audit_rejects_a_mutating_result(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
