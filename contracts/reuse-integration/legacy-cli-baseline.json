@@ -807,6 +807,25 @@
         }
       }
     },
+    "layer-standard-check": {
+      "options": {
+        "--audit": {
+          "dest": "audit",
+          "nargs": null,
+          "required": true
+        },
+        "--output": {
+          "dest": "output",
+          "nargs": null,
+          "required": true
+        },
+        "--rules": {
+          "dest": "rules",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
     "mechanical-review": {
       "options": {
         "--build-evidence": {
