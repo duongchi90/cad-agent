@@ -2097,6 +2097,7 @@ def _page_vector_line_witnesses(
         return []
     transform = page.rotation_matrix
     origin_x, origin_y = pixmap_origin
+    bboxlog = page.get_bboxlog()
     results: list[RawLine] = []
     for drawing in page.get_drawings(extended=True):
         color = drawing.get("color")
@@ -2123,6 +2124,50 @@ def _page_vector_line_witnesses(
             or len(items) != 1
             or items[0][0] != "l"
         ):
+            continue
+        if seqno >= len(bboxlog) or len(bboxlog[seqno]) != 2:
+            continue
+        try:
+            source_kind, source_bounds = bboxlog[seqno]
+            source_paint_rect = fitz.Rect(source_bounds)
+        except (IndexError, TypeError, ValueError, OverflowError):
+            continue
+        if (
+            source_kind != "stroke-path"
+            or not source_paint_rect.is_valid
+            or source_paint_rect.is_empty
+            or not all(math.isfinite(value) for value in source_paint_rect)
+        ):
+            continue
+
+        # A source path is not a valid line witness when a later non-stroke
+        # paint fully covers its recorded stroke bounds. Stroke-path bounds
+        # are not enough to prove occlusion: a later arc may only touch this
+        # line at its tangent point, while an opaque fill/image/text can erase
+        # the whole stroke without changing the source drawing record.
+        hidden_by_later_fill = False
+        for later_record in bboxlog[seqno + 1 :]:
+            if len(later_record) != 2:
+                hidden_by_later_fill = True
+                break
+            later_kind, later_bounds = later_record
+            if later_kind == "stroke-path":
+                continue
+            try:
+                later_rect = fitz.Rect(later_bounds)
+            except (TypeError, ValueError, OverflowError):
+                hidden_by_later_fill = True
+                break
+            if (
+                not later_rect.is_valid
+                or not all(math.isfinite(value) for value in later_rect)
+            ):
+                hidden_by_later_fill = True
+                break
+            if later_rect.contains(source_paint_rect):
+                hidden_by_later_fill = True
+                break
+        if hidden_by_later_fill:
             continue
         try:
             first = fitz.Point(items[0][1]) * transform

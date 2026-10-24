@@ -40,6 +40,7 @@ def _write_quarter_arc_pdf(
     later_duplicate: bool = False,
     later_curved_stroke_intersample: bool = False,
     leading_tangent_line_length: float | None = None,
+    occlude_leading_tangent_line: bool = False,
     arc_width: float = 1.5,
     disconnected: bool = False,
     start_deg: float = 0.0,
@@ -81,6 +82,19 @@ def _write_quarter_arc_pdf(
             width=0.5,
             overlay=True,
         )
+        if occlude_leading_tangent_line:
+            cover_radius = half_length + 5.0
+            page.draw_rect(
+                fitz.Rect(
+                    midpoint.x - cover_radius,
+                    midpoint.y - cover_radius,
+                    midpoint.x + cover_radius,
+                    midpoint.y + cover_radius,
+                ),
+                color=None,
+                fill=(1, 1, 1),
+                overlay=True,
+            )
     shape = page.new_shape()
     shape.draw_bezier(p0, p1, p2, p3)
     if disconnected:
@@ -535,6 +549,90 @@ def test_independent_pdf_tangent_line_survives_arc_duplicate_suppression(tmp_pat
 
     assert any(overlaps_independent_tangent(line) for line in lines), (
         "the independent PDF tangent stroke was removed as an ARC duplicate"
+    )
+
+
+def test_hidden_pdf_tangent_line_does_not_resurrect_arc_fragment(tmp_path: Path) -> None:
+    source_without_line = tmp_path / "arc-without-line.pdf"
+    output_without_line = tmp_path / "arc-without-line-result"
+    source_with_hidden_line = tmp_path / "arc-with-hidden-line.pdf"
+    output_with_hidden_line = tmp_path / "arc-with-hidden-line-result"
+    render_scale = 216.0 / 72.0
+    expected_line_length_px = 60.0
+    radius_px = 850.0
+    center_px = (350.0 * render_scale, 350.0 * render_scale)
+
+    _write_quarter_arc_pdf(
+        source_without_line,
+        radius=850.0 / render_scale,
+        arc_width=0.5,
+        page_size_override=700.0,
+        center_override=(350.0, 350.0),
+    )
+    _write_quarter_arc_pdf(
+        source_with_hidden_line,
+        radius=850.0 / render_scale,
+        arc_width=0.5,
+        page_size_override=700.0,
+        center_override=(350.0, 350.0),
+        leading_tangent_line_length=expected_line_length_px / render_scale,
+        occlude_leading_tangent_line=True,
+    )
+
+    run_pdf(source_without_line, output_without_line, scale_mm_per_px=1.0, dpi=216)
+    run_pdf(source_with_hidden_line, output_with_hidden_line, scale_mm_per_px=1.0, dpi=216)
+
+    payloads = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (
+            output_without_line / "primitive_ir" / "page_01.json",
+            output_with_hidden_line / "primitive_ir" / "page_01.json",
+        )
+    ]
+    arcs_by_case = [
+        [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+        for payload in payloads
+    ]
+    lines_by_case = [
+        [primitive for primitive in payload["primitives"] if primitive["type"] == "line"]
+        for payload in payloads
+    ]
+    assert [len(arcs) for arcs in arcs_by_case] == [1, 1]
+
+    midpoint = (
+        center_px[0] + radius_px / math.sqrt(2.0),
+        center_px[1] - radius_px / math.sqrt(2.0),
+    )
+    tangent = (-1.0 / math.sqrt(2.0), -1.0 / math.sqrt(2.0))
+    image_height_px = payloads[1]["source_document"]["image_height_px"]
+
+    def overlaps_hidden_tangent(line: dict) -> bool:
+        geometry = line["geometry"]
+        endpoints = [
+            (geometry["start"]["x"], image_height_px - geometry["start"]["y"]),
+            (geometry["end"]["x"], image_height_px - geometry["end"]["y"]),
+        ]
+        perpendicular = [
+            abs(
+                (point[0] - midpoint[0]) * tangent[1]
+                - (point[1] - midpoint[1]) * tangent[0]
+            )
+            for point in endpoints
+        ]
+        projected = [
+            (point[0] - midpoint[0]) * tangent[0]
+            + (point[1] - midpoint[1]) * tangent[1]
+            for point in endpoints
+        ]
+        return (
+            max(perpendicular) <= 4.0
+            and min(projected) <= expected_line_length_px / 2.0
+            and max(projected) >= -expected_line_length_px / 2.0
+        )
+
+    assert not any(overlaps_hidden_tangent(line) for line in lines_by_case[0])
+    assert not any(overlaps_hidden_tangent(line) for line in lines_by_case[1]), (
+        "an occluded PDF line witness preserved a raster fragment of the ARC as a LINE"
     )
 
 
