@@ -36,6 +36,7 @@ from cad_agent.visual_evidence import (
     snapshot_visual_run_manifest,
     validate_visual_evidence_freshness,
 )
+from cad_agent.drawing_contracts import DrawingContractError, validate_contract_payload
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_IPC_DIR = Path(r"C:\temp")
@@ -824,6 +825,18 @@ class DotNetIPCClient:
                     raise DotNetIPCProtocolError(
                         "drawing_setup_audit result is missing requested model_space_inventory"
                     )
+                try:
+                    audit_payload = {
+                        **payload,
+                        "schema_version": "drawing-setup-audit-1.0",
+                        "drawing_full_path": normalized_path,
+                        "drawing_sha256": normalized_sha256,
+                    }
+                    validate_contract_payload(audit_payload, contract="drawing_setup_audit")
+                except DrawingContractError as exc:
+                    raise DotNetIPCProtocolError(
+                        f"drawing_setup_audit result has invalid ModelSpace inventory: {exc}"
+                    ) from exc
             if result["success"] is not True:
                 errors = result.get("errors", [])
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"

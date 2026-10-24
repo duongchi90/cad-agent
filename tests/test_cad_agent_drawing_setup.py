@@ -1033,6 +1033,35 @@ def test_create_setup_audit_preserves_hash_bound_model_space_inventory(
     assert read_contract(output, contract="drawing_setup_audit") == audit
 
 
+def test_create_setup_audit_rejects_cross_bound_inventory_dbmod(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["dbmod_before"] = 1
+    result["payload"]["dbmod_after"] = 1
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": digest,
+        "drawing_sha256_after": digest,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "process_id": 123,
+        "plugin_version": "test",
+        "plugin_binary_path": r"C:\\plugin.dll",
+        "plugin_binary_sha256": "a" * 64,
+        "entity_count": 0,
+        "enumeration_complete": True,
+        "bounds_complete": True,
+        "entities": [],
+    }
+
+    with pytest.raises(DrawingContractError, match="DBMOD"):
+        create_setup_audit(drawing, digest, result)
+
+
 def test_create_setup_audit_rejects_model_space_hash_mismatch(tmp_path: Path) -> None:
     drawing = tmp_path / "setup-lite.dwg"
     drawing.write_bytes(b"synthetic-dwg")

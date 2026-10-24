@@ -474,6 +474,11 @@ def _validate_audit(payload: dict[str, Any]) -> None:
             _fail(contract, "ModelSpace inventory DBMOD values must be integers")
         if inventory["dbmod_before"] != 0 or inventory["dbmod_after"] != 0:
             _fail(contract, "ModelSpace inventory requires DBMOD=0 before and after")
+        if (
+            payload["dbmod_before"] != inventory["dbmod_before"]
+            or payload["dbmod_after"] != inventory["dbmod_after"]
+        ):
+            _fail(contract, "ModelSpace inventory DBMOD values do not match audit DBMOD values")
         if isinstance(inventory["process_id"], bool) or not isinstance(inventory["process_id"], int) or inventory["process_id"] <= 0:
             _fail(contract, "ModelSpace inventory process_id must be positive")
         for key in ("plugin_version", "plugin_binary_path"):
