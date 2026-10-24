@@ -377,6 +377,7 @@ def run(
     pdf_vector_arcs = pdf_vector_arcs or []
     pdf_vector_line_witnesses = pdf_vector_line_witnesses or []
     raw_lines = []
+    pdf_witnessed_lines = []
     for line in raw_geometry.lines:
         if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs):
             raw_lines.append(line)
@@ -384,10 +385,14 @@ def run(
         for witness in pdf_vector_line_witnesses:
             clipped = _clip_raster_line_to_pdf_vector_witness(line, witness)
             if clipped is not None:
-                raw_lines.append(clipped)
+                # Keep the source-bounded segment out of the general line
+                # merger: an adjacent raster fragment must not extend it
+                # beyond the PDF stroke that independently supports it.
+                pdf_witnessed_lines.append(clipped)
                 break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
+    raw_lines.extend(pdf_witnessed_lines)
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:

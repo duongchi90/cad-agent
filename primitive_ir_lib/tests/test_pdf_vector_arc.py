@@ -16,7 +16,8 @@ import numpy as np
 import pytest
 
 from primitive_ir_lib.run_pdf import _page_vector_arcs, _page_vector_line_witnesses, run_pdf
-from primitive_ir_lib.geometry_extraction import RawArc, RawLine
+from primitive_ir_lib.geometry_extraction import RawArc, RawGeometry, RawLine
+import primitive_ir_lib.run_image as run_image_module
 from primitive_ir_lib.run_image import _line_is_explained_by_pdf_arc
 from primitive_ir_lib.validator import validate_document
 from dxf_builder_lib.builder import build_dxf
@@ -658,6 +659,66 @@ def test_short_pdf_tangent_witness_does_not_extend_arc_hough_line(tmp_path: Path
     ), (
         "the emitted ARC-adjacent LINE must stay within the source-supported extent; "
         f"source extent={witness_length_px:.1f}px, emitted extents={witness_matched_lengths}"
+    )
+
+
+def test_merge_lines_does_not_extend_pdf_witness_clipped_line(tmp_path: Path, monkeypatch) -> None:
+    image_path = tmp_path / "merge-witness-input.png"
+    image_path.write_bytes(b"synthetic image")
+    image = np.full((100, 100, 3), 255, dtype=np.uint8)
+    arc = RawArc(
+        id="arc",
+        center_px=(0.0, 0.0),
+        radius_px=100.0,
+        start_px=(100.0 * math.cos(math.radians(-10.0)), 100.0 * math.sin(math.radians(-10.0))),
+        end_px=(100.0 * math.cos(math.radians(10.0)), 100.0 * math.sin(math.radians(10.0))),
+        signed_sweep_deg=20.0,
+        confidence=1.0,
+        bbox_px=(98.0, -18.0, 101.0, 18.0),
+        source_pdf_sha256="a" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="b" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+    )
+    # The first Hough segment is clipped to the short PDF LINE witness.
+    # The separate same-direction segment has no PDF witness or pixel support.
+    detected_lines = [
+        RawLine("arc-tangent", (100.0, -6.0), (100.0, 6.0), 0.8, (100, -6, 100, 6)),
+        RawLine("unsupported-fragment", (100.0, 12.0), (100.0, 25.0), 0.7, (100, 12, 100, 25)),
+    ]
+    witness = RawLine("pdf-witness", (100.0, -4.0), (100.0, 4.0), 1.0, (100, -4, 100, 4))
+    captured: dict = {}
+
+    monkeypatch.setattr(run_image_module.cv2, "imread", lambda _path: image)
+    monkeypatch.setattr(
+        run_image_module, "extract_raw_geometry", lambda *_args, **_kwargs: RawGeometry(lines=detected_lines)
+    )
+
+    def build_document(**kwargs):
+        captured["raw_lines"] = kwargs["raw_lines"]
+        return SimpleNamespace(cross_validations=[])
+
+    monkeypatch.setattr(run_image_module, "build_document", build_document)
+    monkeypatch.setattr(run_image_module, "cross_validate", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(run_image_module, "save_document", lambda *_args, **_kwargs: None)
+
+    run_image_module.run(
+        image_path=str(image_path),
+        output_path=str(tmp_path / "out" / "primitive_ir.json"),
+        scale_mm_per_px=1.0,
+        merge_lines=True,
+        pdf_vector_arcs=[arc],
+        pdf_vector_line_witnesses=[witness],
+    )
+
+    lines = captured["raw_lines"]
+    assert len(lines) == 2, f"witness-bounded and independent lines must remain distinct: {lines}"
+    assert any(line.id == "arc-tangent" and line.length_px() == pytest.approx(8.0) for line in lines)
+    assert any(
+        line.id == "unsupported-fragment" and line.length_px() == pytest.approx(13.0)
+        for line in lines
     )
 
 
