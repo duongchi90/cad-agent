@@ -2192,11 +2192,23 @@ def _page_vector_line_witnesses(
     origin_x, origin_y = pixmap_origin
     bboxlog = page.get_bboxlog()
     drawings = page.get_drawings(extended=True)
-    drawing_by_seqno = {
-        drawing.get("seqno"): drawing
-        for drawing in drawings
-        if isinstance(drawing.get("seqno"), int)
-    }
+    drawing_by_seqno: dict[int, dict] = {}
+    for drawing in drawings:
+        seqno = drawing.get("seqno")
+        if seqno is None:
+            continue
+        if (
+            isinstance(seqno, bool)
+            or not isinstance(seqno, int)
+            or seqno < 0
+            or seqno >= len(bboxlog)
+            or seqno in drawing_by_seqno
+            or not isinstance(bboxlog[seqno], (tuple, list))
+            or len(bboxlog[seqno]) != 2
+        ):
+            # A partial or ambiguous sequence map cannot support line witnesses.
+            return []
+        drawing_by_seqno[seqno] = drawing
     results: list[RawLine] = []
     for drawing in drawings:
         color = drawing.get("color")
@@ -2266,7 +2278,7 @@ def _page_vector_line_witnesses(
             if later_kind == "stroke-path":
                 if later_rect.contains(source_paint_rect):
                     later_drawing = drawing_by_seqno.get(later_seqno)
-                    if later_drawing is None:
+                    if later_drawing is None or later_drawing.get("type") not in {"s", "fs"}:
                         hidden_by_later_fill = True
                         break
                     if _opaque_stroke_fully_covers_line(

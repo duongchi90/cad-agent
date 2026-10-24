@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import pytest
 
-from primitive_ir_lib.run_pdf import _page_vector_arcs, run_pdf
+from primitive_ir_lib.run_pdf import _page_vector_arcs, _page_vector_line_witnesses, run_pdf
 from primitive_ir_lib.geometry_extraction import RawArc, RawLine
 from primitive_ir_lib.run_image import _line_is_explained_by_pdf_arc
 from primitive_ir_lib.validator import validate_document
@@ -569,6 +569,44 @@ def test_independent_pdf_tangent_line_survives_arc_duplicate_suppression(tmp_pat
     assert any(overlaps_independent_tangent(line) for line in lines), (
         "the independent PDF tangent stroke was removed as an ARC duplicate"
     )
+
+
+@pytest.mark.parametrize("bboxlog_corruption", ["truncated", "kind_mismatch"])
+def test_inconsistent_bboxlog_fails_closed_for_hidden_line_witness(
+    tmp_path: Path, bboxlog_corruption: str
+) -> None:
+    source = tmp_path / "hidden-line-bboxlog.pdf"
+    document = fitz.open()
+    page = document.new_page(width=200, height=200)
+    page.draw_line(
+        fitz.Point(20, 100), fitz.Point(80, 100), color=(0, 0, 0), width=0.5
+    )
+    page.draw_rect(
+        fitz.Rect(18, 96, 82, 104), color=None, fill=(1, 1, 1), overlay=True
+    )
+    document.save(source)
+    document.close()
+
+    with fitz.open(source) as pdf:
+        page = pdf[0]
+        drawings = page.get_drawings(extended=True)
+        bboxlog = page.get_bboxlog()
+        assert [record[0] for record in bboxlog] == ["stroke-path", "fill-path"]
+        assert _page_vector_line_witnesses(page, 1.0, (0, 0)) == []
+
+        if bboxlog_corruption == "truncated":
+            corrupted_bboxlog = bboxlog[:-1]
+        else:
+            corrupted_bboxlog = list(bboxlog)
+            corrupted_bboxlog[1] = ("stroke-path", corrupted_bboxlog[1][1])
+
+        inconsistent_page = SimpleNamespace(
+            rotation=page.rotation,
+            rotation_matrix=page.rotation_matrix,
+            get_drawings=lambda **_: drawings,
+            get_bboxlog=lambda: corrupted_bboxlog,
+        )
+        assert _page_vector_line_witnesses(inconsistent_page, 1.0, (0, 0)) == []
 
 
 @pytest.mark.parametrize(
