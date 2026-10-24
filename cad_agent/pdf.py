@@ -344,6 +344,14 @@ def _validate_pdf_resume_artifacts(
             f"page {page_number} rendered-page",
         )
         register(f"page {page_number} rendered-page", (page_number, "rendered_png"), rendered_path)
+        if render_record.get("state") == "completed" and not _completed(
+            resolved_root,
+            rendered_record,
+            rendered_path,
+        ):
+            raise ManifestError(
+                f"PDF page {page_number} rendered-page checkpoint is missing or has changed."
+            )
 
         stages = page.get("stages")
         if not isinstance(stages, dict):

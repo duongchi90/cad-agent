@@ -966,6 +966,43 @@ def test_pdf_cli_run_and_resume() -> None:
         ]) == 0
 
 
+@pytest.mark.parametrize("damage", ["missing", "hash-invalid"])
+def test_pdf_cli_resume_rejects_invalid_rendered_page_without_mutating_manifest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], damage: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    manifest_path = output / "pdf-run-manifest.json"
+
+    assert main([
+        "run-pdf",
+        "--input", str(source),
+        "--output-dir", str(output),
+        "--scale-mm-per-px", "0.5",
+        "--calibration-approval", "ticket-123",
+        "--dpi", "144",
+    ]) == 0
+    manifest_before = manifest_path.read_bytes()
+    persisted = json.loads(manifest_before)
+    rendered = output / persisted["pages"][0]["rendered_png"]["artifact"]
+    if damage == "missing":
+        rendered.unlink()
+    else:
+        rendered.write_bytes(b"changed rendered page")
+
+    result = main([
+        "resume-pdf",
+        "--manifest", str(manifest_path),
+        "--input", str(source),
+    ])
+    capsys.readouterr()
+
+    assert result != 0
+    assert manifest_path.read_bytes() == manifest_before
+    assert all(page["rendered_png"]["state"] == "completed" for page in persisted["pages"])
+
+
 def test_pdf_cli_auto_calibration_candidate_stops_before_semantic_or_dxf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
