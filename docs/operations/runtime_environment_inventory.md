@@ -56,3 +56,45 @@ Update this owner only for a material topology/owner change. Record transient
 process, active-file, hashes and gate results in the current Issue/evidence packet,
 and fresh-read them on resume. No daemon, watcher, registry, second transport or
 approval authority is introduced by this inventory.
+
+## External tool / connector allowlist
+
+This inventory also records the small set of external tools/connectors that are
+allowed to participate in the development workflow. This is documentation and
+preflight evidence only; it is not a runtime authority, permission service,
+registry, approval system, or second control plane.
+
+Default rules:
+
+```text
+NOT_IN_ALLOWLIST => NOT_ASSUMED_AVAILABLE
+NEW_CONNECTOR => CURRENT_PRODUCT_NEED + EXISTING_OWNER_GAP + LEAST_AUTHORITY_SCOPE
+EXISTING_GITHUB_CONNECTOR => NO_SECOND_GITHUB_MCP_WITHOUT_MEASURED_NEED
+EXISTING_CAD_TRANSPORT => NO_SECOND_CAD_TRANSPORT_WITHOUT_MEASURED_RED
+DISABLED_OR_STALE_CONNECTOR => DO_NOT_ROUTE_WORK_THROUGH_IT
+```
+
+Before adding or materially expanding an external tool, verify that the current
+product boundary actually needs it, the same capability is not already owned,
+and the permission surface is the minimum required. Prefer read-only scope for
+research/review. Credentials, private/customer data and destructive external
+actions remain genuine Human Gates.
+
+Record only material, durable facts when a connector is actually admitted:
+
+| Field | Required fact |
+| --- | --- |
+| Tool / connector | Exact product or connector identity |
+| Purpose | Current product/review need it serves |
+| Existing owner | Owner/path it extends rather than duplicates |
+| Capability | Read-only or exact bounded write capability |
+| Permission scope | Least-authority repository/service scope |
+| Credential boundary | Where authorization lives; never store secrets here |
+| Current identity | Version/build/plugin identity when material to compatibility |
+| State | ENABLED / DISABLED / STALE / NOT_ADMITTED |
+| Last verified | GitHub/runtime evidence reference or date when material |
+
+Do not create a machine-readable registry merely to mirror this table. Transient
+session IDs, tokens, PIDs, HWNDs and active-file facts belong in the current
+issue/evidence packet, not here.
+
