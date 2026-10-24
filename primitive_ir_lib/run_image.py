@@ -28,7 +28,7 @@ from .assemble import build_document
 from .calibration import Calibration, auto_estimate_calibration
 from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
-from .geometry_extraction import RawArc, extract_raw_geometry
+from .geometry_extraction import RawArc, RawLine, extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
 from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
@@ -207,8 +207,10 @@ def _line_is_explained_by_pdf_arc(line, arc: RawArc) -> bool:
     return max(progresses) - min(progresses) <= 15.0
 
 
-def _line_matches_pdf_vector_witness(line: RawLine, witness: RawLine) -> bool:
-    """Return whether a raster line substantially matches a separate PDF stroke."""
+def _clip_raster_line_to_pdf_vector_witness(
+    line: RawLine, witness: RawLine
+) -> Optional[RawLine]:
+    """Bound an existing raster LINE to the part supported by a PDF stroke."""
     line_dx = line.p2_px[0] - line.p1_px[0]
     line_dy = line.p2_px[1] - line.p1_px[1]
     witness_dx = witness.p2_px[0] - witness.p1_px[0]
@@ -216,14 +218,14 @@ def _line_matches_pdf_vector_witness(line: RawLine, witness: RawLine) -> bool:
     line_length = math.hypot(line_dx, line_dy)
     witness_length = math.hypot(witness_dx, witness_dy)
     if not all(math.isfinite(value) for value in (line_length, witness_length)):
-        return False
+        return None
     if line_length <= 1e-9 or witness_length <= 1e-9:
-        return False
+        return None
 
     direction = (witness_dx / witness_length, witness_dy / witness_length)
     alignment = abs((line_dx * direction[0] + line_dy * direction[1]) / line_length)
     if alignment < 0.98:
-        return False
+        return None
 
     line_points = (line.p1_px, line.p2_px)
     perpendicular_distances = [
@@ -234,18 +236,48 @@ def _line_matches_pdf_vector_witness(line: RawLine, witness: RawLine) -> bool:
         for point in line_points
     ]
     if not all(math.isfinite(value) and value <= 2.5 for value in perpendicular_distances):
-        return False
+        return None
 
     projections = [
         (point[0] - witness.p1_px[0]) * direction[0]
         + (point[1] - witness.p1_px[1]) * direction[1]
         for point in line_points
     ]
-    overlap = max(
-        0.0,
-        min(witness_length, max(projections)) - max(0.0, min(projections)),
+    overlap_start = max(0.0, min(projections))
+    overlap_end = min(witness_length, max(projections))
+    overlap = overlap_end - overlap_start
+    if overlap / witness_length < 0.75:
+        return None
+
+    projection_span = projections[1] - projections[0]
+    if abs(projection_span) <= 1e-9:
+        return None
+    parameters = (
+        (overlap_start - projections[0]) / projection_span,
+        (overlap_end - projections[0]) / projection_span,
     )
-    return overlap / witness_length >= 0.75
+    clipped_points = [
+        (
+            line.p1_px[0] + parameter * line_dx,
+            line.p1_px[1] + parameter * line_dy,
+        )
+        for parameter in parameters
+    ]
+    clipped_length = math.dist(clipped_points[0], clipped_points[1])
+    if not math.isfinite(clipped_length) or clipped_length <= 1e-9:
+        return None
+    return RawLine(
+        id=line.id,
+        p1_px=clipped_points[0],
+        p2_px=clipped_points[1],
+        confidence=line.confidence,
+        bbox_px=(
+            min(point[0] for point in clipped_points),
+            min(point[1] for point in clipped_points),
+            max(point[0] for point in clipped_points),
+            max(point[1] for point in clipped_points),
+        ),
+    )
 
 
 def run(
@@ -344,14 +376,16 @@ def run(
 
     pdf_vector_arcs = pdf_vector_arcs or []
     pdf_vector_line_witnesses = pdf_vector_line_witnesses or []
-    raw_lines = [
-        line for line in raw_geometry.lines
-        if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs)
-        or any(
-            _line_matches_pdf_vector_witness(line, witness)
-            for witness in pdf_vector_line_witnesses
-        )
-    ]
+    raw_lines = []
+    for line in raw_geometry.lines:
+        if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs):
+            raw_lines.append(line)
+            continue
+        for witness in pdf_vector_line_witnesses:
+            clipped = _clip_raster_line_to_pdf_vector_witness(line, witness)
+            if clipped is not None:
+                raw_lines.append(clipped)
+                break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
 

@@ -571,6 +571,96 @@ def test_independent_pdf_tangent_line_survives_arc_duplicate_suppression(tmp_pat
     )
 
 
+def test_short_pdf_tangent_witness_does_not_extend_arc_hough_line(tmp_path: Path) -> None:
+    source = tmp_path / "short-tangent-witness.pdf"
+    output = tmp_path / "short-tangent-witness-result"
+    render_scale = 144.0 / 72.0
+    witness_length_px = 10.0
+    _write_quarter_arc_pdf(
+        source,
+        radius=850.0 / render_scale,
+        arc_width=0.5,
+        page_size_override=1000.0,
+        center_override=(500.0, 500.0),
+        leading_tangent_line_length=witness_length_px / render_scale,
+    )
+
+    # The independent oracle is the short LINE record in the generated PDF,
+    # not the raster detector's line extent.
+    with fitz.open(source) as pdf:
+        source_lines = [
+            drawing["items"][0]
+            for drawing in pdf[0].get_drawings(extended=True)
+            if len(drawing.get("items", [])) == 1
+            and drawing["items"][0][0] == "l"
+        ]
+        assert len(source_lines) == 1
+        source_start = fitz.Point(source_lines[0][1]) * render_scale
+        source_end = fitz.Point(source_lines[0][2]) * render_scale
+        source_length = math.dist(
+            (source_start.x, source_start.y), (source_end.x, source_end.y)
+        )
+        assert source_length == pytest.approx(witness_length_px, abs=0.1)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=144)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    arcs = [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+    lines = [primitive for primitive in payload["primitives"] if primitive["type"] == "line"]
+    assert len(arcs) == 1
+    image_height = payload["source_document"]["image_height_px"]
+    witness_start = (source_start.x, image_height - source_start.y)
+    witness_end = (source_end.x, image_height - source_end.y)
+    witness_dx = witness_end[0] - witness_start[0]
+    witness_dy = witness_end[1] - witness_start[1]
+    witness_norm = math.hypot(witness_dx, witness_dy)
+    witness_direction = (witness_dx / witness_norm, witness_dy / witness_norm)
+
+    witness_matched_lengths = []
+    for primitive in lines:
+        geometry = primitive["geometry"]
+        endpoints = [
+            (geometry["start"]["x"], geometry["start"]["y"]),
+            (geometry["end"]["x"], geometry["end"]["y"]),
+        ]
+        dx = endpoints[1][0] - endpoints[0][0]
+        dy = endpoints[1][1] - endpoints[0][1]
+        line_length = math.hypot(dx, dy)
+        if line_length <= 1e-9 or abs(
+            (dx * witness_direction[0] + dy * witness_direction[1]) / line_length
+        ) < 0.98:
+            continue
+        perpendicular = [
+            abs(
+                (point[0] - witness_start[0]) * witness_direction[1]
+                - (point[1] - witness_start[1]) * witness_direction[0]
+            )
+            for point in endpoints
+        ]
+        projections = [
+            (point[0] - witness_start[0]) * witness_direction[0]
+            + (point[1] - witness_start[1]) * witness_direction[1]
+            for point in endpoints
+        ]
+        overlap = max(
+            0.0,
+            min(witness_norm, max(projections)) - max(0.0, min(projections)),
+        )
+        if max(perpendicular) <= 2.5 and overlap > 0:
+            witness_matched_lengths.append(line_length)
+
+    assert witness_matched_lengths, "the visible source LINE witness was lost"
+    assert all(
+        0.75 * witness_length_px <= length <= witness_length_px + 2.0
+        for length in witness_matched_lengths
+    ), (
+        "the emitted ARC-adjacent LINE must stay within the source-supported extent; "
+        f"source extent={witness_length_px:.1f}px, emitted extents={witness_matched_lengths}"
+    )
+
+
 @pytest.mark.parametrize("bboxlog_corruption", ["truncated", "kind_mismatch"])
 def test_inconsistent_bboxlog_fails_closed_for_hidden_line_witness(
     tmp_path: Path, bboxlog_corruption: str
