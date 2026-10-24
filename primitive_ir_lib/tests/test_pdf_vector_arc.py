@@ -125,6 +125,21 @@ def _wrap_page_in_triangle_clip(path: Path) -> None:
     document.close()
 
 
+def _wrap_page_in_rectangle_clip(path: Path) -> Path:
+    """Apply a rectangular PDF clip that fully contains the quarter arc."""
+    document = fitz.open(path)
+    page = document[0]
+    content_xref = page.get_contents()[0]
+    original_stream = document.xref_stream(content_xref)
+    # The clip rectangle surrounds the entire stroke with a small margin.
+    clip_prefix = b"q 90 155 m 155 155 l 155 90 l 90 90 l h W n\n"
+    document.update_stream(content_xref, clip_prefix + original_stream + b"\nQ")
+    clipped_path = path.with_name(f"{path.stem}-rectangle-clipped.pdf")
+    document.save(clipped_path)
+    document.close()
+    return clipped_path
+
+
 def test_visible_open_pdf_vector_arc_reaches_primitive_ir(tmp_path: Path) -> None:
     source = tmp_path / "visible-quarter-arc.pdf"
     output = tmp_path / "result"
@@ -327,6 +342,20 @@ def test_nonrectangular_clip_cannot_hide_arc_behind_its_scissor_bbox(tmp_path: P
         (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
     )
     assert not any(primitive["type"] == "arc" for primitive in payload["primitives"])
+
+
+def test_rectangular_clip_containing_arc_preserves_vector_arc(tmp_path: Path) -> None:
+    source = tmp_path / "rectangle-clipped.pdf"
+    _write_quarter_arc_pdf(source)
+    clipped_source = _wrap_page_in_rectangle_clip(source)
+    output = tmp_path / "rectangle-clipped-result"
+
+    run_pdf(clipped_source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert sum(primitive["type"] == "arc" for primitive in payload["primitives"]) == 1
 
 
 def test_only_short_line_fragments_on_the_arc_locus_are_suppressed() -> None:

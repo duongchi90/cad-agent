@@ -947,22 +947,38 @@ def _drawing_may_erase_circle(
     return False
 
 
-def _clip_fully_contains_circle(
-    drawing: dict, center_x: float, center_y: float, radius: float
-) -> bool:
-    """Prove an axis-aligned clip rectangle leaves a candidate circle intact."""
+def _axis_aligned_clip_rect(drawing: dict) -> Optional[fitz.Rect]:
+    """Return clip bounds only when its actual path is a closed axis-aligned rectangle."""
     scissor = drawing.get("scissor")
     items = drawing.get("items", [])
-    if drawing.get("type") != "clip" or scissor is None or len(items) != 4:
-        return False
+    if drawing.get("type") != "clip" or scissor is None:
+        return None
+
+    if len(items) == 1 and isinstance(items[0], (tuple, list)) and items[0][0] == "re":
+        try:
+            clip_rect = fitz.Rect(items[0][1])
+        except (IndexError, TypeError, ValueError, OverflowError):
+            return None
+        if not clip_rect.is_valid or not all(math.isfinite(value) for value in clip_rect):
+            return None
+        try:
+            scissor_rect = fitz.Rect(scissor)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return clip_rect if scissor_rect.is_valid and all(math.isfinite(value) for value in scissor_rect) else None
+
+    if len(items) != 4:
+        return None
 
     segments: list[tuple[fitz.Point, fitz.Point]] = []
     for item in items:
-        if item[0] != "l":
-            return False
+        if not isinstance(item, (tuple, list)) or len(item) != 3 or item[0] != "l":
+            return None
         _, start, end = item
+        if any(not math.isfinite(value) for value in (start.x, start.y, end.x, end.y)):
+            return None
         if abs(start.x - end.x) > 0.02 and abs(start.y - end.y) > 0.02:
-            return False
+            return None
         segments.append((start, end))
     if any(
         math.hypot(
@@ -972,7 +988,7 @@ def _clip_fully_contains_circle(
         > 0.02
         for index in range(4)
     ):
-        return False
+        return None
 
     points = [point for segment in segments for point in segment]
     x0 = min(point.x for point in points)
@@ -987,19 +1003,43 @@ def _clip_fully_contains_circle(
     }
     actual_corners = {(round(point.x, 3), round(point.y, 3)) for point in points}
     if actual_corners != expected_corners:
-        return False
+        return None
+    try:
+        scissor_rect = fitz.Rect(scissor)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not all(math.isfinite(value) for value in scissor_rect):
+        return None
+    return fitz.Rect(x0, y0, x1, y1) if scissor_rect.is_valid else None
 
+
+def _clip_fully_contains_rect(drawing: dict, target: fitz.Rect) -> bool:
+    """Prove both actual rectangular clip geometry and its scissor contain a target."""
+    clip_rect = _axis_aligned_clip_rect(drawing)
+    if clip_rect is None or not target.is_valid:
+        return False
+    scissor_rect = fitz.Rect(drawing["scissor"])
     margin = 0.02
     return (
-        scissor.x0 <= center_x - radius + margin
-        and scissor.y0 <= center_y - radius + margin
-        and scissor.x1 >= center_x + radius - margin
-        and scissor.y1 >= center_y + radius - margin
-        and x0 <= center_x - radius + margin
-        and y0 <= center_y - radius + margin
-        and x1 >= center_x + radius - margin
-        and y1 >= center_y + radius - margin
+        clip_rect.x0 <= target.x0 + margin
+        and clip_rect.y0 <= target.y0 + margin
+        and clip_rect.x1 >= target.x1 - margin
+        and clip_rect.y1 >= target.y1 - margin
+        and scissor_rect.x0 <= target.x0 + margin
+        and scissor_rect.y0 <= target.y0 + margin
+        and scissor_rect.x1 >= target.x1 - margin
+        and scissor_rect.y1 >= target.y1 - margin
     )
+
+
+def _clip_fully_contains_circle(
+    drawing: dict, center_x: float, center_y: float, radius: float
+) -> bool:
+    """Prove an axis-aligned clip rectangle leaves a candidate circle intact."""
+    target = fitz.Rect(
+        center_x - radius, center_y - radius, center_x + radius, center_y + radius
+    )
+    return _clip_fully_contains_rect(drawing, target)
 
 
 def _image_paint_operations(page: fitz.Page) -> list[tuple[int, fitz.Rect]]:
@@ -1797,6 +1837,11 @@ def _page_vector_arcs(
         # Any intersecting clip/group ancestry or later-painted operation is
         # unresolved visibility. Reject conservatively, including image paint.
         level = drawing["level"]
+        parent_clips = [
+            prior
+            for prior in drawings[:index]
+            if prior.get("type") == "clip" and int(prior.get("level") or 0) < level
+        ]
         prior_group = any(
             prior.get("type") == "group"
             and int(prior.get("level") or 0) < level
@@ -1804,11 +1849,16 @@ def _page_vector_arcs(
             and fitz.Rect(prior["rect"]).intersects(path_rect)
             for prior in drawings[:index]
         )
-        # PyMuPDF's scissor is only the clip's rectangular bounding box. It
-        # cannot prove that a nonrectangular clip path leaves this arc intact.
-        # Reject nested drawing content until the actual clip geometry can be
-        # proven to contain the candidate.
-        clip_unresolved = level > 0
+        # PyMuPDF's scissor is only the clip path's rectangular bounding box.
+        # Admit nested content only when every parent clip's actual path is
+        # proven to be an axis-aligned rectangle containing the full stroke.
+        clip_unresolved = level > 0 and (
+            not parent_clips
+            or any(
+                not _clip_fully_contains_rect(clip, path_rect)
+                for clip in parent_clips
+            )
+        )
         paint_margin = max(0.25, float(width_pt) / 2.0)
         if seqno >= len(bboxlog) or len(bboxlog[seqno]) != 2:
             continue
