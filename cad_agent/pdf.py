@@ -381,6 +381,12 @@ def _requires_auto_ocr_checkpoint_regeneration(primitive_path: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return True
     validations = primitive.get("cross_validations") if isinstance(primitive, dict) else None
+    primitives = primitive.get("primitives") if isinstance(primitive, dict) else None
+    if isinstance(primitives, list) and any(
+        isinstance(item, dict) and item.get("source") == "text_pdfvector"
+        for item in primitives
+    ):
+        return True
     if not isinstance(validations, list):
         return True
     return any(
@@ -541,6 +547,13 @@ def _regenerate_primitive_from_pdf(
         ):
             raise ManifestError("Regenerated Primitive IR does not match its PDF page record.")
 
+        page["pdf_vector_text_visibility"] = regenerated_manifest.get(
+            "pdf_vector_text_visibility", "not_assessed"
+        )
+        page["excluded_unverified_pdf_vector_text_span_count"] = regenerated_page.get(
+            "excluded_unverified_pdf_vector_text_span_count", 0
+        )
+
         latest_paths = _validate_pdf_resume_artifacts(output_dir, manifest_path, source, manifest)
         latest_primitive = latest_paths[(page_number, "primitive_ir")]
         if latest_primitive != primitive:
@@ -641,13 +654,20 @@ def _ensure_rendered(
         candidates = item.get("scale_label_candidates", [])
         if not isinstance(candidates, list):
             raise ManifestError("PDF render manifest has invalid scale-label candidates.")
-        pages.append(_page_record(
+        page_record = _page_record(
             int(item["page"]),
             primitive,
             rendered_png,
             output_dir,
             candidates,
-        ))
+        )
+        page_record["pdf_vector_text_visibility"] = rendered.get(
+            "pdf_vector_text_visibility", "not_assessed"
+        )
+        page_record["excluded_unverified_pdf_vector_text_span_count"] = item.get(
+            "excluded_unverified_pdf_vector_text_span_count", 0
+        )
+        pages.append(page_record)
     if not pages:
         raise ManifestError("PDF contains no renderable pages.")
     manifest["pages"] = pages

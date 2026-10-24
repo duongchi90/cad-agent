@@ -118,7 +118,7 @@ def test_run_image_deduplicates_same_span_without_dangling_ocr_references(tmp_pa
     duplicate = RawText("ocr-1", "R7,50", (9, 10, 31, 20), 0.0, 0.9, "text_tesseract")
     repeated = RawText("ocr-2", "R7,50", (50, 10, 70, 20), 0.0, 0.9, "text_tesseract")
     near_overlap = RawText("ocr-4", "R7,50", (13, 10, 33, 20), 0.0, 0.9, "text_tesseract")
-    different = RawText("ocr-3", "Ø14", (10, 10, 30, 20), 0.0, 0.9, "text_tesseract")
+    different = RawText("ocr-3", "Ø14", (35, 10, 55, 20), 0.0, 0.9, "text_tesseract")
     contained_ocr = RawText("ocr-5", "R7,50", (80, 40, 90, 50), 0.0, 0.9, "text_tesseract")
     containing_vector = RawText(
         "pdf-2", "R7,50", (70, 30, 110, 70), 0.0, 1.0, "text_pdfvector"
@@ -145,8 +145,28 @@ def test_run_image_deduplicates_same_span_without_dangling_ocr_references(tmp_pa
         ("R7,50", "text_tesseract"),
         ("Ø14", "text_tesseract"),
         ("R7,50", "text_tesseract"),
-        ("R7,50", "text_pdfvector"),
     ]
+
+
+def test_run_image_rejects_different_content_at_same_ocr_pdf_span(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    ocr = RawText("ocr-1", "R7,50", (10, 10, 30, 20), 0.0, 0.9, "text_tesseract")
+    pdf_text = RawText("pdf-1", "R7.50", (10, 10, 30, 20), 0.0, 1.0, "text_pdfvector")
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr]),
+        pytest.raises(ValueError, match=r"same-span content conflict.*ocr-1.*pdf-1"),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
+            pdf_vector_texts=[pdf_text],
+        )
+
+    assert not output_path.exists()
 
 
 def test_run_image_cross_validation_references_saved_text_after_pdf_dedup(tmp_path):

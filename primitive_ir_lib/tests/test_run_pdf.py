@@ -2,20 +2,17 @@
 
 import json
 import hashlib
-import math
 from pathlib import Path
 from unittest.mock import patch
 
 import fitz
 import pytest
-import cv2
-import numpy as np
 
 from primitive_ir_lib.run_pdf import run_pdf
 from primitive_ir_lib.text_extraction import RawText
 
 
-def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path):
+def test_run_pdf_excludes_unverified_pdf_only_text_and_binds_rendered_page(tmp_path: Path):
     pdf_path = tmp_path / "vector-text.pdf"
     output_dir = tmp_path / "output"
     document = fitz.open()
@@ -33,10 +30,9 @@ def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path
     payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
     assert manifest["status"] == "complete"
     texts = [p for p in payload["primitives"] if p["type"] == "text"]
-    assert [(p["text_data"]["content"], p["source"]) for p in texts] == [
-        ("R7,50", "text_pdfvector")
-    ]
-    assert texts[0]["trace"]["extraction_tool"] == "pymupdf"
+    assert texts == []
+    assert manifest["pdf_vector_text_visibility"] == "not_assessed"
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
 
     rendered_path = output_dir / manifest["pages"][0]["rendered_png"]
     assert payload["source_document"]["sha256"] == hashlib.sha256(
@@ -50,22 +46,100 @@ def test_run_pdf_emits_vector_text_and_binds_pdf_to_rendered_page(tmp_path: Path
     assert page_record["page_rotation_matrix"] == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
     source_doc = fitz.open(pdf_path)
-    span = next(
-        span
-        for block in source_doc[0].get_text("dict")["blocks"]
-        if "lines" in block
-        for line in block["lines"]
-        for span in line["spans"]
-        if span["text"] == "R7,50"
-    )
-    x0, y0, x1, y1 = span["bbox"]
-    assert texts[0]["trace"]["bbox_px"] == [
-        math.floor(x0), math.floor(y0), math.ceil(x1), math.ceil(y1)
-    ]
     source_doc.close()
 
 
-def test_run_pdf_preserves_text_rotation_from_line_direction(tmp_path: Path):
+@pytest.mark.parametrize("visibility_case", ["invisible", "later_covered"])
+def test_run_pdf_never_emits_unverified_invisible_or_covered_text(
+    tmp_path: Path, visibility_case: str
+):
+    pdf_path = tmp_path / f"{visibility_case}.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text(
+        (50, 60), "HIDDEN7", fontsize=12,
+        render_mode=3 if visibility_case == "invisible" else 0,
+    )
+    if visibility_case == "later_covered":
+        page.draw_rect((40, 40, 130, 80), color=None, fill=(1, 1, 1), overlay=True)
+    assert "HIDDEN7" in page.get_text("text")
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert not [p for p in payload["primitives"] if p["type"] == "text"]
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
+
+
+def test_run_pdf_still_emits_ocr_only_text(tmp_path: Path, monkeypatch):
+    pdf_path = tmp_path / "ocr-only.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    document.new_page(width=240, height=120).insert_text((50, 60), "R7,50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_pdf._page_vector_texts",
+        lambda *args, **kwargs: ([], "empty", 0),
+    )
+    ocr = RawText("ocr-visible", "R7,50", (50, 45, 85, 65), 0.0, 0.9, "text_tesseract")
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    texts = [p for p in payload["primitives"] if p["type"] == "text"]
+    assert [(p["text_data"]["content"], p["source"]) for p in texts] == [
+        ("R7,50", "text_tesseract")
+    ]
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 0
+
+
+def test_run_pdf_rejects_different_ocr_and_pdf_text_at_same_span(tmp_path: Path, monkeypatch):
+    pdf_path = tmp_path / "conflicting-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text((50, 60), "R7.50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+    bbox = (48, 48, 82, 66)
+    pdf_text = RawText("pdf-1", "R7.50", bbox, 0.0, 1.0, "text_pdfvector")
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_pdf._page_vector_texts",
+        lambda *args, **kwargs: ([pdf_text], "extracted", 0),
+    )
+
+    with (
+        patch(
+            "primitive_ir_lib.run_image.extract_text_tesseract",
+            return_value=[RawText("ocr-1", "R7,50", bbox, 0.0, 0.9, "text_tesseract")],
+        ),
+        pytest.raises(ValueError, match=r"same-span content conflict.*ocr-1.*pdf-"),
+    ):
+        run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    saved_manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert saved_manifest["status"] == "failed"
+    assert saved_manifest["pages"] == []
+    assert saved_manifest["failed_page_index"] == 0
+    assert not (output_dir / "primitive_ir" / "page_01.json").exists()
+
+
+def test_run_pdf_excludes_unverified_rotated_pdf_text(tmp_path: Path):
     pdf_path = tmp_path / "independently-rotated-text.pdf"
     output_dir = tmp_path / "output"
     document = fitz.open()
@@ -82,8 +156,8 @@ def test_run_pdf_preserves_text_rotation_from_line_direction(tmp_path: Path):
         )
 
     payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
-    text = next(p for p in payload["primitives"] if p["type"] == "text")
-    assert text["text_data"]["rotation_deg"] == pytest.approx(45.0, abs=0.5)
+    assert not [p for p in payload["primitives"] if p["type"] == "text"]
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
 
 
 def test_run_pdf_marks_manifest_failed_when_same_span_rotation_conflicts(
@@ -155,7 +229,7 @@ def test_run_pdf_geometry_only_mode_does_not_emit_embedded_text(tmp_path: Path):
 
 
 @pytest.mark.parametrize("rotation", [90, 180, 270])
-def test_run_pdf_vector_text_bbox_matches_rendered_text_after_rotation_and_crop(
+def test_run_pdf_excludes_unverified_text_after_rotation_and_crop(
     tmp_path: Path, rotation: int
 ):
     pdf_path = tmp_path / f"rotated-cropped-{rotation}.pdf"
@@ -176,15 +250,8 @@ def test_run_pdf_vector_text_bbox_matches_rendered_text_after_rotation_and_crop(
 
     page_record = manifest["pages"][0]
     payload = json.loads((output_dir / page_record["primitive_ir"]).read_text())
-    text = next(p for p in payload["primitives"] if p["type"] == "text")
-    rendered = cv2.imread(str(output_dir / page_record["rendered_png"]))
-    ys, xs = np.where(np.any(rendered < 200, axis=2))
-    ink_bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
-    x0, y0, x1, y1 = text["trace"]["bbox_px"]
-    assert x0 <= ink_bbox[0] + 2
-    assert y0 <= ink_bbox[1] + 2
-    assert x1 >= ink_bbox[2] - 2
-    assert y1 >= ink_bbox[3] - 2
+    assert not [p for p in payload["primitives"] if p["type"] == "text"]
+    assert page_record["excluded_unverified_pdf_vector_text_span_count"] == 1
     assert page_record["page_rotation_matrix"] != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
 
@@ -210,6 +277,166 @@ def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
         assert payload["source_document"]["image_width_px"] == 200
         assert payload["source_document"]["page_index"] == page["page_index"]
         assert page["primitive_count"] == len(payload["primitives"])
+
+
+@pytest.mark.parametrize("fail_during_processing", [False, True])
+def test_run_pdf_replaces_manifest_symlink_without_modifying_external_target(
+    tmp_path: Path, fail_during_processing: bool
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external file that must not be overwritten"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+    source_bytes = pdf_path.read_bytes()
+    manifest_path = output_dir / "manifest.json"
+    try:
+        manifest_path.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    if fail_during_processing:
+        with patch(
+            "primitive_ir_lib.run_pdf._page_circle_witnesses",
+            side_effect=RuntimeError("controlled page failure"),
+        ), pytest.raises(RuntimeError, match="controlled page failure"):
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+        expected_status = "failed"
+    else:
+        with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+        expected_status = "complete"
+
+    assert pdf_path.read_bytes() == source_bytes
+    assert protected_path.read_bytes() == protected_bytes
+    assert not manifest_path.is_symlink()
+    saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert saved["status"] == expected_status
+
+
+def test_run_pdf_rejects_page_ir_symlink_without_modifying_external_target(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    ir_dir = output_dir / "primitive_ir"
+    ir_dir.mkdir(parents=True)
+    (output_dir / "manifest.json").write_text(
+        json.dumps({"status": "complete", "pages": [{"page": 1}]}),
+        encoding="utf-8",
+    )
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external page artifact target must not be overwritten"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+    page_ir_path = ir_dir / "page_01.json"
+    try:
+        page_ir_path.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]),
+        pytest.raises((OSError, ValueError), match="redirected|multiple hard links"),
+    ):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    manifest_path = output_dir / "manifest.json"
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["rendered/page_01.png", "primitive_ir/page_01.view_candidates.json"],
+)
+def test_run_pdf_rejects_redirected_artifact_and_keeps_external_bytes(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    artifact = output_dir / artifact_name
+    artifact.parent.mkdir(parents=True)
+    protected_path = tmp_path / "external.bin"
+    protected_bytes = b"must not be changed through a PDF output artifact"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+    try:
+        artifact.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    with pytest.raises(ValueError, match="redirected"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    manifest_path = output_dir / "manifest.json"
+    assert not manifest_path.exists() or json.loads(
+        manifest_path.read_text(encoding="utf-8")
+    )["status"] != "complete"
+
+
+def test_run_pdf_rejects_hardlinked_page_ir_before_processing(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    ir_dir = output_dir / "primitive_ir"
+    ir_dir.mkdir(parents=True)
+    protected_path = tmp_path / "external.bin"
+    protected_bytes = b"hardlink target must stay unchanged"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+    (ir_dir / "page_01.json").hardlink_to(protected_path)
+
+    with pytest.raises(ValueError, match="multiple hard links"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "failed"
+
+
+def test_run_pdf_rejects_redirected_output_directory(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    external_dir = tmp_path / "external-output"
+    external_dir.mkdir()
+    protected_path = external_dir / "sentinel.bin"
+    protected_bytes = b"output directory must not redirect writes here"
+    protected_path.write_bytes(protected_bytes)
+    output_dir.mkdir()
+    try:
+        (output_dir / "rendered").symlink_to(external_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable on this workstation: {exc}")
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+
+    with pytest.raises(ValueError, match="redirected"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "failed"
 
 
 def _make_blank_pdf(pdf_path: Path) -> None:
