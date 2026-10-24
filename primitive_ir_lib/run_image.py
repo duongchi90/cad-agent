@@ -105,7 +105,8 @@ def _rotation_equivalent(a: RawText, b: RawText) -> bool:
 
 
 def _combine_pdf_vector_texts(
-    pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText]
+    pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText],
+    conflict_report: Optional[dict] = None,
 ) -> List[RawText]:
     """Validate PDF/OCR spans; only OCR text is admissible for visible output."""
     pdf_texts = pdf_vector_texts or []
@@ -128,27 +129,49 @@ def _combine_pdf_vector_texts(
         for ocr in ocr_texts
         if _same_span_bbox_match(pdf, ocr) and pdf.content != ocr.content
     ]
-    if content_conflicts:
-        details = "; ".join(
-            f"OCR {ocr.id}={ocr.content[:80]!r}, "
-            f"PDF {pdf.id}={pdf.content[:80]!r}"
-            for pdf, ocr in content_conflicts
+    excluded_pdf_objects = {id(pdf) for pdf, _ in content_conflicts}
+    excluded_ocr_objects = {id(ocr) for _, ocr in content_conflicts}
+    # Exclude the whole same-span group, including a third OCR/PDF observation
+    # that happens to agree with one side of an otherwise conflicting pair.
+    changed = True
+    while changed:
+        changed = False
+        for pdf in pdf_texts:
+            for ocr in ocr_texts:
+                if not _same_span_bbox_match(pdf, ocr):
+                    continue
+                if id(pdf) in excluded_pdf_objects or id(ocr) in excluded_ocr_objects:
+                    if id(pdf) not in excluded_pdf_objects:
+                        excluded_pdf_objects.add(id(pdf))
+                        changed = True
+                    if id(ocr) not in excluded_ocr_objects:
+                        excluded_ocr_objects.add(id(ocr))
+                        changed = True
+    if conflict_report is not None:
+        conflict_report.update(
+            ocr_text_state=(
+                "partial_conflicts_excluded" if content_conflicts else "unverified"
+            ),
+            ocr_pdf_conflict_count=len(content_conflicts),
+            excluded_ocr_text_span_count=len(excluded_ocr_objects),
+            excluded_pdf_text_span_count=len(excluded_pdf_objects),
         )
-        raise ValueError(f"OCR/PDF same-span content conflict: {details}")
+    admitted_pdf_texts = [text for text in pdf_texts if id(text) not in excluded_pdf_objects]
+    admitted_ocr_texts = [text for text in ocr_texts if id(text) not in excluded_ocr_objects]
 
     pdf_matches = {
         pdf_index: [
-            ocr_index for ocr_index, ocr in enumerate(ocr_texts)
+            ocr_index for ocr_index, ocr in enumerate(admitted_ocr_texts)
             if pdf.content == ocr.content and _same_span_bbox_match(pdf, ocr)
         ]
-        for pdf_index, pdf in enumerate(pdf_texts)
+        for pdf_index, pdf in enumerate(admitted_pdf_texts)
     }
     ocr_matches = {
         ocr_index: [
-            pdf_index for pdf_index, pdf in enumerate(pdf_texts)
+            pdf_index for pdf_index, pdf in enumerate(admitted_pdf_texts)
             if pdf.content == ocr.content and _same_span_bbox_match(pdf, ocr)
         ]
-        for ocr_index, ocr in enumerate(ocr_texts)
+        for ocr_index, ocr in enumerate(admitted_ocr_texts)
     }
 
     ambiguous_pairs = [
@@ -166,11 +189,11 @@ def _combine_pdf_vector_texts(
         pdf_indexes = sorted({pdf_index for pdf_index, _ in ambiguous_pairs})
         ocr_indexes = sorted({ocr_index for _, ocr_index in ambiguous_pairs})
         pdf_details = ", ".join(
-            f"{pdf_texts[index].id}={pdf_texts[index].rotation_deg}°"
+            f"{admitted_pdf_texts[index].id}={admitted_pdf_texts[index].rotation_deg}°"
             for index in pdf_indexes
         )
         ocr_details = ", ".join(
-            f"{ocr_texts[index].id}={ocr_texts[index].rotation_deg}°"
+            f"{admitted_ocr_texts[index].id}={admitted_ocr_texts[index].rotation_deg}°"
             for index in ocr_indexes
         )
         raise ValueError(
@@ -181,15 +204,15 @@ def _combine_pdf_vector_texts(
     for pdf_index, ocr_indexes in pdf_matches.items():
         if not ocr_indexes:
             continue
-        ocr = ocr_texts[ocr_indexes[0]]
-        pdf = pdf_texts[pdf_index]
+        ocr = admitted_ocr_texts[ocr_indexes[0]]
+        pdf = admitted_pdf_texts[pdf_index]
         if not _rotation_equivalent(ocr, pdf):
             raise ValueError(
                 "PDF/OCR same-span rotation conflict: "
                 f"{ocr.id}={ocr.rotation_deg}°, "
                 f"{pdf.id}={pdf.rotation_deg}°"
             )
-    return list(ocr_texts)
+    return admitted_ocr_texts
 
 
 def run(
@@ -213,6 +236,7 @@ def run(
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
     pdf_vector_texts: Optional[List[RawText]] = None,
+    text_conflict_report: Optional[dict] = None,
     source_page_index: int = 0,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
@@ -278,15 +302,17 @@ def run(
         )
         ocr_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
 
-    raw_texts = _combine_pdf_vector_texts(pdf_vector_texts, ocr_texts)
+    raw_texts = _combine_pdf_vector_texts(
+        pdf_vector_texts, ocr_texts, conflict_report=text_conflict_report
+    )
     # Keep OCR as the only decision-grade text source. Embedded PDF text can
     # be invisible or stale relative to the rendered page and must not replace
     # OCR evidence used by existing geometry association gates.
-    decision_texts = ocr_texts
+    decision_texts = raw_texts
 
     raw_lines = raw_geometry.lines
     if merge_lines:
-        raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
+        raw_lines = merge_collinear_lines(raw_lines, blocking_texts=ocr_texts, image_bgr=image)
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:

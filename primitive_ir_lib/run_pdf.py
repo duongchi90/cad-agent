@@ -1932,6 +1932,12 @@ def run_pdf(
                 else None
             )
             vector_kwargs = {}
+            text_conflict_report = {
+                "ocr_text_state": "unverified" if auto_ocr_roi else "disabled",
+                "ocr_pdf_conflict_count": 0,
+                "excluded_ocr_text_span_count": 0,
+                "excluded_pdf_text_span_count": 0,
+            }
             if require_all_vector_witnesses or vector_circle_witnesses or suspect_regions:
                 vector_kwargs = {
                     "pdf_vector_circle_witnesses": vector_circle_witnesses,
@@ -1959,6 +1965,7 @@ def run_pdf(
                         view_candidates_output_path=str(candidates_temp),
                         view_candidates_dpi=dpi,
                         pdf_vector_texts=pdf_vector_texts,
+                        text_conflict_report=text_conflict_report,
                         source_page_index=index - 1,
                         **vector_kwargs,
                     )
@@ -2023,6 +2030,7 @@ def run_pdf(
                     "pdf_vector_text_status": pdf_text_status,
                     "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
                     "excluded_unverified_pdf_vector_text_span_count": len(pdf_vector_texts),
+                    **text_conflict_report,
                     "primitive_count": len(payload["primitives"]),
                     "cross_validation_count": len(payload["cross_validations"]),
                     "calibration_method": payload["calibration"]["method"],

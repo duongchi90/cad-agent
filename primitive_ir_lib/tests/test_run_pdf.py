@@ -9,6 +9,7 @@ from unittest.mock import patch
 import fitz
 import pytest
 
+from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from primitive_ir_lib.run_pdf import _write_pdf_output, run_pdf
 from primitive_ir_lib.text_extraction import RawText
 
@@ -106,38 +107,87 @@ def test_run_pdf_still_emits_ocr_only_text(tmp_path: Path, monkeypatch):
     assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 0
 
 
-def test_run_pdf_rejects_different_ocr_and_pdf_text_at_same_span(tmp_path: Path, monkeypatch):
+def test_run_pdf_excludes_conflicting_ocr_spans_and_reports_partial_text(
+    tmp_path: Path, monkeypatch
+):
     pdf_path = tmp_path / "conflicting-text.pdf"
     output_dir = tmp_path / "output"
     document = fitz.open()
     page = document.new_page(width=240, height=120)
-    page.insert_text((50, 60), "R7.50", fontsize=12)
+    page.draw_line(fitz.Point(10, 80), fitz.Point(150, 80), color=(0, 0, 0), width=1)
     document.save(pdf_path)
     document.close()
-    bbox = (48, 48, 82, 66)
-    pdf_text = RawText("pdf-1", "R7.50", bbox, 0.0, 1.0, "text_pdfvector")
+    conflicts = [
+        (
+            RawText("pdf-title", "motor-mount-bottom", (72, 70, 96, 90), 0.0, 1.0, "text_pdfvector"),
+            RawText("ocr-title", "-mount-bottom", (72, 70, 96, 90), 0.0, 0.9, "text_tesseract"),
+        ),
+        (
+            RawText("pdf-hex", "0x6f736f646f", (10, 10, 70, 25), 0.0, 1.0, "text_pdfvector"),
+            RawText("ocr-hex", "Ox6f736f646F", (10, 10, 70, 25), 0.0, 0.9, "text_tesseract"),
+        ),
+        (
+            RawText("pdf-page", "1 / 1 ", (180, 10, 205, 25), 0.0, 1.0, "text_pdfvector"),
+            RawText("ocr-page", "1/1", (180, 10, 205, 25), 0.0, 0.9, "text_tesseract"),
+        ),
+    ]
+    unrelated_dimension = RawText(
+        "ocr-dimension", "100", (50, 20, 70, 35), 0.0, 1.0,
+        "text_tesseract", parsed_value=100.0, semantic_role="dimension_value",
+    )
+    pdf_texts = [pdf for pdf, _ in conflicts]
+    ocr_texts = [ocr for _, ocr in conflicts] + [unrelated_dimension]
+    raw_lines = RawGeometry(
+        lines=[
+            RawLine("line-left", (10, 80), (70, 80), 1.0, (10, 80, 70, 80)),
+            RawLine("line-right", (90, 80), (150, 80), 1.0, (90, 80, 150, 80)),
+            RawLine("dimension-line", (10, 40), (110, 40), 1.0, (10, 40, 110, 40)),
+        ]
+    )
     monkeypatch.setattr(
         "primitive_ir_lib.run_pdf._page_vector_texts",
-        lambda *args, **kwargs: ([pdf_text], "extracted", 0),
+        lambda *args, **kwargs: (pdf_texts, "extracted", 0),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.detect_text_candidate_rois",
+        lambda image: [(0, 0, 240, 120)],
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_raw_geometry",
+        lambda *args, **kwargs: raw_lines,
+    )
+    text_extractions = [ocr_texts, []]
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_text_tesseract",
+        lambda *args, **kwargs: text_extractions.pop(0),
     )
 
-    with (
-        patch(
-            "primitive_ir_lib.run_image.extract_text_tesseract",
-            return_value=[RawText("ocr-1", "R7,50", bbox, 0.0, 0.9, "text_tesseract")],
-        ),
-        pytest.raises(ValueError, match=r"same-span content conflict.*ocr-1.*pdf-"),
-    ):
-        run_pdf(
-            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
-            auto_ocr_roi=True,
-        )
+    manifest = run_pdf(
+        pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+        auto_ocr_roi=True, merge_lines=True,
+    )
 
-    saved_manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert saved_manifest["status"] == "failed"
-    assert saved_manifest["pages"] == []
-    assert saved_manifest["failed_page_index"] == 0
-    assert not (output_dir / "primitive_ir" / "page_01.json").exists()
+    payload = json.loads(
+        (output_dir / manifest["pages"][0]["primitive_ir"]).read_text(encoding="utf-8")
+    )
+    page_report = manifest["pages"][0]
+    texts = [item for item in payload["primitives"] if item["type"] == "text"]
+    assert [(item["id"], item["text_data"]["content"]) for item in texts] == [
+        ("ocr-dimension", "100")
+    ]
+    assert page_report["ocr_text_state"] == "partial_conflicts_excluded"
+    assert page_report["ocr_pdf_conflict_count"] == 3
+    assert page_report["excluded_ocr_text_span_count"] == 3
+    assert page_report["excluded_pdf_text_span_count"] == 3
+
+    line_ids = {
+        item["id"] for item in payload["primitives"] if item["type"] == "line"
+    }
+    assert {"line-left", "line-right", "dimension-line"} <= line_ids
+    cross_validation_text_ids = {
+        item["text_primitive_id"] for item in payload["cross_validations"]
+    }
+    assert cross_validation_text_ids == {"ocr-dimension"}
 
 
 def test_run_pdf_excludes_unverified_rotated_pdf_text(tmp_path: Path):
@@ -663,7 +713,7 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
                  calibration_status="verified", calibration_source_sha256=None,
-                 pdf_vector_texts=None, source_page_index=0):
+                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0):
         captured_calls.append(dict(
             auto_ocr_roi=auto_ocr_roi, auto_calibrate=auto_calibrate,
             calibration_registry_path=calibration_registry_path,
@@ -729,7 +779,7 @@ def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: 
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
                  calibration_status="verified", calibration_source_sha256=None,
-                 pdf_vector_texts=None, source_page_index=0):
+                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
             "primitives": [], "cross_validations": [],
