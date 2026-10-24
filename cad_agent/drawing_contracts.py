@@ -467,6 +467,11 @@ def _validate_audit(payload: dict[str, Any]) -> None:
             _sha(inventory[key].lower() if isinstance(inventory[key], str) else inventory[key], contract=contract, path=f"model_space_inventory.{key}")
         if inventory["drawing_sha256_before"].lower() != inventory["drawing_sha256_after"].lower():
             _fail(contract, "ModelSpace drawing hash changed during inventory")
+        if any(
+            isinstance(inventory[key], bool) or not isinstance(inventory[key], int)
+            for key in ("dbmod_before", "dbmod_after")
+        ):
+            _fail(contract, "ModelSpace inventory DBMOD values must be integers")
         if inventory["dbmod_before"] != 0 or inventory["dbmod_after"] != 0:
             _fail(contract, "ModelSpace inventory requires DBMOD=0 before and after")
         if isinstance(inventory["process_id"], bool) or not isinstance(inventory["process_id"], int) or inventory["process_id"] <= 0:
