@@ -15,7 +15,10 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import stat
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -134,10 +137,210 @@ def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -
     return max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3])
 
 
+def _pdf_output_error(path: Path, reason: str) -> ValueError:
+    return ValueError(f"Unsafe PDF output {reason}: {path}")
+
+
+def _is_reparse_point(info: os.stat_result) -> bool:
+    reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & reparse_point
+    )
+
+
+def _same_physical_path(left: Path, right: Path) -> bool:
+    try:
+        if os.path.samefile(left, right):
+            return True
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise _pdf_output_error(left, "identity cannot be verified") from exc
+    try:
+        return os.path.normcase(str(left.resolve(strict=False))) == os.path.normcase(
+            str(right.resolve(strict=False))
+        )
+    except (OSError, RuntimeError) as exc:
+        raise _pdf_output_error(left, "identity cannot be resolved") from exc
+
+
+def _validate_pdf_output_directory(output_root: Path, directory: Path) -> None:
+    root = Path(os.path.abspath(output_root))
+    target = Path(os.path.abspath(directory))
+    try:
+        if os.path.normcase(str(root.resolve(strict=False))) != os.path.normcase(str(root)):
+            raise _pdf_output_error(root, "output root has a redirected ancestor")
+    except (OSError, RuntimeError) as exc:
+        raise _pdf_output_error(root, "output root identity cannot be resolved") from exc
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise _pdf_output_error(target, "directory escapes its output root") from exc
+
+    current = root
+    candidates = [current]
+    for part in relative.parts:
+        current = current / part
+        candidates.append(current)
+    for path in candidates:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise _pdf_output_error(path, "directory cannot be inspected") from exc
+        if _is_reparse_point(info):
+            raise _pdf_output_error(path, "directory is redirected")
+        if not stat.S_ISDIR(info.st_mode):
+            raise _pdf_output_error(path, "directory is not a directory")
+
+
+def _validate_pdf_output_path(
+    path: Path,
+    output_root: Path,
+    source_pdf: Path,
+    *,
+    atomic_replace: bool = False,
+) -> None:
+    root = Path(os.path.abspath(output_root))
+    target = Path(os.path.abspath(path))
+    if _same_physical_path(target, source_pdf):
+        raise _pdf_output_error(target, "aliases the source PDF")
+    _validate_pdf_output_directory(root, target.parent)
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _pdf_output_error(target, "file cannot be inspected") from exc
+
+    if _is_reparse_point(info):
+        if atomic_replace:
+            return
+        raise _pdf_output_error(target, "file is redirected")
+    if stat.S_ISREG(info.st_mode):
+        if getattr(info, "st_nlink", 1) > 1 and not atomic_replace:
+            raise _pdf_output_error(target, "file has multiple hard links")
+        return
+    raise _pdf_output_error(target, "destination is not a regular file")
+
+
+def _validate_pdf_output_tree(
+    output_root: Path, source_pdf: Path, manifest_path: Path
+) -> None:
+    root = Path(os.path.abspath(output_root))
+    manifest_identity_path = os.path.normcase(
+        str(Path(os.path.abspath(manifest_path)))
+    )
+    _validate_pdf_output_directory(root, root)
+    if not root.exists():
+        return
+
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise _pdf_output_error(directory, "directory cannot be inspected") from exc
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                raise _pdf_output_error(path, "entry cannot be inspected") from exc
+            is_manifest = os.path.normcase(str(path)) == manifest_identity_path
+            if _same_physical_path(path, source_pdf):
+                raise _pdf_output_error(path, "aliases the source PDF")
+            if _is_reparse_point(info):
+                if is_manifest:
+                    continue
+                raise _pdf_output_error(path, "entry is redirected")
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(path)
+            elif stat.S_ISREG(info.st_mode):
+                if getattr(info, "st_nlink", 1) > 1 and not is_manifest:
+                    raise _pdf_output_error(path, "file has multiple hard links")
+            else:
+                raise _pdf_output_error(path, "entry is not a regular file or directory")
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    try:
+        info = path.stat()
+    except OSError as exc:
+        raise _pdf_output_error(path, "parent directory identity cannot be verified") from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise _pdf_output_error(path, "parent is not a directory")
+    return info.st_dev, info.st_ino
+
+
+def _create_pdf_output_temp(
+    destination: Path, output_root: Path, source_pdf: Path
+) -> tuple[Path, tuple[int, int]]:
+    _validate_pdf_output_path(destination, output_root, source_pdf)
+    _validate_pdf_output_directory(output_root, destination.parent)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _validate_pdf_output_directory(output_root, destination.parent)
+    parent_identity = _directory_identity(destination.parent)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.stem}.",
+        suffix=destination.suffix,
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(name)
+    if _directory_identity(destination.parent) != parent_identity:
+        temporary.unlink(missing_ok=True)
+        raise _pdf_output_error(destination.parent, "parent changed during temporary creation")
+    try:
+        _validate_pdf_output_path(temporary, output_root, source_pdf)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary, parent_identity
+
+
+def _publish_pdf_output_temp(
+    temporary: Path,
+    destination: Path,
+    output_root: Path,
+    source_pdf: Path,
+    parent_identity: tuple[int, int],
+) -> None:
+    _validate_pdf_output_path(destination, output_root, source_pdf)
+    _validate_pdf_output_path(temporary, output_root, source_pdf)
+    if _directory_identity(destination.parent) != parent_identity:
+        raise _pdf_output_error(destination.parent, "parent changed before publication")
+    os.replace(temporary, destination)
+    _validate_pdf_output_path(destination, output_root, source_pdf)
+
+
+def _write_pdf_output(
+    destination: Path,
+    output_root: Path,
+    source_pdf: Path,
+    writer,
+) -> None:
+    temporary, parent_identity = _create_pdf_output_temp(
+        destination, output_root, source_pdf
+    )
+    try:
+        result = writer(temporary)
+        if result is False:
+            raise ValueError(f"PDF artifact writer rejected destination: {destination}")
+        _publish_pdf_output_temp(
+            temporary, destination, output_root, source_pdf, parent_identity
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _materialize_view_children(
     candidates: list[dict],
     rendered_path: Path,
     output_dir: Path,
+    source_pdf: Path,
     page_number: int,
     preset: str,
     merge_lines: bool,
@@ -165,21 +368,32 @@ def _materialize_view_children(
             candidate["child_state"] = "skipped_invalid_bbox"
             continue
         accepted_boxes.append(bbox)
+        _validate_pdf_output_directory(output_dir, child_root)
         child_root.mkdir(parents=True, exist_ok=True)
+        _validate_pdf_output_directory(output_dir, child_root)
         child_image = child_root / f"view_{index:02d}.png"
         child_ir = child_root / f"view_{index:02d}.json"
-        if not cv2.imwrite(str(child_image), image[y0:y1, x0:x1]):
-            raise ValueError(f"Cannot write view child image: {child_image}")
+        _write_pdf_output(
+            child_image,
+            output_dir,
+            source_pdf,
+            lambda path: cv2.imwrite(str(path), image[y0:y1, x0:x1]),
+        )
         child_image_sha256 = hashlib.sha256(child_image.read_bytes()).hexdigest()
-        run(
-            image_path=str(child_image),
-            output_path=str(child_ir),
-            scale_mm_per_px=float(candidate["pixel_to_unit_scale"]),
-            preset=preset,
-            merge_lines=merge_lines,
-            auto_ocr_roi=True,
-            calibration_status="needs_verification",
-            calibration_source_sha256=child_image_sha256,
+        _write_pdf_output(
+            child_ir,
+            output_dir,
+            source_pdf,
+            lambda path: run(
+                image_path=str(child_image),
+                output_path=str(path),
+                scale_mm_per_px=float(candidate["pixel_to_unit_scale"]),
+                preset=preset,
+                merge_lines=merge_lines,
+                auto_ocr_roi=True,
+                calibration_status="needs_verification",
+                calibration_source_sha256=child_image_sha256,
+            ),
         )
         candidate["child_ir"] = str(child_ir.relative_to(output_dir)).replace("\\", "/")
         candidate["child_image"] = str(child_image.relative_to(output_dir)).replace("\\", "/")
@@ -1536,8 +1750,9 @@ def run_pdf(
 
     render_dir = output_dir / "rendered"
     ir_dir = output_dir / "primitive_ir"
-    render_dir.mkdir(parents=True, exist_ok=True)
-    ir_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    _validate_pdf_output_directory(output_dir, output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0
     manifest = {
         "status": "in_progress",
@@ -1548,13 +1763,19 @@ def run_pdf(
         "pdf_vector_text_visibility": "not_assessed",
         "pages": [],
     }
-    manifest_path = output_dir / "manifest.json"
     from cad_agent.manifest import write_manifest
 
+    _validate_pdf_output_path(manifest_path, output_dir, pdf_path, atomic_replace=True)
     write_manifest(manifest_path, manifest)
     document = None
     current_page_index = None
     try:
+        _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
+        _validate_pdf_output_directory(output_dir, render_dir)
+        _validate_pdf_output_directory(output_dir, ir_dir)
+        render_dir.mkdir(parents=True, exist_ok=True)
+        ir_dir.mkdir(parents=True, exist_ok=True)
+        _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
         document = fitz.open(str(pdf_path))
         for index, page in enumerate(document, start=1):
             current_page_index = index - 1
@@ -1563,7 +1784,12 @@ def run_pdf(
             )
             image_path = render_dir / f"page_{index:02d}.png"
             pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-            pixmap.save(str(image_path))
+            _write_pdf_output(
+                image_path,
+                output_dir,
+                pdf_path,
+                lambda path: pixmap.save(str(path)),
+            )
             if auto_ocr_roi:
                 pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
                     page,
@@ -1589,35 +1815,60 @@ def run_pdf(
                     "pdf_vector_circle_suspect_regions": suspect_regions,
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
-            run(
-                image_path=str(image_path),
-                output_path=str(output_path),
-                scale_mm_per_px=scale_mm_per_px,
-                preset=preset,
-                merge_lines=merge_lines,
-                auto_ocr_roi=auto_ocr_roi,
-                auto_calibrate=auto_calibrate,
-                calibration_registry_path=calibration_registry_path,
-                calibration_id=page_calibration_id,
-                view_candidates_output_path=str(view_candidates_path),
-                view_candidates_dpi=dpi,
-                pdf_vector_texts=pdf_vector_texts,
-                source_page_index=index - 1,
-                **vector_kwargs,
-            )
+            def process_page_ir(path: Path) -> None:
+                candidates_temp, candidates_parent_identity = _create_pdf_output_temp(
+                    view_candidates_path, output_dir, pdf_path
+                )
+                try:
+                    run(
+                        image_path=str(image_path),
+                        output_path=str(path),
+                        scale_mm_per_px=scale_mm_per_px,
+                        preset=preset,
+                        merge_lines=merge_lines,
+                        auto_ocr_roi=auto_ocr_roi,
+                        auto_calibrate=auto_calibrate,
+                        calibration_registry_path=calibration_registry_path,
+                        calibration_id=page_calibration_id,
+                        view_candidates_output_path=str(candidates_temp),
+                        view_candidates_dpi=dpi,
+                        pdf_vector_texts=pdf_vector_texts,
+                        source_page_index=index - 1,
+                        **vector_kwargs,
+                    )
+                    _validate_pdf_output_path(
+                        candidates_temp, output_dir, pdf_path
+                    )
+                    _publish_pdf_output_temp(
+                        candidates_temp,
+                        view_candidates_path,
+                        output_dir,
+                        pdf_path,
+                        candidates_parent_identity,
+                    )
+                finally:
+                    candidates_temp.unlink(missing_ok=True)
+
+            _write_pdf_output(output_path, output_dir, pdf_path, process_page_ir)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             scale_label_candidates = json.loads(view_candidates_path.read_text(encoding="utf-8"))
             _materialize_view_children(
                 scale_label_candidates,
                 image_path,
                 output_dir,
+                pdf_path,
                 index,
                 preset,
                 merge_lines,
             )
-            view_candidates_path.write_text(
-                json.dumps(scale_label_candidates, indent=2) + "\n",
-                encoding="utf-8",
+            _write_pdf_output(
+                view_candidates_path,
+                output_dir,
+                pdf_path,
+                lambda path: path.write_text(
+                    json.dumps(scale_label_candidates, indent=2) + "\n",
+                    encoding="utf-8",
+                ),
             )
             manifest["pages"].append(
                 {
@@ -1645,12 +1896,14 @@ def run_pdf(
         manifest["status"] = "failed"
         manifest["failed_page_index"] = current_page_index
         manifest["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        _validate_pdf_output_path(manifest_path, output_dir, pdf_path, atomic_replace=True)
         write_manifest(manifest_path, manifest)
         raise
     finally:
         if document is not None:
             document.close()
     manifest["status"] = "complete"
+    _validate_pdf_output_path(manifest_path, output_dir, pdf_path, atomic_replace=True)
     write_manifest(manifest_path, manifest)
     return manifest
 

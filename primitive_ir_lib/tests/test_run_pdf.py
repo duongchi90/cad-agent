@@ -320,6 +320,125 @@ def test_run_pdf_replaces_manifest_symlink_without_modifying_external_target(
     assert saved["status"] == expected_status
 
 
+def test_run_pdf_rejects_page_ir_symlink_without_modifying_external_target(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    ir_dir = output_dir / "primitive_ir"
+    ir_dir.mkdir(parents=True)
+    (output_dir / "manifest.json").write_text(
+        json.dumps({"status": "complete", "pages": [{"page": 1}]}),
+        encoding="utf-8",
+    )
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external page artifact target must not be overwritten"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+    page_ir_path = ir_dir / "page_01.json"
+    try:
+        page_ir_path.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]),
+        pytest.raises((OSError, ValueError), match="redirected|multiple hard links"),
+    ):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    manifest_path = output_dir / "manifest.json"
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["rendered/page_01.png", "primitive_ir/page_01.view_candidates.json"],
+)
+def test_run_pdf_rejects_redirected_artifact_and_keeps_external_bytes(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    artifact = output_dir / artifact_name
+    artifact.parent.mkdir(parents=True)
+    protected_path = tmp_path / "external.bin"
+    protected_bytes = b"must not be changed through a PDF output artifact"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+    try:
+        artifact.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    with pytest.raises(ValueError, match="redirected"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    manifest_path = output_dir / "manifest.json"
+    assert not manifest_path.exists() or json.loads(
+        manifest_path.read_text(encoding="utf-8")
+    )["status"] != "complete"
+
+
+def test_run_pdf_rejects_hardlinked_page_ir_before_processing(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    ir_dir = output_dir / "primitive_ir"
+    ir_dir.mkdir(parents=True)
+    protected_path = tmp_path / "external.bin"
+    protected_bytes = b"hardlink target must stay unchanged"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+    (ir_dir / "page_01.json").hardlink_to(protected_path)
+
+    with pytest.raises(ValueError, match="multiple hard links"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "failed"
+
+
+def test_run_pdf_rejects_redirected_output_directory(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    external_dir = tmp_path / "external-output"
+    external_dir.mkdir()
+    protected_path = external_dir / "sentinel.bin"
+    protected_bytes = b"output directory must not redirect writes here"
+    protected_path.write_bytes(protected_bytes)
+    output_dir.mkdir()
+    try:
+        (output_dir / "rendered").symlink_to(external_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable on this workstation: {exc}")
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+
+    with pytest.raises(ValueError, match="redirected"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "failed"
+
+
 def _make_blank_pdf(pdf_path: Path) -> None:
     """Fixture tối thiểu — chỉ cần tồn tại trên đĩa, không cần nội dung, vì
     các test dưới đây kiểm tra nhánh validate xảy ra TRƯỚC khi fitz.open()
