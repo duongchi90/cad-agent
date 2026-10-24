@@ -42,6 +42,7 @@ def _write_quarter_arc_pdf(
     leading_tangent_line_length: float | None = None,
     occlude_leading_tangent_line: bool = False,
     occlude_leading_tangent_line_with_cubic_stroke: bool = False,
+    occluding_cubic_line_cap: int = 0,
     arc_width: float = 1.5,
     disconnected: bool = False,
     start_deg: float = 0.0,
@@ -106,7 +107,12 @@ def _write_quarter_arc_pdf(
                 line_end - tangent * (leading_tangent_line_length / 3.0),
                 line_end,
             )
-            cover.finish(color=(1, 1, 1), width=3.0, closePath=False)
+            cover.finish(
+                color=(1, 1, 1),
+                width=3.0,
+                closePath=False,
+                lineCap=occluding_cubic_line_cap,
+            )
             cover.commit()
     shape = page.new_shape()
     shape.draw_bezier(p0, p1, p2, p3)
@@ -565,9 +571,12 @@ def test_independent_pdf_tangent_line_survives_arc_duplicate_suppression(tmp_pat
     )
 
 
-@pytest.mark.parametrize("occluder", ["fill", "cubic_stroke"])
+@pytest.mark.parametrize(
+    ("occluder", "cover_line_cap"),
+    [("fill", 0), ("cubic_stroke", 0), ("cubic_stroke", 1)],
+)
 def test_hidden_pdf_tangent_line_does_not_resurrect_arc_fragment(
-    tmp_path: Path, occluder: str
+    tmp_path: Path, occluder: str, cover_line_cap: int
 ) -> None:
     source_without_line = tmp_path / "arc-without-line.pdf"
     output_without_line = tmp_path / "arc-without-line-result"
@@ -594,7 +603,16 @@ def test_hidden_pdf_tangent_line_does_not_resurrect_arc_fragment(
         leading_tangent_line_length=expected_line_length_px / render_scale,
         occlude_leading_tangent_line=occluder == "fill",
         occlude_leading_tangent_line_with_cubic_stroke=occluder == "cubic_stroke",
+        occluding_cubic_line_cap=cover_line_cap,
     )
+
+    with fitz.open(source_without_line) as control_doc, fitz.open(
+        source_with_hidden_line
+    ) as covered_doc:
+        control_pixels = control_doc[0].get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+        covered_pixels = covered_doc[0].get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+        if cover_line_cap == 1:
+            assert control_pixels.samples == covered_pixels.samples
 
     run_pdf(source_without_line, output_without_line, scale_mm_per_px=1.0, dpi=216)
     run_pdf(source_with_hidden_line, output_with_hidden_line, scale_mm_per_px=1.0, dpi=216)

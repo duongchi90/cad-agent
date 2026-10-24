@@ -2093,12 +2093,22 @@ def _opaque_stroke_fully_covers_line(
     color = drawing.get("color")
     width = drawing.get("width")
     items = drawing.get("items", [])
+    cover_line_cap = drawing.get("lineCap")
+    caps_match = cover_line_cap == source_line_cap
+    butt_source_is_contained = (
+        isinstance(source_line_cap, (tuple, list))
+        and len(source_line_cap) == 3
+        and all(cap == 0 for cap in source_line_cap)
+        and isinstance(cover_line_cap, (tuple, list))
+        and len(cover_line_cap) == 3
+        and all(cap in (0, 1, 2) for cap in cover_line_cap)
+    )
     if (
         drawing.get("type") != "s"
         or drawing.get("fill") is not None
         or drawing.get("stroke_opacity") != 1.0
         or drawing.get("dashes") != "[] 0"
-        or drawing.get("lineCap") != source_line_cap
+        or not (caps_match or butt_source_is_contained)
         or not isinstance(color, (tuple, list))
         or len(color) != 3
         or any(
