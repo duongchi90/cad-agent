@@ -36,17 +36,22 @@ def _write_quarter_arc_pdf(
     later_image: bool = False,
     later_frame: bool = False,
     later_stroke: bool = False,
+    later_curved_frame: bool = False,
     later_duplicate: bool = False,
+    later_curved_stroke_intersample: bool = False,
+    arc_width: float = 1.5,
     disconnected: bool = False,
     start_deg: float = 0.0,
     sweep_deg: float = 90.0,
     page_rotation: int = 0,
+    page_size_override: float | None = None,
+    center_override: tuple[float, float] | None = None,
 ) -> None:
     document = fitz.open()
     y_radius = ellipse_y_radius or radius
-    page_size = max(200.0, 2.0 * max(radius, y_radius) + 20.0)
+    page_size = page_size_override or max(200.0, 2.0 * max(radius, y_radius) + 20.0)
     page = document.new_page(width=page_size, height=page_size)
-    center = fitz.Point(page_size / 2.0, page_size / 2.0)
+    center = fitz.Point(*(center_override or (page_size / 2.0, page_size / 2.0)))
     start = math.radians(start_deg)
     end = math.radians(start_deg + sweep_deg)
     handle = (4.0 / 3.0) * math.tan(abs(end - start) / 4.0)
@@ -63,7 +68,7 @@ def _write_quarter_arc_pdf(
         gap_start = fitz.Point(center.x + radius * math.cos(math.radians(100)), center.y - radius * math.sin(math.radians(100)))
         gap_end = fitz.Point(center.x + radius * math.cos(math.radians(115)), center.y - radius * math.sin(math.radians(115)))
         shape.draw_bezier(gap_start, gap_start, gap_end, gap_end)
-    shape.finish(color=(0, 0, 0), width=1.5, closePath=close_path)
+    shape.finish(color=(0, 0, 0), width=arc_width, closePath=close_path)
     shape.commit()
     if later_fill:
         page.draw_rect(fitz.Rect(139, 92, 151, 108), color=None, fill=(1, 1, 1), overlay=True)
@@ -99,11 +104,50 @@ def _write_quarter_arc_pdf(
     if later_stroke:
         # Cross the quarter-arc near its midpoint.
         page.draw_line(fitz.Point(132, 60), fitz.Point(132, 76), color=(0, 0, 0), width=1.0, overlay=True)
+    if later_curved_frame:
+        page.draw_bezier(
+            fitz.Point(90, 80), fitz.Point(90, 120),
+            fitz.Point(160, 120), fitz.Point(160, 80),
+            color=(0, 0, 0), width=1.0, overlay=True,
+        )
     if later_duplicate:
         duplicate = page.new_shape()
         duplicate.draw_bezier(p0, p1, p2, p3)
         duplicate.finish(color=(0, 0, 0), width=1.5)
         duplicate.commit()
+    if later_curved_stroke_intersample:
+        midpoint = fitz.Point(
+            0.125 * p0.x + 0.375 * p1.x + 0.375 * p2.x + 0.125 * p3.x,
+            0.125 * p0.y + 0.375 * p1.y + 0.375 * p2.y + 0.125 * p3.y,
+        )
+        tangent = fitz.Point(
+            0.75 * (p1.x - p0.x) + 1.5 * (p2.x - p1.x) + 0.75 * (p3.x - p2.x),
+            0.75 * (p1.y - p0.y) + 1.5 * (p2.y - p1.y) + 0.75 * (p3.y - p2.y),
+        )
+        tangent /= math.hypot(tangent.x, tangent.y)
+        normal = fitz.Point(midpoint.x - center.x, midpoint.y - center.y)
+        normal /= math.hypot(normal.x, normal.y)
+        crossing_t = 0.53125
+
+        def later_point(t: float) -> fitz.Point:
+            offset = t - crossing_t
+            return fitz.Point(
+                midpoint.x + tangent.x * 40.0 * offset + normal.x * 1500.0 * offset**2,
+                midpoint.y + tangent.y * 40.0 * offset + normal.y * 1500.0 * offset**2,
+            )
+
+        q0, q3 = later_point(0.0), later_point(1.0)
+        derivative0 = fitz.Point(
+            tangent.x * 40.0 - normal.x * 3000.0 * crossing_t,
+            tangent.y * 40.0 - normal.y * 3000.0 * crossing_t,
+        )
+        derivative1 = fitz.Point(
+            tangent.x * 40.0 + normal.x * 3000.0 * (1.0 - crossing_t),
+            tangent.y * 40.0 + normal.y * 3000.0 * (1.0 - crossing_t),
+        )
+        q1 = q0 + derivative0 / 3.0
+        q2 = q3 - derivative1 / 3.0
+        page.draw_bezier(q0, q1, q2, q3, color=(1, 1, 1), width=1.0, overlay=True)
     if page_rotation:
         page.set_rotation(page_rotation)
     document.save(path)
@@ -214,6 +258,20 @@ def test_later_stroke_bbox_without_path_overlap_does_not_hide_arc(tmp_path: Path
     assert len(arcs) == 1
 
 
+def test_later_curved_stroke_bbox_without_path_overlap_preserves_arc(tmp_path: Path) -> None:
+    source = tmp_path / "later-curved-frame.pdf"
+    output = tmp_path / "later-curved-frame-result"
+    _write_quarter_arc_pdf(source, later_curved_frame=True)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    arcs = [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+    assert len(arcs) == 1
+
+
 def test_later_opaque_fill_between_arc_samples_blocks_admission(tmp_path: Path) -> None:
     source = tmp_path / "intersample-occlusion.pdf"
     output = tmp_path / "intersample-occlusion-result"
@@ -258,6 +316,25 @@ def test_later_stroke_retracing_arc_still_blocks_admission(tmp_path: Path) -> No
     source = tmp_path / "later-duplicate.pdf"
     output = tmp_path / "later-duplicate-result"
     _write_quarter_arc_pdf(source, later_duplicate=True)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["type"] == "arc" for primitive in payload["primitives"])
+
+
+def test_later_curved_stroke_between_samples_blocks_arc_admission(tmp_path: Path) -> None:
+    source = tmp_path / "later-curved-crossing-stroke.pdf"
+    output = tmp_path / "later-curved-crossing-stroke-result"
+    _write_quarter_arc_pdf(
+        source,
+        later_curved_stroke_intersample=True,
+        arc_width=1.0,
+        page_size_override=520.0,
+        center_override=(100.0, 100.0),
+    )
 
     run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
 

@@ -1644,18 +1644,24 @@ def _page_vector_arcs(
             ))
         return bounds
 
-    def stroke_segments(drawing: dict) -> Optional[list[tuple[tuple[float, float], tuple[float, float]]]]:
-        """Flatten known stroked PDF paths so their paint bounds are not mistaken for the path."""
-        segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    def stroke_segments(
+        drawing: dict,
+    ) -> Optional[list[tuple[tuple[float, float], tuple[float, float], float]]]:
+        """Flatten known stroked paths with a conservative curve error bound."""
+        segments: list[tuple[tuple[float, float], tuple[float, float], float]] = []
         for item in drawing.get("items", []):
             kind = item[0]
             if kind == "l":
                 points = [(float(point.x), float(point.y)) for point in item[1:3]]
+                segments.extend((start, end, 0.0) for start, end in zip(points, points[1:]))
             elif kind == "c":
                 try:
-                    points = cubic_points(item, steps=16)
+                    cubic_segments = flatten_cubic(item)
                 except (IndexError, TypeError, ValueError, OverflowError):
                     return None
+                if cubic_segments is None:
+                    return None
+                segments.extend(cubic_segments)
             elif kind == "re":
                 rect = fitz.Rect(item[1])
                 points = [
@@ -1663,6 +1669,7 @@ def _page_vector_arcs(
                     (rect.x1, rect.y1), (rect.x0, rect.y1),
                     (rect.x0, rect.y0),
                 ]
+                segments.extend((start, end, 0.0) for start, end in zip(points, points[1:]))
             elif kind == "qu":
                 quad = item[1]
                 points = [
@@ -1670,9 +1677,9 @@ def _page_vector_arcs(
                     (quad.lr.x, quad.lr.y), (quad.ll.x, quad.ll.y),
                     (quad.ul.x, quad.ul.y),
                 ]
+                segments.extend((start, end, 0.0) for start, end in zip(points, points[1:]))
             else:
                 return None
-            segments.extend(zip(points, points[1:]))
         return segments
 
     def intersection_point(
@@ -1727,8 +1734,69 @@ def _page_vector_arcs(
             candidates.append((math.dist(point, other), other, point))
         return min(candidates, key=lambda item: item[0])
 
+    def flatten_cubic(
+        item: tuple,
+        *,
+        max_flatness: float = 0.025,
+        max_depth: int = 12,
+    ) -> Optional[list[tuple[tuple[float, float], tuple[float, float], float]]]:
+        """Flatten a cubic while retaining a control-hull distance bound."""
+        try:
+            controls = tuple((float(point.x), float(point.y)) for point in item[1:5])
+        except (IndexError, TypeError, ValueError, OverflowError):
+            return None
+        if len(controls) != 4 or not all(
+            math.isfinite(value) for point in controls for value in point
+        ):
+            return None
+        result: list[tuple[tuple[float, float], tuple[float, float], float]] = []
+
+        def midpoint(
+            first: tuple[float, float], second: tuple[float, float]
+        ) -> tuple[float, float]:
+            return ((first[0] + second[0]) / 2.0, (first[1] + second[1]) / 2.0)
+
+        def visit(curve: tuple[tuple[float, float], ...], depth: int) -> bool:
+            start, control1, control2, end = curve
+            flatness = max(
+                math.dist(control1, point_segment_closest(control1, start, end)),
+                math.dist(control2, point_segment_closest(control2, start, end)),
+            )
+            if not math.isfinite(flatness):
+                return False
+            if flatness <= max_flatness:
+                result.append((start, end, flatness))
+                return True
+            if depth >= max_depth:
+                return False
+            first = midpoint(start, control1)
+            middle = midpoint(control1, control2)
+            last = midpoint(control2, end)
+            left_middle = midpoint(first, middle)
+            right_middle = midpoint(middle, last)
+            split = midpoint(left_middle, right_middle)
+            return visit((start, first, left_middle, split), depth + 1) and visit(
+                (split, right_middle, last, end), depth + 1
+            )
+
+        if not visit(controls, 0):
+            return None
+        return result
+
+    def flatten_arc_items(
+        items: list[tuple],
+    ) -> Optional[list[tuple[tuple[float, float], tuple[float, float], float]]]:
+        segments = []
+        for item in items:
+            flattened = flatten_cubic(item)
+            if flattened is None:
+                return None
+            segments.extend(flattened)
+        return segments
+
     def later_stroke_crosses_arc(
         drawing: dict,
+        arc_segments: list[tuple[tuple[float, float], tuple[float, float], float]],
         arc_samples: list[tuple[float, float]],
         arc_width_pt: float,
     ) -> Optional[bool]:
@@ -1743,16 +1811,16 @@ def _page_vector_arcs(
             return None
         overlap_tolerance = max(0.0, arc_width_pt) / 2.0 + float(stroke_width) / 2.0 + 0.25
         endpoint_join_tolerance = min(0.25, overlap_tolerance * 0.15)
-        for arc_index, (arc_start, arc_end) in enumerate(zip(arc_samples, arc_samples[1:])):
+        for arc_start, arc_end, arc_error in arc_segments:
             arc_dx, arc_dy = arc_end[0] - arc_start[0], arc_end[1] - arc_start[1]
             arc_length = math.hypot(arc_dx, arc_dy)
             if arc_length <= 1e-12:
                 continue
-            for line_start, line_end in segments:
+            for line_start, line_end, line_error in segments:
                 distance, arc_point, later_point = segment_closest_points(
                     arc_start, arc_end, line_start, line_end
                 )
-                if distance > overlap_tolerance:
+                if distance > overlap_tolerance + arc_error + line_error:
                     continue
 
                 line_dx, line_dy = line_end[0] - line_start[0], line_end[1] - line_start[1]
@@ -1826,6 +1894,9 @@ def _page_vector_arcs(
             continue
         if any(not math.isfinite(value) for point in samples for value in point):
             continue
+        arc_segments = flatten_arc_items(items)
+        if arc_segments is None:
+            continue
 
         x0, y0 = samples[0]
         x1, y1 = samples[-1]
@@ -1895,7 +1966,7 @@ def _page_vector_arcs(
                         later_paint = True
                     else:
                         crosses_arc = later_stroke_crosses_arc(
-                            later_drawing, samples, float(width_pt)
+                            later_drawing, arc_segments, samples, float(width_pt)
                         )
                         later_paint = crosses_arc is not False
                 else:
