@@ -597,6 +597,7 @@ def _validate_layer_standard_check(payload: dict[str, Any]) -> None:
     contract = "layer_standard_check"
     required = {
         "schema_version", "status", "classification_scope", "engineering_compliance",
+        "audit_origin_authentication", "layer_inventory_completeness", "classification_basis",
         "audit_full_path", "audit_sha256", "drawing_full_path", "drawing_sha256",
         "rules", "layer_count", "standard_count", "nonstandard_count",
         "standard_percentage", "layers",
@@ -608,6 +609,12 @@ def _validate_layer_standard_check(payload: dict[str, Any]) -> None:
         _fail(contract, "status is invalid")
     if payload["classification_scope"] != "LAYER_NAME_RULES_ONLY":
         _fail(contract, "classification_scope is invalid")
+    if payload["audit_origin_authentication"] != "NOT_AUTHENTICATED":
+        _fail(contract, "audit_origin_authentication must remain NOT_AUTHENTICATED")
+    if payload["layer_inventory_completeness"] != "NOT_VERIFIED":
+        _fail(contract, "layer_inventory_completeness must remain NOT_VERIFIED")
+    if payload["classification_basis"] != "CALLER_SUPPLIED_AUDIT_LAYER_NAMES":
+        _fail(contract, "classification_basis must identify caller-supplied audit layer names")
     if payload["engineering_compliance"] != "NOT_EVALUATED":
         _fail(contract, "engineering_compliance must remain NOT_EVALUATED")
     for field in ("audit_full_path", "drawing_full_path"):

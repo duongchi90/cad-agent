@@ -110,6 +110,9 @@ def test_layer_standard_check_classifies_every_audited_layer_by_literal_rules(
         "schema_version": "layer-standard-check-1.0",
         "status": "CLASSIFIED",
         "classification_scope": "LAYER_NAME_RULES_ONLY",
+        "audit_origin_authentication": "NOT_AUTHENTICATED",
+        "layer_inventory_completeness": "NOT_VERIFIED",
+        "classification_basis": "CALLER_SUPPLIED_AUDIT_LAYER_NAMES",
         "engineering_compliance": "NOT_EVALUATED",
         "audit_full_path": str(audit_path.resolve()),
         "audit_sha256": sha256_file(audit_path),
@@ -141,6 +144,30 @@ def test_layer_standard_check_classifies_every_audited_layer_by_literal_rules(
             {"name": "MISC", "classification": "NONSTANDARD", "matching_rules": []},
         ],
     }
+
+
+def test_layer_standard_check_does_not_authenticate_pre_submission_audit_edits(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    # This schema-valid list may have been shortened before classification.
+    audit["layers"] = [{"name": "A-WALL", "linetype": "Continuous", "plottable": True}]
+    write_manifest(audit_path, audit)
+
+    result = _layer_classifier()(
+        audit_path,
+        {"allowed_exact_names": ["A-WALL"], "allowed_prefixes": [], "case_sensitive": True},
+    )
+
+    assert result["layer_count"] == 1
+    assert result["audit_origin_authentication"] == "NOT_AUTHENTICATED"
+    assert result["layer_inventory_completeness"] == "NOT_VERIFIED"
+    assert result["classification_basis"] == "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"
 
 
 def test_layer_standard_check_does_not_trim_or_ignore_case_when_not_requested(
@@ -291,6 +318,9 @@ def test_layer_standard_check_cli_writes_valid_read_only_result(tmp_path: Path) 
 
     result = read_contract(output, contract="layer_standard_check")
     assert result["status"] == "CLASSIFIED"
+    assert result["audit_origin_authentication"] == "NOT_AUTHENTICATED"
+    assert result["layer_inventory_completeness"] == "NOT_VERIFIED"
+    assert result["classification_basis"] == "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"
     assert result["engineering_compliance"] == "NOT_EVALUATED"
     assert result["standard_count"] == 1
     assert result["nonstandard_count"] == 1

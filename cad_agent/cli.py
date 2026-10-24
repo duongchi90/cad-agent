@@ -1123,7 +1123,8 @@ def build_parser() -> argparse.ArgumentParser:
     drawing_setup_verify.add_argument("--approval-reference", required=True)
     drawing_setup_verify.add_argument("--output", type=Path, required=True)
     layer_standard_check = subcommands.add_parser(
-        "layer-standard-check", help="Classify audited layers using explicit literal rules"
+        "layer-standard-check",
+        help="Classify caller-supplied audit layer names; audit origin is not authenticated",
     )
     layer_standard_check.add_argument("--audit", type=Path, required=True)
     layer_standard_check.add_argument("--rules", type=Path, required=True)

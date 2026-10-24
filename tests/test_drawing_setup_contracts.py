@@ -532,3 +532,25 @@ def test_layer_standard_contract_recomputes_rule_witnesses(
 
     with pytest.raises(DrawingContractError, match="classification.*rules"):
         read_contract(path, contract="layer_standard_check")
+
+
+@pytest.mark.parametrize(
+    ("field", "claim"),
+    [
+        ("audit_origin_authentication", "AUTHENTICATED"),
+        ("layer_inventory_completeness", "VERIFIED"),
+        ("classification_basis", "LIVE_DWG_LAYER_TABLE"),
+    ],
+)
+def test_layer_standard_contract_rejects_unsupported_provenance_claims(
+    tmp_path: Path, field: str, claim: str
+) -> None:
+    payload = json.loads(
+        (EXAMPLES / "layer-standard-check.json").read_text(encoding="utf-8")
+    )
+    payload[field] = claim
+    path = tmp_path / "unsupported-provenance-claim.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="authentication|completeness|basis"):
+        read_contract(path, contract="layer_standard_check")
