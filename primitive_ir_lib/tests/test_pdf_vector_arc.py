@@ -6,6 +6,7 @@ import json
 import hashlib
 import copy
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +32,9 @@ def _write_quarter_arc_pdf(
     close_path: bool = False,
     later_fill: bool = False,
     later_image: bool = False,
+    later_frame: bool = False,
+    later_stroke: bool = False,
+    later_duplicate: bool = False,
     disconnected: bool = False,
     start_deg: float = 0.0,
     sweep_deg: float = 90.0,
@@ -65,6 +69,18 @@ def _write_quarter_arc_pdf(
         cv2.imwrite(str(image_path), np.full((8, 8, 3), 255, dtype=np.uint8))
         page.insert_image(fitz.Rect(141, 96, 149, 104), filename=str(image_path), overlay=True)
         image_path.unlink()
+    if later_frame:
+        # Its bounding box contains the candidate arc, while its actual stroke
+        # remains well outside the arc's path.
+        page.draw_rect(fitz.Rect(10, 10, 190, 190), color=(0, 0, 0), width=1.0, overlay=True)
+    if later_stroke:
+        # Cross the quarter-arc near its midpoint.
+        page.draw_line(fitz.Point(132, 60), fitz.Point(132, 76), color=(0, 0, 0), width=1.0, overlay=True)
+    if later_duplicate:
+        duplicate = page.new_shape()
+        duplicate.draw_bezier(p0, p1, p2, p3)
+        duplicate.finish(color=(0, 0, 0), width=1.5)
+        duplicate.commit()
     if page_rotation:
         page.set_rotation(page_rotation)
     document.save(path)
@@ -122,6 +138,46 @@ def test_unsupported_or_ambiguous_vector_paths_do_not_emit_arc(tmp_path: Path, o
     source = tmp_path / "negative.pdf"
     output = tmp_path / "negative-result"
     _write_quarter_arc_pdf(source, **options)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["type"] == "arc" for primitive in payload["primitives"])
+
+
+def test_later_stroke_bbox_without_path_overlap_does_not_hide_arc(tmp_path: Path) -> None:
+    source = tmp_path / "later-frame.pdf"
+    output = tmp_path / "later-frame-result"
+    _write_quarter_arc_pdf(source, later_frame=True)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    arcs = [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+    assert len(arcs) == 1
+
+
+def test_later_stroke_crossing_arc_still_blocks_admission(tmp_path: Path) -> None:
+    source = tmp_path / "later-crossing-stroke.pdf"
+    output = tmp_path / "later-crossing-stroke-result"
+    _write_quarter_arc_pdf(source, later_stroke=True)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["type"] == "arc" for primitive in payload["primitives"])
+
+
+def test_later_stroke_retracing_arc_still_blocks_admission(tmp_path: Path) -> None:
+    source = tmp_path / "later-duplicate.pdf"
+    output = tmp_path / "later-duplicate-result"
+    _write_quarter_arc_pdf(source, later_duplicate=True)
 
     run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
 
@@ -215,3 +271,41 @@ def test_only_short_line_fragments_on_the_arc_locus_are_suppressed() -> None:
 
     assert _line_is_explained_by_pdf_arc(duplicate_fragment, arc)
     assert not _line_is_explained_by_pdf_arc(crossing_line, arc)
+
+
+@pytest.mark.real_data
+def test_b041_preserves_three_source_supported_corner_arcs(tmp_path: Path) -> None:
+    pdf_value = os.environ.get("CAD_AGENT_B041_CIRCLE_PDF")
+    if not pdf_value:
+        pytest.skip("set CAD_AGENT_B041_CIRCLE_PDF to the approved private B041 PDF")
+    source = Path(pdf_value)
+    assert source.is_file(), "CAD_AGENT_B041_CIRCLE_PDF must point to the approved PDF"
+    source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert source_sha256 == "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+
+    output = tmp_path / "b041-vector-arc-result"
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    arcs = [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+
+    assert len(arcs) == 3
+    assert all(arc["source"] == "geometry_pdfvector" for arc in arcs)
+    assert all(arc["trace"]["source_pdf_sha256"] == source_sha256 for arc in arcs)
+    assert all(arc["trace"]["source_page_index"] == 0 for arc in arcs)
+    assert all(arc["geometry"]["radius"] == pytest.approx(2.79, abs=0.02) for arc in arcs)
+    assert all(
+        (arc["geometry"]["end_angle_deg"] - arc["geometry"]["start_angle_deg"]) % 360.0
+        == pytest.approx(90.0, abs=0.02)
+        for arc in arcs
+    )
+    assert validate_document(payload) == []
+
+    primitive_doc = load_primitive_ir_document(
+        str(output / "primitive_ir" / "page_01.json")
+    )
+    build = build_dxf(primitive_doc, str(tmp_path / "b041-vector-arcs.dxf"))
+    review = review_dxf(build, strict_primitive_inventory=True)
+    assert review.passed is True
+    assert len(build.handle_by_primitive_id) == len(payload["primitives"])

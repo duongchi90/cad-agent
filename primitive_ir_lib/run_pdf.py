@@ -1523,6 +1523,11 @@ def _page_vector_arcs(
     height, width = image.shape
     drawings = page.get_drawings(extended=True)
     bboxlog = page.get_bboxlog()
+    drawing_by_seqno = {
+        drawing.get("seqno"): drawing
+        for drawing in drawings
+        if isinstance(drawing.get("seqno"), int)
+    }
     transform = page.rotation_matrix
     transform_values = (
         transform.a * pixel_scale,
@@ -1547,6 +1552,140 @@ def _page_vector_arcs(
                 u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
             ))
         return points
+
+    def stroke_segments(drawing: dict) -> Optional[list[tuple[tuple[float, float], tuple[float, float]]]]:
+        """Flatten known stroked PDF paths so their paint bounds are not mistaken for the path."""
+        segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        for item in drawing.get("items", []):
+            kind = item[0]
+            if kind == "l":
+                points = [(float(point.x), float(point.y)) for point in item[1:3]]
+            elif kind == "c":
+                try:
+                    points = cubic_points(item, steps=16)
+                except (IndexError, TypeError, ValueError, OverflowError):
+                    return None
+            elif kind == "re":
+                rect = fitz.Rect(item[1])
+                points = [
+                    (rect.x0, rect.y0), (rect.x1, rect.y0),
+                    (rect.x1, rect.y1), (rect.x0, rect.y1),
+                    (rect.x0, rect.y0),
+                ]
+            elif kind == "qu":
+                quad = item[1]
+                points = [
+                    (quad.ul.x, quad.ul.y), (quad.ur.x, quad.ur.y),
+                    (quad.lr.x, quad.lr.y), (quad.ll.x, quad.ll.y),
+                    (quad.ul.x, quad.ul.y),
+                ]
+            else:
+                return None
+            segments.extend(zip(points, points[1:]))
+        return segments
+
+    def intersection_point(
+        first_start: tuple[float, float],
+        first_end: tuple[float, float],
+        second_start: tuple[float, float],
+        second_end: tuple[float, float],
+    ) -> Optional[tuple[float, float]]:
+        ax, ay = first_start
+        bx, by = first_end
+        cx, cy = second_start
+        dx, dy = second_end
+        rx, ry = bx - ax, by - ay
+        sx, sy = dx - cx, dy - cy
+        denominator = rx * sy - ry * sx
+        qpx, qpy = cx - ax, cy - ay
+        if abs(denominator) <= 1e-10:
+            return None
+        first_t = (qpx * sy - qpy * sx) / denominator
+        second_t = (qpx * ry - qpy * rx) / denominator
+        if -1e-9 <= first_t <= 1.0 + 1e-9 and -1e-9 <= second_t <= 1.0 + 1e-9:
+            return (ax + first_t * rx, ay + first_t * ry)
+        return None
+
+    def point_segment_closest(
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> tuple[float, float]:
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length_squared = dx * dx + dy * dy
+        if length_squared <= 1e-18:
+            return start
+        fraction = max(0.0, min(1.0, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared))
+        return (start[0] + fraction * dx, start[1] + fraction * dy)
+
+    def segment_closest_points(
+        first_start: tuple[float, float],
+        first_end: tuple[float, float],
+        second_start: tuple[float, float],
+        second_end: tuple[float, float],
+    ) -> tuple[float, tuple[float, float], tuple[float, float]]:
+        intersection = intersection_point(first_start, first_end, second_start, second_end)
+        if intersection is not None:
+            return 0.0, intersection, intersection
+        candidates = []
+        for point in (first_start, first_end):
+            other = point_segment_closest(point, second_start, second_end)
+            candidates.append((math.dist(point, other), point, other))
+        for point in (second_start, second_end):
+            other = point_segment_closest(point, first_start, first_end)
+            candidates.append((math.dist(point, other), other, point))
+        return min(candidates, key=lambda item: item[0])
+
+    def later_stroke_crosses_arc(
+        drawing: dict,
+        arc_samples: list[tuple[float, float]],
+        arc_width_pt: float,
+    ) -> Optional[bool]:
+        segments = stroke_segments(drawing)
+        stroke_width = drawing.get("width")
+        if (
+            segments is None
+            or not isinstance(stroke_width, (int, float))
+            or not math.isfinite(float(stroke_width))
+            or stroke_width < 0
+        ):
+            return None
+        overlap_tolerance = max(0.0, arc_width_pt) / 2.0 + float(stroke_width) / 2.0 + 0.25
+        endpoint_join_tolerance = min(0.25, overlap_tolerance * 0.15)
+        for arc_index, (arc_start, arc_end) in enumerate(zip(arc_samples, arc_samples[1:])):
+            arc_dx, arc_dy = arc_end[0] - arc_start[0], arc_end[1] - arc_start[1]
+            arc_length = math.hypot(arc_dx, arc_dy)
+            if arc_length <= 1e-12:
+                continue
+            for line_start, line_end in segments:
+                distance, arc_point, later_point = segment_closest_points(
+                    arc_start, arc_end, line_start, line_end
+                )
+                if distance > overlap_tolerance:
+                    continue
+
+                line_dx, line_dy = line_end[0] - line_start[0], line_end[1] - line_start[1]
+                line_length = math.hypot(line_dx, line_dy)
+                tangent_joins: list[tuple[float, float]] = []
+                if line_length > 1e-12:
+                    for endpoint, tangent in (
+                        (arc_samples[0], (arc_samples[1][0] - arc_samples[0][0], arc_samples[1][1] - arc_samples[0][1])),
+                        (arc_samples[-1], (arc_samples[-1][0] - arc_samples[-2][0], arc_samples[-1][1] - arc_samples[-2][1])),
+                    ):
+                        tangent_length = math.hypot(*tangent)
+                        shares_endpoint = min(math.dist(endpoint, line_start), math.dist(endpoint, line_end)) <= endpoint_join_tolerance
+                        tangent_aligned = tangent_length > 1e-12 and abs(
+                            (tangent[0] * line_dx + tangent[1] * line_dy) / (tangent_length * line_length)
+                        ) >= 0.98
+                        if shares_endpoint and tangent_aligned:
+                            tangent_joins.append(endpoint)
+                if any(math.dist(later_point, endpoint) <= endpoint_join_tolerance for endpoint in tangent_joins):
+                    # Allow only the paint overlap at a proven tangent endpoint
+                    # join. Any later stroke reaching the arc interior still
+                    # fails closed.
+                    continue
+                return True
+        return False
 
     for index, drawing in enumerate(drawings):
         items = drawing.get("items", [])
@@ -1636,7 +1775,7 @@ def _page_vector_arcs(
         if not current_matches_source:
             continue
         later_paint = False
-        for record in bboxlog[seqno + 1 :]:
+        for later_seqno, record in enumerate(bboxlog[seqno + 1 :], start=seqno + 1):
             if len(record) != 2:
                 later_paint = True
                 break
@@ -1650,8 +1789,21 @@ def _page_vector_arcs(
                 and paint_rect.y0 - paint_margin <= y <= paint_rect.y1 + paint_margin
                 for x, y in samples
             ):
-                later_paint = True
-                break
+                if record[0] == "stroke-path":
+                    later_drawing = drawing_by_seqno.get(later_seqno)
+                    if later_drawing is None:
+                        later_paint = True
+                    else:
+                        crosses_arc = later_stroke_crosses_arc(
+                            later_drawing, samples, float(width_pt)
+                        )
+                        later_paint = crosses_arc is not False
+                else:
+                    # Filled shapes, text, images, and unknown paint remain
+                    # conservative: their paint bounds may hide the source arc.
+                    later_paint = True
+                if later_paint:
+                    break
         if prior_group or clip_unresolved or later_paint:
             continue
 
