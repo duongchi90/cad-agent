@@ -2082,6 +2082,89 @@ def _page_vector_arcs(
     return results
 
 
+def _opaque_stroke_fully_covers_line(
+    drawing: dict,
+    line_start: fitz.Point,
+    line_end: fitz.Point,
+    source_width_pt: float,
+    source_line_cap: tuple[int, int, int],
+) -> bool:
+    """Prove a later opaque background stroke covers one complete line witness."""
+    color = drawing.get("color")
+    width = drawing.get("width")
+    items = drawing.get("items", [])
+    if (
+        drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("stroke_opacity") != 1.0
+        or drawing.get("dashes") != "[] 0"
+        or drawing.get("lineCap") != source_line_cap
+        or not isinstance(color, (tuple, list))
+        or len(color) != 3
+        or any(
+            not isinstance(channel, (int, float))
+            or not math.isfinite(float(channel))
+            or float(channel) < 0.95
+            for channel in color
+        )
+        or not isinstance(width, (int, float))
+        or not math.isfinite(float(width))
+        or not math.isfinite(source_width_pt)
+        or width <= source_width_pt
+    ):
+        return False
+
+    line_dx = line_end.x - line_start.x
+    line_dy = line_end.y - line_start.y
+    line_length = math.hypot(line_dx, line_dy)
+    if not math.isfinite(line_length) or line_length <= 1e-9:
+        return False
+    direction = (line_dx / line_length, line_dy / line_length)
+    cover_radius = (float(width) - source_width_pt) / 2.0
+    epsilon = 1e-7
+
+    # A line or one cubic is sufficient when its entire control polygon stays
+    # within the cover radius of the witness and advances monotonically from
+    # one endpoint to the other. The cubic's convex hull then proves continuous
+    # coverage; a broad bbox alone is never enough.
+    for item in items:
+        if not isinstance(item, (tuple, list)) or not item:
+            continue
+        if item[0] == "l" and len(item) == 3:
+            controls = item[1:3]
+        elif item[0] == "c" and len(item) == 5:
+            controls = item[1:5]
+        else:
+            continue
+        try:
+            points = [(float(point.x), float(point.y)) for point in controls]
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            continue
+        if not all(math.isfinite(value) for point in points for value in point):
+            continue
+        projections = []
+        perpendicular = []
+        for x, y in points:
+            relative_x, relative_y = x - line_start.x, y - line_start.y
+            projections.append(relative_x * direction[0] + relative_y * direction[1])
+            perpendicular.append(abs(relative_x * direction[1] - relative_y * direction[0]))
+        if any(distance > cover_radius + epsilon for distance in perpendicular):
+            continue
+        increasing = all(
+            later >= earlier - epsilon
+            for earlier, later in zip(projections, projections[1:])
+        )
+        decreasing = all(
+            later <= earlier + epsilon
+            for earlier, later in zip(projections, projections[1:])
+        )
+        if (increasing or decreasing) and min(projections[0], projections[-1]) <= epsilon and max(
+            projections[0], projections[-1]
+        ) >= line_length - epsilon:
+            return True
+    return False
+
+
 def _page_vector_line_witnesses(
     page,
     pixel_scale: float,
@@ -2098,8 +2181,14 @@ def _page_vector_line_witnesses(
     transform = page.rotation_matrix
     origin_x, origin_y = pixmap_origin
     bboxlog = page.get_bboxlog()
+    drawings = page.get_drawings(extended=True)
+    drawing_by_seqno = {
+        drawing.get("seqno"): drawing
+        for drawing in drawings
+        if isinstance(drawing.get("seqno"), int)
+    }
     results: list[RawLine] = []
-    for drawing in page.get_drawings(extended=True):
+    for drawing in drawings:
         color = drawing.get("color")
         width_pt = drawing.get("width")
         seqno = drawing.get("seqno")
@@ -2146,13 +2235,13 @@ def _page_vector_line_witnesses(
         # line at its tangent point, while an opaque fill/image/text can erase
         # the whole stroke without changing the source drawing record.
         hidden_by_later_fill = False
-        for later_record in bboxlog[seqno + 1 :]:
+        for later_seqno, later_record in enumerate(
+            bboxlog[seqno + 1 :], start=seqno + 1
+        ):
             if len(later_record) != 2:
                 hidden_by_later_fill = True
                 break
             later_kind, later_bounds = later_record
-            if later_kind == "stroke-path":
-                continue
             try:
                 later_rect = fitz.Rect(later_bounds)
             except (TypeError, ValueError, OverflowError):
@@ -2164,6 +2253,22 @@ def _page_vector_line_witnesses(
             ):
                 hidden_by_later_fill = True
                 break
+            if later_kind == "stroke-path":
+                if later_rect.contains(source_paint_rect):
+                    later_drawing = drawing_by_seqno.get(later_seqno)
+                    if later_drawing is None:
+                        hidden_by_later_fill = True
+                        break
+                    if _opaque_stroke_fully_covers_line(
+                        later_drawing,
+                        fitz.Point(items[0][1]),
+                        fitz.Point(items[0][2]),
+                        float(width_pt),
+                        tuple(drawing.get("lineCap", ())),
+                    ):
+                        hidden_by_later_fill = True
+                        break
+                continue
             if later_rect.contains(source_paint_rect):
                 hidden_by_later_fill = True
                 break

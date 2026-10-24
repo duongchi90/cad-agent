@@ -41,6 +41,7 @@ def _write_quarter_arc_pdf(
     later_curved_stroke_intersample: bool = False,
     leading_tangent_line_length: float | None = None,
     occlude_leading_tangent_line: bool = False,
+    occlude_leading_tangent_line_with_cubic_stroke: bool = False,
     arc_width: float = 1.5,
     disconnected: bool = False,
     start_deg: float = 0.0,
@@ -95,6 +96,18 @@ def _write_quarter_arc_pdf(
                 fill=(1, 1, 1),
                 overlay=True,
             )
+        if occlude_leading_tangent_line_with_cubic_stroke:
+            line_start = midpoint - tangent * half_length
+            line_end = midpoint + tangent * half_length
+            cover = page.new_shape()
+            cover.draw_bezier(
+                line_start,
+                line_start + tangent * (leading_tangent_line_length / 3.0),
+                line_end - tangent * (leading_tangent_line_length / 3.0),
+                line_end,
+            )
+            cover.finish(color=(1, 1, 1), width=3.0, closePath=False)
+            cover.commit()
     shape = page.new_shape()
     shape.draw_bezier(p0, p1, p2, p3)
     if disconnected:
@@ -552,7 +565,10 @@ def test_independent_pdf_tangent_line_survives_arc_duplicate_suppression(tmp_pat
     )
 
 
-def test_hidden_pdf_tangent_line_does_not_resurrect_arc_fragment(tmp_path: Path) -> None:
+@pytest.mark.parametrize("occluder", ["fill", "cubic_stroke"])
+def test_hidden_pdf_tangent_line_does_not_resurrect_arc_fragment(
+    tmp_path: Path, occluder: str
+) -> None:
     source_without_line = tmp_path / "arc-without-line.pdf"
     output_without_line = tmp_path / "arc-without-line-result"
     source_with_hidden_line = tmp_path / "arc-with-hidden-line.pdf"
@@ -576,7 +592,8 @@ def test_hidden_pdf_tangent_line_does_not_resurrect_arc_fragment(tmp_path: Path)
         page_size_override=700.0,
         center_override=(350.0, 350.0),
         leading_tangent_line_length=expected_line_length_px / render_scale,
-        occlude_leading_tangent_line=True,
+        occlude_leading_tangent_line=occluder == "fill",
+        occlude_leading_tangent_line_with_cubic_stroke=occluder == "cubic_stroke",
     )
 
     run_pdf(source_without_line, output_without_line, scale_mm_per_px=1.0, dpi=216)
