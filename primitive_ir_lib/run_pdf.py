@@ -1553,6 +1553,57 @@ def _page_vector_arcs(
             ))
         return points
 
+    def cubic_segment_bounds(item: tuple, steps: int = 32) -> list[fitz.Rect]:
+        """Return conservative control-hull bounds for each cubic subcurve."""
+        _, p0, p1, p2, p3 = item
+        controls = tuple(
+            (float(point.x), float(point.y)) for point in (p0, p1, p2, p3)
+        )
+
+        def point_at(t: float) -> tuple[float, float]:
+            u = 1.0 - t
+            return tuple(
+                u**3 * controls[0][axis]
+                + 3.0 * u**2 * t * controls[1][axis]
+                + 3.0 * u * t**2 * controls[2][axis]
+                + t**3 * controls[3][axis]
+                for axis in (0, 1)
+            )
+
+        def tangent_at(t: float) -> tuple[float, float]:
+            u = 1.0 - t
+            return tuple(
+                3.0 * u**2 * (controls[1][axis] - controls[0][axis])
+                + 6.0 * u * t * (controls[2][axis] - controls[1][axis])
+                + 3.0 * t**2 * (controls[3][axis] - controls[2][axis])
+                for axis in (0, 1)
+            )
+
+        if not all(math.isfinite(value) for point in controls for value in point):
+            raise ValueError("non-finite cubic control point")
+        bounds = []
+        for step in range(steps):
+            start_t = step / steps
+            end_t = (step + 1) / steps
+            interval = end_t - start_t
+            start = point_at(start_t)
+            end = point_at(end_t)
+            start_tangent = tangent_at(start_t)
+            end_tangent = tangent_at(end_t)
+            subcurve_controls = (
+                start,
+                tuple(start[i] + start_tangent[i] * interval / 3.0 for i in (0, 1)),
+                tuple(end[i] - end_tangent[i] * interval / 3.0 for i in (0, 1)),
+                end,
+            )
+            bounds.append(fitz.Rect(
+                min(point[0] for point in subcurve_controls),
+                min(point[1] for point in subcurve_controls),
+                max(point[0] for point in subcurve_controls),
+                max(point[1] for point in subcurve_controls),
+            ))
+        return bounds
+
     def stroke_segments(drawing: dict) -> Optional[list[tuple[tuple[float, float], tuple[float, float]]]]:
         """Flatten known stroked PDF paths so their paint bounds are not mistaken for the path."""
         segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
@@ -1713,11 +1764,13 @@ def _page_vector_arcs(
             continue
 
         samples: list[tuple[float, float]] = []
+        curve_segment_bounds: list[fitz.Rect] = []
         connected = True
         previous_end = None
         for item in items:
             try:
                 sampled = cubic_points(item)
+                item_segment_bounds = cubic_segment_bounds(item)
             except (IndexError, TypeError, ValueError, OverflowError):
                 connected = False
                 break
@@ -1727,6 +1780,7 @@ def _page_vector_arcs(
             if samples:
                 sampled = sampled[1:]
             samples.extend(sampled)
+            curve_segment_bounds.extend(item_segment_bounds)
             previous_end = sampled[-1] if sampled else previous_end
         if not connected or len(samples) < 8 or math.dist(samples[0], samples[-1]) <= 0.02:
             continue
@@ -1785,9 +1839,13 @@ def _page_vector_arcs(
                 later_paint = True
                 break
             if any(
-                paint_rect.x0 - paint_margin <= x <= paint_rect.x1 + paint_margin
-                and paint_rect.y0 - paint_margin <= y <= paint_rect.y1 + paint_margin
-                for x, y in samples
+                paint_rect.intersects(fitz.Rect(
+                    segment_rect.x0 - paint_margin,
+                    segment_rect.y0 - paint_margin,
+                    segment_rect.x1 + paint_margin,
+                    segment_rect.y1 + paint_margin,
+                ))
+                for segment_rect in curve_segment_bounds
             ):
                 if record[0] == "stroke-path":
                     later_drawing = drawing_by_seqno.get(later_seqno)

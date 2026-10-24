@@ -31,6 +31,8 @@ def _write_quarter_arc_pdf(
     ellipse_y_radius: float | None = None,
     close_path: bool = False,
     later_fill: bool = False,
+    later_intersample_fill: bool = False,
+    later_interior_fill: bool = False,
     later_image: bool = False,
     later_frame: bool = False,
     later_stroke: bool = False,
@@ -41,9 +43,10 @@ def _write_quarter_arc_pdf(
     page_rotation: int = 0,
 ) -> None:
     document = fitz.open()
-    page = document.new_page(width=200, height=200)
-    center = fitz.Point(100, 100)
     y_radius = ellipse_y_radius or radius
+    page_size = max(200.0, 2.0 * max(radius, y_radius) + 20.0)
+    page = document.new_page(width=page_size, height=page_size)
+    center = fitz.Point(page_size / 2.0, page_size / 2.0)
     start = math.radians(start_deg)
     end = math.radians(start_deg + sweep_deg)
     handle = (4.0 / 3.0) * math.tan(abs(end - start) / 4.0)
@@ -64,6 +67,26 @@ def _write_quarter_arc_pdf(
     shape.commit()
     if later_fill:
         page.draw_rect(fitz.Rect(139, 92, 151, 108), color=None, fill=(1, 1, 1), overlay=True)
+    if later_intersample_fill:
+        t = 16.5 / 32.0
+        u = 1.0 - t
+        hidden_point = fitz.Point(
+            u**3 * p0.x + 3 * u**2 * t * p1.x + 3 * u * t**2 * p2.x + t**3 * p3.x,
+            u**3 * p0.y + 3 * u**2 * t * p1.y + 3 * u * t**2 * p2.y + t**3 * p3.y,
+        )
+        page.draw_rect(
+            fitz.Rect(
+                hidden_point.x - 0.1,
+                hidden_point.y - 0.1,
+                hidden_point.x + 0.1,
+                hidden_point.y + 0.1,
+            ),
+            color=None,
+            fill=(1, 1, 1),
+            overlay=True,
+        )
+    if later_interior_fill:
+        page.draw_rect(fitz.Rect(109, 74, 111, 76), color=None, fill=(1, 1, 1), overlay=True)
     if later_image:
         image_path = path.with_suffix(".png")
         cv2.imwrite(str(image_path), np.full((8, 8, 3), 255, dtype=np.uint8))
@@ -151,6 +174,33 @@ def test_later_stroke_bbox_without_path_overlap_does_not_hide_arc(tmp_path: Path
     source = tmp_path / "later-frame.pdf"
     output = tmp_path / "later-frame-result"
     _write_quarter_arc_pdf(source, later_frame=True)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    arcs = [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+    assert len(arcs) == 1
+
+
+def test_later_opaque_fill_between_arc_samples_blocks_admission(tmp_path: Path) -> None:
+    source = tmp_path / "intersample-occlusion.pdf"
+    output = tmp_path / "intersample-occlusion-result"
+    _write_quarter_arc_pdf(source, radius=200.0, later_intersample_fill=True)
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["type"] == "arc" for primitive in payload["primitives"])
+
+
+def test_later_fill_inside_arc_bounds_but_away_from_path_preserves_arc(tmp_path: Path) -> None:
+    source = tmp_path / "interior-fill.pdf"
+    output = tmp_path / "interior-fill-result"
+    _write_quarter_arc_pdf(source, later_interior_fill=True)
 
     run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
 
