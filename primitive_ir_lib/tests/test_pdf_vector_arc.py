@@ -800,6 +800,64 @@ def test_duplicate_hough_candidates_for_one_pdf_witness_emit_one_line(
     }
 
 
+def test_overlapping_hough_intervals_for_one_pdf_witness_emit_one_bounded_line(
+    tmp_path: Path, monkeypatch
+) -> None:
+    image_path = tmp_path / "overlapping-witness-input.png"
+    image = np.full((150, 5200, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+
+    radius = 5000.0
+    end_angle = math.radians(2.0)
+    arc = RawArc(
+        id="long-arc",
+        center_px=(0.0, 0.0),
+        radius_px=radius,
+        start_px=(radius, 0.0),
+        end_px=(radius * math.cos(end_angle), radius * math.sin(end_angle)),
+        signed_sweep_deg=2.0,
+        confidence=1.0,
+        bbox_px=(4998.0, -2.0, 5001.0, 175.0),
+        source_pdf_sha256="e" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="f" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+    )
+    witness = RawLine("long-pdf-witness", (5000.0, 0.0), (5000.0, 100.0), 1.0, (5000, 0, 5000, 100))
+    proposals = [
+        RawLine("interval-a", (5000.0, 0.0), (5000.0, 75.0), 0.8, (5000, 0, 5000, 75)),
+        RawLine("interval-b", (5000.0, 25.0), (5000.0, 100.0), 0.9, (5000, 25, 5000, 100)),
+    ]
+    monkeypatch.setattr(
+        run_image_module,
+        "extract_raw_geometry",
+        lambda *_args, **_kwargs: RawGeometry(lines=proposals),
+    )
+
+    output_path = tmp_path / "overlapping-witness-output.json"
+    run_image_module.run(
+        image_path=str(image_path),
+        output_path=str(output_path),
+        scale_mm_per_px=1.0,
+        merge_lines=True,
+        pdf_vector_arcs=[arc],
+        pdf_vector_line_witnesses=[witness],
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    emitted_lines = [primitive for primitive in payload["primitives"] if primitive["type"] == "line"]
+
+    assert len(emitted_lines) == 1, (
+        "overlapping proposals for one source witness must not emit duplicate "
+        f"Primitive IR LINE claims: {emitted_lines}"
+    )
+    geometry = emitted_lines[0]["geometry"]
+    assert geometry["start"]["x"] == pytest.approx(5000.0)
+    assert geometry["end"]["x"] == pytest.approx(5000.0)
+    assert abs(geometry["end"]["y"] - geometry["start"]["y"]) == pytest.approx(100.0)
+
+
 @pytest.mark.parametrize("bboxlog_corruption", ["truncated", "kind_mismatch"])
 def test_inconsistent_bboxlog_fails_closed_for_hidden_line_witness(
     tmp_path: Path, bboxlog_corruption: str

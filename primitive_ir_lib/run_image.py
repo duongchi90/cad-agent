@@ -280,17 +280,49 @@ def _clip_raster_line_to_pdf_vector_witness(
     )
 
 
-def _same_pdf_witness_interval(first: RawLine, second: RawLine) -> bool:
-    """Identify duplicate raster proposals for the same clipped source interval."""
-    direct_error = max(
-        math.dist(first.p1_px, second.p1_px),
-        math.dist(first.p2_px, second.p2_px),
+def _union_overlapping_pdf_witness_intervals(
+    first: RawLine, second: RawLine, witness: RawLine
+) -> Optional[RawLine]:
+    """Union overlapping raster intervals on one source-supported PDF stroke."""
+    witness_dx = witness.p2_px[0] - witness.p1_px[0]
+    witness_dy = witness.p2_px[1] - witness.p1_px[1]
+    witness_length = math.hypot(witness_dx, witness_dy)
+    if not math.isfinite(witness_length) or witness_length <= 1e-9:
+        return None
+    direction = (witness_dx / witness_length, witness_dy / witness_length)
+
+    def interval(line: RawLine) -> tuple[float, float]:
+        projections = [
+            (point[0] - witness.p1_px[0]) * direction[0]
+            + (point[1] - witness.p1_px[1]) * direction[1]
+            for point in (line.p1_px, line.p2_px)
+        ]
+        return min(projections), max(projections)
+
+    first_start, first_end = interval(first)
+    second_start, second_end = interval(second)
+    if min(first_end, second_end) < max(first_start, second_start) - 1e-6:
+        return None
+
+    merged_start = max(0.0, min(first_start, second_start))
+    merged_end = min(witness_length, max(first_end, second_end))
+    if not math.isfinite(merged_start) or not math.isfinite(merged_end) or merged_end <= merged_start:
+        return None
+    p1 = (
+        witness.p1_px[0] + merged_start * direction[0],
+        witness.p1_px[1] + merged_start * direction[1],
     )
-    reversed_error = max(
-        math.dist(first.p1_px, second.p2_px),
-        math.dist(first.p2_px, second.p1_px),
+    p2 = (
+        witness.p1_px[0] + merged_end * direction[0],
+        witness.p1_px[1] + merged_end * direction[1],
     )
-    return min(direct_error, reversed_error) <= 2.5
+    return RawLine(
+        id=first.id if first.confidence >= second.confidence else second.id,
+        p1_px=p1,
+        p2_px=p2,
+        confidence=max(first.confidence, second.confidence),
+        bbox_px=(min(p1[0], p2[0]), min(p1[1], p2[1]), max(p1[0], p2[0]), max(p1[1], p2[1])),
+    )
 
 
 def run(
@@ -390,7 +422,7 @@ def run(
     pdf_vector_arcs = pdf_vector_arcs or []
     pdf_vector_line_witnesses = pdf_vector_line_witnesses or []
     raw_lines = []
-    pdf_witnessed_lines = []
+    pdf_witnessed_lines: dict[int, List[RawLine]] = {}
     for line in raw_geometry.lines:
         if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs):
             raw_lines.append(line)
@@ -401,16 +433,20 @@ def run(
                 # Keep the source-bounded segment out of the general line
                 # merger: an adjacent raster fragment must not extend it
                 # beyond the PDF stroke that independently supports it.
-                if not any(
-                    existing_witness_index == witness_index
-                    and _same_pdf_witness_interval(existing, clipped)
-                    for existing_witness_index, existing in pdf_witnessed_lines
-                ):
-                    pdf_witnessed_lines.append((witness_index, clipped))
+                witnessed_intervals = pdf_witnessed_lines.setdefault(witness_index, [])
+                for interval_index, existing in enumerate(witnessed_intervals):
+                    merged = _union_overlapping_pdf_witness_intervals(existing, clipped, witness)
+                    if merged is not None:
+                        witnessed_intervals[interval_index] = merged
+                        break
+                else:
+                    witnessed_intervals.append(clipped)
                 break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
-    raw_lines.extend(line for _, line in pdf_witnessed_lines)
+    raw_lines.extend(
+        line for witnessed_intervals in pdf_witnessed_lines.values() for line in witnessed_intervals
+    )
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:
