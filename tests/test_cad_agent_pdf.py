@@ -28,8 +28,6 @@ def test_pdf_run_image_consumes_the_rendered_source_bytes_when_shared_png_is_rep
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import cv2
-
     pdf_module = importlib.import_module("primitive_ir_lib.run_pdf")
     image_module = importlib.import_module("primitive_ir_lib.run_image")
     source = tmp_path / "source.pdf"
@@ -52,9 +50,9 @@ def test_pdf_run_image_consumes_the_rendered_source_bytes_when_shared_png_is_rep
         source_bytes = source_document[0].get_pixmap(alpha=False).tobytes("png")
     with fitz.open(replacement) as replacement_document:
         replacement_bytes = replacement_document[0].get_pixmap(alpha=False).tobytes("png")
-    expected_pixels = cv2.imdecode(
+    expected_pixels = image_module.cv2.imdecode(
         np.frombuffer(source_bytes, dtype=np.uint8),
-        cv2.IMREAD_COLOR,
+        image_module.cv2.IMREAD_COLOR,
     )
     expected_pixels_sha256 = hashlib.sha256(expected_pixels.tobytes()).hexdigest()
     observed_geometry_input_hashes: list[str] = []
