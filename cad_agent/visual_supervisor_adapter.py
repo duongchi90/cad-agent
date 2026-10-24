@@ -21,6 +21,11 @@ from cad_agent.drawing_artifact_reference import (
     require_current_drawing_artifact_reference,
 )
 from cad_agent.drawing_contracts import canonical_json_sha256
+from cad_agent.responses_provider import (
+    ResponsesTask6Result,
+    consume_responses_task6_result,
+    validate_responses_task6_result,
+)
 from cad_agent.vision_handoff import (
     BoundWorkerThread,
     ServerOwnedAuthorityContext,
@@ -36,6 +41,7 @@ R5_VISUAL_VERDICT_RESULT_SCHEMA_VERSION = "r5-visual-verdict-result-1.0"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_PROVIDER_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
 _CRITICALITIES = frozenset({"CRITICAL", "NORMAL"})
 _REGION_STATUSES = frozenset({"PASS", "FAIL", "SKIP", "NOT_RUN"})
 _VERDICTS = frozenset({"PASS", "FAIL", "NEEDS_HUMAN"})
@@ -93,9 +99,16 @@ def _closed(
         _fail(f"{label} contains unknown field(s): {', '.join(sorted(unknown))}")
 
 
-def _task6_result(value: object, *, label: str) -> CodexWorkerResult:
+def _task6_result(value: object, *, label: str) -> CodexWorkerResult | ResponsesTask6Result:
     """Validate the accepted Task6 public result, never a caller-made mapping."""
 
+    if isinstance(value, ResponsesTask6Result):
+        try:
+            return validate_responses_task6_result(value)
+        except Exception:
+            _fail(
+                "R5_B3_TASK6_PUBLIC_SEAM_MISSING: invalid server-issued Responses result"
+            )
     if not isinstance(value, CodexWorkerResult):
         _fail("R5_B3_TASK6_PUBLIC_SEAM_MISSING: task6_result must be CodexWorkerResult")
     if value.operation not in {"turn", "steer"}:
@@ -185,21 +198,40 @@ def _owner_state(value: object, *, label: str) -> Mapping[str, object]:
 
 def _provider(
     value: object,
-) -> tuple[CodexWorkerResult, str, str, list[dict[str, object]]]:
+) -> tuple[CodexWorkerResult | ResponsesTask6Result, str, str, list[dict[str, object]]]:
     provider = _mapping(value, label="provider_result")
-    required = {"task6_result", "provider_verdict", "candidate_revision_sha256", "regions"}
-    _closed(provider, required, label="provider_result")
+    task6_value = provider.get("task6_result")
+    if isinstance(task6_value, ResponsesTask6Result):
+        _closed(provider, {"task6_result"}, label="provider_result")
+    else:
+        _closed(
+            provider,
+            {"task6_result", "provider_verdict", "candidate_revision_sha256", "regions"},
+            label="provider_result",
+        )
     task6 = _task6_result(provider["task6_result"], label="provider_result.task6_result")
-    candidate_sha = _sha(
-        provider["candidate_revision_sha256"],
-        label="provider_result.candidate_revision_sha256",
-    )
-    verdict = _plain_string(
-        provider["provider_verdict"], label="provider_result.provider_verdict"
-    )
+    if isinstance(task6, ResponsesTask6Result):
+        candidate_sha = _sha(
+            task6.candidate_revision_sha256,
+            label="provider_result.task6_result.candidate_revision_sha256",
+        )
+        output = _mapping(task6.candidate_output, label="provider_result.task6_result.candidate_output")
+        _closed(output, {"provider_verdict", "regions"}, label="Responses candidate output")
+        verdict = _plain_string(
+            output["provider_verdict"], label="provider_result.task6_result.provider_verdict"
+        )
+        raw_regions = output["regions"]
+    else:
+        candidate_sha = _sha(
+            provider["candidate_revision_sha256"],
+            label="provider_result.candidate_revision_sha256",
+        )
+        verdict = _plain_string(
+            provider["provider_verdict"], label="provider_result.provider_verdict"
+        )
+        raw_regions = provider["regions"]
     if verdict not in _VERDICTS:
         _fail("provider verdict is unknown")
-    raw_regions = provider["regions"]
     if not isinstance(raw_regions, Sequence) or isinstance(
         raw_regions, (str, bytes, bytearray)
     ):
@@ -855,10 +887,57 @@ def _request_binding_facts(
     worker_binding: BoundWorkerThread | None,
     authority_context: ServerOwnedAuthorityContext | None,
     worker_context: ServerOwnedWorkerBindingContext | None,
-    task6: CodexWorkerResult,
+    task6: CodexWorkerResult | ResponsesTask6Result,
     run_id: object,
     now: datetime | None,
 ) -> dict[str, object]:
+    if isinstance(task6, ResponsesTask6Result):
+        if any(
+            value is not None
+            for value in (request_handoff, worker_binding, authority_context, worker_context)
+        ):
+            _fail("Responses inference result cannot be supplied with Codex attestation")
+        expected_run = _identifier(run_id, label="visual_scope.run_id")
+        if task6.run_id != expected_run:
+            _fail("R5_REQUEST_BINDING_INVALID")
+        _identifier(task6.request_id, label="request_binding.request_id")
+        if _PROVIDER_IDENTIFIER.fullmatch(task6.response_id) is None:
+            _fail("R5_REQUEST_BINDING_INVALID")
+        return {
+            "provider_identity": {
+                "provider": task6.provider,
+                "model": task6.model,
+            },
+            "task6_epoch_id": task6.task6_epoch_id,
+            "request_id": task6.request_id,
+            "provider_request_sha256": _sha(
+                task6.request_sha256, label="request_binding.provider_request_sha256"
+            ),
+            "input_sha256": _sha(
+                task6.input_sha256, label="request_binding.input_sha256"
+            ),
+            "candidate_revision_sha256": _sha(
+                task6.candidate_revision_sha256,
+                label="request_binding.candidate_revision_sha256",
+            ),
+            "candidate_state_sha256": _sha(
+                task6.candidate_state_sha256,
+                label="request_binding.candidate_state_sha256",
+            ),
+            "schema_sha256": _sha(
+                task6.schema_sha256, label="request_binding.schema_sha256"
+            ),
+            "validator_version": _identifier(
+                task6.validator_version, label="request_binding.validator_version"
+            ),
+            "inference_policy": {
+                "background": True,
+                "store": False,
+                "tools": "omitted",
+                "conversation": "omitted",
+                "previous_response_id": "omitted",
+            },
+        }
     try:
         resumed = resume_worker_thread(
             worker_binding,  # type: ignore[arg-type]
@@ -1001,7 +1080,7 @@ def _request_binding_facts(
     return facts
 
 
-_RESULT_FIELDS = {
+_RESULT_COMMON_FIELDS = {
     "schema_version",
     "request_sha256",
     "observation_sha256",
@@ -1014,9 +1093,12 @@ _RESULT_FIELDS = {
     "drawing_reference_sha256",
     "drawing_observation_sha256",
     "latest_mutation_sha256",
-    "task6_thread_id",
-    "task6_turn_id",
     "regions",
+}
+_CODEX_RESULT_FIELDS = _RESULT_COMMON_FIELDS | {"task6_thread_id", "task6_turn_id"}
+_RESPONSES_RESULT_FIELDS = _RESULT_COMMON_FIELDS | {
+    "task6_epoch_id",
+    "task6_response_id",
 }
 
 
@@ -1071,7 +1153,10 @@ def validate_visual_verdict_result(
     """Validate one closed R5 result without consuming Task6 or owning persistence."""
 
     try:
-        if type(result) is not dict or set(result) != _RESULT_FIELDS:
+        if type(result) is not dict or set(result) not in (
+            _CODEX_RESULT_FIELDS,
+            _RESPONSES_RESULT_FIELDS,
+        ):
             _fail("R5_VERDICT_RESULT_INVALID")
         if result.get("schema_version") != R5_VISUAL_VERDICT_RESULT_SCHEMA_VERSION:
             _fail("R5_VERDICT_RESULT_INVALID")
@@ -1091,10 +1176,20 @@ def validate_visual_verdict_result(
         verdict = _plain_string(result.get("verdict"), label="verdict_result.verdict")
         if verdict not in _VERDICTS:
             _fail("R5_VERDICT_RESULT_INVALID")
-        _identifier(
-            result.get("task6_thread_id"), label="verdict_result.task6_thread_id"
-        )
-        _identifier(result.get("task6_turn_id"), label="verdict_result.task6_turn_id")
+        if "task6_thread_id" in result:
+            _identifier(
+                result.get("task6_thread_id"), label="verdict_result.task6_thread_id"
+            )
+            _identifier(
+                result.get("task6_turn_id"), label="verdict_result.task6_turn_id"
+            )
+        else:
+            _identifier(
+                result.get("task6_epoch_id"), label="verdict_result.task6_epoch_id"
+            )
+            response_id = result.get("task6_response_id")
+            if type(response_id) is not str or _PROVIDER_IDENTIFIER.fullmatch(response_id) is None:
+                _fail("R5_VERDICT_RESULT_INVALID")
         normalized_regions = _normalize_result_regions(result.get("regions"))
 
         normalized = copy.deepcopy(result)
@@ -1203,6 +1298,8 @@ def finalize_visual_verdict(
     candidate_state_sha = _sha(
         auth_candidate.get("state_sha256"), label="candidate_state_sha256"
     )
+    if isinstance(task6, ResponsesTask6Result) and task6.candidate_state_sha256 != candidate_state_sha:
+        _fail("provider candidate state does not match current candidate")
     if auth_scope["candidate_revision_sha256"] != selected:
         _fail("visual review scope is not bound to the current R4 candidate")
     if auth_scope["candidate_state_sha256"] != candidate_state_sha:
@@ -1305,13 +1402,23 @@ def finalize_visual_verdict(
     except Exception:
         _fail("R5_REQUEST_BINDING_INVALID")
 
+    task6_identity = (
+        {
+            "task6_epoch_id": owner_task6.task6_epoch_id,
+            "task6_response_id": owner_task6.response_id,
+        }
+        if isinstance(owner_task6, ResponsesTask6Result)
+        else {
+            "task6_thread_id": owner_task6.thread_id,
+            "task6_turn_id": owner_task6.turn_id,
+        }
+    )
     observation_payload = {
         "request_sha256": request_sha,
         "candidate_revision_sha256": provider_candidate_sha,
         "provider_verdict": provider_verdict,
         "regions": copy.deepcopy(regions),
-        "task6_thread_id": owner_task6.thread_id,
-        "task6_turn_id": owner_task6.turn_id,
+        **task6_identity,
     }
     try:
         observation_sha = canonical_json_sha256(observation_payload)
@@ -1337,8 +1444,7 @@ def finalize_visual_verdict(
         "drawing_reference_sha256": drawing_reference_sha,
         "drawing_observation_sha256": drawing_observation_sha,
         "latest_mutation_sha256": latest_mutation_sha,
-        "task6_thread_id": owner_task6.thread_id,
-        "task6_turn_id": owner_task6.turn_id,
+        **task6_identity,
         "regions": copy.deepcopy(regions),
     }
     try:
@@ -1359,13 +1465,16 @@ def finalize_visual_verdict(
     )
 
     try:
-        consume_task6_result(
-            owner_task6,
-            run_id=auth_scope["run_id"],
-            operation=owner_task6.operation,
-            thread_id=owner_task6.thread_id,
-            turn_id=owner_task6.turn_id,
-        )
+        if isinstance(owner_task6, ResponsesTask6Result):
+            consume_responses_task6_result(owner_task6)
+        else:
+            consume_task6_result(
+                owner_task6,
+                run_id=auth_scope["run_id"],
+                operation=owner_task6.operation,
+                thread_id=owner_task6.thread_id,
+                turn_id=owner_task6.turn_id,
+            )
     except Exception:
         _fail("Task6 accepted result could not be consumed")
     return validated_result
