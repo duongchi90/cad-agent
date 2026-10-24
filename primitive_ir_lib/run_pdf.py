@@ -1549,7 +1549,9 @@ def run_pdf(
         "pages": [],
     }
     manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    from cad_agent.manifest import write_manifest
+
+    write_manifest(manifest_path, manifest)
     document = None
     current_page_index = None
     try:
@@ -1642,15 +1644,13 @@ def run_pdf(
         manifest["status"] = "failed"
         manifest["failed_page_index"] = current_page_index
         manifest["error"] = {"type": type(exc).__name__, "message": str(exc)}
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-        )
+        write_manifest(manifest_path, manifest)
         raise
     finally:
         if document is not None:
             document.close()
     manifest["status"] = "complete"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_manifest(manifest_path, manifest)
     return manifest
 
 

@@ -212,6 +212,47 @@ def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
         assert page["primitive_count"] == len(payload["primitives"])
 
 
+@pytest.mark.parametrize("fail_during_processing", [False, True])
+def test_run_pdf_replaces_manifest_symlink_without_modifying_external_target(
+    tmp_path: Path, fail_during_processing: bool
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external file that must not be overwritten"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+    source_bytes = pdf_path.read_bytes()
+    manifest_path = output_dir / "manifest.json"
+    try:
+        manifest_path.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    if fail_during_processing:
+        with patch(
+            "primitive_ir_lib.run_pdf._page_circle_witnesses",
+            side_effect=RuntimeError("controlled page failure"),
+        ), pytest.raises(RuntimeError, match="controlled page failure"):
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+        expected_status = "failed"
+    else:
+        with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+        expected_status = "complete"
+
+    assert pdf_path.read_bytes() == source_bytes
+    assert protected_path.read_bytes() == protected_bytes
+    assert not manifest_path.is_symlink()
+    saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert saved["status"] == expected_status
+
+
 def _make_blank_pdf(pdf_path: Path) -> None:
     """Fixture tối thiểu — chỉ cần tồn tại trên đĩa, không cần nội dung, vì
     các test dưới đây kiểm tra nhánh validate xảy ra TRƯỚC khi fitz.open()
