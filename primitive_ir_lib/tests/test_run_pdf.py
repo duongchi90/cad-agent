@@ -8,7 +8,7 @@ from unittest.mock import patch
 import fitz
 import pytest
 
-from primitive_ir_lib.run_pdf import run_pdf
+from primitive_ir_lib.run_pdf import _write_pdf_output, run_pdf
 from primitive_ir_lib.text_extraction import RawText
 
 
@@ -437,6 +437,30 @@ def test_run_pdf_rejects_redirected_output_directory(tmp_path: Path) -> None:
     assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
         "status"
     ] == "failed"
+
+
+def test_pdf_output_temp_custody_blocks_symlink_swap_before_writer(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    source_pdf = tmp_path / "source.pdf"
+    source_pdf.write_bytes(b"source")
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external bytes must remain unchanged"
+    protected_path.write_bytes(protected_bytes)
+    destination = output_dir / "artifact.bin"
+
+    def replace_temp_with_symlink(temporary: Path) -> None:
+        temporary.unlink()
+        temporary.symlink_to(protected_path)
+        temporary.write_bytes(b"attacker-controlled overwrite")
+
+    with pytest.raises((OSError, ValueError)):
+        _write_pdf_output(destination, output_dir, source_pdf, replace_temp_with_symlink)
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert not destination.exists()
 
 
 def _make_blank_pdf(pdf_path: Path) -> None:

@@ -277,7 +277,7 @@ def _directory_identity(path: Path) -> tuple[int, int]:
 
 def _create_pdf_output_temp(
     destination: Path, output_root: Path, source_pdf: Path
-) -> tuple[Path, tuple[int, int]]:
+) -> tuple[Path, tuple[int, int], int]:
     _validate_pdf_output_path(destination, output_root, source_pdf)
     _validate_pdf_output_directory(output_root, destination.parent)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -288,17 +288,23 @@ def _create_pdf_output_temp(
         suffix=destination.suffix,
         dir=destination.parent,
     )
-    os.close(descriptor)
     temporary = Path(name)
-    if _directory_identity(destination.parent) != parent_identity:
-        temporary.unlink(missing_ok=True)
-        raise _pdf_output_error(destination.parent, "parent changed during temporary creation")
     try:
+        if _directory_identity(destination.parent) != parent_identity:
+            raise _pdf_output_error(
+                destination.parent, "parent changed during temporary creation"
+            )
         _validate_pdf_output_path(temporary, output_root, source_pdf)
     except Exception:
+        os.close(descriptor)
         temporary.unlink(missing_ok=True)
         raise
-    return temporary, parent_identity
+    # Keep the exclusive mkstemp handle open while pathname-based artifact
+    # writers run. On the supported Windows filesystem, that prevents another
+    # process from unlinking/replacing this entry with a symlink before a
+    # writer opens the path. Close only after the writer finishes; publication
+    # itself remains the existing atomic replace step.
+    return temporary, parent_identity, descriptor
 
 
 def _publish_pdf_output_temp(
@@ -322,17 +328,21 @@ def _write_pdf_output(
     source_pdf: Path,
     writer,
 ) -> None:
-    temporary, parent_identity = _create_pdf_output_temp(
+    temporary, parent_identity, descriptor = _create_pdf_output_temp(
         destination, output_root, source_pdf
     )
     try:
         result = writer(temporary)
         if result is False:
             raise ValueError(f"PDF artifact writer rejected destination: {destination}")
+        os.close(descriptor)
+        descriptor = -1
         _publish_pdf_output_temp(
             temporary, destination, output_root, source_pdf, parent_identity
         )
     finally:
+        if descriptor >= 0:
+            os.close(descriptor)
         temporary.unlink(missing_ok=True)
 
 
@@ -1788,7 +1798,7 @@ def run_pdf(
                 image_path,
                 output_dir,
                 pdf_path,
-                lambda path: pixmap.save(str(path)),
+                lambda path: path.write_bytes(pixmap.tobytes("png")),
             )
             if auto_ocr_roi:
                 pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
@@ -1816,9 +1826,11 @@ def run_pdf(
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
             def process_page_ir(path: Path) -> None:
-                candidates_temp, candidates_parent_identity = _create_pdf_output_temp(
-                    view_candidates_path, output_dir, pdf_path
-                )
+                (
+                    candidates_temp,
+                    candidates_parent_identity,
+                    candidates_descriptor,
+                ) = _create_pdf_output_temp(view_candidates_path, output_dir, pdf_path)
                 try:
                     run(
                         image_path=str(image_path),
@@ -1836,6 +1848,8 @@ def run_pdf(
                         source_page_index=index - 1,
                         **vector_kwargs,
                     )
+                    os.close(candidates_descriptor)
+                    candidates_descriptor = -1
                     _validate_pdf_output_path(
                         candidates_temp, output_dir, pdf_path
                     )
@@ -1847,6 +1861,8 @@ def run_pdf(
                         candidates_parent_identity,
                     )
                 finally:
+                    if candidates_descriptor >= 0:
+                        os.close(candidates_descriptor)
                     candidates_temp.unlink(missing_ok=True)
 
             _write_pdf_output(output_path, output_dir, pdf_path, process_page_ir)
