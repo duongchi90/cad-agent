@@ -39,6 +39,7 @@ def _write_quarter_arc_pdf(
     later_curved_frame: bool = False,
     later_duplicate: bool = False,
     later_curved_stroke_intersample: bool = False,
+    leading_tangent_line_length: float | None = None,
     arc_width: float = 1.5,
     disconnected: bool = False,
     start_deg: float = 0.0,
@@ -62,6 +63,24 @@ def _write_quarter_arc_pdf(
     tangent_end = fitz.Point(-radius * math.sin(end) * direction, -y_radius * math.cos(end) * direction)
     p1 = fitz.Point(p0.x + handle * tangent_start.x, p0.y + handle * tangent_start.y)
     p2 = fitz.Point(p3.x - handle * tangent_end.x, p3.y - handle * tangent_end.y)
+    if leading_tangent_line_length is not None:
+        midpoint = fitz.Point(
+            0.125 * p0.x + 0.375 * p1.x + 0.375 * p2.x + 0.125 * p3.x,
+            0.125 * p0.y + 0.375 * p1.y + 0.375 * p2.y + 0.125 * p3.y,
+        )
+        tangent = fitz.Point(
+            0.75 * (p1.x - p0.x) + 1.5 * (p2.x - p1.x) + 0.75 * (p3.x - p2.x),
+            0.75 * (p1.y - p0.y) + 1.5 * (p2.y - p1.y) + 0.75 * (p3.y - p2.y),
+        )
+        tangent /= math.hypot(tangent.x, tangent.y)
+        half_length = leading_tangent_line_length / 2.0
+        page.draw_line(
+            midpoint - tangent * half_length,
+            midpoint + tangent * half_length,
+            color=(0, 0, 0),
+            width=0.5,
+            overlay=True,
+        )
     shape = page.new_shape()
     shape.draw_bezier(p0, p1, p2, p3)
     if disconnected:
@@ -457,6 +476,66 @@ def test_only_short_line_fragments_on_the_arc_locus_are_suppressed() -> None:
 
     assert _line_is_explained_by_pdf_arc(duplicate_fragment, arc)
     assert not _line_is_explained_by_pdf_arc(crossing_line, arc)
+
+
+def test_independent_pdf_tangent_line_survives_arc_duplicate_suppression(tmp_path: Path) -> None:
+    source = tmp_path / "independent-tangent-line.pdf"
+    output = tmp_path / "independent-tangent-line-result"
+    render_scale = 216.0 / 72.0
+    expected_line_length_px = 60.0
+    radius_px = 850.0
+    center_px = (350.0 * render_scale, 350.0 * render_scale)
+    _write_quarter_arc_pdf(
+        source,
+        radius=850.0 / render_scale,
+        arc_width=0.5,
+        page_size_override=700.0,
+        center_override=(350.0, 350.0),
+        leading_tangent_line_length=expected_line_length_px / render_scale,
+    )
+
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=216)
+
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    arcs = [primitive for primitive in payload["primitives"] if primitive["type"] == "arc"]
+    lines = [primitive for primitive in payload["primitives"] if primitive["type"] == "line"]
+    assert len(arcs) == 1
+    midpoint = (
+        center_px[0] + radius_px / math.sqrt(2.0),
+        center_px[1] - radius_px / math.sqrt(2.0),
+    )
+    tangent = (-1.0 / math.sqrt(2.0), -1.0 / math.sqrt(2.0))
+    image_height_px = payload["source_document"]["image_height_px"]
+
+    def overlaps_independent_tangent(line: dict) -> bool:
+        geometry = line["geometry"]
+        endpoints = [
+            (geometry["start"]["x"], image_height_px - geometry["start"]["y"]),
+            (geometry["end"]["x"], image_height_px - geometry["end"]["y"]),
+        ]
+        perpendicular = [
+            abs(
+                (point[0] - midpoint[0]) * tangent[1]
+                - (point[1] - midpoint[1]) * tangent[0]
+            )
+            for point in endpoints
+        ]
+        projected = [
+            (point[0] - midpoint[0]) * tangent[0]
+            + (point[1] - midpoint[1]) * tangent[1]
+            for point in endpoints
+        ]
+        return (
+            max(perpendicular) <= 4.0
+            and min(projected) <= expected_line_length_px / 2.0
+            and max(projected) >= -expected_line_length_px / 2.0
+        )
+
+    assert any(overlaps_independent_tangent(line) for line in lines), (
+        "the independent PDF tangent stroke was removed as an ARC duplicate"
+    )
 
 
 @pytest.mark.real_data

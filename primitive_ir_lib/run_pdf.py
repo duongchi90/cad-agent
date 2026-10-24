@@ -23,7 +23,7 @@ import fitz
 import numpy as np
 
 from .calibration_registry import get_verified_scale
-from .geometry_extraction import RawArc
+from .geometry_extraction import RawArc, RawLine
 from .models import new_id
 from .run_image import run
 from .text_extraction import RawText
@@ -2082,6 +2082,86 @@ def _page_vector_arcs(
     return results
 
 
+def _page_vector_line_witnesses(
+    page,
+    pixel_scale: float,
+    pixmap_origin: tuple[int, int],
+) -> list[RawLine]:
+    """Return simple PDF strokes that can corroborate already-detected raster lines.
+
+    These witnesses do not create Primitive IR geometry. They only prevent the
+    image owner from discarding a Hough line that matches an independent source
+    stroke merely because it lies close to a separately admitted PDF ARC.
+    """
+    if page.rotation not in {0, 90, 180, 270}:
+        return []
+    transform = page.rotation_matrix
+    origin_x, origin_y = pixmap_origin
+    results: list[RawLine] = []
+    for drawing in page.get_drawings(extended=True):
+        color = drawing.get("color")
+        width_pt = drawing.get("width")
+        seqno = drawing.get("seqno")
+        items = drawing.get("items", [])
+        if (
+            drawing.get("type") != "s"
+            or drawing.get("fill") is not None
+            or drawing.get("level") != 0
+            or not isinstance(color, (tuple, list))
+            or len(color) != 3
+            or any(
+                not math.isfinite(float(channel)) or float(channel) > 0.45
+                for channel in color
+            )
+            or not isinstance(width_pt, (int, float))
+            or not math.isfinite(float(width_pt))
+            or width_pt <= 0
+            or drawing.get("stroke_opacity") != 1.0
+            or drawing.get("dashes") != "[] 0"
+            or not isinstance(seqno, int)
+            or seqno < 0
+            or len(items) != 1
+            or items[0][0] != "l"
+        ):
+            continue
+        try:
+            first = fitz.Point(items[0][1]) * transform
+            second = fitz.Point(items[0][2]) * transform
+            first_px = (
+                first.x * pixel_scale - origin_x,
+                first.y * pixel_scale - origin_y,
+            )
+            second_px = (
+                second.x * pixel_scale - origin_x,
+                second.y * pixel_scale - origin_y,
+            )
+        except (IndexError, TypeError, ValueError, OverflowError):
+            continue
+        if not all(
+            math.isfinite(value)
+            for point in (first_px, second_px)
+            for value in point
+        ):
+            continue
+        if math.dist(first_px, second_px) <= 1e-6:
+            continue
+        results.append(
+            RawLine(
+                id=f"pdf-line-witness-{seqno}",
+                p1_px=first_px,
+                p2_px=second_px,
+                confidence=1.0,
+                bbox_px=(
+                    min(first_px[0], second_px[0]),
+                    min(first_px[1], second_px[1]),
+                    max(first_px[0], second_px[0]),
+                    max(first_px[1], second_px[1]),
+                ),
+            )
+        )
+    return results
+
+
 def run_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -2151,6 +2231,11 @@ def run_pdf(
                 manifest["source_pdf_sha256"],
                 index - 1,
             )
+            pdf_vector_line_witnesses = (
+                _page_vector_line_witnesses(page, scale, (pixmap.x, pixmap.y))
+                if pdf_vector_arcs
+                else []
+            )
             if auto_ocr_roi:
                 pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
                     page,
@@ -2178,6 +2263,8 @@ def run_pdf(
                 }
             if pdf_vector_arcs:
                 vector_kwargs["pdf_vector_arcs"] = pdf_vector_arcs
+            if pdf_vector_line_witnesses:
+                vector_kwargs["pdf_vector_line_witnesses"] = pdf_vector_line_witnesses
             run(
                 image_path=str(image_path),
                 output_path=str(output_path),

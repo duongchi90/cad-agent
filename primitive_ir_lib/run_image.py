@@ -207,6 +207,47 @@ def _line_is_explained_by_pdf_arc(line, arc: RawArc) -> bool:
     return max(progresses) - min(progresses) <= 15.0
 
 
+def _line_matches_pdf_vector_witness(line: RawLine, witness: RawLine) -> bool:
+    """Return whether a raster line substantially matches a separate PDF stroke."""
+    line_dx = line.p2_px[0] - line.p1_px[0]
+    line_dy = line.p2_px[1] - line.p1_px[1]
+    witness_dx = witness.p2_px[0] - witness.p1_px[0]
+    witness_dy = witness.p2_px[1] - witness.p1_px[1]
+    line_length = math.hypot(line_dx, line_dy)
+    witness_length = math.hypot(witness_dx, witness_dy)
+    if not all(math.isfinite(value) for value in (line_length, witness_length)):
+        return False
+    if line_length <= 1e-9 or witness_length <= 1e-9:
+        return False
+
+    direction = (witness_dx / witness_length, witness_dy / witness_length)
+    alignment = abs((line_dx * direction[0] + line_dy * direction[1]) / line_length)
+    if alignment < 0.98:
+        return False
+
+    line_points = (line.p1_px, line.p2_px)
+    perpendicular_distances = [
+        abs(
+            (point[0] - witness.p1_px[0]) * direction[1]
+            - (point[1] - witness.p1_px[1]) * direction[0]
+        )
+        for point in line_points
+    ]
+    if not all(math.isfinite(value) and value <= 2.5 for value in perpendicular_distances):
+        return False
+
+    projections = [
+        (point[0] - witness.p1_px[0]) * direction[0]
+        + (point[1] - witness.p1_px[1]) * direction[1]
+        for point in line_points
+    ]
+    overlap = max(
+        0.0,
+        min(witness_length, max(projections)) - max(0.0, min(projections)),
+    )
+    return overlap / witness_length >= 0.75
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -229,6 +270,7 @@ def run(
     require_pdf_vector_circle_witness: bool = False,
     pdf_vector_texts: Optional[List[RawText]] = None,
     pdf_vector_arcs: Optional[List[RawArc]] = None,
+    pdf_vector_line_witnesses: Optional[List[RawLine]] = None,
     source_page_index: int = 0,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
@@ -301,9 +343,14 @@ def run(
     decision_texts = ocr_texts
 
     pdf_vector_arcs = pdf_vector_arcs or []
+    pdf_vector_line_witnesses = pdf_vector_line_witnesses or []
     raw_lines = [
         line for line in raw_geometry.lines
         if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs)
+        or any(
+            _line_matches_pdf_vector_witness(line, witness)
+            for witness in pdf_vector_line_witnesses
+        )
     ]
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
