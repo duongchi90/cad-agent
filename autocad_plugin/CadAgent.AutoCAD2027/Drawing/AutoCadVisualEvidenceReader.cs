@@ -812,6 +812,21 @@ internal static class AutoCadVisualEvidenceReader
             && array.Length > 0;
     }
 
+    internal static bool ShouldRestoreSystemVariableForTesting(
+        JsonElement currentValue,
+        JsonElement capturedValue) =>
+        !JsonElement.DeepEquals(currentValue, capturedValue);
+
+    internal static bool ShouldRestoreSelectionForTesting(
+        IReadOnlyList<string> currentHandles,
+        IReadOnlyList<string> capturedHandles) =>
+        !currentHandles.SequenceEqual(capturedHandles, StringComparer.Ordinal);
+
+    internal static bool ShouldRestoreViewForTesting(
+        SessionViewSnapshot? currentView,
+        SessionViewSnapshot? capturedView) =>
+        !Equals(currentView, capturedView);
+
     internal static bool IsConformalBasisForTesting(
         double xLength,
         double yLength,
@@ -1531,33 +1546,13 @@ internal static class AutoCadVisualEvidenceReader
             name => name,
             name => JsonSerializer.SerializeToElement(AcadApplication.GetSystemVariable(name)),
             StringComparer.Ordinal);
-        var selectionHandles = new List<string>();
-        var impliedSelection = document.Editor.SelectImplied();
-        if (impliedSelection.Status == PromptStatus.OK && impliedSelection.Value is not null)
-        {
-            selectionHandles.AddRange(
-                impliedSelection.Value.GetObjectIds()
-                    .Select(objectId => objectId.Handle.ToString().ToUpperInvariant()));
-        }
+        var selectionHandles = CaptureSelectionHandles(document);
         var currentLayer = Convert.ToString(
             AcadApplication.GetSystemVariable("CLAYER"),
             CultureInfo.InvariantCulture) ?? string.Empty;
         var currentLayout = LayoutManager.Current.CurrentLayout;
         var space = CaptureSessionSpace();
-        using var currentView = document.Editor.GetCurrentView();
-        var viewState = new SessionViewSnapshot(
-            currentView.CenterPoint.X,
-            currentView.CenterPoint.Y,
-            currentView.Width,
-            currentView.Height,
-            currentView.Target.X,
-            currentView.Target.Y,
-            currentView.Target.Z,
-            currentView.ViewDirection.X,
-            currentView.ViewDirection.Y,
-            currentView.ViewDirection.Z,
-            currentView.ViewTwist,
-            currentView.LensLength);
+        var viewState = CaptureSessionView(document);
         var viewProperties = JsonSerializer.Serialize(viewState);
         return SessionStateSnapshot.Create(
             database.Filename,
@@ -1606,10 +1601,20 @@ internal static class AutoCadVisualEvidenceReader
                 continue;
             }
 
-            AcadApplication.SetSystemVariable(variable.Key, ToSystemVariableValue(variable.Value));
+            var currentValue = JsonSerializer.SerializeToElement(AcadApplication.GetSystemVariable(variable.Key));
+            if (ShouldRestoreSystemVariableForTesting(currentValue, variable.Value))
+            {
+                AcadApplication.SetSystemVariable(variable.Key, ToSystemVariableValue(variable.Value));
+            }
         }
 
-        AcadApplication.SetSystemVariable("CLAYER", snapshot.CurrentLayer);
+        var currentLayer = Convert.ToString(
+            AcadApplication.GetSystemVariable("CLAYER"),
+            CultureInfo.InvariantCulture) ?? string.Empty;
+        if (!string.Equals(currentLayer, snapshot.CurrentLayer, StringComparison.OrdinalIgnoreCase))
+        {
+            AcadApplication.SetSystemVariable("CLAYER", snapshot.CurrentLayer);
+        }
         var restoredSpace = CaptureSessionSpace();
         if (snapshot.Space.Kind == "PAPER_SPACE_FLOATING_VIEWPORT"
             && restoredSpace.Cvport != snapshot.Space.Cvport)
@@ -1622,30 +1627,69 @@ internal static class AutoCadVisualEvidenceReader
             AcadApplication.SetSystemVariable("CVPORT", 1);
         }
 
-        var ids = snapshot.SelectionHandles
-            .Select(handle => document.Database.GetObjectId(false, new Handle(Convert.ToInt64(handle, 16)), 0))
-            .Where(id => !id.IsNull)
-            .ToArray();
-        document.Editor.SetImpliedSelection(ids);
+        var currentSelectionHandles = CaptureSelectionHandles(document);
+        if (ShouldRestoreSelectionForTesting(currentSelectionHandles, snapshot.SelectionHandles))
+        {
+            var ids = snapshot.SelectionHandles
+                .Select(handle => document.Database.GetObjectId(false, new Handle(Convert.ToInt64(handle, 16)), 0))
+                .Where(id => !id.IsNull)
+                .ToArray();
+            document.Editor.SetImpliedSelection(ids);
+        }
 
         if (snapshot.CurrentView is not null)
         {
-            using var view = document.Editor.GetCurrentView();
-            view.CenterPoint = new Point2d(snapshot.CurrentView.CenterX, snapshot.CurrentView.CenterY);
-            view.Width = snapshot.CurrentView.Width;
-            view.Height = snapshot.CurrentView.Height;
-            view.Target = new Point3d(
-                snapshot.CurrentView.TargetX,
-                snapshot.CurrentView.TargetY,
-                snapshot.CurrentView.TargetZ);
-            view.ViewDirection = new Vector3d(
-                snapshot.CurrentView.DirectionX,
-                snapshot.CurrentView.DirectionY,
-                snapshot.CurrentView.DirectionZ);
-            view.ViewTwist = snapshot.CurrentView.Twist;
-            view.LensLength = snapshot.CurrentView.LensLength;
-            document.Editor.SetCurrentView(view);
+            var currentView = CaptureSessionView(document);
+            if (ShouldRestoreViewForTesting(currentView, snapshot.CurrentView))
+            {
+                using var view = document.Editor.GetCurrentView();
+                view.CenterPoint = new Point2d(snapshot.CurrentView.CenterX, snapshot.CurrentView.CenterY);
+                view.Width = snapshot.CurrentView.Width;
+                view.Height = snapshot.CurrentView.Height;
+                view.Target = new Point3d(
+                    snapshot.CurrentView.TargetX,
+                    snapshot.CurrentView.TargetY,
+                    snapshot.CurrentView.TargetZ);
+                view.ViewDirection = new Vector3d(
+                    snapshot.CurrentView.DirectionX,
+                    snapshot.CurrentView.DirectionY,
+                    snapshot.CurrentView.DirectionZ);
+                view.ViewTwist = snapshot.CurrentView.Twist;
+                view.LensLength = snapshot.CurrentView.LensLength;
+                document.Editor.SetCurrentView(view);
+            }
         }
+    }
+
+    private static IReadOnlyList<string> CaptureSelectionHandles(Document document)
+    {
+        var impliedSelection = document.Editor.SelectImplied();
+        if (impliedSelection.Status != PromptStatus.OK || impliedSelection.Value is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return impliedSelection.Value.GetObjectIds()
+            .Select(objectId => objectId.Handle.ToString().ToUpperInvariant())
+            .ToArray();
+    }
+
+    private static SessionViewSnapshot CaptureSessionView(Document document)
+    {
+        using var currentView = document.Editor.GetCurrentView();
+        return new SessionViewSnapshot(
+            currentView.CenterPoint.X,
+            currentView.CenterPoint.Y,
+            currentView.Width,
+            currentView.Height,
+            currentView.Target.X,
+            currentView.Target.Y,
+            currentView.Target.Z,
+            currentView.ViewDirection.X,
+            currentView.ViewDirection.Y,
+            currentView.ViewDirection.Z,
+            currentView.ViewTwist,
+            currentView.LensLength);
     }
 
     private static SessionSpaceSnapshot CaptureSessionSpace()
