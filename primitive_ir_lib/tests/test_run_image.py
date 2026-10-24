@@ -148,22 +148,77 @@ def test_run_image_deduplicates_same_span_without_dangling_ocr_references(tmp_pa
     ]
 
 
-def test_run_image_rejects_different_content_at_same_ocr_pdf_span(tmp_path):
+def test_run_image_excludes_conflicting_spans_but_keeps_unrelated_ocr_text(tmp_path):
     image_path = tmp_path / "drawing.png"
     output_path = tmp_path / "primitive_ir.json"
     assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
-    ocr = RawText("ocr-1", "R7,50", (10, 10, 30, 20), 0.0, 0.9, "text_tesseract")
-    pdf_text = RawText("pdf-1", "R7.50", (10, 10, 30, 20), 0.0, 1.0, "text_pdfvector")
+    ocr_conflict = RawText(
+        "ocr-conflict", "R7,50", (10, 10, 30, 20), 0.0, 0.9, "text_tesseract"
+    )
+    pdf_conflict = RawText(
+        "pdf-conflict", "R7.50", (10, 10, 30, 20), 0.0, 1.0, "text_pdfvector"
+    )
+    agreeing_ocr_in_conflict_group = RawText(
+        "ocr-agreeing-but-conflicted", "R7.50", (10, 10, 30, 20),
+        0.0, 0.8, "text_tesseract",
+    )
+    unrelated_ocr = RawText(
+        "ocr-unrelated", "NOTE", (50, 10, 75, 20), 0.0, 0.9, "text_tesseract"
+    )
 
     with (
         patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry()),
-        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr]),
-        pytest.raises(ValueError, match=r"same-span content conflict.*ocr-1.*pdf-1"),
+        patch(
+            "primitive_ir_lib.run_image.extract_text_tesseract",
+            return_value=[ocr_conflict, agreeing_ocr_in_conflict_group, unrelated_ocr],
+        ),
     ):
         run(
             image_path=str(image_path), output_path=str(output_path),
             scale_mm_per_px=1.0, preset="default", ocr_rois=[(0, 0, 120, 80)],
-            pdf_vector_texts=[pdf_text],
+            pdf_vector_texts=[pdf_conflict],
+        )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    text_primitives = [item for item in payload["primitives"] if item["type"] == "text"]
+    assert [(item["id"], item["text_data"]["content"]) for item in text_primitives] == [
+        ("ocr-unrelated", "NOTE")
+    ]
+    assert not payload["cross_validations"]
+
+
+def test_run_image_does_not_calibrate_from_conflicting_ocr_dimension(tmp_path):
+    image_path = tmp_path / "drawing.png"
+    output_path = tmp_path / "primitive_ir.json"
+    assert cv2.imwrite(str(image_path), np.full((80, 120, 3), 255, dtype=np.uint8))
+    line = RawLine(
+        "dimension-line", (10.0, 40.0), (110.0, 40.0), 1.0,
+        (10.0, 40.0, 110.0, 40.0),
+    )
+    ocr_dimension = RawText(
+        "ocr-dimension", "100", (50, 20, 70, 35), 0.0, 0.9,
+        "text_tesseract", parsed_value=100.0, semantic_role="dimension_value",
+    )
+    pdf_dimension = RawText(
+        "pdf-dimension", "100.0", (50, 20, 70, 35), 0.0, 1.0,
+        "text_pdfvector", parsed_value=100.0, semantic_role="dimension_value",
+    )
+
+    with (
+        patch(
+            "primitive_ir_lib.run_image.extract_raw_geometry",
+            return_value=RawGeometry(lines=[line]),
+        ),
+        patch(
+            "primitive_ir_lib.run_image.extract_text_tesseract",
+            return_value=[ocr_dimension],
+        ),
+        pytest.raises(CalibrationCandidateUnavailableError),
+    ):
+        run(
+            image_path=str(image_path), output_path=str(output_path),
+            preset="default", ocr_rois=[(0, 0, 120, 80)], auto_calibrate=True,
+            pdf_vector_texts=[pdf_dimension],
         )
 
     assert not output_path.exists()
