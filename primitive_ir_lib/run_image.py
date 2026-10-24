@@ -133,20 +133,32 @@ def _combine_pdf_vector_texts(
     excluded_ocr_objects = {id(ocr) for _, ocr in content_conflicts}
     # Exclude the whole same-span group, including a third OCR/PDF observation
     # that happens to agree with one side of an otherwise conflicting pair.
-    changed = True
-    while changed:
-        changed = False
-        for pdf in pdf_texts:
+    seed_pdf_texts = {id(pdf): pdf for pdf, _ in content_conflicts}
+    seed_ocr_texts = {id(ocr): ocr for _, ocr in content_conflicts}
+    excluded_queue = [
+        *((True, pdf) for pdf in seed_pdf_texts.values()),
+        *((False, ocr) for ocr in seed_ocr_texts.values()),
+    ]
+    queue_index = 0
+    while queue_index < len(excluded_queue):
+        is_pdf, text = excluded_queue[queue_index]
+        queue_index += 1
+        if is_pdf:
             for ocr in ocr_texts:
-                if not _same_span_bbox_match(pdf, ocr):
-                    continue
-                if id(pdf) in excluded_pdf_objects or id(ocr) in excluded_ocr_objects:
-                    if id(pdf) not in excluded_pdf_objects:
-                        excluded_pdf_objects.add(id(pdf))
-                        changed = True
-                    if id(ocr) not in excluded_ocr_objects:
-                        excluded_ocr_objects.add(id(ocr))
-                        changed = True
+                if (
+                    id(ocr) not in excluded_ocr_objects
+                    and _same_span_bbox_match(text, ocr)
+                ):
+                    excluded_ocr_objects.add(id(ocr))
+                    excluded_queue.append((False, ocr))
+        else:
+            for pdf in pdf_texts:
+                if (
+                    id(pdf) not in excluded_pdf_objects
+                    and _same_span_bbox_match(pdf, text)
+                ):
+                    excluded_pdf_objects.add(id(pdf))
+                    excluded_queue.append((True, pdf))
     if conflict_report is not None:
         conflict_report.update(
             ocr_text_state=(
