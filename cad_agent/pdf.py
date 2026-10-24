@@ -374,8 +374,19 @@ def _validate_pdf_resume_artifacts(
     return paths
 
 
-def _requires_auto_ocr_checkpoint_regeneration(primitive_path: Path) -> bool:
+def _requires_auto_ocr_checkpoint_regeneration(
+    primitive_path: Path,
+    page_record: dict[str, Any] | None = None,
+) -> bool:
     """Return whether a cached auto-OCR Primitive IR violates current policy."""
+    from primitive_ir_lib.run_image import PDF_TEXT_CONFLICT_POLICY_VERSION
+
+    if (
+        not isinstance(page_record, dict)
+        or page_record.get("pdf_text_conflict_policy_version")
+        != PDF_TEXT_CONFLICT_POLICY_VERSION
+    ):
+        return True
     try:
         primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -508,6 +519,14 @@ def _regenerate_primitive_from_pdf(
         regenerated_page = regenerated_pages[0]
         if _pdf_page_identity(regenerated_page) != identity:
             raise ManifestError("Regenerated PDF page transform does not match the verified page.")
+        from primitive_ir_lib.run_image import PDF_TEXT_CONFLICT_POLICY_VERSION
+
+        if (
+            bool(config.get("auto_ocr_roi", False))
+            and regenerated_page.get("pdf_text_conflict_policy_version")
+            != PDF_TEXT_CONFLICT_POLICY_VERSION
+        ):
+            raise ManifestError("Regenerated PDF page lacks the current OCR/PDF conflict policy.")
 
         temporary_pdf_root = temporary_root / "pdf"
         regenerated_render = _resolve_pdf_resume_artifact(
@@ -553,6 +572,10 @@ def _regenerate_primitive_from_pdf(
         page["excluded_unverified_pdf_vector_text_span_count"] = regenerated_page.get(
             "excluded_unverified_pdf_vector_text_span_count", 0
         )
+        if "pdf_text_conflict_policy_version" in regenerated_page:
+            page["pdf_text_conflict_policy_version"] = regenerated_page[
+                "pdf_text_conflict_policy_version"
+            ]
 
         latest_paths = _validate_pdf_resume_artifacts(output_dir, manifest_path, source, manifest)
         latest_primitive = latest_paths[(page_number, "primitive_ir")]
@@ -667,6 +690,10 @@ def _ensure_rendered(
         page_record["excluded_unverified_pdf_vector_text_span_count"] = item.get(
             "excluded_unverified_pdf_vector_text_span_count", 0
         )
+        if "pdf_text_conflict_policy_version" in item:
+            page_record["pdf_text_conflict_policy_version"] = item[
+                "pdf_text_conflict_policy_version"
+            ]
         pages.append(page_record)
     if not pages:
         raise ManifestError("PDF contains no renderable pages.")
@@ -851,7 +878,7 @@ def run_pdf_stages(source: Path, output_dir: Path, manifest_path: Path, manifest
         if (
             primitive_completed
             and bool(manifest["configuration"].get("auto_ocr_roi", False))
-            and _requires_auto_ocr_checkpoint_regeneration(primitive)
+            and _requires_auto_ocr_checkpoint_regeneration(primitive, page)
         ):
             primitive_completed = False
         if not primitive_completed:

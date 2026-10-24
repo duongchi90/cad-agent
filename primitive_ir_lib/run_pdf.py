@@ -27,7 +27,7 @@ import numpy as np
 
 from .calibration_registry import get_verified_scale
 from .models import new_id
-from .run_image import run
+from .run_image import PDF_TEXT_CONFLICT_POLICY_VERSION, run
 from .text_extraction import RawText
 
 
@@ -2039,6 +2039,11 @@ def run_pdf(
                     "pdf_vector_text_status": pdf_text_status,
                     "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
                     "excluded_unverified_pdf_vector_text_span_count": len(pdf_vector_texts),
+                    **(
+                        {"pdf_text_conflict_policy_version": PDF_TEXT_CONFLICT_POLICY_VERSION}
+                        if auto_ocr_roi
+                        else {}
+                    ),
                     **text_conflict_report,
                     "primitive_count": len(payload["primitives"]),
                     "cross_validation_count": len(payload["cross_validations"]),

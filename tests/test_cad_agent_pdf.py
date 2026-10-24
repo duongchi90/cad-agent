@@ -680,6 +680,45 @@ def test_pdf_auto_ocr_resume_rejects_cached_unverified_pdf_text(tmp_path: Path) 
     assert _requires_auto_ocr_checkpoint_regeneration(primitive)
 
 
+def test_pdf_auto_ocr_resume_rebuilds_legacy_ocr_cache_with_empty_validations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    monkeypatch.setattr(image_module, "detect_text_candidate_rois", lambda image: [])
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page = persisted["pages"][0]
+    primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+    primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+    primitive["cross_validations"] = []
+    primitive["primitives"] = [{
+        "id": "legacy-stale-ocr",
+        "source": "text_tesseract",
+        "text_data": {"content": "STALE OCR"},
+    }]
+    primitive_path.write_text(json.dumps(primitive), encoding="utf-8")
+    page["stages"]["primitive_ir"]["sha256"] = sha256_file(primitive_path)
+    page.pop("pdf_text_conflict_policy_version", None)
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    run_pdf_stages(source, output, manifest_path, persisted)
+
+    resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rebuilt = json.loads(primitive_path.read_text(encoding="utf-8"))
+    assert all(item.get("id") != "legacy-stale-ocr" for item in rebuilt["primitives"])
+    assert resumed["pages"][0]["pdf_text_conflict_policy_version"] == "ocr-pdf-conflict-exclusion-v1"
+
+
 @pytest.mark.parametrize("path_kind", ["parent-traversal", "absolute", "symlink"])
 def test_pdf_resume_refuses_artifact_paths_outside_output_root_without_io(
     tmp_path: Path,

@@ -36,6 +36,7 @@ from .text_extraction import RawText, detect_text_candidate_rois, extract_text_t
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
+PDF_TEXT_CONFLICT_POLICY_VERSION = "ocr-pdf-conflict-exclusion-v1"
 
 
 class CalibrationCandidateUnavailableError(ValueError):
