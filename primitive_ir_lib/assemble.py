@@ -9,12 +9,13 @@ DXF Builder sẽ đọc.
 
 from __future__ import annotations
 
+import math
 from typing import List, Optional
 
 from .calibration import Calibration
-from .geometry_extraction import RawCircle, RawLine
+from .geometry_extraction import RawArc, RawCircle, RawLine
 from .models import (
-    CircleGeometry, LineGeometry, Primitive,
+    ArcGeometry, CircleGeometry, LineGeometry, Primitive,
     PrimitiveIRDocument, SourceDocument, Trace, now_iso,
 )
 from .text_extraction import RawText
@@ -43,6 +44,42 @@ def circle_to_primitive(raw: RawCircle, calibration: Calibration, tool: str = "o
         confidence=raw.confidence,
         geometry=CircleGeometry(center, radius),
         trace=Trace(bbox_px=raw.bbox_px, extraction_tool=tool, extracted_at=now_iso()),
+    )
+
+
+def pdf_vector_arc_to_primitive(raw: RawArc, calibration: Calibration) -> Primitive:
+    center = calibration.pixel_to_cad(*raw.center_px)
+    start = calibration.pixel_to_cad(*raw.start_px)
+    end = calibration.pixel_to_cad(*raw.end_px)
+    start_angle = math.degrees(math.atan2(start.y - center.y, start.x - center.x)) % 360.0
+    end_angle = math.degrees(math.atan2(end.y - center.y, end.x - center.x)) % 360.0
+    # DXF ARC is counter-clockwise. The page-to-CAD transform reverses the
+    # raster Y axis, so choose the endpoint order that preserves the same open
+    # minor arc in CAD coordinates.
+    if (end_angle - start_angle) % 360.0 > 180.0:
+        start_angle, end_angle = end_angle, start_angle
+    return Primitive(
+        id=raw.id,
+        type="arc",
+        source="geometry_pdfvector",
+        confidence=raw.confidence,
+        geometry=ArcGeometry(
+            center=center,
+            radius=raw.radius_px * calibration.pixel_to_unit_scale,
+            start_angle_deg=start_angle,
+            end_angle_deg=end_angle,
+        ),
+        trace=Trace(
+            bbox_px=raw.bbox_px,
+            extraction_tool="pymupdf-vector-cubic-fit-v1",
+            extracted_at=now_iso(),
+            source_pdf_sha256=raw.source_pdf_sha256,
+            source_page_index=raw.source_page_index,
+            source_transform=raw.source_transform,
+            source_render_sha256=raw.render_sha256,
+            source_render_dpi=raw.render_dpi,
+            source_render_origin_px=raw.render_origin_px,
+        ),
     )
 
 
@@ -91,6 +128,7 @@ def build_document(
     raw_lines: List[RawLine],
     raw_circles: List[RawCircle],
     raw_texts: List[RawText],
+    raw_arcs: Optional[List[RawArc]] = None,
     sha256: Optional[str] = None,
 ) -> PrimitiveIRDocument:
     """Entry point chính: sinh PrimitiveIRDocument đầy đủ (chưa có
@@ -100,6 +138,7 @@ def build_document(
     primitives: List[Primitive] = []
     primitives += [line_to_primitive(l, calibration) for l in raw_lines]
     primitives += [circle_to_primitive(c, calibration) for c in raw_circles]
+    primitives += [pdf_vector_arc_to_primitive(a, calibration) for a in (raw_arcs or [])]
     primitives += [text_to_primitive(t, calibration) for t in raw_texts]
 
     return PrimitiveIRDocument(
