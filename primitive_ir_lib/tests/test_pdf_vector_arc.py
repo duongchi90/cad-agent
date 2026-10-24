@@ -722,6 +722,84 @@ def test_merge_lines_does_not_extend_pdf_witness_clipped_line(tmp_path: Path, mo
     )
 
 
+def test_duplicate_hough_candidates_for_one_pdf_witness_emit_one_line(
+    tmp_path: Path, monkeypatch
+) -> None:
+    image_path = tmp_path / "duplicate-witness-input.png"
+    image = np.full((120, 120, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+
+    arc = RawArc(
+        id="arc",
+        center_px=(0.0, 0.0),
+        radius_px=100.0,
+        start_px=(100.0 * math.cos(math.radians(-10.0)), 100.0 * math.sin(math.radians(-10.0))),
+        end_px=(100.0 * math.cos(math.radians(10.0)), 100.0 * math.sin(math.radians(10.0))),
+        signed_sweep_deg=20.0,
+        confidence=1.0,
+        bbox_px=(98.0, -18.0, 101.0, 18.0),
+        source_pdf_sha256="a" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="b" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+    )
+    separate_arc = RawArc(
+        id="separate-arc",
+        center_px=(0.0, 0.0),
+        radius_px=110.0,
+        start_px=(110.0 * math.cos(math.radians(-10.0)), 110.0 * math.sin(math.radians(-10.0))),
+        end_px=(110.0 * math.cos(math.radians(10.0)), 110.0 * math.sin(math.radians(10.0))),
+        signed_sweep_deg=20.0,
+        confidence=1.0,
+        bbox_px=(108.0, -18.0, 111.0, 18.0),
+        source_pdf_sha256="c" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="d" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+    )
+    witness = RawLine("pdf-witness", (100.0, -4.0), (100.0, 4.0), 1.0, (100, -4, 100, 4))
+    separate_witness = RawLine(
+        "separate-pdf-witness", (110.0, -4.0), (110.0, 4.0), 1.0, (110, -4, 110, 4)
+    )
+    duplicate_hough_candidates = [
+        RawLine("arc-tangent-1", (100.0, -6.0), (100.0, 6.0), 0.8, (100, -6, 100, 6)),
+        RawLine("arc-tangent-2", (100.0, -6.0), (100.0, 6.0), 0.8, (100, -6, 100, 6)),
+        RawLine("separate-witness-line", (110.0, -6.0), (110.0, 6.0), 0.8, (110, -6, 110, 6)),
+        RawLine("independent-line", (20.0, 20.0), (50.0, 20.0), 0.9, (20, 20, 50, 20)),
+    ]
+    monkeypatch.setattr(
+        run_image_module,
+        "extract_raw_geometry",
+        lambda *_args, **_kwargs: RawGeometry(lines=duplicate_hough_candidates),
+    )
+
+    output_path = tmp_path / "duplicate-witness-output.json"
+    run_image_module.run(
+        image_path=str(image_path),
+        output_path=str(output_path),
+        scale_mm_per_px=1.0,
+        merge_lines=True,
+        pdf_vector_arcs=[arc, separate_arc],
+        pdf_vector_line_witnesses=[witness, separate_witness],
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    emitted_lines = [primitive for primitive in payload["primitives"] if primitive["type"] == "line"]
+
+    assert len(emitted_lines) == 3, (
+        "repeated Hough detections must collapse only within their shared PDF "
+        f"witness interval while preserving the independent line: {emitted_lines}"
+    )
+    assert {primitive["id"] for primitive in emitted_lines} == {
+        "arc-tangent-1",
+        "separate-witness-line",
+        "independent-line",
+    }
+
+
 @pytest.mark.parametrize("bboxlog_corruption", ["truncated", "kind_mismatch"])
 def test_inconsistent_bboxlog_fails_closed_for_hidden_line_witness(
     tmp_path: Path, bboxlog_corruption: str

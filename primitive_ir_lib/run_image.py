@@ -280,6 +280,19 @@ def _clip_raster_line_to_pdf_vector_witness(
     )
 
 
+def _same_pdf_witness_interval(first: RawLine, second: RawLine) -> bool:
+    """Identify duplicate raster proposals for the same clipped source interval."""
+    direct_error = max(
+        math.dist(first.p1_px, second.p1_px),
+        math.dist(first.p2_px, second.p2_px),
+    )
+    reversed_error = max(
+        math.dist(first.p1_px, second.p2_px),
+        math.dist(first.p2_px, second.p1_px),
+    )
+    return min(direct_error, reversed_error) <= 2.5
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -382,17 +395,22 @@ def run(
         if not any(_line_is_explained_by_pdf_arc(line, arc) for arc in pdf_vector_arcs):
             raw_lines.append(line)
             continue
-        for witness in pdf_vector_line_witnesses:
+        for witness_index, witness in enumerate(pdf_vector_line_witnesses):
             clipped = _clip_raster_line_to_pdf_vector_witness(line, witness)
             if clipped is not None:
                 # Keep the source-bounded segment out of the general line
                 # merger: an adjacent raster fragment must not extend it
                 # beyond the PDF stroke that independently supports it.
-                pdf_witnessed_lines.append(clipped)
+                if not any(
+                    existing_witness_index == witness_index
+                    and _same_pdf_witness_interval(existing, clipped)
+                    for existing_witness_index, existing in pdf_witnessed_lines
+                ):
+                    pdf_witnessed_lines.append((witness_index, clipped))
                 break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=decision_texts, image_bgr=image)
-    raw_lines.extend(pdf_witnessed_lines)
+    raw_lines.extend(line for _, line in pdf_witnessed_lines)
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:
