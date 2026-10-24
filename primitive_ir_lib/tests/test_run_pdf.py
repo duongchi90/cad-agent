@@ -713,7 +713,8 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
                  calibration_status="verified", calibration_source_sha256=None,
-                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0):
+                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0,
+                 image_bytes=None):
         captured_calls.append(dict(
             auto_ocr_roi=auto_ocr_roi, auto_calibrate=auto_calibrate,
             calibration_registry_path=calibration_registry_path,
@@ -722,6 +723,7 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
                 view_candidates_dpi=view_candidates_dpi,
             pdf_vector_texts=pdf_vector_texts,
             source_page_index=source_page_index,
+            image_bytes=image_bytes,
         ))
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
@@ -750,6 +752,7 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
     assert len(captured_calls) == 2
     assert [c["calibration_id"] for c in captured_calls] == ["tau190_page01", "tau190_page02"]
     assert [c["source_page_index"] for c in captured_calls] == [0, 1]
+    assert all(isinstance(c["image_bytes"], bytes) and c["image_bytes"] for c in captured_calls)
     for c in captured_calls:
         assert c["auto_ocr_roi"] is True
         assert c["auto_calibrate"] is True
@@ -779,7 +782,8 @@ def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: 
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
                  calibration_status="verified", calibration_source_sha256=None,
-                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0):
+                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0,
+                 image_bytes=None):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
             "primitives": [], "cross_validations": [],

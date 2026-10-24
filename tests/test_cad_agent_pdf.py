@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -7,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 import fitz
+import numpy as np
 import pytest
 
 from cad_agent.cli import main
@@ -20,6 +22,71 @@ from cad_agent.pdf import (
     read_pdf_manifest,
     run_pdf_stages,
 )
+
+
+def test_pdf_run_image_consumes_the_rendered_source_bytes_when_shared_png_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cv2
+
+    pdf_module = importlib.import_module("primitive_ir_lib.run_pdf")
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    source = tmp_path / "source.pdf"
+    replacement = tmp_path / "replacement.pdf"
+    output = tmp_path / "run"
+
+    source_document = fitz.open()
+    source_page = source_document.new_page(width=400, height=300)
+    source_page.draw_line((30, 50), (350, 50), width=3)
+    source_document.save(source)
+    source_document.close()
+
+    replacement_document = fitz.open()
+    replacement_page = replacement_document.new_page(width=400, height=300)
+    replacement_page.draw_line((30, 250), (350, 250), width=3)
+    replacement_document.save(replacement)
+    replacement_document.close()
+
+    with fitz.open(source) as source_document:
+        source_bytes = source_document[0].get_pixmap(alpha=False).tobytes("png")
+    with fitz.open(replacement) as replacement_document:
+        replacement_bytes = replacement_document[0].get_pixmap(alpha=False).tobytes("png")
+    expected_pixels = cv2.imdecode(
+        np.frombuffer(source_bytes, dtype=np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+    expected_pixels_sha256 = hashlib.sha256(expected_pixels.tobytes()).hexdigest()
+    observed_geometry_input_hashes: list[str] = []
+    original_extract = image_module.extract_raw_geometry
+    original_run = pdf_module.run
+
+    def observe_geometry_input(image, **kwargs):
+        observed_geometry_input_hashes.append(hashlib.sha256(image.tobytes()).hexdigest())
+        return original_extract(image, **kwargs)
+
+    def replace_shared_png_before_image_read(*args, **kwargs):
+        Path(kwargs["image_path"]).write_bytes(replacement_bytes)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(image_module, "extract_raw_geometry", observe_geometry_input)
+    monkeypatch.setattr(pdf_module, "run", replace_shared_png_before_image_read)
+
+    with pytest.raises(ValueError, match="rendered page changed"):
+        pdf_module.run_pdf(
+            source,
+            output,
+            scale_mm_per_px=0.5,
+            dpi=72,
+            auto_ocr_roi=False,
+        )
+
+    assert observed_geometry_input_hashes == [expected_pixels_sha256]
+    failed_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert failed_manifest["status"] == "failed"
+    assert failed_manifest["pages"] == []
+    assert hashlib.sha256(source_bytes).hexdigest() != hashlib.sha256(replacement_bytes).hexdigest()
+    assert not (output / "primitive_ir" / "page_01.json").exists()
 
 
 def _pdf(path: Path, label: str = "A") -> None:

@@ -1907,11 +1907,13 @@ def run_pdf(
             )
             image_path = render_dir / f"page_{index:02d}.png"
             pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            rendered_png_bytes = pixmap.tobytes("png")
+            rendered_png_sha256 = hashlib.sha256(rendered_png_bytes).hexdigest()
             _write_pdf_output(
                 image_path,
                 output_dir,
                 pdf_path,
-                lambda path: path.write_bytes(pixmap.tobytes("png")),
+                lambda path: path.write_bytes(rendered_png_bytes),
             )
             if auto_ocr_roi:
                 pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
@@ -1967,8 +1969,13 @@ def run_pdf(
                         pdf_vector_texts=pdf_vector_texts,
                         text_conflict_report=text_conflict_report,
                         source_page_index=index - 1,
+                        image_bytes=rendered_png_bytes,
                         **vector_kwargs,
                     )
+                    if _sha256_file(image_path) != rendered_png_sha256:
+                        raise ValueError(
+                            "PDF rendered page changed while its source-bound image was extracted."
+                        )
                     candidates_stat, candidates_size, candidates_sha256 = (
                         _descriptor_sha256(candidates_descriptor)
                     )
@@ -2006,6 +2013,8 @@ def run_pdf(
                 preset,
                 merge_lines,
             )
+            if _sha256_file(image_path) != rendered_png_sha256:
+                raise ValueError("PDF rendered page changed before its source checkpoint was recorded.")
             _write_pdf_output(
                 view_candidates_path,
                 output_dir,
@@ -2025,7 +2034,7 @@ def run_pdf(
                     "render_scale_px_per_point": scale,
                     "pixmap_origin_px": [pixmap.x, pixmap.y],
                     "rendered_png": str(image_path.relative_to(output_dir)),
-                    "rendered_png_sha256": _sha256_file(image_path),
+                    "rendered_png_sha256": rendered_png_sha256,
                     "primitive_ir": str(output_path.relative_to(output_dir)),
                     "pdf_vector_text_status": pdf_text_status,
                     "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
