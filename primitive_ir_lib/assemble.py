@@ -55,7 +55,15 @@ def text_to_primitive(raw: RawText, calibration: Calibration, height_px: float =
     bbox_height_px = raw.bbox_px[3] - raw.bbox_px[1]
     height_cad = (bbox_height_px if bbox_height_px > 0 else height_px) * calibration.pixel_to_unit_scale
 
-    tool = "tesseract-5.3" if raw.source == "text_tesseract" else "claude-vision"
+    tools = {
+        "text_tesseract": "tesseract-5.3",
+        "text_vision": "claude-vision",
+        "text_pdfvector": "pymupdf",
+    }
+    try:
+        tool = tools[raw.source]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported text source: {raw.source!r}") from exc
 
     return Primitive(
         id=raw.id,

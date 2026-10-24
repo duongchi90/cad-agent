@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
+import numpy as np
 import pytesseract
 
 from .assemble import build_document
@@ -31,10 +32,11 @@ from .cross_validation import cross_validate
 from .geometry_extraction import extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
-from .text_extraction import detect_text_candidate_rois, extract_text_tesseract
+from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
 
 Bbox = Tuple[int, int, int, int]
+PDF_TEXT_CONFLICT_POLICY_VERSION = "ocr-pdf-conflict-exclusion-v1"
 
 
 class CalibrationCandidateUnavailableError(ValueError):
@@ -80,6 +82,153 @@ def _sha256(path: str) -> str:
     return digest.hexdigest()
 
 
+def _same_span_bbox_match(a: RawText, b: RawText) -> bool:
+    ax0, ay0, ax1, ay1 = a.bbox_px
+    bx0, by0, bx1, by1 = b.bbox_px
+    area_a = max(0, ax1 - ax0) * max(0, ay1 - ay0)
+    area_b = max(0, bx1 - bx0) * max(0, by1 - by0)
+    overlap_width = max(0, min(ax1, bx1) - max(ax0, bx0))
+    overlap_height = max(0, min(ay1, by1) - max(ay0, by0))
+    intersection_area = overlap_width * overlap_height
+    smaller_area = min(area_a, area_b)
+    larger_area = max(area_a, area_b)
+    return (
+        smaller_area > 0
+        and intersection_area / smaller_area >= 0.90
+        and smaller_area / larger_area >= 0.40
+    )
+
+
+def _rotation_equivalent(a: RawText, b: RawText) -> bool:
+    if not math.isfinite(a.rotation_deg) or not math.isfinite(b.rotation_deg):
+        return False
+    difference = abs((a.rotation_deg - b.rotation_deg + 180.0) % 360.0 - 180.0)
+    return difference <= 1e-6
+
+
+def _combine_pdf_vector_texts(
+    pdf_vector_texts: Optional[List[RawText]], ocr_texts: List[RawText],
+    conflict_report: Optional[dict] = None,
+) -> List[RawText]:
+    """Validate PDF/OCR spans; only OCR text is admissible for visible output."""
+    pdf_texts = pdf_vector_texts or []
+
+    for first_index, first in enumerate(pdf_texts):
+        for second in pdf_texts[first_index + 1:]:
+            if (
+                first.content == second.content
+                and _same_span_bbox_match(first, second)
+            ):
+                raise ValueError(
+                    "PDF/PDF same-span identity ambiguous: "
+                    f"{first.id}={first.rotation_deg}°, "
+                    f"{second.id}={second.rotation_deg}°"
+                )
+
+    content_conflicts = [
+        (pdf, ocr)
+        for pdf in pdf_texts
+        for ocr in ocr_texts
+        if _same_span_bbox_match(pdf, ocr) and pdf.content != ocr.content
+    ]
+    excluded_pdf_objects = {id(pdf) for pdf, _ in content_conflicts}
+    excluded_ocr_objects = {id(ocr) for _, ocr in content_conflicts}
+    # Exclude the whole same-span group, including a third OCR/PDF observation
+    # that happens to agree with one side of an otherwise conflicting pair.
+    seed_pdf_texts = {id(pdf): pdf for pdf, _ in content_conflicts}
+    seed_ocr_texts = {id(ocr): ocr for _, ocr in content_conflicts}
+    excluded_queue = [
+        *((True, pdf) for pdf in seed_pdf_texts.values()),
+        *((False, ocr) for ocr in seed_ocr_texts.values()),
+    ]
+    queue_index = 0
+    while queue_index < len(excluded_queue):
+        is_pdf, text = excluded_queue[queue_index]
+        queue_index += 1
+        if is_pdf:
+            for ocr in ocr_texts:
+                if (
+                    id(ocr) not in excluded_ocr_objects
+                    and _same_span_bbox_match(text, ocr)
+                ):
+                    excluded_ocr_objects.add(id(ocr))
+                    excluded_queue.append((False, ocr))
+        else:
+            for pdf in pdf_texts:
+                if (
+                    id(pdf) not in excluded_pdf_objects
+                    and _same_span_bbox_match(pdf, text)
+                ):
+                    excluded_pdf_objects.add(id(pdf))
+                    excluded_queue.append((True, pdf))
+    if conflict_report is not None:
+        conflict_report.update(
+            ocr_text_state=(
+                "partial_conflicts_excluded" if content_conflicts else "unverified"
+            ),
+            ocr_pdf_conflict_count=len(content_conflicts),
+            excluded_ocr_text_span_count=len(excluded_ocr_objects),
+            excluded_pdf_text_span_count=len(excluded_pdf_objects),
+        )
+    admitted_pdf_texts = [text for text in pdf_texts if id(text) not in excluded_pdf_objects]
+    admitted_ocr_texts = [text for text in ocr_texts if id(text) not in excluded_ocr_objects]
+
+    pdf_matches = {
+        pdf_index: [
+            ocr_index for ocr_index, ocr in enumerate(admitted_ocr_texts)
+            if pdf.content == ocr.content and _same_span_bbox_match(pdf, ocr)
+        ]
+        for pdf_index, pdf in enumerate(admitted_pdf_texts)
+    }
+    ocr_matches = {
+        ocr_index: [
+            pdf_index for pdf_index, pdf in enumerate(admitted_pdf_texts)
+            if pdf.content == ocr.content and _same_span_bbox_match(pdf, ocr)
+        ]
+        for ocr_index, ocr in enumerate(admitted_ocr_texts)
+    }
+
+    ambiguous_pairs = [
+        (pdf_index, ocr_index)
+        for pdf_index, ocr_indexes in pdf_matches.items()
+        if len(ocr_indexes) > 1
+        for ocr_index in ocr_indexes
+    ] + [
+        (pdf_index, ocr_index)
+        for ocr_index, pdf_indexes in ocr_matches.items()
+        if len(pdf_indexes) > 1
+        for pdf_index in pdf_indexes
+    ]
+    if ambiguous_pairs:
+        pdf_indexes = sorted({pdf_index for pdf_index, _ in ambiguous_pairs})
+        ocr_indexes = sorted({ocr_index for _, ocr_index in ambiguous_pairs})
+        pdf_details = ", ".join(
+            f"{admitted_pdf_texts[index].id}={admitted_pdf_texts[index].rotation_deg}°"
+            for index in pdf_indexes
+        )
+        ocr_details = ", ".join(
+            f"{admitted_ocr_texts[index].id}={admitted_ocr_texts[index].rotation_deg}°"
+            for index in ocr_indexes
+        )
+        raise ValueError(
+            "ambiguous OCR/PDF span match: "
+            f"OCR [{ocr_details}]; PDF [{pdf_details}]"
+        )
+
+    for pdf_index, ocr_indexes in pdf_matches.items():
+        if not ocr_indexes:
+            continue
+        ocr = admitted_ocr_texts[ocr_indexes[0]]
+        pdf = admitted_pdf_texts[pdf_index]
+        if not _rotation_equivalent(ocr, pdf):
+            raise ValueError(
+                "PDF/OCR same-span rotation conflict: "
+                f"{ocr.id}={ocr.rotation_deg}°, "
+                f"{pdf.id}={pdf.rotation_deg}°"
+            )
+    return admitted_ocr_texts
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -100,6 +249,10 @@ def run(
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
+    pdf_vector_texts: Optional[List[RawText]] = None,
+    text_conflict_report: Optional[dict] = None,
+    source_page_index: int = 0,
+    image_bytes: Optional[bytes] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -124,7 +277,14 @@ def run(
     if not os.path.isfile(image_path):
         raise FileNotFoundError(f"Không thấy ảnh đầu vào: {image_path}")
 
-    image = cv2.imread(image_path)
+    if image_bytes is None:
+        image = cv2.imread(image_path)
+        image_sha256 = _sha256(image_path)
+    else:
+        if not isinstance(image_bytes, bytes) or not image_bytes:
+            raise ValueError("image_bytes must be non-empty bytes")
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        image_sha256 = hashlib.sha256(image_bytes).hexdigest()
     if image is None:
         raise ValueError(f"Không đọc được ảnh bằng OpenCV: {image_path}")
 
@@ -148,10 +308,10 @@ def run(
         effective_rois = list({*effective_rois, *detected}) if effective_rois else detected
         print(f"[run-image] auto-ocr-roi: {len(detected)} vùng ứng viên được phát hiện tự động.")
 
-    raw_texts = []
+    ocr_texts: List[RawText] = []
     if effective_rois:
         _configure_tesseract(tesseract_cmd)
-        raw_texts = extract_text_tesseract(image, roi_boxes=effective_rois, lang=ocr_lang)
+        ocr_texts = extract_text_tesseract(image, roi_boxes=effective_rois, lang=ocr_lang)
 
     if view_candidates_output_path is not None:
         _configure_tesseract(tesseract_cmd)
@@ -162,16 +322,24 @@ def run(
             psm=11,
             lang=ocr_lang,
         )
-        raw_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
+        ocr_texts.extend(text for text in title_texts if parse_scale_label(text.content) is not None)
+
+    raw_texts = _combine_pdf_vector_texts(
+        pdf_vector_texts, ocr_texts, conflict_report=text_conflict_report
+    )
+    # Keep OCR as the only decision-grade text source. Embedded PDF text can
+    # be invisible or stale relative to the rendered page and must not replace
+    # OCR evidence used by existing geometry association gates.
+    decision_texts = raw_texts
 
     raw_lines = raw_geometry.lines
     if merge_lines:
-        raw_lines = merge_collinear_lines(raw_lines, blocking_texts=raw_texts, image_bgr=image)
+        raw_lines = merge_collinear_lines(raw_lines, blocking_texts=ocr_texts, image_bgr=image)
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:
             raise ValueError("view_candidates_dpi is required with view_candidates_output_path")
-        candidates = detect_view_candidates(raw_texts, raw_lines, image.shape[1], image.shape[0], dpi=view_candidates_dpi)
+        candidates = detect_view_candidates(decision_texts, raw_lines, image.shape[1], image.shape[0], dpi=view_candidates_dpi)
         candidates_path = Path(view_candidates_output_path)
         candidates_path.parent.mkdir(parents=True, exist_ok=True)
         candidates_path.write_text(json.dumps(candidates, indent=2) + "\n", encoding="utf-8")
@@ -190,7 +358,7 @@ def run(
             source_sha256=calibration_source_sha256,
         )
     else:
-        calibration = auto_estimate_calibration(raw_texts, raw_lines, image.shape[0], unit="mm")
+        calibration = auto_estimate_calibration(decision_texts, raw_lines, image.shape[0], unit="mm")
         if calibration is None:
             raise CalibrationCandidateUnavailableError(
                 "auto_calibrate không tìm được cặp (dimension_value, line gần "
@@ -199,9 +367,7 @@ def run(
                 "kích thước đã biết."
             )
         calibration.status = "needs_verification"
-        calibration.source_sha256 = calibration_source_sha256 or _sha256(
-            image_path
-        )
+        calibration.source_sha256 = calibration_source_sha256 or image_sha256
         print(
             "[run-image] CẢNH BÁO: scale được suy tự động "
             f"({calibration.pixel_to_unit_scale} mm/px, method="
@@ -216,6 +382,7 @@ def run(
                 calibration.pixel_to_unit_scale,
                 evidence=calibration.reference_note or "auto_estimate_calibration",
                 status="needs_verification",
+                image_sha256=image_sha256,
             )
             print(
                 f"[run-image] Đã ghi bản ghi calibration '{calibration_id}' "
@@ -225,17 +392,17 @@ def run(
             )
     document = build_document(
         file_name=os.path.basename(image_path),
-        page_index=0,
+        page_index=source_page_index,
         image_width_px=image.shape[1],
         image_height_px=image.shape[0],
         calibration=calibration,
         raw_lines=raw_lines,
         raw_circles=raw_geometry.circles,
         raw_texts=raw_texts,
-        sha256=_sha256(image_path),
+        sha256=image_sha256,
     )
     document.cross_validations = cross_validate(
-        raw_texts,
+        decision_texts,
         raw_lines,
         calibration,
         merge_collinear=False,

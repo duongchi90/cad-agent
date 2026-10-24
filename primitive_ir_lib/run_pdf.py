@@ -15,7 +15,10 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import stat
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +26,9 @@ import fitz
 import numpy as np
 
 from .calibration_registry import get_verified_scale
-from .run_image import run
+from .models import new_id
+from .run_image import PDF_TEXT_CONFLICT_POLICY_VERSION, run
+from .text_extraction import RawText
 
 
 def _candidate_crop_bbox(
@@ -37,14 +42,428 @@ def _candidate_crop_bbox(
     return x0, y0, x1, y1
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _matrix_values(matrix: fitz.Matrix) -> list[float]:
+    values = [float(matrix.a), float(matrix.b), float(matrix.c), float(matrix.d), float(matrix.e), float(matrix.f)]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("PDF page transform contains a non-finite value")
+    return [round(value, 8) for value in values]
+
+
+def _page_vector_texts(
+    page: fitz.Page,
+    pixel_scale: float,
+    pixmap_origin: tuple[int, int],
+    image_size: tuple[int, int],
+) -> tuple[list[RawText], str, int]:
+    """Extract embedded PDF spans in the exact page-render pixel frame."""
+    if page.rotation not in {0, 90, 180, 270}:
+        return [], "unsupported_page_rotation", 0
+    try:
+        _matrix_values(page.rotation_matrix)
+        blocks = page.get_text("dict")["blocks"]
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+        return [], f"unavailable:{type(exc).__name__}", 0
+
+    width_px, height_px = image_size
+    origin_x, origin_y = pixmap_origin
+    extracted: list[RawText] = []
+    skipped = 0
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                content = span.get("text")
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                try:
+                    bbox = tuple(float(value) for value in span["bbox"])
+                    if len(bbox) != 4 or not all(math.isfinite(value) for value in bbox):
+                        raise ValueError("invalid span bbox")
+                    x0, y0, x1, y1 = bbox
+                    if x0 >= x1 or y0 >= y1:
+                        raise ValueError("degenerate span bbox")
+                    transformed = [
+                        fitz.Point(x, y) * page.rotation_matrix
+                        for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1))
+                    ]
+                    left = max(0, math.floor(min(point.x for point in transformed) * pixel_scale - origin_x))
+                    top = max(0, math.floor(min(point.y for point in transformed) * pixel_scale - origin_y))
+                    right = min(width_px, math.ceil(max(point.x for point in transformed) * pixel_scale - origin_x))
+                    bottom = min(height_px, math.ceil(max(point.y for point in transformed) * pixel_scale - origin_y))
+                    if left >= right or top >= bottom:
+                        raise ValueError("span is outside the rendered page")
+
+                    direction = line.get("dir", (1.0, 0.0))
+                    dx, dy = float(direction[0]), float(direction[1])
+                    if not math.isfinite(dx) or not math.isfinite(dy) or (dx == 0.0 and dy == 0.0):
+                        raise ValueError("invalid span direction")
+                    vector_start = fitz.Point(0, 0) * page.rotation_matrix
+                    vector_end = fitz.Point(dx, dy) * page.rotation_matrix
+                    rotation_deg = math.degrees(
+                        math.atan2(-(vector_end.y - vector_start.y), vector_end.x - vector_start.x)
+                    )
+                    if not math.isfinite(rotation_deg):
+                        raise ValueError("invalid transformed span direction")
+                except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+                    skipped += 1
+                    continue
+
+                extracted.append(
+                    RawText(
+                        id=new_id("pdf-text"),
+                        content=content,
+                        bbox_px=(left, top, right, bottom),
+                        rotation_deg=rotation_deg,
+                        confidence=1.0,
+                        source="text_pdfvector",
+                        semantic_role="unknown",
+                    )
+                )
+    if skipped:
+        status = "partial_unsupported_spans" if extracted else "unsupported_spans"
+    else:
+        status = "available" if extracted else "no_text"
+    return extracted, status, skipped
+
+
 def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
     return max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3])
+
+
+def _pdf_output_error(path: Path, reason: str) -> ValueError:
+    return ValueError(f"Unsafe PDF output {reason}: {path}")
+
+
+def _is_reparse_point(info: os.stat_result) -> bool:
+    reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & reparse_point
+    )
+
+
+def _same_physical_path(left: Path, right: Path) -> bool:
+    try:
+        if os.path.samefile(left, right):
+            return True
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise _pdf_output_error(left, "identity cannot be verified") from exc
+    try:
+        return os.path.normcase(str(left.resolve(strict=False))) == os.path.normcase(
+            str(right.resolve(strict=False))
+        )
+    except (OSError, RuntimeError) as exc:
+        raise _pdf_output_error(left, "identity cannot be resolved") from exc
+
+
+def _validate_pdf_output_directory(output_root: Path, directory: Path) -> None:
+    root = Path(os.path.abspath(output_root))
+    target = Path(os.path.abspath(directory))
+    try:
+        if os.path.normcase(str(root.resolve(strict=False))) != os.path.normcase(str(root)):
+            raise _pdf_output_error(root, "output root has a redirected ancestor")
+    except (OSError, RuntimeError) as exc:
+        raise _pdf_output_error(root, "output root identity cannot be resolved") from exc
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise _pdf_output_error(target, "directory escapes its output root") from exc
+
+    current = root
+    candidates = [current]
+    for part in relative.parts:
+        current = current / part
+        candidates.append(current)
+    for path in candidates:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise _pdf_output_error(path, "directory cannot be inspected") from exc
+        if _is_reparse_point(info):
+            raise _pdf_output_error(path, "directory is redirected")
+        if not stat.S_ISDIR(info.st_mode):
+            raise _pdf_output_error(path, "directory is not a directory")
+
+
+def _validate_pdf_output_path(
+    path: Path,
+    output_root: Path,
+    source_pdf: Path,
+    *,
+    atomic_replace: bool = False,
+) -> None:
+    root = Path(os.path.abspath(output_root))
+    target = Path(os.path.abspath(path))
+    if _same_physical_path(target, source_pdf):
+        raise _pdf_output_error(target, "aliases the source PDF")
+    _validate_pdf_output_directory(root, target.parent)
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise _pdf_output_error(target, "file cannot be inspected") from exc
+
+    if _is_reparse_point(info):
+        if atomic_replace:
+            return
+        raise _pdf_output_error(target, "file is redirected")
+    if stat.S_ISREG(info.st_mode):
+        if getattr(info, "st_nlink", 1) > 1 and not atomic_replace:
+            raise _pdf_output_error(target, "file has multiple hard links")
+        return
+    raise _pdf_output_error(target, "destination is not a regular file")
+
+
+def _validate_pdf_output_tree(
+    output_root: Path, source_pdf: Path, manifest_path: Path
+) -> None:
+    root = Path(os.path.abspath(output_root))
+    manifest_identity_path = os.path.normcase(
+        str(Path(os.path.abspath(manifest_path)))
+    )
+    _validate_pdf_output_directory(root, root)
+    if not root.exists():
+        return
+
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise _pdf_output_error(directory, "directory cannot be inspected") from exc
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                raise _pdf_output_error(path, "entry cannot be inspected") from exc
+            is_manifest = os.path.normcase(str(path)) == manifest_identity_path
+            if _same_physical_path(path, source_pdf):
+                raise _pdf_output_error(path, "aliases the source PDF")
+            if _is_reparse_point(info):
+                if is_manifest:
+                    continue
+                raise _pdf_output_error(path, "entry is redirected")
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(path)
+            elif stat.S_ISREG(info.st_mode):
+                if getattr(info, "st_nlink", 1) > 1 and not is_manifest:
+                    raise _pdf_output_error(path, "file has multiple hard links")
+            else:
+                raise _pdf_output_error(path, "entry is not a regular file or directory")
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    try:
+        info = path.stat()
+    except OSError as exc:
+        raise _pdf_output_error(path, "parent directory identity cannot be verified") from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise _pdf_output_error(path, "parent is not a directory")
+    return info.st_dev, info.st_ino
+
+
+def _pdf_output_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _cleanup_owned_pdf_output_temp(
+    temporary: Path, expected_identity: tuple[int, int]
+) -> None:
+    if _pdf_output_identity(temporary) == expected_identity:
+        temporary.unlink(missing_ok=True)
+
+
+def _create_pdf_output_temp(
+    destination: Path, output_root: Path, source_pdf: Path
+) -> tuple[Path, tuple[int, int], int, tuple[int, int]]:
+    _validate_pdf_output_path(destination, output_root, source_pdf)
+    _validate_pdf_output_directory(output_root, destination.parent)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _validate_pdf_output_directory(output_root, destination.parent)
+    parent_identity = _directory_identity(destination.parent)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.stem}.",
+        suffix=destination.suffix,
+        dir=destination.parent,
+    )
+    temporary = Path(name)
+    created_stat = os.fstat(descriptor)
+    created_identity = (created_stat.st_dev, created_stat.st_ino)
+    try:
+        if _directory_identity(destination.parent) != parent_identity:
+            raise _pdf_output_error(
+                destination.parent, "parent changed during temporary creation"
+            )
+        _validate_pdf_output_path(temporary, output_root, source_pdf)
+    except Exception:
+        os.close(descriptor)
+        _cleanup_owned_pdf_output_temp(temporary, created_identity)
+        raise
+    # Keep the exclusive mkstemp handle open while pathname-based artifact
+    # writers run. On the supported Windows filesystem, that prevents another
+    # process from unlinking/replacing this entry with a symlink before a
+    # writer opens the path. Close only after the writer finishes; publication
+    # itself remains the existing atomic replace step.
+    return temporary, parent_identity, descriptor, created_identity
+
+
+def _descriptor_sha256(descriptor: int) -> tuple[os.stat_result, int, str]:
+    before = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or getattr(before, "st_nlink", 1) != 1
+        or getattr(before, "st_file_attributes", 0) & 0x0400
+    ):
+        raise ValueError("PDF artifact writer output is not a single-link regular file.")
+    original_offset = os.lseek(descriptor, 0, os.SEEK_CUR)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    finally:
+        os.lseek(descriptor, original_offset, os.SEEK_SET)
+    after = os.fstat(descriptor)
+    if (
+        not os.path.samestat(before, after)
+        or before.st_size != after.st_size
+        or size != after.st_size
+    ):
+        raise ValueError("PDF artifact changed while its writer output was being bound.")
+    return after, size, digest.hexdigest()
+
+
+def _verify_published_pdf_output(
+    destination: Path,
+    expected_stat: os.stat_result,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    from cad_agent.file_integrity import assert_path_identity, open_bound_file
+
+    descriptor, published_stat = open_bound_file(
+        destination,
+        flags=os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        label="PDF artifact",
+    )
+    try:
+        if not os.path.samestat(expected_stat, published_stat):
+            raise ValueError("Published PDF artifact is not the writer-owned file.")
+        actual_stat, actual_size, actual_sha256 = _descriptor_sha256(descriptor)
+        if (
+            not os.path.samestat(expected_stat, actual_stat)
+            or actual_size != expected_size
+            or actual_sha256 != expected_sha256
+        ):
+            raise ValueError("Published PDF artifact does not match writer-bound bytes.")
+        assert_path_identity(destination, actual_stat, label="PDF artifact")
+    finally:
+        os.close(descriptor)
+
+
+def _publish_pdf_output_temp(
+    temporary: Path,
+    destination: Path,
+    output_root: Path,
+    source_pdf: Path,
+    parent_identity: tuple[int, int],
+    expected_stat: os.stat_result,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    _validate_pdf_output_path(destination, output_root, source_pdf)
+    _validate_pdf_output_path(temporary, output_root, source_pdf)
+    if _directory_identity(destination.parent) != parent_identity:
+        raise _pdf_output_error(destination.parent, "parent changed before publication")
+    from cad_agent.file_integrity import open_bound_file
+
+    descriptor, temporary_stat = open_bound_file(
+        temporary,
+        flags=os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        label="PDF temporary artifact",
+    )
+    try:
+        if not os.path.samestat(expected_stat, temporary_stat):
+            raise ValueError("PDF temporary artifact is not the writer-owned file.")
+        actual_stat, actual_size, actual_sha256 = _descriptor_sha256(descriptor)
+        if (
+            not os.path.samestat(expected_stat, actual_stat)
+            or actual_size != expected_size
+            or actual_sha256 != expected_sha256
+        ):
+            raise ValueError("PDF temporary artifact does not match writer-bound bytes.")
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, destination)
+    _validate_pdf_output_path(destination, output_root, source_pdf)
+    _verify_published_pdf_output(destination, expected_stat, expected_size, expected_sha256)
+
+
+def _write_pdf_output(
+    destination: Path,
+    output_root: Path,
+    source_pdf: Path,
+    writer,
+) -> None:
+    from cad_agent.file_integrity import pin_directory_chain
+
+    output_parent = Path(os.path.abspath(destination.parent))
+    with pin_directory_chain(output_parent):
+        temporary, parent_identity, descriptor, created_identity = _create_pdf_output_temp(
+            destination, output_root, source_pdf
+        )
+        try:
+            result = writer(temporary)
+            if result is False:
+                raise ValueError(f"PDF artifact writer rejected destination: {destination}")
+            expected_stat, expected_size, expected_sha256 = _descriptor_sha256(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            _publish_pdf_output_temp(
+                temporary,
+                destination,
+                output_root,
+                source_pdf,
+                parent_identity,
+                expected_stat,
+                expected_size,
+                expected_sha256,
+            )
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            _cleanup_owned_pdf_output_temp(temporary, created_identity)
 
 
 def _materialize_view_children(
     candidates: list[dict],
     rendered_path: Path,
     output_dir: Path,
+    source_pdf: Path,
     page_number: int,
     preset: str,
     merge_lines: bool,
@@ -72,21 +491,32 @@ def _materialize_view_children(
             candidate["child_state"] = "skipped_invalid_bbox"
             continue
         accepted_boxes.append(bbox)
+        _validate_pdf_output_directory(output_dir, child_root)
         child_root.mkdir(parents=True, exist_ok=True)
+        _validate_pdf_output_directory(output_dir, child_root)
         child_image = child_root / f"view_{index:02d}.png"
         child_ir = child_root / f"view_{index:02d}.json"
-        if not cv2.imwrite(str(child_image), image[y0:y1, x0:x1]):
-            raise ValueError(f"Cannot write view child image: {child_image}")
+        _write_pdf_output(
+            child_image,
+            output_dir,
+            source_pdf,
+            lambda path: cv2.imwrite(str(path), image[y0:y1, x0:x1]),
+        )
         child_image_sha256 = hashlib.sha256(child_image.read_bytes()).hexdigest()
-        run(
-            image_path=str(child_image),
-            output_path=str(child_ir),
-            scale_mm_per_px=float(candidate["pixel_to_unit_scale"]),
-            preset=preset,
-            merge_lines=merge_lines,
-            auto_ocr_roi=True,
-            calibration_status="needs_verification",
-            calibration_source_sha256=child_image_sha256,
+        _write_pdf_output(
+            child_ir,
+            output_dir,
+            source_pdf,
+            lambda path: run(
+                image_path=str(child_image),
+                output_path=str(path),
+                scale_mm_per_px=float(candidate["pixel_to_unit_scale"]),
+                preset=preset,
+                merge_lines=merge_lines,
+                auto_ocr_roi=True,
+                calibration_status="needs_verification",
+                calibration_source_sha256=child_image_sha256,
+            ),
         )
         candidate["child_ir"] = str(child_ir.relative_to(output_dir)).replace("\\", "/")
         candidate["child_image"] = str(child_image.relative_to(output_dir)).replace("\\", "/")
@@ -1443,23 +1873,59 @@ def run_pdf(
 
     render_dir = output_dir / "rendered"
     ir_dir = output_dir / "primitive_ir"
-    render_dir.mkdir(parents=True, exist_ok=True)
-    ir_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    _validate_pdf_output_directory(output_dir, output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0
     manifest = {
+        "status": "in_progress",
         "source_pdf": pdf_path.name,
+        "source_pdf_sha256": _sha256_file(pdf_path),
         "render_dpi": dpi,
         "scale_mm_per_px": scale_mm_per_px if scale_mm_per_px is not None else "auto",
+        "pdf_vector_text_visibility": "not_assessed",
         "pages": [],
     }
-    document = fitz.open(str(pdf_path))
+    from cad_agent.manifest import write_manifest
+
+    _validate_pdf_output_path(manifest_path, output_dir, pdf_path, atomic_replace=True)
+    write_manifest(manifest_path, manifest)
+    document = None
+    current_page_index = None
     try:
+        _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
+        _validate_pdf_output_directory(output_dir, render_dir)
+        _validate_pdf_output_directory(output_dir, ir_dir)
+        render_dir.mkdir(parents=True, exist_ok=True)
+        ir_dir.mkdir(parents=True, exist_ok=True)
+        _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
+        document = fitz.open(str(pdf_path))
         for index, page in enumerate(document, start=1):
+            current_page_index = index - 1
             require_all_vector_witnesses, vector_circle_witnesses, suspect_regions = (
                 _page_circle_witnesses(page, scale)
             )
             image_path = render_dir / f"page_{index:02d}.png"
-            page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).save(str(image_path))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            rendered_png_bytes = pixmap.tobytes("png")
+            rendered_png_sha256 = hashlib.sha256(rendered_png_bytes).hexdigest()
+            _write_pdf_output(
+                image_path,
+                output_dir,
+                pdf_path,
+                lambda path: path.write_bytes(rendered_png_bytes),
+            )
+            if auto_ocr_roi:
+                pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = _page_vector_texts(
+                    page,
+                    scale,
+                    (pixmap.x, pixmap.y),
+                    (pixmap.width, pixmap.height),
+                )
+            else:
+                # The existing auto-OCR opt-out is the explicit geometry-only
+                # mode; keep that contract free of newly surfaced text.
+                pdf_vector_texts, pdf_text_status, skipped_pdf_text_spans = [], "disabled", 0
             output_path = ir_dir / f"page_{index:02d}.json"
             view_candidates_path = ir_dir / f"page_{index:02d}.view_candidates.json"
             page_calibration_id = (
@@ -1468,45 +1934,117 @@ def run_pdf(
                 else None
             )
             vector_kwargs = {}
+            text_conflict_report = {
+                "ocr_text_state": "unverified" if auto_ocr_roi else "disabled",
+                "ocr_pdf_conflict_count": 0,
+                "excluded_ocr_text_span_count": 0,
+                "excluded_pdf_text_span_count": 0,
+            }
             if require_all_vector_witnesses or vector_circle_witnesses or suspect_regions:
                 vector_kwargs = {
                     "pdf_vector_circle_witnesses": vector_circle_witnesses,
                     "pdf_vector_circle_suspect_regions": suspect_regions,
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
-            run(
-                image_path=str(image_path),
-                output_path=str(output_path),
-                scale_mm_per_px=scale_mm_per_px,
-                preset=preset,
-                merge_lines=merge_lines,
-                auto_ocr_roi=auto_ocr_roi,
-                auto_calibrate=auto_calibrate,
-                calibration_registry_path=calibration_registry_path,
-                calibration_id=page_calibration_id,
-                view_candidates_output_path=str(view_candidates_path),
-                view_candidates_dpi=dpi,
-                **vector_kwargs,
-            )
+            def process_page_ir(path: Path) -> None:
+                (
+                    candidates_temp,
+                    candidates_parent_identity,
+                    candidates_descriptor,
+                    candidates_created_identity,
+                ) = _create_pdf_output_temp(view_candidates_path, output_dir, pdf_path)
+                try:
+                    run(
+                        image_path=str(image_path),
+                        output_path=str(path),
+                        scale_mm_per_px=scale_mm_per_px,
+                        preset=preset,
+                        merge_lines=merge_lines,
+                        auto_ocr_roi=auto_ocr_roi,
+                        auto_calibrate=auto_calibrate,
+                        calibration_registry_path=calibration_registry_path,
+                        calibration_id=page_calibration_id,
+                        view_candidates_output_path=str(candidates_temp),
+                        view_candidates_dpi=dpi,
+                        pdf_vector_texts=pdf_vector_texts,
+                        text_conflict_report=text_conflict_report,
+                        source_page_index=index - 1,
+                        image_bytes=rendered_png_bytes,
+                        **vector_kwargs,
+                    )
+                    if _sha256_file(image_path) != rendered_png_sha256:
+                        raise ValueError(
+                            "PDF rendered page changed while its source-bound image was extracted."
+                        )
+                    candidates_stat, candidates_size, candidates_sha256 = (
+                        _descriptor_sha256(candidates_descriptor)
+                    )
+                    os.close(candidates_descriptor)
+                    candidates_descriptor = -1
+                    _validate_pdf_output_path(
+                        candidates_temp, output_dir, pdf_path
+                    )
+                    _publish_pdf_output_temp(
+                        candidates_temp,
+                        view_candidates_path,
+                        output_dir,
+                        pdf_path,
+                        candidates_parent_identity,
+                        candidates_stat,
+                        candidates_size,
+                        candidates_sha256,
+                    )
+                finally:
+                    if candidates_descriptor >= 0:
+                        os.close(candidates_descriptor)
+                    _cleanup_owned_pdf_output_temp(
+                        candidates_temp, candidates_created_identity
+                    )
+
+            _write_pdf_output(output_path, output_dir, pdf_path, process_page_ir)
             payload = json.loads(output_path.read_text(encoding="utf-8"))
             scale_label_candidates = json.loads(view_candidates_path.read_text(encoding="utf-8"))
             _materialize_view_children(
                 scale_label_candidates,
                 image_path,
                 output_dir,
+                pdf_path,
                 index,
                 preset,
                 merge_lines,
             )
-            view_candidates_path.write_text(
-                json.dumps(scale_label_candidates, indent=2) + "\n",
-                encoding="utf-8",
+            if _sha256_file(image_path) != rendered_png_sha256:
+                raise ValueError("PDF rendered page changed before its source checkpoint was recorded.")
+            _write_pdf_output(
+                view_candidates_path,
+                output_dir,
+                pdf_path,
+                lambda path: path.write_text(
+                    json.dumps(scale_label_candidates, indent=2) + "\n",
+                    encoding="utf-8",
+                ),
             )
             manifest["pages"].append(
                 {
+                    "page_index": index - 1,
                     "page": index,
+                    "page_rotation": page.rotation,
+                    "page_cropbox": [round(float(value), 8) for value in page.cropbox],
+                    "page_rotation_matrix": _matrix_values(page.rotation_matrix),
+                    "render_scale_px_per_point": scale,
+                    "pixmap_origin_px": [pixmap.x, pixmap.y],
                     "rendered_png": str(image_path.relative_to(output_dir)),
+                    "rendered_png_sha256": rendered_png_sha256,
                     "primitive_ir": str(output_path.relative_to(output_dir)),
+                    "pdf_vector_text_status": pdf_text_status,
+                    "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
+                    "excluded_unverified_pdf_vector_text_span_count": len(pdf_vector_texts),
+                    **(
+                        {"pdf_text_conflict_policy_version": PDF_TEXT_CONFLICT_POLICY_VERSION}
+                        if auto_ocr_roi
+                        else {}
+                    ),
+                    **text_conflict_report,
                     "primitive_count": len(payload["primitives"]),
                     "cross_validation_count": len(payload["cross_validations"]),
                     "calibration_method": payload["calibration"]["method"],
@@ -1514,10 +2052,19 @@ def run_pdf(
                     "scale_label_candidates": scale_label_candidates,
                 }
             )
+    except Exception as exc:
+        manifest["status"] = "failed"
+        manifest["failed_page_index"] = current_page_index
+        manifest["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        _validate_pdf_output_path(manifest_path, output_dir, pdf_path, atomic_replace=True)
+        write_manifest(manifest_path, manifest)
+        raise
     finally:
-        document.close()
-    manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        if document is not None:
+            document.close()
+    manifest["status"] = "complete"
+    _validate_pdf_output_path(manifest_path, output_dir, pdf_path, atomic_replace=True)
+    write_manifest(manifest_path, manifest)
     return manifest
 
 
