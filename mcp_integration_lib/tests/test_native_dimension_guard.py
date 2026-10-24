@@ -9,9 +9,11 @@ import pytest
 
 from cad_agent import cli
 from cad_agent.live import write_build_evidence
+from dxf_builder_lib.builder import BuildResult
 from dxf_builder_lib.tests.dxf_test_support import build_native_dimension_consumer_fixture
 from dxf_builder_lib.reviewer import review_dxf
 from mcp_integration_lib.mcp_client import FakeMCPClient, MCPTimeoutError, MCPToolError
+from mcp_integration_lib.reviewer2 import review_dxf_live
 
 
 @pytest.mark.parametrize(
@@ -109,3 +111,50 @@ def test_mechanical_review_does_not_accept_unreadable_bound_dimension(
     if approved is not None:
         assert any("approved_value_mm" in message for message in review["mismatches"])
     assert (candidate.read_bytes(), evidence.read_bytes()) == before
+
+
+def test_live_review_does_not_pass_when_geometry_readback_times_out() -> None:
+    built = BuildResult(
+        output_path="synthetic.dxf",
+        handle_by_primitive_id={"line": "101"},
+        layer_by_primitive_id={"line": "PART"},
+        written_geometry_by_primitive_id={
+            "line": {"type": "line", "start": (0.0, 0.0), "end": (10.0, 0.0)},
+        },
+        entity_count=1,
+    )
+    client = FakeMCPClient(fail_entity_get=True)
+    client.preload_entity(
+        "101", "LINE", "PART", {"start": (0.0, 0.0), "end": (10.0, 0.0)},
+    )
+
+    result = review_dxf_live(built, client, open_drawing=False)
+
+    assert result.structural_checked == 1
+    assert result.geometry_checked == 0
+    assert result.geometry_degraded
+    assert not result.passed
+
+
+def test_live_review_does_not_pass_when_unbound_dimension_readback_times_out() -> None:
+    built = BuildResult(
+        output_path="synthetic.dxf",
+        dimension_count=1,
+        dimension_handle_by_cross_validation_id={"cv-unbound": "103"},
+        written_dimension_by_cross_validation_id={
+            "cv-unbound": {
+                "layer": "DIMENSIONS",
+                "measurement": 10.0,
+                "approved_value_mm": None,
+                "geometry_primitive_id": None,
+            },
+        },
+    )
+    client = FakeMCPClient(fail_entity_get=True)
+    client.preload_entity("103", "DIMENSION", "DIMENSIONS", {})
+
+    result = review_dxf_live(built, client, open_drawing=False)
+
+    assert result.dimension_checked == 1
+    assert result.geometry_degraded
+    assert not result.passed
