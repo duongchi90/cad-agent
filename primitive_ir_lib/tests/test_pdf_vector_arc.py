@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pytest
 
+import primitive_ir_lib.run_pdf as run_pdf_module
 from primitive_ir_lib.run_pdf import _page_vector_arcs, _page_vector_line_witnesses, run_pdf
 from primitive_ir_lib.geometry_extraction import RawArc, RawGeometry, RawLine
 import primitive_ir_lib.run_image as run_image_module
@@ -448,7 +449,7 @@ def test_clipped_pdf_vector_arc_is_not_admitted(tmp_path: Path) -> None:
 
     arcs = _page_vector_arcs(
         clipped_page,
-        rendered,
+        rendered.read_bytes(),
         1.0,
         (pixmap.x, pixmap.y),
         72,
@@ -457,6 +458,44 @@ def test_clipped_pdf_vector_arc_is_not_admitted(tmp_path: Path) -> None:
     )
     document.close()
     assert arcs == []
+
+
+def test_pdf_arc_support_uses_frozen_render_bytes_during_shared_png_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "render-custody-arc.pdf"
+    output = tmp_path / "render-custody-arc-result"
+    _write_quarter_arc_pdf(source)
+    rendered_path = output / "rendered" / "page_01.png"
+    original_arc_reader = run_pdf_module._page_vector_arcs
+    substituted = False
+
+    def swap_shared_png_during_arc_read(page, rendered_png_bytes, *args, **kwargs):
+        nonlocal substituted
+        source_bytes = rendered_path.read_bytes()
+        source_image = cv2.imdecode(
+            np.frombuffer(source_bytes, dtype=np.uint8), cv2.IMREAD_COLOR
+        )
+        assert source_image is not None
+        encoded_ok, blank_image = cv2.imencode(
+            ".png", np.full_like(source_image, 255)
+        )
+        assert encoded_ok
+        rendered_path.write_bytes(blank_image.tobytes())
+        substituted = True
+        try:
+            return original_arc_reader(page, rendered_png_bytes, *args, **kwargs)
+        finally:
+            rendered_path.write_bytes(source_bytes)
+
+    monkeypatch.setattr(run_pdf_module, "_page_vector_arcs", swap_shared_png_during_arc_read)
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+
+    assert substituted
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert sum(primitive["type"] == "arc" for primitive in payload["primitives"]) == 1
 
 
 def test_nonrectangular_clip_cannot_hide_arc_behind_its_scissor_bbox(tmp_path: Path) -> None:

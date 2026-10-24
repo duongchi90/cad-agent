@@ -2126,7 +2126,7 @@ def _page_circle_witnesses(
 
 def _page_vector_arcs(
     page: fitz.Page,
-    rendered_path: Path,
+    rendered_png_bytes: bytes,
     pixel_scale: float,
     pixmap_origin: tuple[int, int],
     render_dpi: int,
@@ -2138,7 +2138,11 @@ def _page_vector_arcs(
         return []
     import cv2
 
-    image = cv2.imread(str(rendered_path), cv2.IMREAD_GRAYSCALE)
+    if not isinstance(rendered_png_bytes, bytes) or not rendered_png_bytes:
+        return []
+    image = cv2.imdecode(
+        np.frombuffer(rendered_png_bytes, dtype=np.uint8), cv2.IMREAD_GRAYSCALE
+    )
     if image is None:
         return []
     height, width = image.shape
@@ -2656,7 +2660,7 @@ def _page_vector_arcs(
             source_pdf_sha256=source_pdf_sha256,
             source_page_index=source_page_index,
             source_transform=tuple(float(value) for value in transform_values),
-            render_sha256=_sha256_file(rendered_path),
+            render_sha256=hashlib.sha256(rendered_png_bytes).hexdigest(),
             render_dpi=render_dpi,
             render_origin_px=pixmap_origin,
         ))
@@ -2993,7 +2997,7 @@ def run_pdf(
             )
             pdf_vector_arcs = _page_vector_arcs(
                 page,
-                image_path,
+                rendered_png_bytes,
                 scale,
                 (pixmap.x, pixmap.y),
                 dpi,
