@@ -47,6 +47,22 @@ def _layer_classifier():
     return classifier
 
 
+def test_write_manifest_does_not_follow_preexisting_temporary_symlink(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+    protected = tmp_path / "source.dwg"
+    protected.write_bytes(b"source drawing bytes")
+    temporary_link = output.with_suffix(output.suffix + ".tmp")
+    try:
+        temporary_link.symlink_to(protected)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"filesystem symlink creation is unavailable: {exc}")
+
+    write_manifest(output, {"status": "CLASSIFIED"})
+
+    assert protected.read_bytes() == b"source drawing bytes"
+    assert json.loads(output.read_text(encoding="utf-8")) == {"status": "CLASSIFIED"}
+
+
 def _create_plan(
     *,
     run_id: str,
