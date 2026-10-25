@@ -11,12 +11,14 @@ buộc, sai enum, oneOf type/geometry không khớp.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import List
 
 _VALID_TYPES = {"line", "circle", "arc", "text"}
 _VALID_SOURCES = {
-    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision"
+    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision",
+    "text_pdfvector", "geometry_pdfvector",
 }
 _VALID_ROLES = {"dimension_value", "title_block_field", "drawing_code", "general_note", "table_cell", "unknown"}
 _VALID_VALIDATION_STATUS = {"unreviewed", "reviewer1_pass", "reviewer1_fail", "reviewer2_pass", "reviewer2_fail", "repaired"}
@@ -70,6 +72,35 @@ def validate_document(doc: dict) -> List[str]:
                     errors.append(
                         f"{prefix}: external geometry trace thiếu hoặc sai '{field}'"
                     )
+
+        if source == "geometry_pdfvector":
+            trace = prim.get("trace")
+            digest = trace.get("source_pdf_sha256") if isinstance(trace, dict) else None
+            page_index = trace.get("source_page_index") if isinstance(trace, dict) else None
+            transform = trace.get("source_transform") if isinstance(trace, dict) else None
+            render_digest = trace.get("source_render_sha256") if isinstance(trace, dict) else None
+            render_dpi = trace.get("source_render_dpi") if isinstance(trace, dict) else None
+            render_origin = trace.get("source_render_origin_px") if isinstance(trace, dict) else None
+            if not _is_lower_sha256(digest):
+                errors.append(f"{prefix}: geometry_pdfvector trace thiếu hoặc sai source_pdf_sha256")
+            if not isinstance(page_index, int) or page_index < 0:
+                errors.append(f"{prefix}: geometry_pdfvector trace thiếu hoặc sai source_page_index")
+            if (
+                not isinstance(transform, list)
+                or len(transform) != 6
+                or any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in transform)
+            ):
+                errors.append(f"{prefix}: geometry_pdfvector trace thiếu hoặc sai source_transform")
+            if not _is_lower_sha256(render_digest):
+                errors.append(f"{prefix}: geometry_pdfvector trace thiếu hoặc sai source_render_sha256")
+            if not isinstance(render_dpi, int) or render_dpi <= 0:
+                errors.append(f"{prefix}: geometry_pdfvector trace thiếu hoặc sai source_render_dpi")
+            if (
+                not isinstance(render_origin, list)
+                or len(render_origin) != 2
+                or any(not isinstance(value, int) for value in render_origin)
+            ):
+                errors.append(f"{prefix}: geometry_pdfvector trace thiếu hoặc sai source_render_origin_px")
 
         conf = prim.get("confidence")
         if not isinstance(conf, (int, float)) or not (0.0 <= conf <= 1.0):

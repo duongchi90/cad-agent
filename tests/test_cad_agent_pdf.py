@@ -1,16 +1,90 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
+import os
 import tempfile
 from pathlib import Path
 
 import fitz
+import numpy as np
 import pytest
 
 from cad_agent.cli import main
-from cad_agent.manifest import ManifestError, sha256_file
-from cad_agent.pdf import new_pdf_manifest, read_pdf_manifest, run_pdf_stages
+from cad_agent.manifest import ManifestError, sha256_file, write_manifest
+from cad_agent.pdf import (
+    _requires_auto_ocr_checkpoint_regeneration,
+    _resolve_pdf_resume_artifact,
+    _validate_pdf_resume_artifacts,
+    _write_page_stage,
+    new_pdf_manifest,
+    read_pdf_manifest,
+    run_pdf_stages,
+)
+
+
+def test_pdf_run_image_consumes_the_rendered_source_bytes_when_shared_png_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_module = importlib.import_module("primitive_ir_lib.run_pdf")
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    source = tmp_path / "source.pdf"
+    replacement = tmp_path / "replacement.pdf"
+    output = tmp_path / "run"
+
+    source_document = fitz.open()
+    source_page = source_document.new_page(width=400, height=300)
+    source_page.draw_line((30, 50), (350, 50), width=3)
+    source_document.save(source)
+    source_document.close()
+
+    replacement_document = fitz.open()
+    replacement_page = replacement_document.new_page(width=400, height=300)
+    replacement_page.draw_line((30, 250), (350, 250), width=3)
+    replacement_document.save(replacement)
+    replacement_document.close()
+
+    with fitz.open(source) as source_document:
+        source_bytes = source_document[0].get_pixmap(alpha=False).tobytes("png")
+    with fitz.open(replacement) as replacement_document:
+        replacement_bytes = replacement_document[0].get_pixmap(alpha=False).tobytes("png")
+    expected_pixels = image_module.cv2.imdecode(
+        np.frombuffer(source_bytes, dtype=np.uint8),
+        image_module.cv2.IMREAD_COLOR,
+    )
+    expected_pixels_sha256 = hashlib.sha256(expected_pixels.tobytes()).hexdigest()
+    observed_geometry_input_hashes: list[str] = []
+    original_extract = image_module.extract_raw_geometry
+    original_run = pdf_module.run
+
+    def observe_geometry_input(image, **kwargs):
+        observed_geometry_input_hashes.append(hashlib.sha256(image.tobytes()).hexdigest())
+        return original_extract(image, **kwargs)
+
+    def replace_shared_png_before_image_read(*args, **kwargs):
+        Path(kwargs["image_path"]).write_bytes(replacement_bytes)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(image_module, "extract_raw_geometry", observe_geometry_input)
+    monkeypatch.setattr(pdf_module, "run", replace_shared_png_before_image_read)
+
+    with pytest.raises(ValueError, match="rendered page changed"):
+        pdf_module.run_pdf(
+            source,
+            output,
+            scale_mm_per_px=0.5,
+            dpi=72,
+            auto_ocr_roi=False,
+        )
+
+    assert observed_geometry_input_hashes == [expected_pixels_sha256]
+    failed_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert failed_manifest["status"] == "failed"
+    assert failed_manifest["pages"] == []
+    assert hashlib.sha256(source_bytes).hexdigest() != hashlib.sha256(replacement_bytes).hexdigest()
+    assert not (output / "primitive_ir" / "page_01.json").exists()
 
 
 def _pdf(path: Path, label: str = "A") -> None:
@@ -21,6 +95,85 @@ def _pdf(path: Path, label: str = "A") -> None:
         page.insert_text((50, 100), f"{label}-{index + 1}")
     document.save(path)
     document.close()
+
+
+def test_pdf_resume_accepts_windows_short_path_alias_for_manifest_root(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows short-path aliases are only available on Windows")
+
+    import ctypes
+
+    output = tmp_path / "run"
+    output.mkdir()
+    short_buffer = ctypes.create_unicode_buffer(32768)
+    get_short_path = ctypes.windll.kernel32.GetShortPathNameW
+    get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint)
+    get_short_path.restype = ctypes.c_uint
+    length = get_short_path(str(output), short_buffer, len(short_buffer))
+    if not length or length >= len(short_buffer):
+        pytest.skip("The temporary directory has no Windows short-path alias")
+    short_output = Path(short_buffer.value)
+    if os.path.normcase(str(short_output)) == os.path.normcase(str(output)):
+        pytest.skip("8.3 short paths are unavailable for the temporary directory")
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"source")
+    manifest = {
+        "render": {"state": "pending", "artifact": "pdf/manifest.json"},
+        "pages": [],
+    }
+
+    paths = _validate_pdf_resume_artifacts(
+        output.resolve(),
+        short_output / "pdf-run-manifest.json",
+        source,
+        manifest,
+    )
+    assert paths[("run", "render")] == output / "pdf" / "manifest.json"
+    assert _resolve_pdf_resume_artifact(
+        short_output,
+        "pdf/primitive_ir/page_01.json",
+        "pdf/primitive_ir/page_01.json",
+        "test",
+    ) == output / "pdf" / "primitive_ir" / "page_01.json"
+
+
+def test_pdf_stage_checkpoint_accepts_mixed_windows_path_aliases(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows short-path aliases are only available on Windows")
+
+    import ctypes
+
+    output = tmp_path / "run"
+    output.mkdir()
+    short_buffer = ctypes.create_unicode_buffer(32768)
+    get_short_path = ctypes.windll.kernel32.GetShortPathNameW
+    get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint)
+    get_short_path.restype = ctypes.c_uint
+    length = get_short_path(str(output), short_buffer, len(short_buffer))
+    if not length or length >= len(short_buffer):
+        pytest.skip("The temporary directory has no Windows short-path alias")
+    short_output = Path(short_buffer.value)
+    if os.path.normcase(str(short_output)) == os.path.normcase(str(output)):
+        pytest.skip("8.3 short paths are unavailable for the temporary directory")
+
+    artifact = output / "semantic_ir" / "page_01.json"
+    artifact.parent.mkdir()
+    artifact.write_text("{}", encoding="utf-8")
+    manifest_path = short_output / "pdf-run-manifest.json"
+    manifest: dict[str, object] = {}
+    page = {"stages": {}}
+
+    _write_page_stage(
+        manifest_path,
+        manifest,
+        page,
+        "semantic_ir",
+        artifact,
+        "Semantic IR generated.",
+    )
+
+    assert page["stages"]["semantic_ir"]["artifact"] == "semantic_ir/page_01.json"
 
 
 def _dimension_pdf(path: Path, label: str = "1077") -> None:
@@ -427,6 +580,405 @@ def test_pdf_resume_regenerates_missing_primitive_from_verified_render() -> None
         assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
 
 
+@pytest.mark.parametrize("damage", ["missing", "hash-invalid"], ids=["missing", "hash-invalid"])
+def test_pdf_resume_excludes_unverified_embedded_text_and_preserves_unaffected_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    monkeypatch.setattr(
+        image_module,
+        "detect_text_candidate_rois",
+        lambda image: [(0, 0, image.shape[1], image.shape[0])],
+    )
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "embedded-text.pdf"
+    document = fitz.open()
+    first = document.new_page(width=400, height=300)
+    first.draw_line((25, 50), (350, 50), width=1)
+    first.insert_text((40, 100), "R7,50", fontsize=14)
+    second = document.new_page(width=400, height=300)
+    second.draw_line((25, 60), (350, 60), width=1)
+    second.insert_text((40, 110), "PAGE TWO", fontsize=14)
+    document.save(source)
+    document.close()
+
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest = new_pdf_manifest(source, 0.5, "synthetic-scale", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_page, second_page = persisted["pages"]
+    first_primitive = output / first_page["stages"]["primitive_ir"]["artifact"]
+    second_page_files = {
+        artifact: sha256_file(output / artifact)
+        for artifact in [
+            second_page["rendered_png"]["artifact"],
+            *(stage["artifact"] for stage in second_page["stages"].values()),
+        ]
+    }
+
+    original_primitive = json.loads(first_primitive.read_text(encoding="utf-8"))
+    original_text = [
+        item for item in original_primitive["primitives"]
+        if item["type"] == "text" and item["text_data"]["content"] == "R7,50"
+    ]
+    assert original_text == []
+    assert first_page["pdf_vector_text_visibility"] == "not_assessed"
+    assert first_page["excluded_unverified_pdf_vector_text_span_count"] == 1
+    if damage == "missing":
+        first_primitive.unlink()
+    else:
+        first_primitive.write_text("invalid cached primitive", encoding="utf-8")
+
+    run_pdf_stages(source, output, manifest_path, persisted)
+
+    resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    regenerated = output / resumed["pages"][0]["stages"]["primitive_ir"]["artifact"]
+    primitive = json.loads(regenerated.read_text(encoding="utf-8"))
+    vector_text = [
+        item for item in primitive["primitives"]
+        if item["type"] == "text" and item["text_data"]["content"] == "R7,50"
+    ]
+    assert vector_text == []
+    assert resumed["pages"][0]["pdf_vector_text_visibility"] == "not_assessed"
+    assert resumed["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
+    assert all(stage["state"] == "completed" for stage in resumed["pages"][0]["stages"].values())
+
+    dxf_path = output / resumed["pages"][0]["stages"]["dxf"]["artifact"]
+    dxf_lines = dxf_path.read_text(encoding="utf-8").splitlines()
+    assert not any(
+        group_code.strip() == "1" and value == "R7,50"
+        for group_code, value in zip(dxf_lines, dxf_lines[1:])
+    )
+    assert {
+        artifact: sha256_file(output / artifact) for artifact in second_page_files
+    } == second_page_files
+
+    primitive_sha256 = sha256_file(regenerated)
+    manifest_bytes = manifest_path.read_bytes()
+
+    def reject_unexpected_regeneration(*args: object, **kwargs: object) -> None:
+        raise AssertionError("valid PDF page artifacts were regenerated during resume")
+
+    monkeypatch.setattr("primitive_ir_lib.run_pdf.run_pdf", reject_unexpected_regeneration)
+    run_pdf_stages(source, output, manifest_path, resumed)
+    assert sha256_file(regenerated) == primitive_sha256
+    assert manifest_path.read_bytes() == manifest_bytes
+
+
+def test_pdf_auto_ocr_resume_rejects_cached_unverified_pdf_text(tmp_path: Path) -> None:
+    primitive = tmp_path / "primitive.json"
+    primitive.write_text(json.dumps({
+        "cross_validations": [],
+        "primitives": [{"id": "pdf-old", "source": "text_pdfvector"}],
+    }), encoding="utf-8")
+
+    assert _requires_auto_ocr_checkpoint_regeneration(primitive)
+
+
+def test_pdf_auto_ocr_resume_rebuilds_legacy_ocr_cache_with_empty_validations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    monkeypatch.setattr(image_module, "detect_text_candidate_rois", lambda image: [])
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page = persisted["pages"][0]
+    primitive_path = output / page["stages"]["primitive_ir"]["artifact"]
+    primitive = json.loads(primitive_path.read_text(encoding="utf-8"))
+    primitive["cross_validations"] = []
+    primitive["primitives"] = [{
+        "id": "legacy-stale-ocr",
+        "source": "text_tesseract",
+        "text_data": {"content": "STALE OCR"},
+    }]
+    primitive_path.write_text(json.dumps(primitive), encoding="utf-8")
+    page["stages"]["primitive_ir"]["sha256"] = sha256_file(primitive_path)
+    page.pop("pdf_text_conflict_policy_version", None)
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    run_pdf_stages(source, output, manifest_path, persisted)
+
+    resumed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rebuilt = json.loads(primitive_path.read_text(encoding="utf-8"))
+    assert all(item.get("id") != "legacy-stale-ocr" for item in rebuilt["primitives"])
+    assert resumed["pages"][0]["pdf_text_conflict_policy_version"] == "ocr-pdf-conflict-exclusion-v1"
+
+
+@pytest.mark.parametrize("path_kind", ["parent-traversal", "absolute", "symlink"])
+def test_pdf_resume_refuses_artifact_paths_outside_output_root_without_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_kind: str,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    outside = tmp_path / "outside.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page = persisted["pages"][0]
+    outside.write_text("protected sentinel", encoding="utf-8")
+
+    if path_kind == "parent-traversal":
+        artifact = "../outside.json"
+    elif path_kind == "absolute":
+        artifact = str(outside.resolve())
+    else:
+        link = output / "pdf" / "primitive_ir" / "escape.json"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+        artifact = link.relative_to(output).as_posix()
+
+    page["stages"]["primitive_ir"]["artifact"] = artifact
+    page["stages"]["primitive_ir"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+    manifest_before = manifest_path.read_bytes()
+    outputs_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    }
+    sentinel_before = outside.read_bytes()
+
+    manifest_module = importlib.import_module("cad_agent.manifest")
+    actual_sha256_file = manifest_module.sha256_file
+    external_reads: list[Path] = []
+
+    def observe_external_reads(path: Path) -> str:
+        if Path(path).resolve() == outside.resolve():
+            external_reads.append(Path(path))
+        return actual_sha256_file(path)
+
+    monkeypatch.setattr(manifest_module, "sha256_file", observe_external_reads)
+
+    def reject_extraction(*args: object, **kwargs: object) -> None:
+        raise AssertionError("PDF extraction started before unsafe artifact-path refusal")
+
+    monkeypatch.setattr("primitive_ir_lib.run_pdf.run_pdf", reject_extraction)
+    with pytest.raises(ManifestError, match="artifact|path|output root"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert external_reads == []
+    assert outside.read_bytes() == sentinel_before
+    assert manifest_path.read_bytes() == manifest_before
+    assert {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    } == outputs_before
+
+
+def test_pdf_resume_refuses_hardlinked_semantic_artifact_before_overwrite(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    run_pdf_stages(source, output, manifest_path, manifest)
+
+    persisted = read_pdf_manifest(manifest_path)
+    semantic = output / persisted["pages"][0]["stages"]["semantic_ir"]["artifact"]
+    semantic.unlink()
+    outside = tmp_path / "outside-semantic.json"
+    sentinel = b"protected external content"
+    outside.write_bytes(sentinel)
+    try:
+        os.link(outside, semantic)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable on this workstation: {exc}")
+
+    persisted["pages"][0]["stages"]["semantic_ir"].update(
+        {"state": "pending", "sha256": None}
+    )
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="hard link|multiple links"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert outside.read_bytes() == sentinel
+    after = read_pdf_manifest(manifest_path)
+    assert after["pages"][0]["stages"]["semantic_ir"]["state"] == "pending"
+
+
+def test_pdf_resume_refuses_hardlinked_run_manifest_before_render_write(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    outside = tmp_path / "outside-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    output.mkdir()
+    outside.write_text(json.dumps(manifest), encoding="utf-8")
+    try:
+        os.link(outside, manifest_path)
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable on this workstation: {exc}")
+    sentinel = outside.read_bytes()
+
+    with pytest.raises(ManifestError, match="hard link|multiple links"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert outside.read_bytes() == sentinel
+    assert not (output / "pdf" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_manifest_write_preserves_external_bytes_at_preexisting_temp_alias(
+    tmp_path: Path,
+    link_kind: str,
+) -> None:
+    manifest_path = tmp_path / "pdf-run-manifest.json"
+    temporary = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    outside = tmp_path / "outside-manifest.json"
+    sentinel = b"protected external bytes"
+    outside.write_bytes(sentinel)
+    try:
+        if link_kind == "symlink":
+            temporary.symlink_to(outside)
+        else:
+            os.link(outside, temporary)
+    except OSError as exc:
+        pytest.skip(f"{link_kind} unavailable on this workstation: {exc}")
+
+    write_manifest(manifest_path, {"state": "updated"})
+
+    assert outside.read_bytes() == sentinel
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == {"state": "updated"}
+
+
+def test_pdf_pending_render_refuses_later_page_symlink_before_renderer_write(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    outside = tmp_path / "outside-page-two.json"
+    sentinel = b"protected external content"
+    outside.write_bytes(sentinel)
+    _pdf(source)
+
+    page_two = output / "pdf" / "primitive_ir" / "page_02.json"
+    page_two.parent.mkdir(parents=True)
+    try:
+        page_two.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable on this workstation: {exc}")
+
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    with pytest.raises(ManifestError, match="redirect|reparse|symbolic link|escapes"):
+        run_pdf_stages(source, output, manifest_path, manifest)
+
+    assert outside.read_bytes() == sentinel
+    assert not (output / "pdf" / "manifest.json").exists()
+
+
+def test_pdf_resume_refuses_cross_page_artifact_alias_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    _pdf(source)
+    manifest = new_pdf_manifest(source, 0.5, "ticket-123", 144)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_page, second_page = persisted["pages"]
+    first_page["stages"]["primitive_ir"]["artifact"] = second_page["stages"]["primitive_ir"]["artifact"]
+    first_page["stages"]["primitive_ir"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(persisted), encoding="utf-8")
+    manifest_before = manifest_path.read_bytes()
+    outputs_before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    }
+
+    def reject_extraction(*args: object, **kwargs: object) -> None:
+        raise AssertionError("PDF extraction started before cross-page alias refusal")
+
+    monkeypatch.setattr("primitive_ir_lib.run_pdf.run_pdf", reject_extraction)
+    with pytest.raises(ManifestError, match="artifact|page|alias|destination"):
+        run_pdf_stages(source, output, manifest_path, read_pdf_manifest(manifest_path))
+
+    assert manifest_path.read_bytes() == manifest_before
+    assert {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file() and path != manifest_path
+    } == outputs_before
+
+
+def test_pdf_resume_does_not_complete_stages_when_source_render_identity_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_module = importlib.import_module("primitive_ir_lib.run_image")
+    pdf_module = importlib.import_module("primitive_ir_lib.run_pdf")
+    monkeypatch.setattr(
+        image_module,
+        "detect_text_candidate_rois",
+        lambda image: [(0, 0, image.shape[1], image.shape[0])],
+    )
+    monkeypatch.setattr(image_module, "extract_text_tesseract", lambda *args, **kwargs: [])
+    monkeypatch.setattr(image_module, "_configure_tesseract", lambda command: None)
+
+    source = tmp_path / "identity-change.pdf"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 100), "R7,50", fontsize=14)
+    document.save(source)
+    document.close()
+
+    output = tmp_path / "run"
+    manifest_path = output / "pdf-run-manifest.json"
+    manifest = new_pdf_manifest(source, 0.5, "synthetic-scale", 144, auto_ocr_roi=True)
+    run_pdf_stages(source, output, manifest_path, manifest)
+    persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page_record = persisted["pages"][0]
+    primitive_path = output / page_record["stages"]["primitive_ir"]["artifact"]
+    primitive_path.unlink()
+
+    original_run_pdf = pdf_module.run_pdf
+
+    def changed_render(*args: object, **kwargs: object) -> dict[str, object]:
+        regenerated = original_run_pdf(*args, **kwargs)
+        rendered_path = Path(args[1]) / regenerated["pages"][0]["rendered_png"]
+        rendered_path.write_bytes(b"changed render identity")
+        return regenerated
+
+    monkeypatch.setattr(pdf_module, "run_pdf", changed_render)
+    with pytest.raises(ManifestError, match="render differs"):
+        run_pdf_stages(source, output, manifest_path, persisted)
+
+    failed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert all(stage["state"] == "pending" for stage in failed["pages"][0]["stages"].values())
+    assert not primitive_path.exists()
+
+
 @pytest.mark.parametrize(
     ("ocr_policy", "expected_text", "expected_dimensions"),
     [
@@ -529,6 +1081,43 @@ def test_pdf_cli_run_and_resume() -> None:
             "--manifest", str(output / "pdf-run-manifest.json"),
             "--input", str(source),
         ]) == 0
+
+
+@pytest.mark.parametrize("damage", ["missing", "hash-invalid"])
+def test_pdf_cli_resume_rejects_invalid_rendered_page_without_mutating_manifest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], damage: str
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "run"
+    _pdf(source)
+    manifest_path = output / "pdf-run-manifest.json"
+
+    assert main([
+        "run-pdf",
+        "--input", str(source),
+        "--output-dir", str(output),
+        "--scale-mm-per-px", "0.5",
+        "--calibration-approval", "ticket-123",
+        "--dpi", "144",
+    ]) == 0
+    manifest_before = manifest_path.read_bytes()
+    persisted = json.loads(manifest_before)
+    rendered = output / persisted["pages"][0]["rendered_png"]["artifact"]
+    if damage == "missing":
+        rendered.unlink()
+    else:
+        rendered.write_bytes(b"changed rendered page")
+
+    result = main([
+        "resume-pdf",
+        "--manifest", str(manifest_path),
+        "--input", str(source),
+    ])
+    capsys.readouterr()
+
+    assert result != 0
+    assert manifest_path.read_bytes() == manifest_before
+    assert all(page["rendered_png"]["state"] == "completed" for page in persisted["pages"])
 
 
 def test_pdf_cli_auto_calibration_candidate_stops_before_semantic_or_dxf(
