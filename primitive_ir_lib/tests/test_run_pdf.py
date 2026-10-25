@@ -1,13 +1,309 @@
 """Regression test for the multi-page PDF to Primitive IR runner."""
 
 import json
+import hashlib
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import fitz
 import pytest
 
-from primitive_ir_lib.run_pdf import run_pdf
+from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+from primitive_ir_lib.run_pdf import _write_pdf_output, run_pdf
+from primitive_ir_lib.text_extraction import RawText
+
+
+def test_run_pdf_excludes_unverified_pdf_only_text_and_binds_rendered_page(tmp_path: Path):
+    pdf_path = tmp_path / "vector-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text((50, 60), "R7,50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert manifest["status"] == "complete"
+    texts = [p for p in payload["primitives"] if p["type"] == "text"]
+    assert texts == []
+    assert manifest["pdf_vector_text_visibility"] == "not_assessed"
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
+
+    rendered_path = output_dir / manifest["pages"][0]["rendered_png"]
+    assert payload["source_document"]["sha256"] == hashlib.sha256(
+        rendered_path.read_bytes()
+    ).hexdigest()
+    assert manifest["source_pdf_sha256"] == hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    page_record = manifest["pages"][0]
+    assert page_record["page_index"] == 0
+    assert page_record["rendered_png_sha256"] == payload["source_document"]["sha256"]
+    assert page_record["render_scale_px_per_point"] == 1.0
+    assert page_record["page_rotation_matrix"] == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+    source_doc = fitz.open(pdf_path)
+    source_doc.close()
+
+
+@pytest.mark.parametrize("visibility_case", ["invisible", "later_covered"])
+def test_run_pdf_never_emits_unverified_invisible_or_covered_text(
+    tmp_path: Path, visibility_case: str
+):
+    pdf_path = tmp_path / f"{visibility_case}.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text(
+        (50, 60), "HIDDEN7", fontsize=12,
+        render_mode=3 if visibility_case == "invisible" else 0,
+    )
+    if visibility_case == "later_covered":
+        page.draw_rect((40, 40, 130, 80), color=None, fill=(1, 1, 1), overlay=True)
+    assert "HIDDEN7" in page.get_text("text")
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert not [p for p in payload["primitives"] if p["type"] == "text"]
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
+
+
+def test_run_pdf_still_emits_ocr_only_text(tmp_path: Path, monkeypatch):
+    pdf_path = tmp_path / "ocr-only.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    document.new_page(width=240, height=120).insert_text((50, 60), "R7,50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_pdf._page_vector_texts",
+        lambda *args, **kwargs: ([], "empty", 0),
+    )
+    ocr = RawText("ocr-visible", "R7,50", (50, 45, 85, 65), 0.0, 0.9, "text_tesseract")
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[ocr]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    texts = [p for p in payload["primitives"] if p["type"] == "text"]
+    assert [(p["text_data"]["content"], p["source"]) for p in texts] == [
+        ("R7,50", "text_tesseract")
+    ]
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 0
+
+
+def test_run_pdf_excludes_conflicting_ocr_spans_and_reports_partial_text(
+    tmp_path: Path, monkeypatch
+):
+    pdf_path = tmp_path / "conflicting-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.draw_line(fitz.Point(10, 80), fitz.Point(150, 80), color=(0, 0, 0), width=1)
+    document.save(pdf_path)
+    document.close()
+    conflicts = [
+        (
+            RawText("pdf-title", "motor-mount-bottom", (72, 70, 96, 90), 0.0, 1.0, "text_pdfvector"),
+            RawText("ocr-title", "-mount-bottom", (72, 70, 96, 90), 0.0, 0.9, "text_tesseract"),
+        ),
+        (
+            RawText("pdf-hex", "0x6f736f646f", (10, 10, 70, 25), 0.0, 1.0, "text_pdfvector"),
+            RawText("ocr-hex", "Ox6f736f646F", (10, 10, 70, 25), 0.0, 0.9, "text_tesseract"),
+        ),
+        (
+            RawText("pdf-page", "1 / 1 ", (180, 10, 205, 25), 0.0, 1.0, "text_pdfvector"),
+            RawText("ocr-page", "1/1", (180, 10, 205, 25), 0.0, 0.9, "text_tesseract"),
+        ),
+    ]
+    unrelated_dimension = RawText(
+        "ocr-dimension", "100", (50, 20, 70, 35), 0.0, 1.0,
+        "text_tesseract", parsed_value=100.0, semantic_role="dimension_value",
+    )
+    pdf_texts = [pdf for pdf, _ in conflicts]
+    ocr_texts = [ocr for _, ocr in conflicts] + [unrelated_dimension]
+    raw_lines = RawGeometry(
+        lines=[
+            RawLine("line-left", (10, 80), (70, 80), 1.0, (10, 80, 70, 80)),
+            RawLine("line-right", (90, 80), (150, 80), 1.0, (90, 80, 150, 80)),
+            RawLine("dimension-line", (10, 40), (110, 40), 1.0, (10, 40, 110, 40)),
+        ]
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_pdf._page_vector_texts",
+        lambda *args, **kwargs: (pdf_texts, "extracted", 0),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.detect_text_candidate_rois",
+        lambda image: [(0, 0, 240, 120)],
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_raw_geometry",
+        lambda *args, **kwargs: raw_lines,
+    )
+    text_extractions = [ocr_texts, []]
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_text_tesseract",
+        lambda *args, **kwargs: text_extractions.pop(0),
+    )
+
+    manifest = run_pdf(
+        pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+        auto_ocr_roi=True, merge_lines=True,
+    )
+
+    payload = json.loads(
+        (output_dir / manifest["pages"][0]["primitive_ir"]).read_text(encoding="utf-8")
+    )
+    page_report = manifest["pages"][0]
+    texts = [item for item in payload["primitives"] if item["type"] == "text"]
+    assert [(item["id"], item["text_data"]["content"]) for item in texts] == [
+        ("ocr-dimension", "100")
+    ]
+    assert page_report["ocr_text_state"] == "partial_conflicts_excluded"
+    assert page_report["ocr_pdf_conflict_count"] == 3
+    assert page_report["excluded_ocr_text_span_count"] == 3
+    assert page_report["excluded_pdf_text_span_count"] == 3
+
+    line_ids = {
+        item["id"] for item in payload["primitives"] if item["type"] == "line"
+    }
+    assert {"line-left", "line-right", "dimension-line"} <= line_ids
+    cross_validation_text_ids = {
+        item["text_primitive_id"] for item in payload["cross_validations"]
+    }
+    assert cross_validation_text_ids == {"ocr-dimension"}
+
+
+def test_run_pdf_excludes_unverified_rotated_pdf_text(tmp_path: Path):
+    pdf_path = tmp_path / "independently-rotated-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    origin = fitz.Point(50, 60)
+    page.insert_text(origin, "ROTATED", fontsize=12, morph=(origin, fitz.Matrix(45)))
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert not [p for p in payload["primitives"] if p["type"] == "text"]
+    assert manifest["pages"][0]["excluded_unverified_pdf_vector_text_span_count"] == 1
+
+
+def test_run_pdf_marks_manifest_failed_when_same_span_rotation_conflicts(
+    tmp_path: Path, monkeypatch
+):
+    pdf_path = tmp_path / "rotated-text.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    origin = fitz.Point(50, 60)
+    page.insert_text(origin, "ROTATED", fontsize=12, morph=(origin, fitz.Matrix(5)))
+    document.save(pdf_path)
+    document.close()
+    (output_dir / "primitive_ir").mkdir(parents=True)
+    (output_dir / "primitive_ir" / "page_01.json").write_text(
+        '{"primitives": [{"id": "old-success"}]}', encoding="utf-8"
+    )
+    (output_dir / "manifest.json").write_text(
+        json.dumps({"status": "complete", "pages": [{"page_index": 0}]}),
+        encoding="utf-8",
+    )
+
+    vector = RawText("pdf-1", "ROTATED", (10, 10, 80, 30), 5.0, 1.0, "text_pdfvector")
+    ocr = RawText("ocr-1", "ROTATED", (10, 10, 80, 30), 0.0, 0.9, "text_tesseract")
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_pdf._page_vector_texts",
+        lambda *args, **kwargs: ([vector], "extracted", 0),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_text_tesseract", lambda *args, **kwargs: [ocr]
+    )
+
+    with pytest.raises(ValueError, match="rotation"):
+        run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["pages"] == []
+    assert manifest["failed_page_index"] == 0
+    assert manifest["error"]["type"] == "ValueError"
+    # The old generated page file is retained for diagnostics, but the current
+    # manifest explicitly invalidates it as a result of this failed run.
+    assert json.loads(
+        (output_dir / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )["primitives"][0]["id"] == "old-success"
+
+
+def test_run_pdf_geometry_only_mode_does_not_emit_embedded_text(tmp_path: Path):
+    pdf_path = tmp_path / "geometry-only.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=240, height=120)
+    page.insert_text((50, 60), "R7,50", fontsize=12)
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=False,
+        )
+
+    payload = json.loads((output_dir / manifest["pages"][0]["primitive_ir"]).read_text())
+    assert not [primitive for primitive in payload["primitives"] if primitive["type"] == "text"]
+    assert manifest["pages"][0]["pdf_vector_text_status"] == "disabled"
+
+
+@pytest.mark.parametrize("rotation", [90, 180, 270])
+def test_run_pdf_excludes_unverified_text_after_rotation_and_crop(
+    tmp_path: Path, rotation: int
+):
+    pdf_path = tmp_path / f"rotated-cropped-{rotation}.pdf"
+    output_dir = tmp_path / "output"
+    document = fitz.open()
+    page = document.new_page(width=220, height=140)
+    page.insert_text((70, 70), "R7,50", fontsize=14)
+    page.set_cropbox(fitz.Rect(20, 15, 205, 125))
+    page.set_rotation(rotation)
+    document.save(pdf_path)
+    document.close()
+
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(
+            pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default",
+            auto_ocr_roi=True,
+        )
+
+    page_record = manifest["pages"][0]
+    payload = json.loads((output_dir / page_record["primitive_ir"]).read_text())
+    assert not [p for p in payload["primitives"] if p["type"] == "text"]
+    assert page_record["excluded_unverified_pdf_vector_text_span_count"] == 1
+    assert page_record["page_rotation_matrix"] != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
 
 def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
@@ -30,7 +326,282 @@ def test_run_pdf_creates_manifest_and_page_ir(tmp_path: Path):
         assert ir_path.is_file()
         payload = json.loads(ir_path.read_text(encoding="utf-8"))
         assert payload["source_document"]["image_width_px"] == 200
+        assert payload["source_document"]["page_index"] == page["page_index"]
         assert page["primitive_count"] == len(payload["primitives"])
+
+
+@pytest.mark.parametrize("fail_during_processing", [False, True])
+def test_run_pdf_replaces_manifest_symlink_without_modifying_external_target(
+    tmp_path: Path, fail_during_processing: bool
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external file that must not be overwritten"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+    source_bytes = pdf_path.read_bytes()
+    manifest_path = output_dir / "manifest.json"
+    try:
+        manifest_path.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    if fail_during_processing:
+        with patch(
+            "primitive_ir_lib.run_pdf._page_circle_witnesses",
+            side_effect=RuntimeError("controlled page failure"),
+        ), pytest.raises(RuntimeError, match="controlled page failure"):
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+        expected_status = "failed"
+    else:
+        with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+            run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+        expected_status = "complete"
+
+    assert pdf_path.read_bytes() == source_bytes
+    assert protected_path.read_bytes() == protected_bytes
+    assert not manifest_path.is_symlink()
+    saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert saved["status"] == expected_status
+
+
+def test_run_pdf_rejects_page_ir_symlink_without_modifying_external_target(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    ir_dir = output_dir / "primitive_ir"
+    ir_dir.mkdir(parents=True)
+    (output_dir / "manifest.json").write_text(
+        json.dumps({"status": "complete", "pages": [{"page": 1}]}),
+        encoding="utf-8",
+    )
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external page artifact target must not be overwritten"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    page = document.new_page(width=80, height=60)
+    page.draw_line((10, 20), (70, 20))
+    document.save(pdf_path)
+    document.close()
+    page_ir_path = ir_dir / "page_01.json"
+    try:
+        page_ir_path.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    with (
+        patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]),
+        pytest.raises((OSError, ValueError), match="redirected|multiple hard links"),
+    ):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    manifest_path = output_dir / "manifest.json"
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["rendered/page_01.png", "primitive_ir/page_01.view_candidates.json"],
+)
+def test_run_pdf_rejects_redirected_artifact_and_keeps_external_bytes(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    artifact = output_dir / artifact_name
+    artifact.parent.mkdir(parents=True)
+    protected_path = tmp_path / "external.bin"
+    protected_bytes = b"must not be changed through a PDF output artifact"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+    try:
+        artifact.symlink_to(protected_path)
+    except OSError as exc:
+        pytest.skip(f"file symlink unavailable on this workstation: {exc}")
+
+    with pytest.raises(ValueError, match="redirected"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    manifest_path = output_dir / "manifest.json"
+    assert not manifest_path.exists() or json.loads(
+        manifest_path.read_text(encoding="utf-8")
+    )["status"] != "complete"
+
+
+def test_run_pdf_rejects_hardlinked_page_ir_before_processing(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    ir_dir = output_dir / "primitive_ir"
+    ir_dir.mkdir(parents=True)
+    protected_path = tmp_path / "external.bin"
+    protected_bytes = b"hardlink target must stay unchanged"
+    protected_path.write_bytes(protected_bytes)
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+    (ir_dir / "page_01.json").hardlink_to(protected_path)
+
+    with pytest.raises(ValueError, match="multiple hard links"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "failed"
+
+
+def test_run_pdf_rejects_redirected_output_directory(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "output"
+    external_dir = tmp_path / "external-output"
+    external_dir.mkdir()
+    protected_path = external_dir / "sentinel.bin"
+    protected_bytes = b"output directory must not redirect writes here"
+    protected_path.write_bytes(protected_bytes)
+    output_dir.mkdir()
+    try:
+        (output_dir / "rendered").symlink_to(external_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink unavailable on this workstation: {exc}")
+    document = fitz.open()
+    document.new_page(width=80, height=60)
+    document.save(pdf_path)
+    document.close()
+
+    with pytest.raises(ValueError, match="redirected"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="default")
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))[
+        "status"
+    ] == "failed"
+
+
+def test_pdf_output_temp_custody_blocks_symlink_swap_before_writer(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    source_pdf = tmp_path / "source.pdf"
+    source_pdf.write_bytes(b"source")
+    protected_path = tmp_path / "protected-external-file.bin"
+    protected_bytes = b"external bytes must remain unchanged"
+    protected_path.write_bytes(protected_bytes)
+    destination = output_dir / "artifact.bin"
+
+    def replace_temp_with_symlink(temporary: Path) -> None:
+        temporary.unlink()
+        temporary.symlink_to(protected_path)
+        temporary.write_bytes(b"attacker-controlled overwrite")
+
+    with pytest.raises((OSError, ValueError)):
+        _write_pdf_output(destination, output_dir, source_pdf, replace_temp_with_symlink)
+
+    assert protected_path.read_bytes() == protected_bytes
+    assert not destination.exists()
+
+
+def test_pdf_output_temp_custody_rejects_same_content_file_swap_before_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import primitive_ir_lib.run_pdf as run_pdf_module
+
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    source_pdf = tmp_path / "source.pdf"
+    source_pdf.write_bytes(b"source")
+    destination = output_dir / "artifact.bin"
+    substituted_bytes = b"writer output"
+    original_publish = run_pdf_module._publish_pdf_output_temp
+
+    def substitute_then_publish(
+        temporary: Path,
+        publish_destination: Path,
+        publish_output_root: Path,
+        publish_source_pdf: Path,
+        parent_identity: tuple[int, int],
+        expected_stat,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> None:
+        replacement = output_dir / "replacement.bin"
+        replacement.write_bytes(substituted_bytes)
+        temporary.unlink()
+        replacement.replace(temporary)
+        original_publish(
+            temporary,
+            publish_destination,
+            publish_output_root,
+            publish_source_pdf,
+            parent_identity,
+            expected_stat,
+            expected_size,
+            expected_sha256,
+        )
+
+    monkeypatch.setattr(
+        run_pdf_module, "_publish_pdf_output_temp", substitute_then_publish
+    )
+
+    with pytest.raises((OSError, ValueError)):
+        _write_pdf_output(
+            destination,
+            output_dir,
+            source_pdf,
+            lambda temporary: temporary.write_bytes(substituted_bytes),
+        )
+
+    assert not destination.exists()
+
+
+def test_pdf_output_temp_custody_records_failed_manifest_on_publish_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import primitive_ir_lib.run_pdf as run_pdf_module
+
+    pdf_path = tmp_path / "source.pdf"
+    document = fitz.open()
+    page = document.new_page(width=120, height=80)
+    page.draw_line((10, 10), (100, 70))
+    document.save(pdf_path)
+    document.close()
+    output_dir = tmp_path / "output"
+    original_replace = run_pdf_module.os.replace
+    replaced = False
+
+    def substitute_at_replace(source: Path, destination: Path) -> None:
+        nonlocal replaced
+        source_path = Path(source)
+        if not replaced and source_path.parent == output_dir / "rendered":
+            replaced = True
+            replacement = source_path.with_name("replacement" + source_path.suffix)
+            replacement.write_bytes(source_path.read_bytes())
+            source_path.unlink()
+            os.rename(replacement, source_path)
+        original_replace(source, destination)
+
+    monkeypatch.setattr(run_pdf_module.os, "replace", substitute_at_replace)
+
+    with pytest.raises(ValueError, match="writer-owned file|writer-bound bytes"):
+        run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72)
+
+    assert replaced
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["failed_page_index"] == 0
 
 
 def _make_blank_pdf(pdf_path: Path) -> None:
@@ -141,13 +712,18 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
-                 calibration_status="verified", calibration_source_sha256=None):
+                 calibration_status="verified", calibration_source_sha256=None,
+                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0,
+                 image_bytes=None):
         captured_calls.append(dict(
             auto_ocr_roi=auto_ocr_roi, auto_calibrate=auto_calibrate,
             calibration_registry_path=calibration_registry_path,
             calibration_id=calibration_id,
                 view_candidates_output_path=view_candidates_output_path,
                 view_candidates_dpi=view_candidates_dpi,
+            pdf_vector_texts=pdf_vector_texts,
+            source_page_index=source_page_index,
+            image_bytes=image_bytes,
         ))
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
@@ -175,6 +751,8 @@ def test_run_pdf_forwards_auto_flags_and_per_page_calibration_id(tmp_path: Path)
 
     assert len(captured_calls) == 2
     assert [c["calibration_id"] for c in captured_calls] == ["tau190_page01", "tau190_page02"]
+    assert [c["source_page_index"] for c in captured_calls] == [0, 1]
+    assert all(isinstance(c["image_bytes"], bytes) and c["image_bytes"] for c in captured_calls)
     for c in captured_calls:
         assert c["auto_ocr_roi"] is True
         assert c["auto_calibrate"] is True
@@ -203,7 +781,9 @@ def test_run_pdf_materializes_review_only_child_ir_for_evidenced_view(tmp_path: 
                  ocr_rois=None, tesseract_cmd=None, merge_lines=False, auto_ocr_roi=False,
                  auto_calibrate=False, calibration_registry_path=None, calibration_id=None,
                  view_candidates_output_path=None, view_candidates_dpi=None,
-                 calibration_status="verified", calibration_source_sha256=None):
+                 calibration_status="verified", calibration_source_sha256=None,
+                 pdf_vector_texts=None, text_conflict_report=None, source_page_index=0,
+                 image_bytes=None):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_text(json.dumps({
             "primitives": [], "cross_validations": [],

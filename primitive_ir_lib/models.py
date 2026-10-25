@@ -19,7 +19,8 @@ SCHEMA_VERSION = "1.0.0"
 
 PrimitiveType = Literal["line", "circle", "arc", "text"]
 SourceType = Literal[
-    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision"
+    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision",
+    "text_pdfvector",
 ]
 SemanticRole = Literal[
     "dimension_value", "title_block_field", "drawing_code",
