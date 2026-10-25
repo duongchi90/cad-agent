@@ -2923,6 +2923,7 @@ def _page_pdf_source_layer_line_witnesses(
         bboxlog = page.get_bboxlog()
         optional_content_groups = document.get_ocgs()
         page_images = page.get_images(full=True)
+        image_info = page.get_image_info(xrefs=True)
     except Exception:
         return []
     config_by_name: dict[str, dict] = {}
@@ -3015,10 +3016,20 @@ def _page_pdf_source_layer_line_witnesses(
     for image in page_images:
         try:
             image_xref = image[0]
-            if isinstance(image_xref, bool) or not isinstance(image_xref, int) or image_xref <= 0:
+            if (
+                isinstance(image_xref, bool)
+                or not isinstance(image_xref, int)
+                or image_xref <= 0
+            ):
+                invalid_competitor_layers.update(difference_by_name)
                 continue
             group_xref = document.get_oc(image_xref)
+            if group_xref is None:
+                continue
             source_name = group_name_by_xref.get(group_xref)
+            if source_name is None:
+                invalid_competitor_layers.update(difference_by_name)
+                continue
             if source_name not in difference_by_name:
                 continue
             image_rects = page.get_image_rects(image_xref)
@@ -3038,8 +3049,53 @@ def _page_pdf_source_layer_line_witnesses(
                     bounds.y1 * pixel_scale - origin_y,
                 )
         except (IndexError, TypeError, ValueError, OverflowError, RuntimeError):
-            # An unreadable image-to-OCG relationship cannot be used as evidence.
+            # If its OCG or bounds cannot be resolved, its pixels cannot be
+            # excluded from any active source-layer attribution probe.
+            invalid_competitor_layers.update(difference_by_name)
             continue
+
+    # get_images() omits inline PDF images (their xref is zero). Their OCG
+    # relationship is not exposed by get_image_info(), so any pixel in their
+    # paint rectangle is ambiguous evidence for every source-layer probe.
+    # Exclude those rectangles for all probed groups; malformed metadata makes
+    # the affected classification fail closed.
+    for image_index, image in enumerate(image_info):
+        if not isinstance(image, dict):
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+        image_xref = image.get("xref")
+        if (
+            isinstance(image_xref, bool)
+            or not isinstance(image_xref, int)
+            or image_xref < 0
+        ):
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+        if image_xref != 0:
+            continue
+        try:
+            bounds = fitz.Rect(image["bbox"])
+            if (
+                not bounds.is_valid
+                or bounds.is_empty
+                or not all(math.isfinite(value) for value in bounds)
+            ):
+                raise ValueError("invalid inline image bounds")
+            bounds *= transform
+            bounds_px = (
+                bounds.x0 * pixel_scale - origin_x,
+                bounds.y0 * pixel_scale - origin_y,
+                bounds.x1 * pixel_scale - origin_x,
+                bounds.y1 * pixel_scale - origin_y,
+            )
+            if not all(math.isfinite(value) for value in bounds_px):
+                raise ValueError("invalid transformed inline image bounds")
+            for source_name in difference_by_name:
+                competing_bounds_by_layer.setdefault(source_name, {})[
+                    -(2_000_000_000 + image_index)
+                ] = bounds_px
+        except (KeyError, TypeError, ValueError, OverflowError):
+            invalid_competitor_layers.update(difference_by_name)
 
     results: list[tuple[RawLine, str]] = []
     seen_seqnos: set[int] = set()
