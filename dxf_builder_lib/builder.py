@@ -34,6 +34,7 @@ constraint_solving.py.
 
 from __future__ import annotations
 
+import io
 import math
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -63,6 +64,8 @@ _LAYER_BY_PART_TYPE: Dict[str, Tuple[str, int]] = {
 }
 _DEFAULT_LAYER: Tuple[str, int] = ("UNCLASSIFIED", 8)
 _TEXT_LAYER: Tuple[str, int] = ("TEXT", 7)  # trắng/đen
+_DIMENSION_PLACEMENT_POLICIES = {"legacy", "avoid_source_line_overlap_v1"}
+_DIMENSION_OVERLAP_TOLERANCE_MM = 1e-6
 
 
 @dataclass(frozen=True)
@@ -177,6 +180,9 @@ def _add_confirmed_dimensions(
     msp,
     dimension_specs: Sequence[NativeLinearDimensionSpec],
     written_geometry_by_primitive_id: Dict[str, dict],
+    *,
+    dimension_placement_policy: str = "legacy",
+    ezdxf_module=None,
 ) -> tuple[Dict[str, str], Dict[str, dict]]:
     """Emit dimensions from the exact line geometry already written to DXF."""
     handles: Dict[str, str] = {}
@@ -193,10 +199,24 @@ def _add_confirmed_dimensions(
             )
         start = line["start"]
         end = line["end"]
+        if dimension_placement_policy == "avoid_source_line_overlap_v1":
+            try:
+                start = _finite_xy_point(start, context=spec.geometry_primitive_id)
+                end = _finite_xy_point(end, context=spec.geometry_primitive_id)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    f"Dimension spec {spec.id!r} measured LINE cannot be classified."
+                ) from exc
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
+        if dimension_placement_policy == "avoid_source_line_overlap_v1":
+            if not all(math.isfinite(value) for value in (*start, *end)) or not math.isfinite(length):
+                raise ValueError(
+                    f"Dimension spec {spec.id!r} has non-finite measured LINE geometry."
+                )
         if length <= 0:
-            if spec.approved_value_mm is not None:
+            if (dimension_placement_policy != "legacy"
+                    or spec.approved_value_mm is not None):
                 raise ValueError(
                     f"Dimension spec {spec.id!r} references zero-length LINE geometry."
                 )
@@ -206,8 +226,51 @@ def _add_confirmed_dimensions(
         offset = max(length * 0.08, 5.0)
         normal_x, normal_y = -dy / length, dx / length
         midpoint = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
-        base = (midpoint[0] + normal_x * offset, midpoint[1] + normal_y * offset)
+        bases = [(midpoint[0] + normal_x * offset, midpoint[1] + normal_y * offset)]
+        if dimension_placement_policy == "avoid_source_line_overlap_v1":
+            bases.append((midpoint[0] - normal_x * offset, midpoint[1] - normal_y * offset))
         angle = math.degrees(math.atan2(dy, dx))
+
+        if dimension_placement_policy == "avoid_source_line_overlap_v1":
+            accepted_base = None
+            try:
+                serialized_context = _serialize_dxf_document(doc)
+            except Exception as exc:
+                raise ValueError(
+                    f"Dimension spec {spec.id!r} render context cannot be serialized."
+                ) from exc
+            for candidate_base in bases:
+                try:
+                    candidate_doc = _clone_dxf_document(serialized_context, ezdxf_module)
+                    candidate_msp = candidate_doc.modelspace()
+                    candidate_override = candidate_msp.add_linear_dim(
+                        base=candidate_base,
+                        p1=start,
+                        p2=end,
+                        location=candidate_base,
+                        angle=angle,
+                        dxfattribs={"layer": "DIMENSIONS"},
+                    )
+                    candidate_override.render()
+                    candidate_lines = _rendered_dimension_lines(candidate_override.dimension)
+                    if not _has_positive_source_line_overlap(
+                        candidate_lines,
+                        written_geometry_by_primitive_id,
+                    ):
+                        accepted_base = candidate_base
+                        break
+                except Exception as exc:
+                    raise ValueError(
+                        f"Dimension spec {spec.id!r} placement candidate cannot be classified."
+                    ) from exc
+            if accepted_base is None:
+                raise ValueError(
+                    f"Dimension spec {spec.id!r} is blocked on both existing placement sides."
+                )
+            base = accepted_base
+        else:
+            base = bases[0]
+
         override = msp.add_linear_dim(
             base=base,
             p1=start,
@@ -227,6 +290,101 @@ def _add_confirmed_dimensions(
             "source_ref": spec.source_ref,
         }
     return handles, written
+
+
+def _serialize_dxf_document(doc) -> str:
+    """Serialize the complete render context once before creating trial clones."""
+    stream = io.StringIO()
+    doc.write(stream)
+    return stream.getvalue()
+
+
+def _clone_dxf_document(serialized_context: str, ezdxf_module):
+    """Clone a frozen complete drawing context without touching its source drawing."""
+    return ezdxf_module.read(io.StringIO(serialized_context))
+
+
+def _rendered_dimension_lines(dimension) -> list[tuple[tuple[float, ...], tuple[float, ...]]]:
+    """Read virtual LINE graphics without adding them to a layout or database."""
+    lines = []
+    for entity in dimension.virtual_entities():
+        if entity.dxftype() == "LINE":
+            lines.append((tuple(entity.dxf.start), tuple(entity.dxf.end)))
+    if not lines:
+        raise ValueError("Rendered DIMENSION has no classifiable LINE graphics.")
+    return lines
+
+
+def _finite_xy_point(point, *, context: str) -> tuple[float, float]:
+    if not isinstance(point, (tuple, list)) or len(point) < 2:
+        raise ValueError(f"{context} has malformed LINE coordinates.")
+    values = point[:3]
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+           for value in values):
+        raise ValueError(f"{context} has non-finite or malformed LINE coordinates.")
+    if len(values) == 3 and abs(float(values[2])) > _DIMENSION_OVERLAP_TOLERANCE_MM:
+        raise ValueError(f"{context} has unsupported non-planar LINE coordinates.")
+    return float(values[0]), float(values[1])
+
+
+def _positive_collinear_overlap_mm(
+    first_start: tuple[float, float],
+    first_end: tuple[float, float],
+    second_start: tuple[float, float],
+    second_end: tuple[float, float],
+) -> bool:
+    tolerance = _DIMENSION_OVERLAP_TOLERANCE_MM
+    ux, uy = first_end[0] - first_start[0], first_end[1] - first_start[1]
+    vx, vy = second_end[0] - second_start[0], second_end[1] - second_start[1]
+    first_length = math.hypot(ux, uy)
+    second_length = math.hypot(vx, vy)
+    if first_length <= tolerance or second_length <= tolerance:
+        return False
+
+    def cross(a_x, a_y, b_x, b_y):
+        return a_x * b_y - a_y * b_x
+
+    if max(
+        abs(cross(ux, uy, point[0] - first_start[0], point[1] - first_start[1])) / first_length
+        for point in (second_start, second_end)
+    ) > tolerance:
+        return False
+    if abs(cross(ux, uy, vx, vy)) / first_length > tolerance:
+        return False
+
+    second_projections = (
+        ((second_start[0] - first_start[0]) * ux + (second_start[1] - first_start[1]) * uy)
+        / first_length,
+        ((second_end[0] - first_start[0]) * ux + (second_end[1] - first_start[1]) * uy)
+        / first_length,
+    )
+    overlap = min(first_length, max(second_projections)) - max(0.0, min(second_projections))
+    return overlap > tolerance
+
+
+def _has_positive_source_line_overlap(
+    dimension_lines: Sequence[tuple[tuple[float, ...], tuple[float, ...]]],
+    written_geometry_by_primitive_id: Dict[str, dict],
+) -> bool:
+    """Return whether any classified source LINE has positive collinear overlap."""
+    source_lines = []
+    for primitive_id, geometry in written_geometry_by_primitive_id.items():
+        if geometry.get("type") != "line":
+            continue
+        try:
+            start = _finite_xy_point(geometry.get("start"), context=primitive_id)
+            end = _finite_xy_point(geometry.get("end"), context=primitive_id)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"Source LINE {primitive_id!r} cannot be classified.") from exc
+        source_lines.append((start, end))
+
+    for dimension_start, dimension_end in dimension_lines:
+        first_start = _finite_xy_point(dimension_start, context="Rendered DIMENSION")
+        first_end = _finite_xy_point(dimension_end, context="Rendered DIMENSION")
+        for source_start, source_end in source_lines:
+            if _positive_collinear_overlap_mm(first_start, first_end, source_start, source_end):
+                return True
+    return False
 
 
 def _dimension_specs_from_cross_validations(
@@ -274,6 +432,8 @@ def build_dxf(
     build_dimensions: bool = False,
     dimension_specs: Optional[Sequence[NativeLinearDimensionSpec]] = None,
     contour_join_by_id: Optional[Dict[str, dict]] = None,
+    *,
+    dimension_placement_policy: str = "legacy",
 ) -> BuildResult:
     """Build 1 file DXF thật từ `primitive_doc`. Trả về `BuildResult` —
     không raise nếu 1 primitive không vẽ được (thiếu geometry/text_data),
@@ -291,6 +451,14 @@ def build_dxf(
 
     Raise ImportError nếu chưa cài `ezdxf`.
     """
+    if (not isinstance(dimension_placement_policy, str)
+            or dimension_placement_policy not in _DIMENSION_PLACEMENT_POLICIES):
+        raise ValueError(
+            "dimension placement policy must be exactly 'legacy' or "
+            "'avoid_source_line_overlap_v1'."
+        )
+    if dimension_placement_policy != "legacy" and not build_dimensions:
+        raise ValueError("non-legacy dimension placement policy requires build_dimensions=True")
     if primitive_doc.calibration.status != "verified":
         raise ValueError(
             "Primitive IR calibration is needs_verification; DXF build is "
@@ -402,6 +570,8 @@ def build_dxf(
             msp,
             active_dimension_specs,
             result.written_geometry_by_primitive_id,
+            dimension_placement_policy=dimension_placement_policy,
+            ezdxf_module=ezdxf,
         )
         result.dimension_count = len(result.dimension_handle_by_cross_validation_id)
 
