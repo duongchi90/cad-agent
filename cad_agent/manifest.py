@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from contextlib import contextmanager
 from collections.abc import Mapping
 from ctypes import wintypes
@@ -799,9 +800,15 @@ def _manifest_lock(path: Path):
 
 def _write_manifest_unlocked(path: Path, manifest: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
     try:
-        temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
         try:

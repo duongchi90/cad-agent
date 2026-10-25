@@ -85,6 +85,15 @@ class VerificationContractTests(unittest.TestCase):
             script,
         )
 
+    def test_verify_clears_every_endpoint_fixture_before_unavailable_probe(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        match = re.search(r"\$specializedVariables\s*=\s*@\((.*?)\)", script, re.S)
+        self.assertIsNotNone(match, "verify.ps1 must declare its isolated fixture environment")
+        assert match is not None
+        for name in ("CAD_AGENT_CASE01_LINE_IMAGE", "CAD_AGENT_FTC11_IMAGE"):
+            with self.subTest(name=name):
+                self.assertIn(f'"{name}"', match.group(1))
+
     def test_verify_owns_release_x64_dotnet_solution_gates(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
         self.assertIn(DOTNET_SOLUTION, script)

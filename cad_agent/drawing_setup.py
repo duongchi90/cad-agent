@@ -9,7 +9,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .drawing_contracts import DrawingContractError, canonical_json_sha256
+from .drawing_contracts import (
+    DrawingContractError,
+    _layer_rule_witnesses,
+    canonical_json_sha256,
+    read_contract_with_sha256,
+)
 from .manifest import sha256_file
 
 
@@ -303,6 +308,102 @@ def create_setup_audit(
     except (TypeError, ValueError) as exc:
         raise _fail("drawing setup audit IPC payload is not strict JSON") from exc
     return audit
+
+
+def create_layer_standard_check(
+    audit_path: Path, rules: Mapping[str, object]
+) -> dict[str, object]:
+    """Classify audited layer names using only caller-supplied literal rules."""
+    if not isinstance(rules, Mapping) or set(rules) != {
+        "allowed_exact_names", "allowed_prefixes", "case_sensitive"
+    }:
+        raise _fail("layer rules require exactly explicit names, prefixes, and case_sensitive")
+    exact = rules["allowed_exact_names"]
+    prefixes = rules["allowed_prefixes"]
+    case_sensitive = rules["case_sensitive"]
+    if not isinstance(exact, list) or not isinstance(prefixes, list):
+        raise _fail("layer rule names and prefixes must be lists")
+    if not isinstance(case_sensitive, bool):
+        raise _fail("layer rule case_sensitive must be boolean")
+    if any(not isinstance(item, str) or not item for item in exact):
+        raise _fail("exact layer names must be non-empty strings")
+    if any(not isinstance(item, str) or not item for item in prefixes):
+        raise _fail("layer prefixes must be non-empty strings")
+
+    audit_file = Path(audit_path)
+    if audit_file.is_symlink() or not audit_file.is_file():
+        raise _fail("audit must be an existing regular file")
+    try:
+        audit, audit_sha = read_contract_with_sha256(
+            audit_file, contract="drawing_setup_audit"
+        )
+    except DrawingContractError as exc:
+        raise _fail(f"invalid drawing setup audit: {exc}") from exc
+    if audit["changed"] is not False or audit["dbmod_before"] != audit["dbmod_after"]:
+        raise _fail("drawing setup audit is not read-only")
+
+    drawing = Path(str(audit["drawing_full_path"]))
+    if drawing.is_symlink() or not drawing.is_file():
+        raise _fail("audited drawing source is missing or not a regular file")
+    expected_drawing_sha = str(audit["drawing_sha256"])
+    try:
+        actual_drawing_sha = sha256_file(drawing)
+    except OSError as exc:
+        raise _fail("audited drawing source is unavailable") from exc
+    if actual_drawing_sha != expected_drawing_sha:
+        raise _fail("audited drawing source hash is stale")
+
+    layers: list[dict[str, object]] = []
+    for entry in audit["layers"]:
+        assert isinstance(entry, Mapping)
+        name = str(entry["name"])
+        matches = _layer_rule_witnesses(
+            name,
+            exact,
+            prefixes,
+            case_sensitive,
+        )
+        layers.append({
+            "name": name,
+            "classification": "STANDARD" if matches else "NONSTANDARD",
+            "matching_rules": matches,
+        })
+
+    try:
+        final_drawing_sha = sha256_file(drawing)
+        final_audit_sha = sha256_file(audit_file)
+    except OSError as exc:
+        raise _fail("audit or drawing source became unavailable during classification") from exc
+    if final_drawing_sha != expected_drawing_sha:
+        raise _fail("audited drawing source changed during classification")
+    if final_audit_sha != audit_sha:
+        raise _fail("drawing setup audit changed during classification")
+
+    count = len(layers)
+    standard = sum(item["classification"] == "STANDARD" for item in layers)
+    return {
+        "schema_version": "layer-standard-check-1.0",
+        "status": "CLASSIFIED" if count else "EMPTY_TABLE",
+        "classification_scope": "LAYER_NAME_RULES_ONLY",
+        "audit_origin_authentication": "NOT_AUTHENTICATED",
+        "layer_inventory_completeness": "NOT_VERIFIED",
+        "classification_basis": "CALLER_SUPPLIED_AUDIT_LAYER_NAMES",
+        "engineering_compliance": "NOT_EVALUATED",
+        "audit_full_path": str(audit_file.resolve()),
+        "audit_sha256": audit_sha,
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256": expected_drawing_sha,
+        "rules": {
+            "allowed_exact_names": list(exact),
+            "allowed_prefixes": list(prefixes),
+            "case_sensitive": case_sensitive,
+        },
+        "layer_count": count,
+        "standard_count": standard,
+        "nonstandard_count": count - standard,
+        "standard_percentage": (standard * 100.0 / count) if count else None,
+        "layers": layers,
+    }
 
 
 def _required_mapping(
