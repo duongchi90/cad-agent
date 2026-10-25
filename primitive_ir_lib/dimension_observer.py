@@ -243,6 +243,19 @@ def _anchor_point(anchor: Mapping[str, object]) -> tuple[float, float] | None:
     return x, y
 
 
+def _anchor_confidence(anchor: Mapping[str, object]) -> float | None:
+    value = anchor.get("confidence", 0.0)
+    if isinstance(value, bool):
+        return None
+    try:
+        confidence = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None
+    return confidence
+
+
 def _anchor_reference_type(anchor_type: object) -> str | None:
     if anchor_type == "LINE_INTERSECTION":
         return "FEATURE"
@@ -283,17 +296,20 @@ def _context_geometry_and_local_anchors(
     local_anchors: list[Mapping[str, object]] = []
     for anchor in semantic_anchors:
         point = _anchor_point(anchor)
+        confidence = _anchor_confidence(anchor)
         if (
             point is None
+            or confidence is None
             or not isinstance(anchor.get("id"), str)
             or _anchor_reference_type(anchor.get("type")) is None
+            or anchor.get("view_id") != view_id
         ):
             continue
         local = dict(anchor)
         local["point_px"] = [point[0] - x0, point[1] - y0]
+        local["confidence"] = confidence
         local_anchors.append(local)
-        if anchor.get("view_id") == view_id:
-            normalized.append(local)
+        normalized.append(local)
 
     baseline = geometry.dimension_line
     orientation = _line_orientation(geometry)
@@ -409,14 +425,19 @@ def _attachment_candidates(
     valid_anchors: list[Mapping[str, object]] = []
     for anchor in semantic_anchors:
         point = anchor.get("point_px")
+        confidence = _anchor_confidence(anchor)
         if not isinstance(point, (list, tuple)) or len(point) != 2:
             continue
         if (
             not isinstance(anchor.get("id"), str)
             or _anchor_reference_type(anchor.get("type")) is None
+            or anchor.get("view_id") != view_id
+            or confidence is None
         ):
             continue
-        valid_anchors.append(anchor)
+        normalized = dict(anchor)
+        normalized["confidence"] = confidence
+        valid_anchors.append(normalized)
 
     candidates: list[dict[str, object]] = []
     for first_index, first in enumerate(valid_anchors):

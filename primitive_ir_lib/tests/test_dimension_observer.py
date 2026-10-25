@@ -492,6 +492,56 @@ def test_source_context_preserves_dimension_identity_and_translates_page_anchors
     } == {"FEATURE"}
 
 
+def test_wrong_view_anchors_are_excluded_from_association_candidates() -> None:
+    anchors = matching_horizontal_anchors()
+    for anchor in anchors:
+        anchor["type"] = "FEATURE"
+        anchor["view_id"] = "OTHER"
+        anchor["confidence"] = 3.0
+
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=anchors,
+        explicit_role="DRIVING",
+        default_unit="mm",
+    )
+
+    assert disposition.observation is not None
+    assert disposition.observation["attachment_candidates"] == []
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, float("nan"), float("inf"), 3.0])
+def test_out_of_range_anchor_confidence_cannot_resolve_association(confidence: float) -> None:
+    anchors = matching_horizontal_anchors()
+    for anchor in anchors:
+        anchor["type"] = "FEATURE"
+        anchor["confidence"] = confidence
+
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=anchors,
+        explicit_role="DRIVING",
+        default_unit="mm",
+    )
+
+    assert disposition.observation is not None
+    assert disposition.observation["attachment_candidates"] == []
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
 def test_competing_feature_intersections_on_a_collinear_continuation_stay_unresolved() -> None:
     page, cluster, anchors = _shifted_dimension_page(ambiguous_continuation=True)
     disposition = observe_dimension_cluster(
