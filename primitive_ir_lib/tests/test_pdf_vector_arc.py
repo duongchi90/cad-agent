@@ -294,6 +294,88 @@ def test_source_layer_witness_requires_full_rendered_pixel_support():
     assert not visible(unrelated_nearby_paint, layer_off, (10, 30), (90, 30), 1.0)
 
 
+def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
+    def pixmap(image: np.ndarray) -> fitz.Pixmap:
+        return fitz.Pixmap(
+            fitz.csRGB, image.shape[1], image.shape[0], image.tobytes(), False
+        )
+
+    candidate = {
+        "layer": "Oculto (ISO)",
+        "level": 1,
+        "type": "s",
+        "fill": None,
+        "stroke_opacity": 1.0,
+        "blendmode": None,
+        "width": 1.0,
+        "dashes": "[] 0",
+        "items": [("l", (10.0, 30.0), (90.0, 30.0))],
+        "seqno": 0,
+    }
+    adjacent_ocg_path = {
+        "layer": "Oculto (ISO)",
+        "level": 1,
+        "type": "s",
+        "fill": None,
+        "stroke_opacity": 1.0,
+        "blendmode": None,
+        "width": 1.0,
+        "dashes": "[] 0",
+        "items": [("c", (10.0, 31.0), (30.0, 31.0), (60.0, 31.0), (90.0, 31.0))],
+        "seqno": 1,
+    }
+
+    class Document:
+        def layer_ui_configs(self):
+            return [{"number": 0, "text": "Oculto (ISO)", "on": 1}]
+
+        def set_layer_ui_config(self, number, action):
+            assert number == 0
+            assert action in {fitz.PDF_OC_ON, fitz.PDF_OC_OFF}
+
+    class Page:
+        rotation = 0
+        rotation_matrix = fitz.Matrix(1, 1)
+        parent = Document()
+
+        def __init__(self, layer_off: np.ndarray):
+            self.layer_off = layer_off
+
+        def get_drawings(self, *, extended):
+            assert extended is True
+            return [candidate, adjacent_ocg_path]
+
+        def get_bboxlog(self):
+            return [
+                ("stroke-path", fitz.Rect(10.0, 29.5, 90.0, 30.5)),
+                ("stroke-path", fitz.Rect(10.0, 30.5, 90.0, 31.5)),
+            ]
+
+        def get_pixmap(self, *, matrix, alpha):
+            assert matrix.a == pytest.approx(1.0)
+            assert alpha is False
+            return pixmap(self.layer_off)
+
+    layer_off = np.full((60, 100, 3), 255, dtype=np.uint8)
+
+    # The candidate is fully hidden, while a separate, non-simple path in
+    # the same OCG changes the adjacent pixel row when the OCG is toggled.
+    covered_baseline = layer_off.copy()
+    covered_baseline[31, 10:91] = 0
+    assert run_pdf_module._page_pdf_source_layer_line_witnesses(
+        Page(layer_off), pixmap(covered_baseline), 1.0, (0, 0)
+    ) == []
+
+    # A true candidate contribution on its own centerline remains admissible.
+    visible_baseline = covered_baseline.copy()
+    visible_baseline[30, 10:91] = 0
+    witnesses = run_pdf_module._page_pdf_source_layer_line_witnesses(
+        Page(layer_off), pixmap(visible_baseline), 1.0, (0, 0)
+    )
+    assert len(witnesses) == 1
+    assert witnesses[0][1] == "HIDDEN"
+
+
 def test_source_layer_mapping_rejects_unsupported_paint_properties():
     classify = getattr(run_pdf_module, "_pdf_source_layer_classification", None)
     assert callable(classify), "source-layer classifier is missing"

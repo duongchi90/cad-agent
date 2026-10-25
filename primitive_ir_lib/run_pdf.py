@@ -2710,8 +2710,15 @@ def _line_has_full_pixel_difference_support(
     start_px: tuple[float, float],
     end_px: tuple[float, float],
     stroke_width_px: float,
+    competing_bounds_px: tuple[tuple[float, float, float, float], ...] = (),
 ) -> bool:
-    """Require changed rendered pixels along the complete interior of a stroke."""
+    """Require changed pixels along the stroke outside other paths' bounds.
+
+    Toggling an optional-content group removes every path in that group. A
+    nearby path must not provide the pixel difference used to witness this
+    candidate, so samples inside another same-group path's paint bounds are
+    not evidence for this line.
+    """
     if (
         not isinstance(baseline_rgb, np.ndarray)
         or not isinstance(layer_off_rgb, np.ndarray)
@@ -2725,6 +2732,14 @@ def _line_has_full_pixel_difference_support(
     coordinates = (*start_px, *end_px)
     if not all(math.isfinite(value) for value in coordinates):
         return False
+    for bounds in competing_bounds_px:
+        if (
+            len(bounds) != 4
+            or not all(math.isfinite(value) for value in bounds)
+            or bounds[0] > bounds[2]
+            or bounds[1] > bounds[3]
+        ):
+            return False
     dx = end_px[0] - start_px[0]
     dy = end_px[1] - start_px[1]
     length = math.hypot(dx, dy)
@@ -2744,6 +2759,11 @@ def _line_has_full_pixel_difference_support(
             pixel_x = int(round(x + normal_x * offset))
             pixel_y = int(round(y + normal_y * offset))
             if not (0 <= pixel_x < width and 0 <= pixel_y < height):
+                continue
+            if any(
+                left <= pixel_x <= right and top <= pixel_y <= bottom
+                for left, top, right, bottom in competing_bounds_px
+            ):
                 continue
             if differences[pixel_y, pixel_x]:
                 supported = True
@@ -2826,6 +2846,37 @@ def _page_pdf_source_layer_line_witnesses(
         difference_by_name[source_name] = off
         del off_pixmap
 
+    competing_bounds_by_layer: dict[str, dict[int, tuple[float, float, float, float]]] = {}
+    invalid_competitor_layers: set[str] = set()
+    for drawing in drawings:
+        source_name = drawing.get("layer")
+        if source_name not in difference_by_name:
+            continue
+        seqno = drawing.get("seqno")
+        if isinstance(seqno, bool) or not isinstance(seqno, int) or not (0 <= seqno < len(bboxlog)):
+            invalid_competitor_layers.add(source_name)
+            continue
+        try:
+            record = bboxlog[seqno]
+            if len(record) != 2:
+                raise ValueError("invalid bounding-box record")
+            bounds = fitz.Rect(record[1])
+            if (
+                not bounds.is_valid
+                or bounds.is_empty
+                or not all(math.isfinite(value) for value in bounds)
+            ):
+                raise ValueError("invalid path bounds")
+            bounds *= transform
+            competing_bounds_by_layer.setdefault(source_name, {})[seqno] = (
+                bounds.x0 * pixel_scale - origin_x,
+                bounds.y0 * pixel_scale - origin_y,
+                bounds.x1 * pixel_scale - origin_x,
+                bounds.y1 * pixel_scale - origin_y,
+            )
+        except (IndexError, TypeError, ValueError, OverflowError):
+            invalid_competitor_layers.add(source_name)
+
     results: list[tuple[RawLine, str]] = []
     seen_seqnos: set[int] = set()
     for drawing in drawings:
@@ -2865,6 +2916,7 @@ def _page_pdf_source_layer_line_witnesses(
             not source_bounds.is_valid
             or source_bounds.is_empty
             or not all(math.isfinite(value) for value in source_bounds)
+            or drawing["layer"] in invalid_competitor_layers
             or not all(math.isfinite(value) for point in (first_px, second_px) for value in point)
             or not _line_has_full_pixel_difference_support(
                 baseline,
@@ -2872,6 +2924,13 @@ def _page_pdf_source_layer_line_witnesses(
                 first_px,
                 second_px,
                 stroke_width_px,
+                tuple(
+                    bounds
+                    for other_seqno, bounds in competing_bounds_by_layer.get(
+                        drawing["layer"], {}
+                    ).items()
+                    if other_seqno != seqno
+                ),
             )
         ):
             continue
