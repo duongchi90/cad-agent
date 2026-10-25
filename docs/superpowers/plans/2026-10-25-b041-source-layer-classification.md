@@ -41,3 +41,14 @@
 - [ ] Implement pixel-backed source-layer witnesses, classification transfer through existing `RawLine`/`Primitive.layer`, and exact DXF fallback with standard logging for semantic precedence.
 - [ ] Run focused tests and B041 real-data → Primitive IR → DXF → strict reviewer checks on the frozen source.
 - [ ] Run the canonical verifier, record native DWG save/reopen as `NOT RUN`, and open the separate exact-head review gates; do not merge until required gates pass.
+
+## Verification checkpoint
+
+Code commit verified: `79c488e202de07fa7593d7d0d11b62de317aefdd`.
+
+- Focused owners and B041 real-data: `pytest primitive_ir_lib/tests/test_run_image.py primitive_ir_lib/tests/test_pdf_vector_arc.py dxf_builder_lib/tests/test_builder.py -q` with `CAD_AGENT_B041_CIRCLE_PDF` set to the hash-verified B041 source — 78 passed.
+- Ruff on all eight changed Python files — PASS.
+- `git diff --check` — PASS.
+- `scripts/verify.ps1 -PythonExe 'C:\Users\t3407d\.codex\worktrees\b041-gdt-text-observation\cad-agent\.venv-py311\Scripts\python.exe'` — exit 0; .NET restore/build PASS (existing `MSB3277` WindowsBase warning), .NET tests 261 PASS, IPC offline 128 PASS, Python offline 3,882 PASS / 29 deselected / 88 subtests; the separate causal-RED oracle emitted its expected single marked failure. The verifier reported the private/live probes as unavailable-state SKIP and did not count them as PASS.
+- Native AutoCAD save/close/reopen/readback — NOT RUN.
+- Exact-head hosted CI, Security and Integration — pending PR creation.
