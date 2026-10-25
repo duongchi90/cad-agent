@@ -18,6 +18,7 @@ from primitive_ir_lib.run_pdf import (
     _fit_full_line_circle_path,
     _dimension_arrowhead_fill,
     _circle_fill_coverage_fraction,
+    _full_page_transparency_group_index,
     _page_circle_witnesses,
     _single_line_record_paths,
     _suspect_geometry,
@@ -307,17 +308,37 @@ def test_run_pdf_uses_only_later_images_as_circle_occluders(tmp_path: Path) -> N
     image_after_circle.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
     image_after_circle.insert_image(image_after_circle.rect, stream=encoded.tobytes())
 
+    masked_image_page = document.new_page(width=600, height=600)
+    masked_image_page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    masked_rgba = np.zeros((32, 32, 4), dtype=np.uint8)
+    masked_rgba[:, :, :3] = 0
+    masked_rgba[:, 14:18, 3] = 255
+    mask_success, masked_encoded = cv2.imencode(".png", masked_rgba)
+    assert mask_success
+    masked_image_page.insert_image(
+        fitz.Rect(500, 284, 525, 316), stream=masked_encoded.tobytes()
+    )
+
     document.save(pdf_path)
     document.close()
+    reopened = fitz.open(pdf_path)
+    assert any(image[1] > 0 for image in reopened[2].get_images(full=True)), (
+        "the negative control must contain a real PDF soft-mask image"
+    )
+    reopened.close()
     run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=144, preset="real_scan_tuned_v1")
 
     before_circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
     after_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
+    masked_circles = _circle_primitives(output_dir / "primitive_ir" / "page_03.json")
     assert _has_circle_near(before_circles, (600, 600), 425), (
         "a background image painted before a visible vector circle must not invalidate that witness"
     )
     assert not _has_circle_near(after_circles, (600, 600), 425), (
         "a later background image that erases the vector circle must invalidate its witness"
+    )
+    assert not _has_circle_near(masked_circles, (600, 600), 425), (
+        "a later soft-masked image intersecting the perimeter must remain a conservative occluder"
     )
 
 
@@ -424,6 +445,116 @@ def test_expired_clip_and_group_levels_do_not_invalidate_later_circle_witness() 
     assert require_all_witnesses is False
     assert len(witnesses) == 1
     assert suspect_regions == []
+
+
+def test_page_transparency_group_and_paired_dimension_arrows_preserve_concentric_circle_witnesses(
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "page-group-dimension-circles.pdf"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    center = fitz.Point(300, 300)
+    radii = (212.63, 167.97)
+
+    for radius in radii:
+        page.draw_circle(center, radius, color=(0.0, 0.0, 0.0), width=1.41)
+
+    def draw_diameter_dimension(radius: float) -> None:
+        left_tip = fitz.Point(center.x - radius, center.y)
+        left_shared = fitz.Point(left_tip.x + 8.0, left_tip.y)
+        right_tip = fitz.Point(center.x + radius, center.y)
+        right_shared = fitz.Point(right_tip.x - 8.0, right_tip.y)
+
+        def draw_arrow(tip: fitz.Point, shared: fitz.Point) -> None:
+            page.draw_line(shared, tip, color=(0.0, 0.0, 0.0), width=0.705)
+            half_width = 3.0
+            triangle = [
+                fitz.Point(shared.x, shared.y - half_width),
+                tip,
+                fitz.Point(shared.x, shared.y + half_width),
+            ]
+            fill = page.new_shape()
+            fill.draw_polyline(triangle + [triangle[0]])
+            fill.finish(color=None, fill=(0.0, 0.0, 0.0), closePath=True)
+            fill.commit()
+            outline = page.new_shape()
+            outline.draw_polyline(triangle + [triangle[0]])
+            outline.finish(color=(0.0, 0.0, 0.0), width=0.705, closePath=True)
+            outline.commit()
+
+        draw_arrow(left_tip, left_shared)
+        draw_arrow(right_tip, right_shared)
+        page.draw_line(left_shared, right_shared, color=(0.0, 0.0, 0.0), width=0.705)
+
+    draw_diameter_dimension(radii[0])
+    draw_diameter_dimension(radii[1])
+    document.xref_set_key(
+        page.xref,
+        "Group",
+        "<< /S /Transparency /CS /DeviceRGB >>",
+    )
+    document.save(pdf_path)
+    document.close()
+
+    reopened = fitz.open(pdf_path)
+    try:
+        require_all_witnesses, witnesses, suspect_regions = _page_circle_witnesses(
+            reopened[0], 2.0
+        )
+        drawings = reopened[0].get_drawings(extended=True)
+    finally:
+        reopened.close()
+
+    assert require_all_witnesses is False
+    assert len(witnesses) == 2
+    assert sorted(witness[2] / 2.0 for witness in witnesses) == pytest.approx(sorted(radii), abs=0.05)
+    assert suspect_regions == []
+
+    fill_index = next(
+        index for index, drawing in enumerate(drawings) if drawing.get("type") in {"f", "fs"}
+    )
+    nonnormal_fill = [dict(drawing) for drawing in drawings]
+    nonnormal_fill[fill_index]["blendmode"] = "Multiply"
+    assert _dimension_arrowhead_fill(
+        nonnormal_fill, fill_index, witnesses[0], drawings[1].get("color")
+    ) is False
+
+
+def test_full_page_group_exception_rejects_modified_and_ambiguous_groups(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "page-group-controls.pdf"
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle(fitz.Point(300, 300), 100, color=(0.0, 0.0, 0.0), width=1.0)
+    document.xref_set_key(page.xref, "Group", "<< /S /Transparency /CS /DeviceRGB >>")
+    document.save(pdf_path)
+    document.close()
+    document = fitz.open(pdf_path)
+    page = document[0]
+    drawings = page.get_drawings(extended=True)
+    assert _full_page_transparency_group_index(page, drawings) == 0
+
+    for group_key in ("/I true", "/K true"):
+        document.xref_set_key(
+            page.xref,
+            "Group",
+            f"<< /S /Transparency /CS /DeviceRGB {group_key} >>",
+        )
+        assert _full_page_transparency_group_index(page, drawings) is None
+
+    document.xref_set_key(page.xref, "Group", "<< /S /Transparency /CS /DeviceRGB >>")
+    partial = [dict(drawing) for drawing in drawings]
+    partial[0]["rect"] = fitz.Rect(0, 0, 300, 600)
+    assert _full_page_transparency_group_index(page, partial) is None
+
+    nonnormal = [dict(drawing) for drawing in drawings]
+    nonnormal[0]["blendmode"] = "Multiply"
+    assert _full_page_transparency_group_index(page, nonnormal) is None
+
+    nested = [dict(drawing) for drawing in drawings]
+    nested.append(dict(nested[0]))
+    assert _full_page_transparency_group_index(page, nested) is None
+
+    document.close()
 
 
 def test_run_pdf_does_not_promote_chord_closed_partial_arc_to_circle(tmp_path: Path) -> None:
@@ -1726,6 +1857,51 @@ def test_unassociated_triangle_remains_a_circle_occluder() -> None:
     assert not witnesses
     assert suspects
     document.close()
+
+
+@pytest.mark.real_data
+def test_nakuja_page_group_recovers_only_the_two_dimensioned_circles(tmp_path: Path) -> None:
+    pdf_value = os.environ.get("CAD_AGENT_NAKUJA_CIRCLE_PDF")
+    if not pdf_value:
+        pytest.skip("set CAD_AGENT_NAKUJA_CIRCLE_PDF to the approved private Nakuja PDF")
+    pdf_path = Path(pdf_value)
+    assert pdf_path.is_file(), "CAD_AGENT_NAKUJA_CIRCLE_PDF must point to the approved PDF"
+    assert hashlib.sha256(pdf_path.read_bytes()).hexdigest() == (
+        "c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c"
+    ), "Nakuja source identity changed"
+
+    output_dir = tmp_path / "nakuja-circle-output"
+    run_pdf(
+        pdf_path,
+        output_dir,
+        scale_mm_per_px=0.0587963,
+        dpi=144,
+        preset="real_scan_tuned_v1",
+    )
+    ir_path = output_dir / "primitive_ir" / "page_01.json"
+    circles = _circle_primitives(ir_path)
+    assert len(circles) == 2, f"unexpected circle candidates: {circles}"
+    geometries = [circle["geometry"] for circle in circles]
+    centers = [
+        (geometry["center"]["x"], geometry["center"]["y"])
+        for geometry in geometries
+    ]
+    radii = sorted(float(geometry["radius"]) for geometry in geometries)
+    assert centers[0] == pytest.approx(centers[1], abs=0.05)
+    assert radii == pytest.approx([19.75, 25.0], abs=0.1)
+
+    from dxf_builder_lib.builder import build_dxf
+    from dxf_builder_lib.reviewer import review_dxf
+    from semantic_ir_lib.io_utils import load_primitive_ir_document
+
+    build = build_dxf(
+        load_primitive_ir_document(str(ir_path)),
+        str(tmp_path / "nakuja-circles.dxf"),
+    )
+    review = review_dxf(build, strict_primitive_inventory=True)
+    assert review.passed, review.mismatches
+    assert len(build.handle_by_primitive_id) == len(circles) + 358
+    assert not build.skipped_primitive_ids
 
 
 @pytest.mark.real_data
