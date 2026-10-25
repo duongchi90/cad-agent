@@ -17,6 +17,7 @@ import numpy as np
 from cad_agent.manifest import sha256_file
 from cad_agent.visual_contracts import validate_visual_contract
 from primitive_ir_lib.dimension_observer import (
+    ANCHOR_COORDINATE_MODES,
     DimensionCluster,
     DimensionDisposition,
     OcrReader,
@@ -154,8 +155,11 @@ def run_dimension_observer(
     semantic_anchors_path: Path | None = None,
     profile_path: Path | None = None,
     ocr_reader: OcrReader | None = None,
+    anchor_coordinate_mode: str = "legacy",
 ) -> Path:
     """Write crops, observer evidence, and a validated register atomically."""
+    if not isinstance(anchor_coordinate_mode, str) or anchor_coordinate_mode not in ANCHOR_COORDINATE_MODES:
+        raise DimensionObserverRunError("anchor_coordinate_mode must be legacy or page")
     source = Path(source_image).resolve()
     output = Path(output_dir).resolve()
     if not source.is_file():
@@ -202,6 +206,7 @@ def run_dimension_observer(
                     source_sha256=source_sha256,
                     ocr_reader=reader,
                     semantic_anchors=anchors,
+                    anchor_coordinate_mode=anchor_coordinate_mode,
                     explicit_role=profile_entry.get("role"),
                     default_unit=profile["default_unit"],
                     blocker_scope=profile_entry.get("blocker_scope", ()),
@@ -238,6 +243,7 @@ def run_dimension_observer(
             "profile_sha256": profile_sha256,
             "page_id": page_id,
             "view_id": view_id,
+            "anchor_coordinate_mode": anchor_coordinate_mode,
             "image_size_px": {"width": width, "height": height},
             "dispositions": [_disposition_payload(item) for item in dispositions],
             "artifacts": artifacts,
