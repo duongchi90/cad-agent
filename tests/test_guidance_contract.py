@@ -25,6 +25,31 @@ class GuidanceContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Agent working agreement: `AGENTS.md`", readme)
 
+    def test_resource_and_native_window_limits_are_persistent(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        operating_model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(
+            encoding="utf-8"
+        )
+        guidance = f"{agents}\n{operating_model}"
+        for invariant in (
+            "LUNA_CONTROLLED_OPEN_DRAWINGS=1_DEFAULT",
+            "MAX_LUNA_CONTROLLED_OPEN_DRAWINGS=2",
+            "EDGE_WINDOWS=1_MAX",
+            "DEFAULT_CONCURRENT_HEAVY_LOCAL_JOBS=1",
+            "ALLOW_SECOND_HEAVY_JOB_IF=",
+            "ON_RESOURCE_PRESSURE",
+            "sufficient measured CPU, RAM, and disk headroom",
+            "no significant paging or UI slowdown",
+            "independent workspaces and outputs",
+            "measured benefit from concurrency",
+            "Do not wait for a fully idle machine when safe independent work can proceed",
+        ):
+            with self.subTest(invariant=invariant):
+                self.assertTrue(
+                    invariant in guidance,
+                    f"Missing persistent operating invariant: {invariant}",
+                )
+
     def test_claude_adapter_is_thin_and_forbids_status_invention(self) -> None:
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(claude.splitlines()), 40)
