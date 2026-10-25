@@ -16,6 +16,7 @@ from primitive_ir_lib.dimension_geometry import (
     DimensionGeometryEvidence,
     detect_dimension_geometry,
     detect_dimension_geometry_regions,
+    detect_extension_lines_for_baseline,
 )
 from primitive_ir_lib.dimension_symbols import ParsedDimensionText, parse_dimension_text
 from primitive_ir_lib.text_extraction import RawText, detect_text_candidate_rois
@@ -26,6 +27,7 @@ OcrReader = Callable[[np.ndarray], Sequence[RawText]]
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _ROLES = {"DRIVING", "REFERENCE", "DERIVED"}
+_REFERENCE_TYPES = {"DATUM", "ENTITY", "FEATURE", "DIMENSION"}
 _OCR_ROTATIONS = (0.0, 90.0, -90.0, 180.0)
 
 
@@ -228,17 +230,177 @@ def _line_orientation(geometry: DimensionGeometryEvidence) -> tuple[float, float
     return vector[0] / length, vector[1] / length
 
 
-def _outer_extension_points(
+def _anchor_point(anchor: Mapping[str, object]) -> tuple[float, float] | None:
+    point = anchor.get("point_px")
+    if not isinstance(point, (list, tuple)) or len(point) != 2:
+        return None
+    try:
+        x, y = float(point[0]), float(point[1])
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return x, y
+
+
+def _anchor_confidence(anchor: Mapping[str, object]) -> float | None:
+    value = anchor.get("confidence", 0.0)
+    if isinstance(value, bool):
+        return None
+    try:
+        confidence = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None
+    return confidence
+
+
+def _anchor_reference_type(anchor_type: object) -> str | None:
+    if anchor_type == "LINE_INTERSECTION":
+        return "FEATURE"
+    return anchor_type if isinstance(anchor_type, str) and anchor_type in _REFERENCE_TYPES else None
+
+
+def _point_segment_distance(
+    point: tuple[float, float],
+    segment: tuple[tuple[float, float], tuple[float, float]],
+) -> float:
+    (x0, y0), (x1, y1) = segment
+    dx, dy = x1 - x0, y1 - y0
+    length_squared = dx * dx + dy * dy
+    if length_squared == 0.0:
+        return math.hypot(point[0] - x0, point[1] - y0)
+    projection = max(
+        0.0,
+        min(1.0, ((point[0] - x0) * dx + (point[1] - y0) * dy) / length_squared),
+    )
+    nearest = (x0 + projection * dx, y0 + projection * dy)
+    return math.hypot(point[0] - nearest[0], point[1] - nearest[1])
+
+
+def _context_geometry_and_local_anchors(
+    image_bgr: np.ndarray,
+    *,
+    bbox: Bbox,
     geometry: DimensionGeometryEvidence,
-) -> list[tuple[float, float]]:
+    semantic_anchors: Sequence[Mapping[str, object]],
+    view_id: str,
+) -> tuple[DimensionGeometryEvidence, list[Mapping[str, object]]]:
+    """Recover source lines only around supplied anchors aligned to the detected baseline."""
+    x0, y0, x1, y1 = bbox
+    normalized: list[Mapping[str, object]] = []
     if geometry.dimension_line is None:
-        return []
-    line = geometry.dimension_line
-    points: list[tuple[float, float]] = []
-    for extension in geometry.extension_lines:
-        candidate = max(extension, key=lambda point: math.hypot(point[0] - line[0][0], point[1] - line[0][1]))
-        points.append(candidate)
-    return points
+        return geometry, normalized
+
+    local_anchors: list[Mapping[str, object]] = []
+    for anchor in semantic_anchors:
+        point = _anchor_point(anchor)
+        confidence = _anchor_confidence(anchor)
+        if (
+            point is None
+            or confidence is None
+            or not isinstance(anchor.get("id"), str)
+            or _anchor_reference_type(anchor.get("type")) is None
+            or anchor.get("view_id") != view_id
+        ):
+            continue
+        local = dict(anchor)
+        local["point_px"] = [point[0] - x0, point[1] - y0]
+        local["confidence"] = confidence
+        local_anchors.append(local)
+        normalized.append(local)
+
+    baseline = geometry.dimension_line
+    orientation = _line_orientation(geometry)
+    if orientation is None:
+        return geometry, local_anchors
+
+    if abs(orientation[0]) >= abs(orientation[1]):
+        low, high = sorted((baseline[0][0], baseline[1][0]))
+        endpoint_groups = [
+            [anchor for anchor in normalized if abs(float(anchor["point_px"][0]) - low) <= 28.0],
+            [anchor for anchor in normalized if abs(float(anchor["point_px"][0]) - high) <= 28.0],
+        ]
+    else:
+        low, high = sorted((baseline[0][1], baseline[1][1]))
+        endpoint_groups = [
+            [anchor for anchor in normalized if abs(float(anchor["point_px"][1]) - low) <= 28.0],
+            [anchor for anchor in normalized if abs(float(anchor["point_px"][1]) - high) <= 28.0],
+        ]
+    if not all(endpoint_groups):
+        return geometry, local_anchors
+    if len(geometry.extension_lines) >= 2:
+        ordered_extensions = sorted(
+            geometry.extension_lines,
+            key=lambda line: (
+                (line[0][0] + line[1][0]) / 2.0
+                if abs(orientation[0]) >= abs(orientation[1])
+                else (line[0][1] + line[1][1]) / 2.0
+            ),
+        )
+        if all(
+            any(
+                _point_segment_distance(
+                    _anchor_point(anchor) or (math.inf, math.inf),
+                    ordered_extensions[index],
+                ) <= 3.0
+                for anchor in group
+            )
+            for index, group in enumerate(endpoint_groups)
+        ):
+            return geometry, local_anchors
+
+    context_points = [
+        _anchor_point(anchor) for group in endpoint_groups for anchor in group
+    ]
+    context_points = [point for point in context_points if point is not None]
+    if len(context_points) < 2:
+        return geometry, local_anchors
+    height, width = image_bgr.shape[:2]
+    context_x0 = max(
+        0, min(x0, math.floor(min(point[0] + x0 for point in context_points)) - 18)
+    )
+    context_y0 = max(
+        0, min(y0, math.floor(min(point[1] + y0 for point in context_points)) - 18)
+    )
+    context_x1 = min(
+        width, max(x1, math.ceil(max(point[0] + x0 for point in context_points)) + 19)
+    )
+    context_y1 = min(
+        height, max(y1, math.ceil(max(point[1] + y0 for point in context_points)) + 19)
+    )
+    context = image_bgr[context_y0:context_y1, context_x0:context_x1]
+    baseline_in_context = (
+        (baseline[0][0] + x0 - context_x0, baseline[0][1] + y0 - context_y0),
+        (baseline[1][0] + x0 - context_x0, baseline[1][1] + y0 - context_y0),
+    )
+    context_extensions = detect_extension_lines_for_baseline(context, baseline_in_context)
+    extension_lines = tuple(
+        (
+            (segment[0][0] + context_x0 - x0, segment[0][1] + context_y0 - y0),
+            (segment[1][0] + context_x0 - x0, segment[1][1] + context_y0 - y0),
+        )
+        for segment in context_extensions
+    )
+    confidence = min(
+        1.0,
+        0.35
+        + (0.25 if len(extension_lines) >= 2 else 0.12 if extension_lines else 0.0)
+        + (0.25 if len(geometry.arrow_points) >= 2 else 0.12 if geometry.arrow_points else 0.0)
+        + (0.10 if geometry.leader_lines else 0.0),
+    )
+    return (
+        DimensionGeometryEvidence(
+            dimension_line=geometry.dimension_line,
+            extension_lines=extension_lines,
+            arrow_points=geometry.arrow_points,
+            leader_lines=geometry.leader_lines,
+            kind_hint=geometry.kind_hint,
+            confidence=confidence,
+        ),
+        local_anchors,
+    )
 
 
 def _attachment_candidates(
@@ -249,18 +411,33 @@ def _attachment_candidates(
 ) -> list[dict[str, object]]:
     if len(geometry.extension_lines) < 2 or len(semantic_anchors) < 2:
         return []
-    endpoints = _outer_extension_points(geometry)
     orientation = _line_orientation(geometry)
-    if orientation is None or len(endpoints) < 2:
+    if orientation is None:
         return []
+    extension_lines = sorted(
+        geometry.extension_lines,
+        key=lambda line: (
+            (line[0][0] + line[1][0]) / 2.0
+            if abs(orientation[0]) >= abs(orientation[1])
+            else (line[0][1] + line[1][1]) / 2.0
+        ),
+    )
     valid_anchors: list[Mapping[str, object]] = []
     for anchor in semantic_anchors:
         point = anchor.get("point_px")
+        confidence = _anchor_confidence(anchor)
         if not isinstance(point, (list, tuple)) or len(point) != 2:
             continue
-        if not isinstance(anchor.get("id"), str) or not isinstance(anchor.get("type"), str):
+        if (
+            not isinstance(anchor.get("id"), str)
+            or _anchor_reference_type(anchor.get("type")) is None
+            or anchor.get("view_id") != view_id
+            or confidence is None
+        ):
             continue
-        valid_anchors.append(anchor)
+        normalized = dict(anchor)
+        normalized["confidence"] = confidence
+        valid_anchors.append(normalized)
 
     candidates: list[dict[str, object]] = []
     for first_index, first in enumerate(valid_anchors):
@@ -270,8 +447,8 @@ def _attachment_candidates(
             first_point = (float(first["point_px"][0]), float(first["point_px"][1]))
             second_point = (float(second["point_px"][0]), float(second["point_px"][1]))
             distances = [
-                math.hypot(first_point[0] - endpoints[0][0], first_point[1] - endpoints[0][1]),
-                math.hypot(second_point[0] - endpoints[1][0], second_point[1] - endpoints[1][1]),
+                _point_segment_distance(first_point, extension_lines[0]),
+                _point_segment_distance(second_point, extension_lines[1]),
             ]
             proximity = math.exp(-sum(distances) / 20.0)
             anchor_vector = (second_point[0] - first_point[0], second_point[1] - first_point[1])
@@ -284,10 +461,15 @@ def _attachment_candidates(
             )
             view_membership = float(first.get("view_id") == view_id and second.get("view_id") == view_id)
             confidence = (float(first.get("confidence", 0.0)) + float(second.get("confidence", 0.0))) / 2.0
-            score = 0.45 * proximity + 0.25 * orientation_compatibility + 0.20 * view_membership + 0.10 * confidence
+            score = (
+                0.45 * proximity
+                + 0.25 * orientation_compatibility
+                + 0.20 * view_membership
+                + 0.10 * confidence
+            )
             candidates.append({
-                "from_ref": {"type": first["type"], "id": first["id"]},
-                "to_ref": {"type": second["type"], "id": second["id"]},
+                "from_ref": {"type": _anchor_reference_type(first["type"]), "id": first["id"]},
+                "to_ref": {"type": _anchor_reference_type(second["type"]), "id": second["id"]},
                 "confidence": round(min(1.0, score), 3),
                 "evidence": ["extension-line-0", "extension-line-1"],
             })
@@ -355,9 +537,16 @@ def observe_dimension_cluster(
         default_unit=default_unit,
     )
     geometry = detect_dimension_geometry(crop)
+    geometry, local_anchors = _context_geometry_and_local_anchors(
+        image_bgr,
+        bbox=bbox,
+        geometry=geometry,
+        semantic_anchors=semantic_anchors,
+        view_id=view_id,
+    )
     attachment_candidates = _attachment_candidates(
         geometry,
-        semantic_anchors=semantic_anchors,
+        semantic_anchors=local_anchors,
         view_id=view_id,
     )
     best_attachment = attachment_candidates[0] if attachment_candidates else None
