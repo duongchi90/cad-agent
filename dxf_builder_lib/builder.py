@@ -34,6 +34,7 @@ constraint_solving.py.
 
 from __future__ import annotations
 
+import logging
 import math
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -63,6 +64,11 @@ _LAYER_BY_PART_TYPE: Dict[str, Tuple[str, int]] = {
 }
 _DEFAULT_LAYER: Tuple[str, int] = ("UNCLASSIFIED", 8)
 _TEXT_LAYER: Tuple[str, int] = ("TEXT", 7)  # trắng/đen
+_LAYER_BY_PDF_SOURCE_CLASSIFICATION: Dict[str, Tuple[str, int]] = {
+    "HIDDEN": ("HIDDEN", 8),
+    "CENTERLINE": ("CENTERLINE", 8),
+}
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -144,7 +150,18 @@ def _layer_for_primitive(prim: Primitive, part_type_by_id: Dict[str, str]) -> Tu
         return _TEXT_LAYER
     part_type = part_type_by_id.get(prim.id)
     if part_type is not None:
-        return _LAYER_BY_PART_TYPE.get(part_type, _DEFAULT_LAYER)
+        effective = _LAYER_BY_PART_TYPE.get(part_type, _DEFAULT_LAYER)
+        if prim.type == "line" and prim.layer in _LAYER_BY_PDF_SOURCE_CLASSIFICATION:
+            _LOGGER.warning(
+                "PDF_SOURCE_LAYER_OVERRIDE primitive_id=%s requested=%s effective=%s "
+                "reason=semantic_doc_precedence",
+                prim.id,
+                prim.layer,
+                effective[0],
+            )
+        return effective
+    if prim.type == "line":
+        return _LAYER_BY_PDF_SOURCE_CLASSIFICATION.get(prim.layer, _DEFAULT_LAYER)
     return _DEFAULT_LAYER
 
 

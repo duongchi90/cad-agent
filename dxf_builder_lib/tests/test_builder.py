@@ -421,6 +421,56 @@ def test_confirmed_dimension_refuses_missing_written_line():
             )
 
 
+def test_pdf_layer_fallback_accepts_only_canonical_line_classifications():
+    if not _HAS_EZDXF:
+        pytest.skip("ezdxf prerequisite unavailable")
+    hidden = _line("hidden", 0, 0, 10, 0)
+    hidden.layer = "HIDDEN"
+    center = _line("center", 0, 1, 10, 1)
+    center.layer = "CENTERLINE"
+    arbitrary = _line("arbitrary", 0, 2, 10, 2)
+    arbitrary.layer = "CUSTOM_LAYER"
+    circle = _circle("wrong-type", 5, 5, 1)
+    circle.layer = "HIDDEN"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = os.path.join(tmp, "source-layers.dxf")
+        result = build_dxf(_doc(hidden, center, arbitrary, circle), out_path)
+        reopened = ezdxf.readfile(out_path)
+        assert result.layer_by_primitive_id == {
+            "hidden": "HIDDEN",
+            "center": "CENTERLINE",
+            "arbitrary": "UNCLASSIFIED",
+            "wrong-type": "UNCLASSIFIED",
+        }
+        assert [entity.dxf.layer for entity in reopened.modelspace().query("LINE")] == [
+            "HIDDEN", "CENTERLINE", "UNCLASSIFIED",
+        ]
+        assert reopened.layers.get("HIDDEN").dxf.linetype.casefold() == "continuous"
+        assert reopened.layers.get("CENTERLINE").dxf.linetype.casefold() == "continuous"
+
+
+def test_semantic_layer_precedence_is_logged_for_source_classification(caplog, tmp_path):
+    if not _HAS_EZDXF:
+        pytest.skip("ezdxf prerequisite unavailable")
+    line = _line("source-hidden", 0, 0, 10, 0)
+    line.layer = "HIDDEN"
+    semantic_doc = SemanticIRDocument(
+        primitive_ir_ref=PrimitiveIRRef(file_name="x.png", primitive_count=1),
+        parts=[SemanticPart(part_type="lo_bat_vit", primitive_ids=["source-hidden"], confidence=1.0)],
+        constraints=[],
+    )
+
+    result = build_dxf(_doc(line), str(tmp_path / "semantic-precedence.dxf"), semantic_doc=semantic_doc)
+
+    assert result.layer_by_primitive_id["source-hidden"] == "LO_BAT_VIT"
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "PDF_SOURCE_LAYER_OVERRIDE primitive_id=source-hidden requested=HIDDEN "
+        "effective=LO_BAT_VIT reason=semantic_doc_precedence"
+    ]
+
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_build_line_circle_text_assigns_handles_and_writes_file,
@@ -435,6 +485,8 @@ _TESTS = [
     test_explicit_dimension_rejects_duplicate_ids,
     test_build_refuses_unverified_calibration,
     test_confirmed_dimension_refuses_missing_written_line,
+    test_pdf_layer_fallback_accepts_only_canonical_line_classifications,
+    test_semantic_layer_precedence_is_logged_for_source_classification,
 ]
 
 
