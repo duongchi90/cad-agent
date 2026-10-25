@@ -692,7 +692,22 @@ def test_b041_classifies_only_visible_source_layer_lines(tmp_path: Path) -> None
     assert Counter(primitive["type"] for primitive in primitives) == {
         "line": 236, "circle": 3, "arc": 3,
     }
-    assert layers == {"UNCLASSIFIED": 228, "CENTERLINE": 8, "HIDDEN": 6}
+    # The short source CENTERLINE dash at x=162, y=313..319 meets an earlier
+    # visible contour at its first endpoint. That endpoint pixel is unchanged
+    # when the CENTERLINE OCG is hidden, so the full-span witness must leave
+    # this one candidate unclassified while preserving the detected geometry.
+    assert layers == {"UNCLASSIFIED": 229, "CENTERLINE": 7, "HIDDEN": 6}
+    unresolved_joined_dash = [
+        primitive
+        for primitive in primitives
+        if primitive["type"] == "line"
+        and primitive["layer"] == "UNCLASSIFIED"
+        and primitive["geometry"]["start"]["x"] == pytest.approx(162.0, abs=0.5)
+        and primitive["geometry"]["start"]["y"] == pytest.approx(313.0, abs=0.5)
+        and primitive["geometry"]["end"]["x"] == pytest.approx(162.0, abs=0.5)
+        and primitive["geometry"]["end"]["y"] == pytest.approx(319.0, abs=0.5)
+    ]
+    assert len(unresolved_joined_dash) == 1
     assert all(
         primitive["type"] == "line"
         for primitive in primitives
