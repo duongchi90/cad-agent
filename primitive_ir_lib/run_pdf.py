@@ -1873,6 +1873,22 @@ def _page_circle_witnesses(
     page_transform = page.rotation_matrix
 
     image_paint_operations = _image_paint_operations(page)
+    text_paint_operations: Optional[list[tuple[int, fitz.Rect]]]
+    try:
+        text_paint_operations = []
+        for span in page.get_texttrace():
+            sequence = span.get("seqno")
+            rect = fitz.Rect(span.get("bbox"))
+            if isinstance(sequence, bool) or not isinstance(sequence, int):
+                raise ValueError("PDF text paint sequence is unavailable")
+            if not all(math.isfinite(value) for value in (rect.x0, rect.y0, rect.x1, rect.y1)):
+                raise ValueError("PDF text paint bounds are non-finite")
+            if not rect.is_empty:
+                text_paint_operations.append((sequence, rect))
+    except Exception:
+        # Without ordered text bounds, a vector circle cannot be independently
+        # cleared of later text paint; fail closed for this page's witnesses.
+        text_paint_operations = None
     annotation_rects: list[fitz.Rect] = []
     for annotation in page.annots() or ():
         annotation_rects.append(annotation.rect)
@@ -1932,13 +1948,19 @@ def _page_circle_witnesses(
 
         # A later drawing/clip/group touching this perimeter can obscure or
         # alter the witness. Conservatively reject rather than infer visibility.
-        occluded = False
+        occluded = text_paint_operations is None
         drawing_sequence = drawing.get("seqno")
         occluder_rects = annotation_rects + [
             rect
             for sequence, rect in image_paint_operations
             if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
         ]
+        if text_paint_operations is not None:
+            occluder_rects.extend(
+                rect
+                for sequence, rect in text_paint_operations
+                if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
+            )
         for rect in occluder_rects:
             dx = max(rect.x0 - cx, 0.0, cx - rect.x1)
             dy = max(rect.y0 - cy, 0.0, cy - rect.y1)
@@ -3603,7 +3625,7 @@ def run_pdf(
             }
             if require_all_vector_witnesses or vector_circle_witnesses or suspect_regions:
                 vector_kwargs = {
-                    "pdf_vector_circle_witnesses": vector_circle_witnesses,
+                    "validated_pdf_vector_circle_witnesses": vector_circle_witnesses,
                     "pdf_vector_circle_suspect_regions": suspect_regions,
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }

@@ -283,6 +283,21 @@ def test_later_black_crossing_line_preserves_full_circle_witness(tmp_path: Path)
     assert circle_count >= 1, "a visible full circle must survive a later non-erasing black stroke"
 
 
+def test_later_text_over_circle_perimeter_invalidates_vector_witness() -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    page.draw_circle((300, 300), 212.5, color=(0.05, 0.05, 0.05), width=1.5)
+    page.insert_text((500, 305), "XXXX", fontsize=28, color=(0.05, 0.05, 0.05))
+
+    _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    text_spans = page.get_texttrace()
+    document.close()
+
+    assert len(text_spans) == 1
+    assert witnesses == [], "later text touching the circle perimeter must fail closed"
+    assert suspect_regions
+
+
 def test_later_wide_same_color_crossing_stroke_invalidates_circle_witness(
     tmp_path: Path,
 ) -> None:
@@ -1285,6 +1300,34 @@ def test_rejected_vector_witness_does_not_suppress_supported_raster_circle(
     )
 
 
+def test_only_validated_pdf_circle_witness_skips_redundant_raster_ridge(
+    monkeypatch,
+) -> None:
+    image = np.full((240, 240, 3), 255, dtype=np.uint8)
+    witness = (100.0, 100.0, 20.0)
+    monkeypatch.setattr(geometry_extraction, "extract_circles", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(geometry_extraction, "extract_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        geometry_extraction,
+        "_circle_has_distributed_source_support",
+        lambda *_args, **_kwargs: False,
+    )
+
+    unvalidated = geometry_extraction.extract_raw_geometry(
+        image,
+        pdf_vector_circle_witnesses=[witness],
+    )
+    validated = geometry_extraction.extract_raw_geometry(
+        image,
+        validated_pdf_vector_circle_witnesses=[witness],
+    )
+
+    assert unvalidated.circles == [], "unvalidated tuples still need raster support"
+    assert [
+        (circle.center_px, circle.radius_px) for circle in validated.circles
+    ] == [((100.0, 100.0), 20.0)]
+
+
 def test_extreme_source_circle_radius_is_rejected_before_unbounded_sampling(
     monkeypatch,
 ) -> None:
@@ -1335,12 +1378,14 @@ def test_run_image_only_forwards_pdf_circle_evidence_without_mutating_geometry(
     monkeypatch.setattr(run_image_module, "save_document", lambda *_args, **_kwargs: None)
 
     witnesses = [(25.0, 20.0, 8.0)]
+    validated_witnesses = [(32.0, 21.0, 7.0)]
     suspect_regions = [(1.0, 2.0, 3.0, 4.0)]
     run_image(
         image_path=str(image_path),
         output_path=str(tmp_path / "out" / "primitive_ir.json"),
         scale_mm_per_px=1.0,
         pdf_vector_circle_witnesses=witnesses,
+        validated_pdf_vector_circle_witnesses=validated_witnesses,
         pdf_vector_circle_suspect_regions=suspect_regions,
         require_pdf_vector_circle_witness=True,
     )
@@ -1348,6 +1393,7 @@ def test_run_image_only_forwards_pdf_circle_evidence_without_mutating_geometry(
     assert captured["extract_kwargs"] == {
         "preset": "real_scan_tuned_v1",
         "pdf_vector_circle_witnesses": witnesses,
+        "validated_pdf_vector_circle_witnesses": validated_witnesses,
         "pdf_vector_circle_suspect_regions": suspect_regions,
         "require_pdf_vector_circle_witness": True,
     }
@@ -1921,3 +1967,70 @@ def test_b041_pdf_preserves_three_source_supported_orthographic_circles(
     ]
     assert not missing, f"missing source-supported orthographic circles: {missing}"
     assert len(circles) == 3, f"unexpected circle candidates, including isometric false positives: {circles}"
+
+
+@pytest.mark.real_data
+def test_fastening_bar_preserves_two_complete_source_circle_witnesses(
+    tmp_path: Path,
+) -> None:
+    pdf_value = os.environ.get("CAD_AGENT_FASTENING_BAR_CIRCLE_PDF")
+    if not pdf_value:
+        pytest.skip("set CAD_AGENT_FASTENING_BAR_CIRCLE_PDF to the approved private PDF")
+    pdf_path = Path(pdf_value)
+    assert pdf_path.is_file(), "CAD_AGENT_FASTENING_BAR_CIRCLE_PDF must point to the approved PDF"
+    assert hashlib.sha256(pdf_path.read_bytes()).hexdigest() == (
+        "bf374d514e47f25bf82b9227145e9c057ef398cb76226b2fd4be662b0596b1cd"
+    ), "Fastening Bar source identity changed"
+
+    expected_pdf_circles = ((181.17, 448.93, 6.93), (181.17, 307.27, 6.93))
+    with fitz.open(pdf_path) as document:
+        paths = []
+        for drawing in document[0].get_drawings():
+            rect = drawing["rect"]
+            center = ((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2)
+            radius = rect.width / 2
+            if (
+                len(drawing["items"]) == 4
+                and all(item[0] == "c" for item in drawing["items"])
+                and abs(rect.width - rect.height) <= 0.01
+                and any(
+                    abs(center[0] - x) <= 0.01
+                    and abs(center[1] - y) <= 0.01
+                    and abs(radius - r) <= 0.01
+                    for x, y, r in expected_pdf_circles
+                )
+            ):
+                paths.append((center, radius, drawing["items"]))
+        assert len(paths) == 2, f"expected two complete source circles, found {paths}"
+        for _, _, items in paths:
+            assert np.hypot(
+                items[0][1].x - items[-1][-1].x,
+                items[0][1].y - items[-1][-1].y,
+            ) <= 0.01
+
+    output_dir = tmp_path / "fastening-bar-circle-output"
+    run_pdf(
+        pdf_path,
+        output_dir,
+        scale_mm_per_px=25.4 / 144.0,
+        dpi=144,
+        preset="real_scan_tuned_v1",
+    )
+    circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
+    expected_output = (
+        ((63.91275, 51.53025), 2.44507),
+        ((63.91275, 101.50475), 2.44507),
+    )
+    missing = [
+        (center, radius)
+        for center, radius in expected_output
+        if not _has_circle_near(
+            circles,
+            center,
+            radius,
+            center_tolerance=0.25,
+            radius_tolerance=0.15,
+        )
+    ]
+    assert not missing, f"missing source-supported Fastening Bar circles: {missing}"
+    assert len(circles) == 2, f"unexpected circle output: {circles}"
