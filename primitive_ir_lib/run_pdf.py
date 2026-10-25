@@ -2712,12 +2712,13 @@ def _line_has_full_pixel_difference_support(
     stroke_width_px: float,
     competing_bounds_px: tuple[tuple[float, float, float, float], ...] = (),
 ) -> bool:
-    """Require changed pixels along the stroke outside other paths' bounds.
+    """Require changed pixels to overlap the candidate stroke's raster footprint.
 
     Toggling an optional-content group removes every path in that group. A
     nearby path must not provide the pixel difference used to witness this
     candidate, so samples inside another same-group path's paint bounds are
-    not evidence for this line.
+    not evidence for this line. Pixel squares are tested against the candidate
+    stroke strip; an arbitrary adjacent row is not source support.
     """
     if (
         not isinstance(baseline_rgb, np.ndarray)
@@ -2747,29 +2748,119 @@ def _line_has_full_pixel_difference_support(
         return False
     differences = np.any(baseline_rgb[:, :, :3] != layer_off_rgb[:, :, :3], axis=2)
     height, width = differences.shape
-    radius = max(1, int(math.ceil(stroke_width_px / 2.0)))
     normal_x, normal_y = -dy / length, dx / length
+    tangent_x, tangent_y = dx / length, dy / length
+    normal_pixel_extent = 0.5 * (abs(normal_x) + abs(normal_y))
+    tangent_pixel_extent = 0.5 * (abs(tangent_x) + abs(tangent_y))
     sample_count = max(2, int(math.ceil(length * 2.0)))
-    for sample_index in range(1, sample_count):
-        fraction = sample_index / sample_count
+    sample_half_span = length / sample_count / 2.0
+    normal_support = stroke_width_px / 2.0 + normal_pixel_extent
+    search_radius = int(math.ceil(normal_support + 1.0))
+    for sample_index in range(sample_count + 1):
+        fraction = (sample_index + 0.5) / (sample_count + 1)
         x = start_px[0] + dx * fraction
         y = start_px[1] + dy * fraction
         supported = False
-        for offset in range(-radius, radius + 1):
-            pixel_x = int(round(x + normal_x * offset))
-            pixel_y = int(round(y + normal_y * offset))
-            if not (0 <= pixel_x < width and 0 <= pixel_y < height):
-                continue
-            if any(
-                left <= pixel_x <= right and top <= pixel_y <= bottom
-                for left, top, right, bottom in competing_bounds_px
-            ):
-                continue
-            if differences[pixel_y, pixel_x]:
-                supported = True
+        center_x = int(math.floor(x))
+        center_y = int(math.floor(y))
+        for pixel_y in range(center_y - search_radius, center_y + search_radius + 2):
+            for pixel_x in range(center_x - search_radius, center_x + search_radius + 2):
+                if not (0 <= pixel_x < width and 0 <= pixel_y < height):
+                    continue
+                pixel_center_x = pixel_x + 0.5
+                pixel_center_y = pixel_y + 0.5
+                offset_x = pixel_center_x - x
+                offset_y = pixel_center_y - y
+                normal_distance = abs(offset_x * normal_x + offset_y * normal_y)
+                tangent_distance = offset_x * tangent_x + offset_y * tangent_y
+                if (
+                    normal_distance >= normal_support
+                    or abs(tangent_distance) >= sample_half_span + tangent_pixel_extent
+                ):
+                    continue
+                if any(
+                    left <= pixel_x <= right and top <= pixel_y <= bottom
+                    for left, top, right, bottom in competing_bounds_px
+                ):
+                    continue
+                if differences[pixel_y, pixel_x]:
+                    supported = True
+                    break
+            if supported:
                 break
         if not supported:
             return False
+    return True
+
+
+def _source_layer_line_has_safe_ancestry(
+    drawings: list[dict],
+    candidate_index: int,
+    full_page_group_index: Optional[int],
+) -> bool:
+    """Reject scoped source strokes unless their clip/compositing context is proven safe."""
+    if not (0 <= candidate_index < len(drawings)):
+        return False
+    candidate = drawings[candidate_index]
+    level = candidate.get("level")
+    items = candidate.get("items")
+    width = candidate.get("width")
+    if (
+        isinstance(level, bool)
+        or not isinstance(level, int)
+        or level < 0
+        or not isinstance(items, (tuple, list))
+        or len(items) != 1
+        or not isinstance(width, (int, float))
+        or isinstance(width, bool)
+        or not math.isfinite(float(width))
+        or width <= 0
+    ):
+        return False
+    item = items[0]
+    if len(item) != 3 or item[0] != "l":
+        return False
+    try:
+        first = fitz.Point(item[1])
+        second = fitz.Point(item[2])
+        margin = float(width) / 2.0
+        stroke_bounds = fitz.Rect(
+            min(first.x, second.x) - margin,
+            min(first.y, second.y) - margin,
+            max(first.x, second.x) + margin,
+            max(first.y, second.y) + margin,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not stroke_bounds.is_valid or stroke_bounds.is_empty:
+        return False
+
+    # Extended drawing levels form a scope stack. A later sibling at the same
+    # level closes the prior clip/group; only active ancestors affect a path.
+    scopes: list[tuple[int, int, dict]] = []
+    active_ancestors: list[tuple[int, dict]] = []
+    for index, drawing in enumerate(drawings[: candidate_index + 1]):
+        current_level = drawing.get("level")
+        if isinstance(current_level, bool) or not isinstance(current_level, int) or current_level < 0:
+            return False
+        while scopes and scopes[-1][0] >= current_level:
+            scopes.pop()
+        if index == candidate_index:
+            active_ancestors = [(scope_index, scope) for _, scope_index, scope in scopes]
+            break
+        if drawing.get("type") in {"group", "clip"}:
+            scopes.append((current_level, index, drawing))
+
+    for scope_index, scope in active_ancestors:
+        if scope.get("type") == "group":
+            # Only the separately verified page-level wrapper is considered
+            # neutral context. Nested groups are not accepted based on opacity
+            # and Normal blend mode alone because their compositing is contextual.
+            if scope_index != full_page_group_index:
+                return False
+        elif scope.get("type") == "clip":
+            if not _clip_fully_contains_rect(scope, stroke_bounds):
+                return False
     return True
 
 
@@ -2797,6 +2888,8 @@ def _page_pdf_source_layer_line_witnesses(
         ui_configs = document.layer_ui_configs()
         drawings = page.get_drawings(extended=True)
         bboxlog = page.get_bboxlog()
+        optional_content_groups = document.get_ocgs()
+        page_images = page.get_images(full=True)
     except Exception:
         return []
     config_by_name: dict[str, dict] = {}
@@ -2877,11 +2970,57 @@ def _page_pdf_source_layer_line_witnesses(
         except (IndexError, TypeError, ValueError, OverflowError):
             invalid_competitor_layers.add(source_name)
 
+    # PDF image paint operations are absent from get_drawings(). An image with
+    # its own OCG can therefore change the layer-toggle render inside a vector
+    # candidate's stroke even though it has no peer path seqno. Treat its full
+    # paint rectangle as competing evidence; transparency cannot be inferred
+    # safely from the rectangle alone.
+    group_name_by_xref = {
+        xref: entry.get("name")
+        for xref, entry in optional_content_groups.items()
+        if isinstance(xref, int) and isinstance(entry, dict)
+    }
+    for image in page_images:
+        try:
+            image_xref = image[0]
+            if isinstance(image_xref, bool) or not isinstance(image_xref, int) or image_xref <= 0:
+                continue
+            group_xref = document.get_oc(image_xref)
+            source_name = group_name_by_xref.get(group_xref)
+            if source_name not in difference_by_name:
+                continue
+            image_rects = page.get_image_rects(image_xref)
+            if not image_rects:
+                invalid_competitor_layers.add(source_name)
+                continue
+            for image_index, image_rect in enumerate(image_rects):
+                bounds = fitz.Rect(image_rect)
+                if not bounds.is_valid or bounds.is_empty or not all(math.isfinite(v) for v in bounds):
+                    invalid_competitor_layers.add(source_name)
+                    continue
+                bounds *= transform
+                competing_bounds_by_layer.setdefault(source_name, {})[-(image_xref * 1000 + image_index + 1)] = (
+                    bounds.x0 * pixel_scale - origin_x,
+                    bounds.y0 * pixel_scale - origin_y,
+                    bounds.x1 * pixel_scale - origin_x,
+                    bounds.y1 * pixel_scale - origin_y,
+                )
+        except (IndexError, TypeError, ValueError, OverflowError, RuntimeError):
+            # An unreadable image-to-OCG relationship cannot be used as evidence.
+            continue
+
     results: list[tuple[RawLine, str]] = []
     seen_seqnos: set[int] = set()
-    for drawing in drawings:
+    full_page_group_index = _full_page_transparency_group_index(page, drawings)
+    for drawing_index, drawing in enumerate(drawings):
         classification = _pdf_source_layer_classification(drawing)
-        if classification is None or drawing.get("layer") not in difference_by_name:
+        if (
+            classification is None
+            or drawing.get("layer") not in difference_by_name
+            or not _source_layer_line_has_safe_ancestry(
+                drawings, drawing_index, full_page_group_index
+            )
+        ):
             continue
         seqno = drawing.get("seqno")
         if (

@@ -293,6 +293,162 @@ def test_source_layer_witness_requires_full_rendered_pixel_support():
     unrelated_nearby_paint[32, 10:91] = 0
     assert not visible(unrelated_nearby_paint, layer_off, (10, 30), (90, 30), 1.0)
 
+    adjacent_ocg_paint = baseline.copy()
+    adjacent_ocg_paint[30, 10:91] = 255
+    adjacent_ocg_paint[31, 10:91] = 0
+    assert not visible(adjacent_ocg_paint, layer_off, (10, 30), (90, 30), 1.0)
+
+
+def _write_ocg_group_false_pixel_witness_pdf(path: Path) -> None:
+    """Build a real PDF whose adjacent OCG raster ink can impersonate a hidden vector line."""
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    ocg = document.add_ocg("Oculto (ISO)")
+    resources_xref = int(document.xref_get_key(page.xref, "Resources")[1].split()[0])
+    form_xref = document.get_new_xref()
+    document.update_object(
+        form_xref,
+        f"<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 600 600] "
+        f"/Resources << /Properties << /MC0 {ocg} 0 R >> >> "
+        "/Group << /Type /Group /S /Transparency /CS /DeviceRGB /I true /K false >> >>",
+    )
+    document.update_stream(
+        form_xref,
+        b"/OC /MC0 BDC\n50 300 m 550 300 l 0 0 0 RG 1 w S\nEMC\n",
+    )
+    document.xref_set_key(resources_xref, "XObject/Fm1", f"{form_xref} 0 R")
+    page_contents_xref = document.get_new_xref()
+    document.update_object(page_contents_xref, "<<>>")
+    document.update_stream(page_contents_xref, b"/Fm1 Do\n")
+    document.xref_set_key(page.xref, "Contents", f"{page_contents_xref} 0 R")
+
+    # This opaque later stroke fully covers the vector line. The independent
+    # non-OCG raster line below is visually coincident with it in both renders.
+    page.draw_line((50, 300), (550, 300), color=(1, 1, 1), width=4, overlay=True)
+
+    def add_transparent_raster_line(y: int, *, layer: int | None = None) -> None:
+        image = np.zeros((600, 600, 4), dtype=np.uint8)
+        image[y, 50:551, :3] = 0
+        image[y, 50:551, 3] = 255
+        encoded_ok, encoded = cv2.imencode(".png", image)
+        assert encoded_ok
+        kwargs = {"oc": layer} if layer is not None else {}
+        page.insert_image(
+            fitz.Rect(0, 0, 600, 600), stream=encoded.tobytes(), overlay=True, **kwargs
+        )
+
+    # This OCG image changes only the immediately adjacent pixel row when the
+    # layer is toggled. It is not a path in get_drawings() and has no peer bbox.
+    add_transparent_raster_line(301, layer=ocg)
+    add_transparent_raster_line(300)
+    document.save(path)
+
+
+def _write_ocg_direct_false_pixel_witness_pdf(path: Path) -> None:
+    """Build a top-level OCG vector line hidden by paint plus an OCG raster decoy."""
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    ocg = document.add_ocg("Oculto (ISO)")
+    page.draw_line(
+        (50, 300), (550, 300), color=(0, 0, 0), width=1, oc=ocg, overlay=True
+    )
+    page.draw_line((50, 300), (550, 300), color=(1, 1, 1), width=4, overlay=True)
+    image = np.zeros((600, 600, 4), dtype=np.uint8)
+    image[301, 50:551, :3] = 0
+    image[301, 50:551, 3] = 255
+    encoded_ok, encoded = cv2.imencode(".png", image)
+    assert encoded_ok
+    page.insert_image(
+        fitz.Rect(0, 0, 600, 600), stream=encoded.tobytes(), oc=ocg, overlay=True
+    )
+    document.save(path)
+
+
+def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
+    tmp_path: Path,
+):
+    source = tmp_path / "group-ocg-adjacent-pixels.pdf"
+    _write_ocg_group_false_pixel_witness_pdf(source)
+
+    document = fitz.open(source)
+    page = document[0]
+    drawings = page.get_drawings(extended=True)
+    candidate = next(drawing for drawing in drawings if drawing.get("layer") == "Oculto (ISO)")
+    candidate_ancestors = [
+        drawing
+        for drawing in drawings
+        if drawing.get("type") in {"group", "clip"}
+        and drawing.get("level", candidate["level"]) < candidate["level"]
+    ]
+    assert {drawing["type"] for drawing in candidate_ancestors} == {"group", "clip"}
+    assert candidate.get("scissor") is None
+    candidate_index = drawings.index(candidate)
+    assert not run_pdf_module._source_layer_line_has_safe_ancestry(
+        drawings,
+        candidate_index,
+        run_pdf_module._full_page_transparency_group_index(page, drawings),
+    )
+
+    baseline_pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+    baseline = run_pdf_module._pixmap_rgb_array(baseline_pixmap)
+    assert baseline is not None
+    document.set_layer_ui_config(0, fitz.PDF_OC_OFF)
+    layer_off_pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+    document.set_layer_ui_config(0, fitz.PDF_OC_ON)
+    layer_off = run_pdf_module._pixmap_rgb_array(layer_off_pixmap)
+    assert layer_off is not None
+    changed = np.any(baseline != layer_off, axis=2)
+    assert not changed[300, 50:551].any(), "the hidden vector stroke changed its own pixel row"
+    assert changed[301, 50:551].all(), "the OCG neighbor-pixel control did not render"
+
+    output = tmp_path / "pipeline"
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["layer"] == "HIDDEN" for primitive in payload["primitives"])
+
+
+def test_real_pdf_ocg_image_pixels_do_not_witness_group_scoped_hidden_source_line(
+    tmp_path: Path,
+):
+    source = tmp_path / "direct-ocg-image-decoy.pdf"
+    _write_ocg_direct_false_pixel_witness_pdf(source)
+    document = fitz.open(source)
+    page = document[0]
+    candidate = next(
+        drawing for drawing in page.get_drawings(extended=True)
+        if drawing.get("layer") == "Oculto (ISO)"
+    )
+    drawings = page.get_drawings(extended=True)
+    candidate_index = drawings.index(candidate)
+    assert candidate.get("level", 0) > 0
+    assert not run_pdf_module._source_layer_line_has_safe_ancestry(
+        drawings,
+        candidate_index,
+        run_pdf_module._full_page_transparency_group_index(page, drawings),
+    )
+    baseline = run_pdf_module._pixmap_rgb_array(
+        page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+    )
+    assert baseline is not None
+    document.set_layer_ui_config(0, fitz.PDF_OC_OFF)
+    layer_off = run_pdf_module._pixmap_rgb_array(
+        page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+    )
+    document.set_layer_ui_config(0, fitz.PDF_OC_ON)
+    assert layer_off is not None
+    changed = np.any(baseline != layer_off, axis=2)
+    assert not changed[300, 50:551].any()
+    assert changed[301, 50:551].all()
+
+    output = tmp_path / "pipeline"
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    assert not any(primitive["layer"] == "HIDDEN" for primitive in payload["primitives"])
+
 
 def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
     def pixmap(image: np.ndarray) -> fitz.Pixmap:
@@ -329,6 +485,12 @@ def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
         def layer_ui_configs(self):
             return [{"number": 0, "text": "Oculto (ISO)", "on": 1}]
 
+        def get_ocgs(self):
+            return {}
+
+        def get_oc(self, xref):
+            return None
+
         def set_layer_ui_config(self, number, action):
             assert number == 0
             assert action in {fitz.PDF_OC_ON, fitz.PDF_OC_OFF}
@@ -350,6 +512,10 @@ def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
                 ("stroke-path", fitz.Rect(10.0, 29.5, 90.0, 30.5)),
                 ("stroke-path", fitz.Rect(10.0, 30.5, 90.0, 31.5)),
             ]
+
+        def get_images(self, *, full):
+            assert full is True
+            return []
 
         def get_pixmap(self, *, matrix, alpha):
             assert matrix.a == pytest.approx(1.0)
@@ -404,6 +570,12 @@ def test_pdf_layer_visibility_probe_fails_closed_when_layer_state_cannot_be_rest
         def layer_ui_configs(self):
             return [{"number": 0, "text": "Oculto (ISO)", "on": 1}]
 
+        def get_ocgs(self):
+            return {}
+
+        def get_oc(self, xref):
+            return None
+
         def set_layer_ui_config(self, number, action):
             if action == fitz.PDF_OC_ON:
                 raise RuntimeError("restore failed")
@@ -423,6 +595,10 @@ def test_pdf_layer_visibility_probe_fails_closed_when_layer_state_cannot_be_rest
 
         def get_bboxlog(self):
             return [("stroke-path", fitz.Rect(2.0, 4.0, 18.0, 6.0))]
+
+        def get_images(self, *, full):
+            assert full is True
+            return []
 
         def get_pixmap(self, **kwargs):
             return fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 10), False)
