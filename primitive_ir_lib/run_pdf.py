@@ -2368,6 +2368,8 @@ def _page_vector_arcs(
             return None
         return result
 
+
+
     def flatten_arc_items(
         items: list[tuple],
     ) -> Optional[list[tuple[tuple[float, float], tuple[float, float], float]]]:
@@ -2666,6 +2668,229 @@ def _page_vector_arcs(
         ))
     return results
 
+
+
+def _pdf_source_layer_classification(drawing: dict) -> Optional[str]:
+    """Recognize only the two reviewed ISO source-layer names and simple strokes."""
+    classification = {
+        "Oculto (ISO)": "HIDDEN",
+        "Linha de centro (ISO)": "CENTERLINE",
+    }.get(drawing.get("layer"))
+    width = drawing.get("width")
+    level = drawing.get("level")
+    if (
+        classification is None
+        or isinstance(level, bool)
+        or not isinstance(level, int)
+        or level < 0
+        or drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("scissor") is not None
+        or drawing.get("stroke_opacity") != 1.0
+        or drawing.get("blendmode") not in {None, "Normal"}
+        or drawing.get("dashes") != "[] 0"
+        or not isinstance(width, (int, float))
+        or isinstance(width, bool)
+        or not math.isfinite(float(width))
+        or width <= 0
+    ):
+        return None
+    items = drawing.get("items")
+    if not isinstance(items, (tuple, list)) or len(items) != 1:
+        return None
+    item = items[0]
+    if not isinstance(item, (tuple, list)) or len(item) != 3 or item[0] != "l":
+        return None
+    return classification
+
+
+def _line_has_full_pixel_difference_support(
+    baseline_rgb: np.ndarray,
+    layer_off_rgb: np.ndarray,
+    start_px: tuple[float, float],
+    end_px: tuple[float, float],
+    stroke_width_px: float,
+) -> bool:
+    """Require changed rendered pixels along the complete interior of a stroke."""
+    if (
+        not isinstance(baseline_rgb, np.ndarray)
+        or not isinstance(layer_off_rgb, np.ndarray)
+        or baseline_rgb.ndim != 3
+        or layer_off_rgb.shape != baseline_rgb.shape
+        or baseline_rgb.shape[2] < 3
+        or not math.isfinite(stroke_width_px)
+        or stroke_width_px <= 0
+    ):
+        return False
+    coordinates = (*start_px, *end_px)
+    if not all(math.isfinite(value) for value in coordinates):
+        return False
+    dx = end_px[0] - start_px[0]
+    dy = end_px[1] - start_px[1]
+    length = math.hypot(dx, dy)
+    if not math.isfinite(length) or length <= 1e-6:
+        return False
+    differences = np.any(baseline_rgb[:, :, :3] != layer_off_rgb[:, :, :3], axis=2)
+    height, width = differences.shape
+    radius = max(1, int(math.ceil(stroke_width_px / 2.0)))
+    normal_x, normal_y = -dy / length, dx / length
+    sample_count = max(2, int(math.ceil(length * 2.0)))
+    for sample_index in range(1, sample_count):
+        fraction = sample_index / sample_count
+        x = start_px[0] + dx * fraction
+        y = start_px[1] + dy * fraction
+        supported = False
+        for offset in range(-radius, radius + 1):
+            pixel_x = int(round(x + normal_x * offset))
+            pixel_y = int(round(y + normal_y * offset))
+            if not (0 <= pixel_x < width and 0 <= pixel_y < height):
+                continue
+            if differences[pixel_y, pixel_x]:
+                supported = True
+                break
+        if not supported:
+            return False
+    return True
+
+
+def _pixmap_rgb_array(pixmap: fitz.Pixmap) -> Optional[np.ndarray]:
+    if pixmap.n < 3:
+        return None
+    samples = np.frombuffer(pixmap.samples, dtype=np.uint8)
+    expected = pixmap.height * pixmap.width * pixmap.n
+    if samples.size != expected:
+        return None
+    return samples.reshape((pixmap.height, pixmap.width, pixmap.n))[:, :, :3].copy()
+
+
+def _page_pdf_source_layer_line_witnesses(
+    page,
+    baseline_pixmap: fitz.Pixmap,
+    pixel_scale: float,
+    pixmap_origin: tuple[int, int],
+) -> list[RawLine]:
+    """Return only uniquely addressable ISO layer strokes visible in the page render."""
+    if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
+        return []
+    document = page.parent
+    try:
+        ui_configs = document.layer_ui_configs()
+        drawings = page.get_drawings(extended=True)
+        bboxlog = page.get_bboxlog()
+    except Exception:
+        return []
+    config_by_name: dict[str, dict] = {}
+    for source_name in ("Oculto (ISO)", "Linha de centro (ISO)"):
+        matches = [config for config in ui_configs if config.get("text") == source_name]
+        if len(matches) == 1 and matches[0].get("on") == 1:
+            config_by_name[source_name] = matches[0]
+    if not config_by_name:
+        return []
+    baseline = _pixmap_rgb_array(baseline_pixmap)
+    if baseline is None:
+        return []
+    origin_x, origin_y = pixmap_origin
+    transform = page.rotation_matrix
+    source_layers = {drawing.get("layer") for drawing in drawings}
+    difference_by_name: dict[str, np.ndarray] = {}
+    for source_name, config in config_by_name.items():
+        if source_name not in source_layers:
+            continue
+        number = config.get("number")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            continue
+        off_pixmap = None
+        restore_failed = False
+        try:
+            document.set_layer_ui_config(number, fitz.PDF_OC_OFF)
+            off_pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(pixel_scale, pixel_scale), alpha=False
+            )
+        except Exception:
+            off_pixmap = None
+        finally:
+            try:
+                document.set_layer_ui_config(number, fitz.PDF_OC_ON)
+            except Exception:
+                restore_failed = True
+        if restore_failed:
+            raise RuntimeError("Failed to restore PDF optional-content layer state")
+        off = _pixmap_rgb_array(off_pixmap) if off_pixmap is not None else None
+        if (
+            off is None
+            or off.shape != baseline.shape
+            or off_pixmap.x != baseline_pixmap.x
+            or off_pixmap.y != baseline_pixmap.y
+        ):
+            continue
+        difference_by_name[source_name] = off
+        del off_pixmap
+
+    results: list[RawLine] = []
+    seen_seqnos: set[int] = set()
+    for drawing in drawings:
+        classification = _pdf_source_layer_classification(drawing)
+        if classification is None or drawing.get("layer") not in difference_by_name:
+            continue
+        seqno = drawing.get("seqno")
+        if (
+            isinstance(seqno, bool)
+            or not isinstance(seqno, int)
+            or seqno < 0
+            or seqno >= len(bboxlog)
+            or seqno in seen_seqnos
+        ):
+            continue
+        seen_seqnos.add(seqno)
+        try:
+            record = bboxlog[seqno]
+            if len(record) != 2 or record[0] != "stroke-path":
+                continue
+            source_bounds = fitz.Rect(record[1])
+            item = drawing["items"][0]
+            first = fitz.Point(item[1]) * transform
+            second = fitz.Point(item[2]) * transform
+            first_px = (
+                first.x * pixel_scale - origin_x,
+                first.y * pixel_scale - origin_y,
+            )
+            second_px = (
+                second.x * pixel_scale - origin_x,
+                second.y * pixel_scale - origin_y,
+            )
+            stroke_width_px = float(drawing["width"]) * pixel_scale
+        except (IndexError, TypeError, ValueError, OverflowError):
+            continue
+        if (
+            not source_bounds.is_valid
+            or source_bounds.is_empty
+            or not all(math.isfinite(value) for value in source_bounds)
+            or not all(math.isfinite(value) for point in (first_px, second_px) for value in point)
+            or not _line_has_full_pixel_difference_support(
+                baseline,
+                difference_by_name[drawing["layer"]],
+                first_px,
+                second_px,
+                stroke_width_px,
+            )
+        ):
+            continue
+        results.append(
+            RawLine(
+                id=f"pdf-layer-line-{seqno}",
+                p1_px=first_px,
+                p2_px=second_px,
+                confidence=1.0,
+                bbox_px=(
+                    min(first_px[0], second_px[0]),
+                    min(first_px[1], second_px[1]),
+                    max(first_px[0], second_px[0]),
+                    max(first_px[1], second_px[1]),
+                ),
+                source_layer_classification=classification,
+            )
+        )
+    return results
 
 def _opaque_stroke_fully_covers_line(
     drawing: dict,
@@ -3004,6 +3229,9 @@ def run_pdf(
                 manifest["source_pdf_sha256"],
                 index - 1,
             )
+            pdf_layer_line_witnesses = _page_pdf_source_layer_line_witnesses(
+                page, pixmap, scale, (pixmap.x, pixmap.y)
+            )
             pdf_vector_line_witnesses = (
                 _page_vector_line_witnesses(page, scale, (pixmap.x, pixmap.y))
                 if pdf_vector_arcs
@@ -3044,6 +3272,8 @@ def run_pdf(
                 vector_kwargs["pdf_vector_arcs"] = pdf_vector_arcs
             if pdf_vector_line_witnesses:
                 vector_kwargs["pdf_vector_line_witnesses"] = pdf_vector_line_witnesses
+            if pdf_layer_line_witnesses:
+                vector_kwargs["pdf_layer_line_witnesses"] = pdf_layer_line_witnesses
 
             def process_page_ir(path: Path) -> None:
                 (

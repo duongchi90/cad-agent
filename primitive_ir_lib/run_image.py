@@ -370,6 +370,51 @@ def _union_overlapping_pdf_witness_intervals(
     )
 
 
+def _classify_pdf_layer_line_witnesses(
+    lines: List[RawLine], witnesses: List[RawLine], endpoint_tolerance_px: float = 1.0
+) -> List[RawLine]:
+    """Classify unchanged raster LINEs only for a mutual unique full-span witness."""
+    if (
+        isinstance(endpoint_tolerance_px, bool)
+        or not math.isfinite(endpoint_tolerance_px)
+        or endpoint_tolerance_px <= 0
+    ):
+        return lines
+    eligible = [
+        (index, witness)
+        for index, witness in enumerate(witnesses)
+        if witness.source_layer_classification in {"HIDDEN", "CENTERLINE"}
+    ]
+    matches_by_line: dict[int, list[int]] = {}
+    matches_by_witness: dict[int, list[int]] = {}
+
+    def endpoints_match(line: RawLine, witness: RawLine) -> bool:
+        direct = max(
+            math.dist(line.p1_px, witness.p1_px),
+            math.dist(line.p2_px, witness.p2_px),
+        )
+        reverse = max(
+            math.dist(line.p1_px, witness.p2_px),
+            math.dist(line.p2_px, witness.p1_px),
+        )
+        return math.isfinite(direct) and math.isfinite(reverse) and min(direct, reverse) <= endpoint_tolerance_px
+
+    for line_index, line in enumerate(lines):
+        for witness_index, witness in eligible:
+            if endpoints_match(line, witness):
+                matches_by_line.setdefault(line_index, []).append(witness_index)
+                matches_by_witness.setdefault(witness_index, []).append(line_index)
+
+    for line_index, witness_indices in matches_by_line.items():
+        if len(witness_indices) != 1:
+            continue
+        witness_index = witness_indices[0]
+        if len(matches_by_witness.get(witness_index, ())) != 1:
+            continue
+        lines[line_index].source_layer_classification = witnesses[witness_index].source_layer_classification
+    return lines
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -394,6 +439,7 @@ def run(
     text_conflict_report: Optional[dict] = None,
     pdf_vector_arcs: Optional[List[RawArc]] = None,
     pdf_vector_line_witnesses: Optional[List[RawLine]] = None,
+    pdf_layer_line_witnesses: Optional[List[RawLine]] = None,
     source_page_index: int = 0,
     image_bytes: Optional[bytes] = None,
 ) -> str:
@@ -500,6 +546,9 @@ def run(
                 break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=ocr_texts, image_bgr=image)
+    raw_lines = _classify_pdf_layer_line_witnesses(
+        raw_lines, pdf_layer_line_witnesses or []
+    )
     raw_lines.extend(
         line for witnessed_intervals in pdf_witnessed_lines.values() for line in witnessed_intervals
     )

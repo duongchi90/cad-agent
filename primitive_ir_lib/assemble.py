@@ -29,6 +29,7 @@ def line_to_primitive(raw: RawLine, calibration: Calibration, tool: str = "openc
         type="line",
         source="geometry_opencv",
         confidence=raw.confidence,
+        layer=raw.source_layer_classification or "UNCLASSIFIED",
         geometry=LineGeometry(start, end),
         trace=Trace(bbox_px=raw.bbox_px, extraction_tool=tool, extracted_at=now_iso()),
     )

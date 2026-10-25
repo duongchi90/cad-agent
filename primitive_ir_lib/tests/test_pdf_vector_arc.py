@@ -7,6 +7,7 @@ import hashlib
 import copy
 import math
 import os
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -272,6 +273,131 @@ def test_visible_open_pdf_vector_arc_reaches_primitive_ir(tmp_path: Path) -> Non
     review = review_dxf(build, strict_primitive_inventory=True)
     assert review.passed is True
     assert len(build.handle_by_primitive_id) == len(payload["primitives"])
+
+
+def test_source_layer_witness_requires_full_rendered_pixel_support():
+    visible = getattr(run_pdf_module, "_line_has_full_pixel_difference_support", None)
+    assert callable(visible), "rendered-pixel witness check is missing"
+
+    baseline = np.full((60, 100, 3), 255, dtype=np.uint8)
+    layer_off = baseline.copy()
+    baseline[30, 10:91] = 0
+    assert visible(baseline, layer_off, (10, 30), (90, 30), 1.0)
+
+    partially_occluded = baseline.copy()
+    partially_occluded[30, 50:91] = 255
+    assert not visible(partially_occluded, layer_off, (10, 30), (90, 30), 1.0)
+
+    unrelated_nearby_paint = baseline.copy()
+    unrelated_nearby_paint[30, 10:91] = 255
+    unrelated_nearby_paint[32, 10:91] = 0
+    assert not visible(unrelated_nearby_paint, layer_off, (10, 30), (90, 30), 1.0)
+
+
+def test_source_layer_mapping_rejects_unsupported_paint_properties():
+    classify = getattr(run_pdf_module, "_pdf_source_layer_classification", None)
+    assert callable(classify), "source-layer classifier is missing"
+
+    base = {
+        "layer": "Oculto (ISO)",
+        "level": 1,
+        "type": "s",
+        "fill": None,
+        "stroke_opacity": 1.0,
+        "blendmode": None,
+        "width": 1.0,
+        "dashes": "[] 0",
+        "items": [("l", (0.0, 0.0), (10.0, 0.0))],
+    }
+    assert classify(base) == "HIDDEN"
+    assert classify({**base, "stroke_opacity": 0.5}) is None
+    assert classify({**base, "blendmode": "Multiply"}) is None
+    assert classify({**base, "scissor": fitz.Rect(0, 0, 5, 5)}) is None
+    assert classify({**base, "layer": "Marca de centro (ISO)"}) is None
+    assert classify({**base, "level": -1}) is None
+
+
+def test_pdf_layer_visibility_probe_fails_closed_when_layer_state_cannot_be_restored():
+    class Document:
+        def layer_ui_configs(self):
+            return [{"number": 0, "text": "Oculto (ISO)", "on": 1}]
+
+        def set_layer_ui_config(self, number, action):
+            if action == fitz.PDF_OC_ON:
+                raise RuntimeError("restore failed")
+
+    class Page:
+        rotation = 0
+        rotation_matrix = fitz.Matrix(1, 1)
+        parent = Document()
+
+        def get_drawings(self, *, extended):
+            return [{
+                "layer": "Oculto (ISO)", "level": 1, "type": "s", "fill": None,
+                "stroke_opacity": 1.0, "blendmode": None, "dashes": "[] 0",
+                "width": 1.0, "items": [("l", (2.0, 5.0), (18.0, 5.0))],
+                "seqno": 0,
+            }]
+
+        def get_bboxlog(self):
+            return [("stroke-path", fitz.Rect(2.0, 4.0, 18.0, 6.0))]
+
+        def get_pixmap(self, **kwargs):
+            return fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 10), False)
+
+    baseline = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 10), False)
+    with pytest.raises(RuntimeError, match="restore PDF optional-content layer state"):
+        run_pdf_module._page_pdf_source_layer_line_witnesses(
+            Page(), baseline, 1.0, (0, 0)
+        )
+
+
+@pytest.mark.real_data
+def test_b041_classifies_only_visible_source_layer_lines(tmp_path: Path) -> None:
+    pdf_value = os.environ.get("CAD_AGENT_B041_CIRCLE_PDF")
+    if not pdf_value:
+        pytest.skip("set CAD_AGENT_B041_CIRCLE_PDF to the approved private B041 PDF")
+    source = Path(pdf_value)
+    assert source.is_file(), "CAD_AGENT_B041_CIRCLE_PDF must point to the approved PDF"
+    source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert source_sha256 == "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+
+    output = tmp_path / "b041-source-layers"
+    result = run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    primitives = payload["primitives"]
+    layers = Counter(primitive["layer"] for primitive in primitives)
+
+    assert result["pages"][0]["primitive_count"] == 242
+    assert Counter(primitive["type"] for primitive in primitives) == {
+        "line": 236, "circle": 3, "arc": 3,
+    }
+    assert layers == {"UNCLASSIFIED": 228, "CENTERLINE": 8, "HIDDEN": 6}
+    assert all(
+        primitive["type"] == "line"
+        for primitive in primitives
+        if primitive["layer"] in {"CENTERLINE", "HIDDEN"}
+    )
+
+    primitive_doc = load_primitive_ir_document(
+        str(output / "primitive_ir" / "page_01.json")
+    )
+    dxf_path = tmp_path / "b041-source-layers.dxf"
+    build = build_dxf(primitive_doc, str(dxf_path))
+    review = review_dxf(build, strict_primitive_inventory=True)
+    assert review.passed is True
+    assert build.entity_count == 242
+    assert Counter(build.layer_by_primitive_id.values()) == layers
+
+    ezdxf = pytest.importorskip("ezdxf")
+    reopened = ezdxf.readfile(str(dxf_path))
+    entities = list(reopened.modelspace())
+    assert len(entities) == 242
+    assert Counter(entity.dxf.layer for entity in entities) == layers
+    assert reopened.layers.get("HIDDEN").dxf.linetype.casefold() == "continuous"
+    assert reopened.layers.get("CENTERLINE").dxf.linetype.casefold() == "continuous"
 
 
 @pytest.mark.parametrize(
