@@ -44,11 +44,12 @@
 
 ## Verification checkpoint
 
-Code commit verified: `79c488e202de07fa7593d7d0d11b62de317aefdd`.
+Code commit verified: `24f0de3b2abea268a92e54e1e77108ec9b37a5e2` (tree `578b658d2b7f895280b6ba2d57fd4243147ea39e`), based on current main `ade737f75ec214377e2e015a4a44ca4d9d42df42`.
 
-- Focused owners and B041 real-data after the ownership-safe witness refactor: the same command — 78 passed.
-- Ruff on all eight changed Python files — PASS.
+- Focused owners and B041 real-data: the focused PDF/image/DXF builder command with `CAD_AGENT_B041_CIRCLE_PDF` set to the SHA-verified B041 source — 78 passed. It checks the same 242 entity geometry inventory, exact HIDDEN/CENTERLINE counts, and strict IR↔DXF review.
+- Ruff on changed Python files — PASS.
 - `git diff --check` — PASS.
-- `scripts/verify.ps1 -PythonExe 'C:\Users\t3407d\.codex\worktrees\b041-gdt-text-observation\cad-agent\.venv-py311\Scripts\python.exe'` — exit 0; .NET restore/build PASS (existing `MSB3277` WindowsBase warning), .NET tests 261 PASS, IPC offline 128 PASS, Python offline 3,882 PASS / 29 deselected / 88 subtests; the separate causal-RED oracle emitted its expected single marked failure. The verifier reported the private/live probes as unavailable-state SKIP and did not count them as PASS.
-- Native AutoCAD save/close/reopen/readback — NOT RUN.
+- `scripts/verify.ps1 -PythonExe 'C:\Users\t3407d\.codex\worktrees\b041-gdt-text-observation\cad-agent\.venv-py311\Scripts\python.exe'` on the clean code commit — exit 0; .NET restore/build PASS (existing `MSB3277` WindowsBase warning), .NET tests 261 PASS, IPC offline 128 PASS, Python offline 3,882 PASS / 29 deselected / 88 subtests. The separate causal-RED oracle emitted its expected single marked failure. The verifier reported 8 private-data probes and 18 AutoCAD live probes as unavailable-state SKIP; neither is PASS.
+- Repository remained clean after verification.
+- Native AutoCAD save/close/reopen/readback for this classification candidate — NOT RUN.
 - Exact-head hosted CI, Security and Integration — pending PR creation.
