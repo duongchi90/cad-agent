@@ -3277,3 +3277,151 @@ def test_native_pdf_observation_rejects_spoofed_b041_aigdt_resource(
 
     assert not any(span.get("source_glyph_id") == 80 for span in observation["native_pdf_spans"])
     assert not any(span.get("content") == "\u2300" for span in observation["native_pdf_spans"])
+
+
+@pytest.mark.real_data
+def test_native_pdf_text_approval_rejects_overlapping_b041_ocr_and_native_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlapping OCR/native source boxes cannot both enter one text approval."""
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "\u2300")
+    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "12,00")
+    native_bbox = native["bbox_px"]
+    ocr_bbox = ocr["bbox_px"]
+    overlap_width = min(native_bbox[2], ocr_bbox[2]) - max(native_bbox[0], ocr_bbox[0])
+    overlap_height = min(native_bbox[3], ocr_bbox[3]) - max(native_bbox[1], ocr_bbox[1])
+    assert overlap_width > 0 and overlap_height > 0
+
+    selection_path = output / "diagnostic-mixed-selection.json"
+    native_review = {"span": native, "visible_and_legible": True}
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [ocr["id"]],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\seguisym.ttf")
+    try:
+        with pytest.raises(FidelityError, match="overlapping OCR and native PDF text"):
+            write_fidelity_text_approval(
+                source,
+                output,
+                manifest,
+                1,
+                observation_path,
+                [ocr["id"]],
+                "TEST_ONLY_DIAGNOSTIC_NOT_HUMAN_APPROVAL",
+                workspace_root=Path.cwd(),
+                native_span_ids=[native["id"]],
+                native_span_reviews=[native_review],
+                selection_path=selection_path,
+            )
+    finally:
+        monkeypatch.delenv("CAD_AGENT_FIDELITY_TEXT_FONT", raising=False)
+    assert not (output / "fidelity_text_approvals" / "page_01.json").exists()
+
+
+@pytest.mark.real_data
+def test_native_pdf_text_approval_keeps_nonoverlapping_b041_ocr_and_native_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "\u2300")
+    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "Adaptador")
+    assert (
+        max(ocr["bbox_px"][0], native["bbox_px"][0]) >= min(ocr["bbox_px"][2], native["bbox_px"][2])
+        or max(ocr["bbox_px"][1], native["bbox_px"][1]) >= min(ocr["bbox_px"][3], native["bbox_px"][3])
+    )
+    native_review = {"span": native, "visible_and_legible": True}
+    selection_path = output / "diagnostic-mixed-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [ocr["id"]],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\seguisym.ttf")
+    approval = write_fidelity_text_approval(
+        source,
+        output,
+        manifest,
+        1,
+        observation_path,
+        [ocr["id"]],
+        "TEST_ONLY_DIAGNOSTIC_NOT_HUMAN_APPROVAL",
+        workspace_root=Path.cwd(),
+        native_span_ids=[native["id"]],
+        native_span_reviews=[native_review],
+        selection_path=selection_path,
+    )
+    assert len(approval["approved_candidates"]) == 1
+    assert len(approval["approved_native_spans"]) == 1
+
+
+@pytest.mark.real_data
+def test_native_pdf_observation_aggregates_complete_nakuja_same_span_glyph_traces(
+    tmp_path: Path,
+) -> None:
+    source_value = os.environ.get("CAD_AGENT_NAKUJA_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_NAKUJA_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    spans = [span for span in observation["native_pdf_spans"] if span["content"] == "10,00"]
+    assert len(spans) == 1
+    span = spans[0]
+    assert span["visibility"] == "unverified"
+    assert span["source_text_agreement"] == "exact"
+    assert span["source_paint_evidence"]["member_sequence_numbers"] == [190, 191, 192, 193, 194]
+    member_traces = span["source_paint_evidence"]["member_traces"]
+    assert "".join(trace["text"] for trace in member_traces) == "10,00"
+    assert [trace["sequence_number"] for trace in member_traces] == [190, 191, 192, 193, 194]
+    assert all(trace["bbox_pt"] and trace["glyph_ids"] for trace in member_traces)

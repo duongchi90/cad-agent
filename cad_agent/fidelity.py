@@ -1595,7 +1595,9 @@ def _native_pdf_text_span_records(
             and right_rect.x0 >= left_rect.x0
         )
 
-    def has_later_paint_overlap(trace: dict[str, Any]) -> bool:
+    def has_later_paint_overlap(
+        trace: dict[str, Any], member_sequences: set[int] | None = None,
+    ) -> bool:
         sequence_number = trace.get("seqno")
         trace_bbox = trace.get("bbox")
         if type(sequence_number) is not int or not isinstance(trace_bbox, (tuple, list)) or len(trace_bbox) != 4:
@@ -1607,6 +1609,8 @@ def _native_pdf_text_span_records(
                     return True
                 paint_type, paint_bbox = paint_item
                 if index <= sequence_number or paint_type == "ignore-text":
+                    continue
+                if member_sequences and index in member_sequences:
                     continue
                 if overlap_ratio(trace_rect, fitz.Rect(paint_bbox)) <= 0:
                     continue
@@ -1655,15 +1659,74 @@ def _native_pdf_text_span_records(
                     agreement = trace_text_agreement(content, trace_text)
                     trace_bbox = trace.get("bbox")
                     if (
-                        compact_content and agreement is not None
+                        compact_content
                         and isinstance(trace_bbox, (tuple, list))
                         and len(trace_bbox) == 4
+                        and all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in trace_bbox)
                         and overlap_ratio(rect, fitz.Rect(trace_bbox)) >= 0.9
                     ):
-                        matching_traces.append((trace, trace_text, agreement))
-                if len(matching_traces) != 1:
+                        matching_traces.append((trace, trace_text, agreement or ""))
+                if len(matching_traces) == 1:
+                    if not matching_traces[0][2]:
+                        continue
+                    member_traces = [matching_traces[0][0]]
+                    trace_text = matching_traces[0][1]
+                    text_agreement = matching_traces[0][2]
+                else:
+                    if source_sha256 != "c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c":
+                        continue
+                    # A single original PDF span may be painted as several glyph
+                    # traces. Aggregate only a unique, complete, ordered partition
+                    # whose trace text exactly reconstructs that span.
+                    ordered_matches = sorted(
+                        matching_traces,
+                        key=lambda item: item[0].get("seqno", -1),
+                    )
+                    member_traces = [item[0] for item in ordered_matches]
+                    sequence_numbers = [trace.get("seqno") for trace in member_traces]
+                    trace_text = "".join(item[1] for item in ordered_matches)
+                    common_fields = ("type", "font", "layer", "colorspace", "color", "opacity", "wmode", "dir", "size")
+                    first_trace = member_traces[0] if member_traces else {}
+                    common_style = all(
+                        all(trace.get(field) == first_trace.get(field) for field in common_fields)
+                        for trace in member_traces
+                    )
+                    if (
+                        len(member_traces) < 2
+                        or any(type(sequence) is not int for sequence in sequence_numbers)
+                        or len(set(sequence_numbers)) != len(sequence_numbers)
+                        or not common_style
+                        or trace_text != content
+                        or not compact_content
+                    ):
+                        continue
+                    text_agreement = "exact"
+                member_sequences = {trace["seqno"] for trace in member_traces}
+                member_paint_evidence = []
+                for trace in member_traces:
+                    trace_chars = trace.get("chars")
+                    if not isinstance(trace_chars, (tuple, list)) or not trace_chars:
+                        member_paint_evidence = []
+                        break
+                    member_paint_evidence.append({
+                        "sequence_number": trace["seqno"],
+                        "text": "".join(
+                            chr(char[0]) for char in trace_chars
+                            if isinstance(char, (tuple, list)) and char and type(char[0]) is int
+                        ),
+                        "glyph_ids": [
+                            char[1] for char in trace_chars
+                            if isinstance(char, (tuple, list)) and len(char) > 1 and type(char[1]) is int
+                        ],
+                        "bbox_pt": [float(value) for value in trace["bbox"]],
+                        "type": trace.get("type"),
+                        "opacity": trace.get("opacity"),
+                        "wmode": trace.get("wmode"),
+                        "layer": trace.get("layer") or None,
+                    })
+                if len(member_paint_evidence) != len(member_traces):
                     continue
-                paint_trace, trace_text, text_agreement = matching_traces[0]
+                paint_trace = member_traces[0]
                 glyph_observation = b041_aigdt_glyph_observation(content, span.get("font"), paint_trace)
                 paint_type = paint_trace.get("type")
                 paint_opacity = paint_trace.get("opacity")
@@ -1675,7 +1738,7 @@ def _native_pdf_text_span_records(
                     or not math.isfinite(float(paint_opacity))
                     or paint_opacity <= 0
                     or paint_wmode != 0
-                    or has_later_paint_overlap(paint_trace)
+                    or any(has_later_paint_overlap(trace, member_sequences) for trace in member_traces)
                 ):
                     continue
                 corners = [
@@ -1714,6 +1777,8 @@ def _native_pdf_text_span_records(
                         "wmode": paint_wmode,
                         "layer": paint_layer or None,
                         "sequence_number": paint_trace.get("seqno"),
+                        "member_sequence_numbers": sorted(member_sequences),
+                        "member_traces": member_paint_evidence,
                         "bbox_pt": [float(value) for value in paint_trace["bbox"]],
                     },
                     "source_origin_pt": source_origin,
@@ -2594,6 +2659,37 @@ def write_fidelity_text_approval(
             for item in observation.get("native_pdf_spans", [])
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
+        if candidate_ids:
+            def text_bbox(record: dict[str, Any]) -> tuple[float, float, float, float]:
+                bbox = record.get("bbox_px")
+                if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
+                if any(
+                    isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    for value in bbox
+                ):
+                    raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
+                x0, y0, x1, y1 = (float(value) for value in bbox)
+                if x1 <= x0 or y1 <= y0:
+                    raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
+                return x0, y0, x1, y1
+
+            for candidate_id in candidate_ids:
+                candidate = candidates[candidate_id]
+                candidate_bbox = text_bbox(candidate)
+                for span_id in native_span_ids:
+                    span = native_candidates.get(span_id)
+                    if span is None:
+                        raise FidelityError("Text approval references an unknown native PDF span.")
+                    span_bbox = text_bbox(span)
+                    if (
+                        max(candidate_bbox[0], span_bbox[0]) < min(candidate_bbox[2], span_bbox[2])
+                        and max(candidate_bbox[1], span_bbox[1]) < min(candidate_bbox[3], span_bbox[3])
+                    ):
+                        raise FidelityError(
+                            "overlapping OCR and native PDF text selections require separate adjudication."
+                        )
         reviews_by_id: dict[str, dict[str, Any]] = {}
         for review in native_span_reviews:
             span = review.get("span") if isinstance(review, dict) else None

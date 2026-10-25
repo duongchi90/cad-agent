@@ -142,3 +142,14 @@
 - [ ] Run the canonical affected verification on the current-main-reconciled PR branch; report real-data/native gates not run separately.
 - [ ] Confirm only the four existing PR #522 owner/test/spec/plan paths differ from current main; confirm #539's published head and files remain untouched.
 - [ ] Keep PR #522 Draft; refresh hosted checks and independent exact-head reviews only after the implementation head is stable. No merge or native acceptance is implied.
+
+### Task 7: Nakuja same-span observation and OCR overlap refusal
+
+**Boundary:** Existing private fidelity text observation/approval only. Frozen Nakuja source SHA-256 `c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c`; B041 source SHA-256 `bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3`.
+
+- [x] Reproduce the Nakuja `10,00` observation omission as a failing real-data regression; the original span maps uniquely to ordered text traces 190–194.
+- [x] Permit a complete ordered trace partition only within one original span and only for this frozen Nakuja source; retain external later-paint checks and unverified status. `10,00` is observed; diagonal dimension values remain excluded where later paint overlaps.
+- [x] Reproduce a B041 OCR `12,00` / native `⌀` positive-area overlap that previously allowed both typed selections to be approved.
+- [x] Reject mixed OCR/native selections with positive-area bbox overlap or invalid bounds before approval; preserve a non-overlapping mixed selection.
+- [x] Keep OCR extraction, source-span identity, manual visibility review and plain-TEXT-only semantics. This does not create associative dimensions or native DWG acceptance.
+- [ ] Run full fidelity module, Ruff and applicable canonical verification; refresh PR #522 exact-head gates only after a stable implementation head. PR #539 remains untouched.
