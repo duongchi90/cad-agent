@@ -2588,6 +2588,32 @@ def _fresh_fidelity_native_pdf_spans(
     return fresh
 
 
+def _fidelity_text_bbox(record: dict[str, Any]) -> tuple[float, float, float, float]:
+    bbox = record.get("bbox_px")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        for value in bbox
+    ):
+        raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    if x1 <= x0 or y1 <= y0:
+        raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
+    return x0, y0, x1, y1
+
+
+def _fidelity_text_boxes_overlap(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return (
+        max(left[0], right[0]) < min(left[2], right[2])
+        and max(left[1], right[1]) < min(left[3], right[3])
+    )
+
+
 def write_fidelity_text_approval(
     source: Path,
     output_root: Path,
@@ -2660,33 +2686,15 @@ def write_fidelity_text_approval(
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         }
         if candidate_ids:
-            def text_bbox(record: dict[str, Any]) -> tuple[float, float, float, float]:
-                bbox = record.get("bbox_px")
-                if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-                    raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
-                if any(
-                    isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(float(value))
-                    for value in bbox
-                ):
-                    raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
-                x0, y0, x1, y1 = (float(value) for value in bbox)
-                if x1 <= x0 or y1 <= y0:
-                    raise FidelityError("Mixed OCR/native text selection has invalid bounds.")
-                return x0, y0, x1, y1
-
             for candidate_id in candidate_ids:
                 candidate = candidates[candidate_id]
-                candidate_bbox = text_bbox(candidate)
+                candidate_bbox = _fidelity_text_bbox(candidate)
                 for span_id in native_span_ids:
                     span = native_candidates.get(span_id)
                     if span is None:
                         raise FidelityError("Text approval references an unknown native PDF span.")
-                    span_bbox = text_bbox(span)
-                    if (
-                        max(candidate_bbox[0], span_bbox[0]) < min(candidate_bbox[2], span_bbox[2])
-                        and max(candidate_bbox[1], span_bbox[1]) < min(candidate_bbox[3], span_bbox[3])
-                    ):
+                    span_bbox = _fidelity_text_bbox(span)
+                    if _fidelity_text_boxes_overlap(candidate_bbox, span_bbox):
                         raise FidelityError(
                             "overlapping OCR and native PDF text selections require separate adjudication."
                         )
@@ -3033,6 +3041,14 @@ def run_fidelity_text_reconstruct(
         native_by_id = {item["id"]: item for item in fresh_native}
         selected_ids = page_selections[0].get("native_span_ids")
         reviews = page_selections[0].get("native_span_reviews")
+        selected_ocr_ids = page_selections[0].get("candidate_ids")
+        if (
+            not isinstance(selected_ocr_ids, list)
+            or any(not isinstance(item, str) for item in selected_ocr_ids)
+            or len(set(selected_ocr_ids)) != len(selected_ocr_ids)
+            or set(selected_ocr_ids) != approved_ids
+        ):
+            raise FidelityError("Native text selection OCR ids do not match approved OCR candidates.")
         if (
             not isinstance(selected_ids, list)
             or not selected_ids
@@ -3101,6 +3117,11 @@ def run_fidelity_text_reconstruct(
             ):
                 raise FidelityError("Native text approval is stale, unsupported, unselected, or missing current glyph evidence.")
             approved_native.append({"span": span, "glyph_render": glyph_render})
+        for approved_ocr in approved_candidates:
+            ocr_bbox = _fidelity_text_bbox(approved_ocr["candidate"])
+            for approved_span in approved_native:
+                if _fidelity_text_boxes_overlap(ocr_bbox, _fidelity_text_bbox(approved_span["span"])):
+                    raise FidelityError("OCR and native PDF text overlap and cannot be reconstructed together.")
         audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
         render_width = audit.get("source_page", {}).get("render_width_px")

@@ -1418,6 +1418,90 @@ def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_pat
     assert all(record["source_font_name"] for record in report["text_sizing"])
 
 
+def test_native_pdf_text_reconstruct_rejects_forged_mixed_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "mixed-overlap-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((50, 100), "12,00", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "12,00")
+    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "12,00")
+    assert (
+        max(native["bbox_px"][0], ocr["bbox_px"][0])
+        < min(native["bbox_px"][2], ocr["bbox_px"][2])
+        and max(native["bbox_px"][1], ocr["bbox_px"][1])
+        < min(native["bbox_px"][3], ocr["bbox_px"][3])
+    )
+
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\seguisym.ttf")
+    native_review = {"span": native, "visible_and_legible": True}
+    selection_path = output / "diagnostic-native-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    native_approval = write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [], "test-native-only",
+        workspace_root=Path.cwd(), native_span_ids=[native["id"]],
+        native_span_reviews=[native_review], selection_path=selection_path,
+    )
+    (output / "fidelity_text_approvals" / "page_01.json").unlink()
+
+    ocr_approval = write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [ocr["id"]], "test-ocr-only",
+        workspace_root=Path.cwd(),
+    )
+    selection = {
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [ocr["id"]],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }
+    selection_path.write_text(json.dumps(selection, ensure_ascii=False), encoding="utf-8")
+    selection_record = fidelity_module._artifact(selection_path, output)
+    native_approval["native_selection"] = selection_record
+    for record in native_approval["approved_native_spans"]:
+        record["visibility_review"]["selection"] = selection_record
+    approval_path = output / "diagnostic-forged-mixed-approval.json"
+    approval_path.write_text(json.dumps(native_approval, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="selection.*OCR|approved OCR"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+    native_approval["approved_candidates"] = ocr_approval["approved_candidates"]
+    approval_path.write_text(json.dumps(native_approval, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(FidelityError, match="overlap"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01" / "output.dxf").exists()
+
+
 def test_native_pdf_text_reconstruction_rejects_junction_output_redirect(tmp_path: Path) -> None:
     import subprocess
 
