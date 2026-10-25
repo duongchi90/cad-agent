@@ -387,6 +387,180 @@ def test_resolved_attachment_without_explicit_role_remains_unresolved() -> None:
     assert "role_unresolved" in disposition.reasons
 
 
+def _shifted_dimension_page(*, ambiguous_continuation: bool = False) -> tuple[np.ndarray, DimensionCluster, list[dict[str, object]]]:
+    page = np.full((360, 760, 3), 255, dtype=np.uint8)
+    source = synthetic_horizontal_dimension()
+    offset_x, offset_y = 130, 70
+    page[offset_y : offset_y + source.shape[0], offset_x : offset_x + source.shape[1]] = source
+    first_feature_y = offset_y + 115
+    cv2.line(
+        page,
+        (offset_x + 80, first_feature_y),
+        (offset_x + 340, first_feature_y),
+        (0, 0, 0),
+        2,
+    )
+    anchors = [
+        {
+            "type": "FEATURE",
+            "id": "FEATURE-LEFT-TOP",
+            "view_id": "SIDE",
+            "point_px": [float(offset_x + 80), float(first_feature_y)],
+            "confidence": 1.0,
+        },
+        {
+            "type": "FEATURE",
+            "id": "FEATURE-RIGHT-TOP",
+            "view_id": "SIDE",
+            "point_px": [float(offset_x + 340), float(first_feature_y)],
+            "confidence": 1.0,
+        },
+    ]
+    if ambiguous_continuation:
+        second_feature_y = first_feature_y + 20
+        for x in (offset_x + 80, offset_x + 340):
+            cv2.line(page, (x, first_feature_y), (x, second_feature_y), (0, 0, 0), 2)
+        cv2.line(
+            page,
+            (offset_x + 80, second_feature_y),
+            (offset_x + 340, second_feature_y),
+            (0, 0, 0),
+            2,
+        )
+        anchors.extend(
+            [
+                {
+                    "type": "FEATURE",
+                    "id": "FEATURE-LEFT-CONTINUATION",
+                    "view_id": "SIDE",
+                    "point_px": [float(offset_x + 80), float(second_feature_y)],
+                    "confidence": 1.0,
+                },
+                {
+                    "type": "FEATURE",
+                    "id": "FEATURE-RIGHT-CONTINUATION",
+                    "view_id": "SIDE",
+                    "point_px": [float(offset_x + 340), float(second_feature_y)],
+                    "confidence": 1.0,
+                },
+            ]
+        )
+    cluster = DimensionCluster(
+        cluster_id="DIMCLUSTER-SHIFTED",
+        bbox_px=(offset_x, offset_y, offset_x + 420, offset_y + 60),
+        member_boxes=((offset_x + 160, offset_y + 5, offset_x + 260, offset_y + 35),),
+    )
+    return page, cluster, anchors
+
+
+def test_source_context_preserves_dimension_identity_and_translates_page_anchors() -> None:
+    page, cluster, anchors = _shifted_dimension_page()
+    forward = observe_dimension_cluster(
+        page,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=anchors,
+    )
+    reverse = observe_dimension_cluster(
+        page,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=list(reversed(anchors)),
+    )
+
+    assert forward.observation is not None and reverse.observation is not None
+    assert forward.observation["source_evidence"]["bbox"] == [130.0, 70.0, 550.0, 130.0]
+    assert forward.observation["extension_geometry"]["dimension_line"][0][1] == 33.0
+    assert len(forward.observation["extension_geometry"]["extension_lines"]) == 2
+    assert "attachment_unresolved" not in forward.reasons
+    assert forward.observation["status"] == "UNRESOLVED"
+    assert "role_unresolved" in forward.reasons
+    assert forward.observation["attachment_candidates"][0] == reverse.observation["attachment_candidates"][0]
+    assert {
+        forward.observation["attachment_candidates"][0]["from_ref"]["id"],
+        forward.observation["attachment_candidates"][0]["to_ref"]["id"],
+    } == {"FEATURE-LEFT-TOP", "FEATURE-RIGHT-TOP"}
+    assert {
+        forward.observation["attachment_candidates"][0]["from_ref"]["type"],
+        forward.observation["attachment_candidates"][0]["to_ref"]["type"],
+    } == {"FEATURE"}
+
+
+def test_wrong_view_anchors_are_excluded_from_association_candidates() -> None:
+    anchors = matching_horizontal_anchors()
+    for anchor in anchors:
+        anchor["type"] = "FEATURE"
+        anchor["view_id"] = "OTHER"
+        anchor["confidence"] = 3.0
+
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=anchors,
+        explicit_role="DRIVING",
+        default_unit="mm",
+    )
+
+    assert disposition.observation is not None
+    assert disposition.observation["attachment_candidates"] == []
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, float("nan"), float("inf"), 3.0])
+def test_out_of_range_anchor_confidence_cannot_resolve_association(confidence: float) -> None:
+    anchors = matching_horizontal_anchors()
+    for anchor in anchors:
+        anchor["type"] = "FEATURE"
+        anchor["confidence"] = confidence
+
+    disposition = observe_dimension_cluster(
+        synthetic_horizontal_dimension(),
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=anchors,
+        explicit_role="DRIVING",
+        default_unit="mm",
+    )
+
+    assert disposition.observation is not None
+    assert disposition.observation["attachment_candidates"] == []
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
+def test_competing_feature_intersections_on_a_collinear_continuation_stay_unresolved() -> None:
+    page, cluster, anchors = _shifted_dimension_page(ambiguous_continuation=True)
+    disposition = observe_dimension_cluster(
+        page,
+        cluster,
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=fake_ocr_4500,
+        semantic_anchors=anchors,
+    )
+
+    assert disposition.observation is not None
+    candidates = disposition.observation["attachment_candidates"]
+    assert sum(float(item["confidence"]) >= 0.85 for item in candidates) >= 2
+    assert disposition.observation["status"] == "UNRESOLVED"
+    assert "attachment_unresolved" in disposition.reasons
+
+
 def test_explicit_reference_role_may_confirm_resolved_observation() -> None:
     disposition = observe_dimension_cluster(
         synthetic_horizontal_dimension(),
