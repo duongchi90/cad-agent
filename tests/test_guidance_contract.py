@@ -53,6 +53,25 @@ class GuidanceContractTests(unittest.TestCase):
             for term in required_terms:
                 self.assertIn(term, content, f"{term!r} missing from {file_name}")
 
+    def test_chat_mode_recovery_does_not_inflate_delivery_or_verdict(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        self.assertIn("one-time `Stay in chat`", agents)
+        self.assertIn("opaque thread/content-reference are not delivery or a verdict", agents)
+        for term in (
+            "select it at most once",
+            "verify the UI is back in that same conversation",
+            "does not prove submission, delivery, or receipt of a verdict",
+            "`SUBMITTED`, `GENERATING`, `COMPLETED`, `ERROR`, and `UNOBSERVABLE`",
+            "opaque `content-reference` placeholder alone is not inspectable reviewer output",
+            "`ROLE`, `REQUEST_ID`, `CONTROLLING_ATTEMPT_ID`, `BASE`, `HEAD`, and `TREE`",
+            "keep the review `PENDING`",
+            "Do not bypass CAPTCHA, identity verification, or anti-automation/security challenges",
+            "Retire the old channel for that packet before transfer",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+
 
 if __name__ == "__main__":
     unittest.main()

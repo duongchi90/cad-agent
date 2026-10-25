@@ -551,6 +551,30 @@ def _drawing_setup_verify_command(args: argparse.Namespace) -> int:
     return 2
 
 
+def _layer_standard_check_command(args: argparse.Namespace) -> int:
+    from .drawing_setup import create_layer_standard_check
+
+    audit = args.audit.resolve()
+    rules_path = args.rules.resolve()
+    output = args.output.resolve()
+    if audit.suffix.lower() != ".json" or rules_path.suffix.lower() != ".json":
+        raise CommandError("layer-standard-check audit and rules inputs must be .json files")
+    if output.suffix.lower() != ".json":
+        raise CommandError("layer-standard-check output must be a .json file")
+    if output.exists():
+        raise CommandError(f"layer-standard-check output already exists: {output}")
+    try:
+        rules = json.loads(rules_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CommandError(f"cannot read layer-standard-check rules: {rules_path}") from exc
+    if not isinstance(rules, dict):
+        raise CommandError("layer-standard-check rules root must be a JSON object")
+    result = create_layer_standard_check(audit, rules)
+    write_manifest(output, result)
+    print(output)
+    return 0
+
+
 def _is_within(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -1098,6 +1122,13 @@ def build_parser() -> argparse.ArgumentParser:
     drawing_setup_verify.add_argument("--verified-by", required=True)
     drawing_setup_verify.add_argument("--approval-reference", required=True)
     drawing_setup_verify.add_argument("--output", type=Path, required=True)
+    layer_standard_check = subcommands.add_parser(
+        "layer-standard-check",
+        help="Classify caller-supplied audit layer names; audit origin is not authenticated",
+    )
+    layer_standard_check.add_argument("--audit", type=Path, required=True)
+    layer_standard_check.add_argument("--rules", type=Path, required=True)
+    layer_standard_check.add_argument("--output", type=Path, required=True)
     dimension_pilot = subcommands.add_parser(
         "dimension-pilot-run",
         help="Build and measure a hash-bound offline linear-dimension candidate",
@@ -1285,6 +1316,8 @@ def main(argv: list[str] | None = None) -> int:
             return _drawing_setup_audit_command(args)
         if args.command == "drawing-setup-verify":
             return _drawing_setup_verify_command(args)
+        if args.command == "layer-standard-check":
+            return _layer_standard_check_command(args)
         if args.command == "dimension-pilot-run":
             return _dimension_pilot_command(args)
         if args.command == "fidelity-pdf":
