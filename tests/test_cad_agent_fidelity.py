@@ -1418,6 +1418,68 @@ def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_pat
     assert all(record["source_font_name"] for record in report["text_sizing"])
 
 
+def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "atomic-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "ATOMIC NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    page_output = output / "text_reconstruction" / "page_01"
+    original_write_text = Path.write_text
+
+    def fail_report_write(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        if path.name == "report.json" and path.parent.name.startswith(".page_01.staging-"):
+            raise OSError("injected report publication failure")
+        return original_write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_report_write)
+    with pytest.raises(FidelityError, match="report could not be published"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+    assert not page_output.exists(), "failed publication must not leave a partial final page"
+    staging_parent = page_output.parent
+    assert not list(staging_parent.glob(".page_01.staging-*")), "failed publication must clean its staging directory"
+
+    monkeypatch.setattr(Path, "write_text", original_write_text)
+    output_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    assert output_dxf == page_output / "layout.dxf"
+    assert output_dxf.is_file()
+    assert (page_output / "report.json").is_file()
+    assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
+
+
 def test_native_pdf_text_reconstruct_rejects_forged_mixed_overlap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

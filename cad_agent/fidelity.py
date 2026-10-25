@@ -12,6 +12,7 @@ import hashlib
 import math
 import os
 import re
+import tempfile
 from collections import Counter
 from html import escape
 from pathlib import Path
@@ -3229,15 +3230,44 @@ def run_fidelity_text_reconstruct(
     if root.exists():
         raise FidelityError(f"Text reconstruction already exists: {root}")
     try:
-        with pin_directory_chain(root.absolute()):
+        with pin_directory_chain(root.parent.absolute()):
             if not _is_within(root, output_root):
                 raise FidelityError("Text reconstruction output escaped the private fidelity root.")
-            output = root / "layout.dxf"
-            document.saveas(output)
-            (root / "report.json").write_text(json.dumps({"state": "needs_review", "profile": "fidelity-layout-text", "text_approval_sha256": sha256_file(approval_path), "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None, "output_dxf_sha256": sha256_file(output), "emitted_text_entities": emitted, "text_sizing": sizing_records, "unresolved": ["text content was human-approved but placement/height/style remain reviewable", "no model export"]}, indent=2) + "\n", encoding="utf-8")
+            if root.exists():
+                raise FidelityError(f"Text reconstruction already exists: {root}")
+            with tempfile.TemporaryDirectory(
+                prefix=f".{root.name}.staging-", dir=root.parent,
+            ) as staging_directory:
+                staging_root = Path(staging_directory)
+                if not _is_within(staging_root, output_root):
+                    raise FidelityError("Text reconstruction staging escaped the private fidelity root.")
+                output = staging_root / "layout.dxf"
+                document.saveas(output)
+                report = {
+                    "state": "needs_review",
+                    "profile": "fidelity-layout-text",
+                    "text_approval_sha256": sha256_file(approval_path),
+                    "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None,
+                    "output_dxf_sha256": sha256_file(output),
+                    "emitted_text_entities": emitted,
+                    "text_sizing": sizing_records,
+                    "unresolved": [
+                        "text content was human-approved but placement/height/style remain reviewable",
+                        "no model export",
+                    ],
+                }
+                try:
+                    (staging_root / "report.json").write_text(
+                        json.dumps(report, indent=2) + "\n", encoding="utf-8",
+                    )
+                except OSError as exc:
+                    raise FidelityError("Text reconstruction report could not be published.") from exc
+                if root.exists():
+                    raise FidelityError(f"Text reconstruction already exists: {root}")
+                os.rename(staging_root, root)
     except FileIdentityError as exc:
         raise FidelityError("Text reconstruction output must use a stable, non-reparse directory inside the private fidelity root.") from exc
-    return output
+    return root / "layout.dxf"
 
 
 def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
