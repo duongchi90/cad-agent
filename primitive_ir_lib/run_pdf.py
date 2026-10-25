@@ -2938,6 +2938,10 @@ def _page_pdf_source_layer_line_witnesses(
             config_by_name[source_name] = matches[0]
     if not config_by_name:
         return []
+    try:
+        text_spans = page.get_texttrace()
+    except Exception:
+        return []
     baseline = _pixmap_rgb_array(baseline_pixmap)
     if baseline is None:
         return []
@@ -2984,7 +2988,11 @@ def _page_pdf_source_layer_line_witnesses(
         if source_name not in difference_by_name:
             continue
         seqno = drawing.get("seqno")
-        if isinstance(seqno, bool) or not isinstance(seqno, int) or not (0 <= seqno < len(bboxlog)):
+        if (
+            isinstance(seqno, bool)
+            or not isinstance(seqno, int)
+            or not (0 <= seqno < len(bboxlog))
+        ):
             invalid_competitor_layers.add(source_name)
             continue
         try:
@@ -3005,6 +3013,44 @@ def _page_pdf_source_layer_line_witnesses(
                 bounds.x1 * pixel_scale - origin_x,
                 bounds.y1 * pixel_scale - origin_y,
             )
+        except (IndexError, TypeError, ValueError, OverflowError):
+            invalid_competitor_layers.add(source_name)
+
+    # Text paint is not returned by get_drawings(). Texttrace binds each text
+    # paint sequence to its OCG; use the corresponding bboxlog bounds as
+    # competing evidence so OCG text cannot impersonate a covered source line.
+    for span in text_spans:
+        if not isinstance(span, dict):
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+        source_name = span.get("layer")
+        if source_name not in difference_by_name:
+            continue
+        seqno = span.get("seqno")
+        if isinstance(seqno, bool) or not isinstance(seqno, int) or not (0 <= seqno < len(bboxlog)):
+            invalid_competitor_layers.add(source_name)
+            continue
+        try:
+            record = bboxlog[seqno]
+            if len(record) != 2 or record[0] not in {"fill-text", "stroke-text"}:
+                raise ValueError("text trace does not match text paint")
+            bounds = fitz.Rect(record[1])
+            if (
+                not bounds.is_valid
+                or bounds.is_empty
+                or not all(math.isfinite(value) for value in bounds)
+            ):
+                raise ValueError("invalid text paint bounds")
+            bounds *= transform
+            bounds_px = (
+                bounds.x0 * pixel_scale - origin_x,
+                bounds.y0 * pixel_scale - origin_y,
+                bounds.x1 * pixel_scale - origin_x,
+                bounds.y1 * pixel_scale - origin_y,
+            )
+            if not all(math.isfinite(value) for value in bounds_px):
+                raise ValueError("invalid transformed text paint bounds")
+            competing_bounds_by_layer.setdefault(source_name, {})[seqno] = bounds_px
         except (IndexError, TypeError, ValueError, OverflowError):
             invalid_competitor_layers.add(source_name)
 

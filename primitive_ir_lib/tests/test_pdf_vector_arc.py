@@ -423,6 +423,31 @@ def _write_ocg_fractional_inline_image_false_pixel_witness_pdf(path: Path) -> No
     document.close()
 
 
+def _write_ocg_text_false_pixel_witness_pdf(path: Path) -> None:
+    """Build a PDF where OCG text paints over a covered ISO source line."""
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    ocg = document.add_ocg("Oculto (ISO)")
+    page.draw_line(
+        (50, 300), (550, 300), color=(0, 0, 0), width=1, oc=ocg, overlay=True
+    )
+    page.draw_line(
+        (50, 300), (550, 300), color=(1, 1, 1), width=4, overlay=True
+    )
+    # Courier underscore glyphs paint one continuous raster row after the
+    # opaque cover. They are in the same OCG but are not the candidate stroke.
+    page.insert_text(
+        (50, 300), "_" * 167, fontname="cour", fontsize=5,
+        color=(0, 0, 0), oc=ocg, overlay=True,
+    )
+    # Independent visible source geometry is a positive control outside text.
+    page.draw_line(
+        (50, 400), (549, 400), color=(0, 0, 0), width=1, oc=ocg, overlay=True
+    )
+    document.save(path)
+    document.close()
+
+
 def test_inline_ocg_image_cannot_witness_covered_source_layer_line(tmp_path: Path) -> None:
     source = tmp_path / "inline-ocg-image-false-line-witness.pdf"
     _write_ocg_inline_image_false_pixel_witness_pdf(source)
@@ -533,6 +558,72 @@ def test_fractional_inline_image_bbox_cannot_witness_pixel_row(tmp_path: Path) -
         layer in {"HIDDEN", "CENTERLINE"}
         for layer in build.layer_by_primitive_id.values()
     )
+
+
+def test_ocg_text_paint_cannot_witness_covered_source_layer_line(tmp_path: Path) -> None:
+    source = tmp_path / "ocg-text-false-line-witness.pdf"
+    _write_ocg_text_false_pixel_witness_pdf(source)
+
+    with fitz.open(source) as document:
+        page = document[0]
+        candidate = next(
+            drawing
+            for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(300.0)
+        )
+        assert page.get_bboxlog()[candidate["seqno"]][0] == "stroke-path"
+        assert page.get_images(full=True) == []
+        text_span = next(
+            span
+            for span in page.get_texttrace()
+            if span.get("layer") == "Oculto (ISO)"
+        )
+        assert page.get_bboxlog()[text_span["seqno"]][0] == "fill-text"
+        initial_configs = [dict(config) for config in document.layer_ui_configs()]
+        baseline = run_pdf_module._pixmap_rgb_array(
+            page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        )
+        assert baseline is not None
+        document.set_layer_ui_config(0, fitz.PDF_OC_OFF)
+        layer_off = run_pdf_module._pixmap_rgb_array(
+            page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        )
+        assert run_pdf_module._restore_pdf_optional_content_state(
+            document, initial_configs
+        )
+        assert layer_off is not None
+        changed = np.any(baseline[:, :, :3] != layer_off[:, :, :3], axis=2)
+        assert changed[300, 50:551].all()
+        assert not changed[299, 50:551].any()
+        assert not changed[301, 50:551].any()
+        witnesses = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page, page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False), 1.0, (0, 0)
+        )
+        assert len(witnesses) == 1
+        assert witnesses[0][0].p1_px == pytest.approx((50.0, 400.0))
+        assert witnesses[0][0].p2_px == pytest.approx((549.0, 400.0))
+
+    output = tmp_path / "pipeline"
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    hidden_lines = [
+        primitive for primitive in payload["primitives"]
+        if primitive["type"] == "line" and primitive.get("layer") == "HIDDEN"
+    ]
+    assert not any(
+        primitive["trace"]["bbox_px"][1] == pytest.approx(300.0, abs=1.0)
+        for primitive in hidden_lines
+    )
+
+    primitive_doc = load_primitive_ir_document(
+        str(output / "primitive_ir" / "page_01.json")
+    )
+    build = build_dxf(primitive_doc, str(tmp_path / "ocg-text-source-layers.dxf"))
+    review = review_dxf(build, strict_primitive_inventory=True)
+    assert review.passed is True
 
 
 def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
@@ -678,6 +769,9 @@ def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
             assert extended is True
             return [candidate, adjacent_ocg_path]
 
+        def get_texttrace(self):
+            return []
+
         def get_bboxlog(self):
             return [
                 ("stroke-path", fitz.Rect(10.0, 29.5, 90.0, 30.5)),
@@ -761,6 +855,9 @@ def test_source_layer_witness_fails_closed_when_image_ocg_readback_fails():
             assert extended is True
             return [candidate]
 
+        def get_texttrace(self):
+            return []
+
         def get_bboxlog(self):
             return [("stroke-path", fitz.Rect(10.0, 29.5, 90.0, 30.5))]
 
@@ -836,6 +933,9 @@ def test_pdf_layer_visibility_probe_fails_closed_when_layer_state_cannot_be_rest
                 "seqno": 0,
             }]
 
+        def get_texttrace(self):
+            return []
+
         def get_bboxlog(self):
             return [("stroke-path", fitz.Rect(2.0, 4.0, 18.0, 6.0))]
 
@@ -899,6 +999,9 @@ def test_pdf_layer_visibility_probe_detects_silent_related_layer_state_change():
                 "width": 1.0, "items": [("l", (2.0, 5.0), (18.0, 5.0))],
                 "seqno": 0,
             }]
+
+        def get_texttrace(self):
+            return []
 
         def get_bboxlog(self):
             return [("stroke-path", fitz.Rect(2.0, 4.5, 18.0, 5.5))]
