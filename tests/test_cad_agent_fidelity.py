@@ -1499,7 +1499,7 @@ def test_native_pdf_text_reconstruct_rejects_forged_mixed_overlap(
         run_fidelity_text_reconstruct(
             source, output, manifest, approval_path, workspace_root=Path.cwd(),
         )
-    assert not (output / "text_reconstruction" / "page_01" / "output.dxf").exists()
+    assert not (output / "text_reconstruction" / "page_01" / "layout.dxf").exists()
 
 
 def test_native_pdf_text_reconstruction_rejects_junction_output_redirect(tmp_path: Path) -> None:
