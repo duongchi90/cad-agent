@@ -26,7 +26,7 @@ KHÔNG tự động thay thế "default" (tham số gốc, giữ để không ph
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -424,6 +424,7 @@ def extract_circles(
     param1: int = 100,
     param2: int = 30,
     min_dist: int = 20,
+    source_support_validator: Optional[Callable[[float, float, float], bool]] = None,
 ) -> List[RawCircle]:
     """HoughCircles (phương pháp gradient). confidence ước lượng thô cố định
     ở mức trung bình-cao vì HoughCircles của OpenCV không trả vote count trực
@@ -465,6 +466,14 @@ def extract_circles(
         for local_x, local_y, r in circ:
             x = float(local_x) + x0
             y = float(local_y) + y0
+            radius = float(r)
+
+            # Validate each proposal before repository-side deduplication so
+            # unsupported linework cannot suppress a nearby supported circle.
+            if source_support_validator is not None and not source_support_validator(
+                x, y, radius
+            ):
+                continue
 
             # Halo khiến cùng một circle có thể được phát hiện ở hai tile kề
             # nhau. HoughCircles đã dùng minDist trong từng tile; áp cùng ngưỡng
@@ -476,7 +485,6 @@ def extract_circles(
             ):
                 continue
 
-            radius = float(r)
             bbox = (x - radius, y - radius, x + radius, y + radius)
             raw_circles.append(RawCircle(
                 id=new_id("rawcirc"),
@@ -601,6 +609,7 @@ def _extract_supplemental_large_circles(
     scale_x = work_width / float(width)
     scale_y = work_height / float(height)
     source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    radius_scale = (scale_x + scale_y) / 2.0
     max_work_radius = min(work_width, work_height) // 2 - 2
     effective_max_radius = int(circle_kwargs.get("max_radius", 200))
     first_radius = max(1, int(np.floor(effective_max_radius * min(scale_x, scale_y))) + 1)
@@ -624,9 +633,13 @@ def _extract_supplemental_large_circles(
             param1=param1,
             param2=param2,
             min_dist=1,
+            source_support_validator=lambda x, y, radius: (
+                _circle_has_distributed_source_support(
+                    source_gray, x / scale_x, y / scale_y, radius / radius_scale
+                )
+            ),
         )
 
-        radius_scale = (scale_x + scale_y) / 2.0
         for candidate in candidates:
             center_x = candidate.center_px[0] / scale_x
             center_y = candidate.center_px[1] / scale_y
@@ -815,7 +828,18 @@ def extract_raw_geometry(
         "canny_low", "canny_high", "hough_threshold", "min_line_length", "max_line_gap")}
     circle_kwargs = {k: v for k, v in merged.items() if k in (
         "min_radius", "max_radius", "param1", "param2", "min_dist")}
-    circles = extract_circles(image_bgr, **circle_kwargs)
+    source_support_validator = None
+    source_gray = None
+    if preset == "real_scan_tuned_v1":
+        source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        source_support_validator = lambda x, y, radius: (
+            _circle_has_distributed_source_support(source_gray, x, y, radius)
+        )
+    circles = extract_circles(
+        image_bgr,
+        **circle_kwargs,
+        source_support_validator=source_support_validator,
+    )
     if (
         preset == "real_scan_tuned_v1"
         and "min_radius" not in kwargs
@@ -839,9 +863,10 @@ def extract_raw_geometry(
         or pdf_vector_circle_witnesses
         or pdf_vector_circle_suspect_regions
     ):
+        if source_gray is None:
+            source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         witnesses = pdf_vector_circle_witnesses or []
         suspect_regions = pdf_vector_circle_suspect_regions or []
-        source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         source_witnesses: list[Tuple[float, float, float]] = []
         min_radius = kwargs.get("min_radius")
         max_radius = kwargs.get("max_radius")

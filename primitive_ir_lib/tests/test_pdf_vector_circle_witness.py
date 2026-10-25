@@ -26,7 +26,7 @@ from primitive_ir_lib.run_pdf import (
 )
 import primitive_ir_lib.geometry_extraction as geometry_extraction
 import primitive_ir_lib.run_image as run_image_module
-from primitive_ir_lib.geometry_extraction import RawCircle, RawGeometry
+from primitive_ir_lib.geometry_extraction import RawCircle, RawGeometry, extract_circles
 from primitive_ir_lib.run_image import (
     run as run_image,
 )
@@ -61,6 +61,24 @@ def _circle_primitive_count(page_ir: Path) -> int:
 def _circle_primitives(page_ir: Path) -> list[dict]:
     payload = json.loads(page_ir.read_text(encoding="utf-8"))
     return [primitive for primitive in payload["primitives"] if primitive["type"] == "circle"]
+
+
+def _raw_hough_has_circle_near(
+    image_path: Path,
+    center: tuple[float, float],
+    radius: float,
+    *,
+    center_tolerance: float = 16.0,
+    radius_tolerance: float = 14.0,
+) -> bool:
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    assert image is not None, f"missing rendered image: {image_path}"
+    return any(
+        math.hypot(circle.center_px[0] - center[0], circle.center_px[1] - center[1])
+        <= center_tolerance
+        and abs(circle.radius_px - radius) <= radius_tolerance
+        for circle in extract_circles(image)
+    )
 
 
 def _has_circle_near(
@@ -786,7 +804,6 @@ def test_run_pdf_keeps_local_raster_circle_on_cropped_rotated_page(tmp_path: Pat
 def test_run_pdf_rejects_raster_circle_erased_by_wide_vector_arc(tmp_path: Path) -> None:
     pdf_path = tmp_path / "raster-circle-erased-by-wide-vector-arc.pdf"
     image_path = tmp_path / "same-page-render.png"
-    baseline_dir = tmp_path / "baseline"
     gated_dir = tmp_path / "gated"
     document = fitz.open()
     page = document.new_page(width=600, height=600)
@@ -808,21 +825,12 @@ def test_run_pdf_rejects_raster_circle_erased_by_wide_vector_arc(tmp_path: Path)
     document.save(pdf_path)
     document.close()
 
-    from primitive_ir_lib.run_image import run as run_image
-
-    run_image(
-        str(image_path),
-        str(baseline_dir / "primitive_ir.json"),
-        scale_mm_per_px=1.0,
-        preset="real_scan_tuned_v1",
+    assert _raw_hough_has_circle_near(image_path, (200, 200), 70), (
+        "raw Hough must still propose the source raster circle before source admission"
     )
     run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
 
-    baseline_circles = _circle_primitives(baseline_dir / "primitive_ir.json")
     gated_circles = _circle_primitives(gated_dir / "primitive_ir" / "page_01.json")
-    assert _has_circle_near(baseline_circles, (200, 400), 70), (
-        "baseline must find the source raster circle"
-    )
     assert not _has_circle_near(gated_circles, (200, 400), 70), (
         "a wide background-colored vector stroke must not leave the erased raster circle as a full circle"
     )
@@ -831,7 +839,6 @@ def test_run_pdf_rejects_raster_circle_erased_by_wide_vector_arc(tmp_path: Path)
 def test_run_pdf_rejects_circle_whose_perimeter_is_inside_a_filled_path(tmp_path: Path) -> None:
     pdf_path = tmp_path / "raster-circle-erased-by-filled-path.pdf"
     image_path = tmp_path / "same-page-render.png"
-    baseline_dir = tmp_path / "baseline"
     gated_dir = tmp_path / "gated"
     source_image = np.full((600, 600, 3), 220, dtype=np.uint8)
     center = (200.0, 200.0)
@@ -860,21 +867,12 @@ def test_run_pdf_rejects_circle_whose_perimeter_is_inside_a_filled_path(tmp_path
     document.save(pdf_path)
     document.close()
 
-    from primitive_ir_lib.run_image import run as run_image
-
-    run_image(
-        str(image_path),
-        str(baseline_dir / "primitive_ir.json"),
-        scale_mm_per_px=1.0,
-        preset="real_scan_tuned_v1",
+    assert _raw_hough_has_circle_near(image_path, (200, 200), 70), (
+        "raw Hough must still propose the source raster circle before source admission"
     )
     run_pdf(pdf_path, gated_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
 
-    baseline_circles = _circle_primitives(baseline_dir / "primitive_ir.json")
     gated_circles = _circle_primitives(gated_dir / "primitive_ir" / "page_01.json")
-    assert _has_circle_near(baseline_circles, (200, 400), 70), (
-        "baseline must find the source raster circle"
-    )
     assert not _has_circle_near(gated_circles, (200, 400), 70), (
         "filled vector paint over the circle perimeter must not leave a full-circle candidate"
     )
@@ -1688,7 +1686,6 @@ def test_run_pdf_rejects_open_line_ellipse_without_suppressing_crossed_raster_ci
 ) -> None:
     pdf_path = tmp_path / "open-line-ellipse-and-crossed-raster-circle.pdf"
     output_dir = tmp_path / "out"
-    pre_gate_dir = tmp_path / "pre-gate"
     document = fitz.open()
 
     ellipse_page = document.new_page(width=400, height=400)
@@ -1721,40 +1718,17 @@ def test_run_pdf_rejects_open_line_ellipse_without_suppressing_crossed_raster_ci
     ellipse_render = tmp_path / "open-ellipse.png"
     rendered[0].get_pixmap(dpi=72, alpha=False).save(ellipse_render)
     rendered.close()
-    run_image(
-        str(ellipse_render),
-        str(pre_gate_dir / "primitive_ir.json"),
-        scale_mm_per_px=1.0,
-        preset="real_scan_tuned_v1",
-    )
-    pre_gate_circles = _circle_primitives(pre_gate_dir / "primitive_ir.json")
-    ellipse_candidates = [
-        circle
-        for circle in pre_gate_circles
-        if _has_circle_near(
-            [circle], (200, 200), 66, center_tolerance=16, radius_tolerance=14
-        )
-    ]
-    assert ellipse_candidates, (
-        "image-only extraction must prove Hough proposes the ellipse-induced circle candidate"
-    )
+    assert _raw_hough_has_circle_near(
+        ellipse_render, (200, 200), 66, center_tolerance=16, radius_tolerance=14
+    ), "raw Hough must prove it proposes the ellipse-induced circle candidate"
 
     run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
 
     ellipse_circles = _circle_primitives(output_dir / "primitive_ir" / "page_01.json")
     crossed_raster_circles = _circle_primitives(output_dir / "primitive_ir" / "page_02.json")
-    for candidate in ellipse_candidates:
-        candidate_center = candidate["geometry"]["center"]
-        candidate_radius = candidate["geometry"]["radius"]
-        assert not any(
-            math.hypot(
-                circle["geometry"]["center"]["x"] - candidate_center["x"],
-                circle["geometry"]["center"]["y"] - candidate_center["y"],
-            )
-            <= 2.0
-            and abs(circle["geometry"]["radius"] - candidate_radius) <= 2.0
-            for circle in ellipse_circles
-        ), "the same open-ellipse Hough candidate must be rejected by PDF source gating"
+    assert not _has_circle_near(
+        ellipse_circles, (200, 200), 66, center_tolerance=16, radius_tolerance=14
+    ), "the open-ellipse Hough candidate must be rejected by PDF source gating"
     assert _has_circle_near(crossed_raster_circles, (200, 200), 65), (
         "a straight drafting line crossing an independent raster circle must not suppress it"
     )
