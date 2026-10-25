@@ -293,6 +293,16 @@ def test_source_layer_witness_requires_full_rendered_pixel_support():
     unrelated_nearby_paint[32, 10:91] = 0
     assert not visible(unrelated_nearby_paint, layer_off, (10, 30), (90, 30), 1.0)
 
+    fractional_competing_paint = baseline.copy()
+    assert not visible(
+        baseline,
+        layer_off,
+        (10, 30),
+        (90, 30),
+        1.0,
+        competing_bounds_px=((10.0, 30.25, 90.0, 30.75),),
+    )
+
     adjacent_ocg_paint = baseline.copy()
     adjacent_ocg_paint[30, 10:91] = 255
     adjacent_ocg_paint[31, 10:91] = 0
@@ -389,6 +399,30 @@ def _write_ocg_inline_image_false_pixel_witness_pdf(path: Path) -> None:
     document.close()
 
 
+def _write_ocg_fractional_inline_image_false_pixel_witness_pdf(path: Path) -> None:
+    """Place an inline OCG image in a fractional PDF box over one raster row."""
+    document = fitz.open()
+    page = document.new_page(width=600, height=600)
+    ocg = document.add_ocg("Oculto (ISO)")
+    resources_xref = int(document.xref_get_key(page.xref, "Resources")[1].split()[0])
+    document.xref_set_key(resources_xref, "Properties", f"<< /MC0 {ocg} 0 R >>")
+    content_xref = document.get_new_xref()
+    document.update_object(content_xref, "<<>>")
+    image_pixels = np.zeros((1, 500, 3), dtype=np.uint8)
+    content = (
+        b"/OC /MC0 BDC\n50 300 m 550 300 l 0 0 0 RG 1 w S\nEMC\n"
+        b"1 1 1 RG 4 w 50 300 m 550 300 l S\n"
+        b"/OC /MC0 BDC\nq\n500 0 0 0.5 50 299.25 cm\n"
+        b"BI /W 500 /H 1 /CS /RGB /BPC 8 ID\n"
+        + image_pixels.tobytes()
+        + b"\nEI\nQ\nEMC\n"
+    )
+    document.update_stream(content_xref, content)
+    document.xref_set_key(page.xref, "Contents", f"{content_xref} 0 R")
+    document.save(path)
+    document.close()
+
+
 def test_inline_ocg_image_cannot_witness_covered_source_layer_line(tmp_path: Path) -> None:
     source = tmp_path / "inline-ocg-image-false-line-witness.pdf"
     _write_ocg_inline_image_false_pixel_witness_pdf(source)
@@ -436,6 +470,69 @@ def test_inline_ocg_image_cannot_witness_covered_source_layer_line(tmp_path: Pat
     review = review_dxf(build, strict_primitive_inventory=True)
     assert review.passed is True
     assert "HIDDEN" not in build.layer_by_primitive_id.values()
+
+
+def test_fractional_inline_image_bbox_cannot_witness_pixel_row(tmp_path: Path) -> None:
+    source = tmp_path / "fractional-inline-ocg-image-false-line-witness.pdf"
+    _write_ocg_fractional_inline_image_false_pixel_witness_pdf(source)
+
+    with fitz.open(source) as document:
+        page = document[0]
+        candidate = next(
+            drawing
+            for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Oculto (ISO)"
+        )
+        assert candidate["items"] == [
+            ("l", fitz.Point(50, 300), fitz.Point(550, 300))
+        ]
+        assert page.get_images(full=True) == []
+        inline_images = page.get_image_info(xrefs=True)
+        assert len(inline_images) == 1 and inline_images[0]["xref"] == 0
+        assert tuple(inline_images[0]["bbox"]) == pytest.approx(
+            (50.0, 300.25, 550.0, 300.75)
+        )
+
+        initial_configs = [dict(config) for config in document.layer_ui_configs()]
+        baseline = run_pdf_module._pixmap_rgb_array(
+            page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        )
+        assert baseline is not None
+        document.set_layer_ui_config(0, fitz.PDF_OC_OFF)
+        layer_off = run_pdf_module._pixmap_rgb_array(
+            page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        )
+        assert run_pdf_module._restore_pdf_optional_content_state(
+            document, initial_configs
+        )
+        assert layer_off is not None
+        changed = np.any(baseline[:, :, :3] != layer_off[:, :, :3], axis=2)
+        assert changed[300, 50:550].all()
+        assert not changed[299, 50:550].any()
+        assert not changed[301, 50:550].any()
+        assert run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page, page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False), 1.0, (0, 0)
+        ) == []
+
+    output = tmp_path / "fractional-pipeline"
+    run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
+    payload = json.loads(
+        (output / "primitive_ir" / "page_01.json").read_text(encoding="utf-8")
+    )
+    lines = [primitive for primitive in payload["primitives"] if primitive["type"] == "line"]
+    assert lines, "visible raster image geometry should remain in Primitive IR"
+    assert not any(primitive.get("layer") in {"HIDDEN", "CENTERLINE"} for primitive in lines)
+
+    primitive_doc = load_primitive_ir_document(
+        str(output / "primitive_ir" / "page_01.json")
+    )
+    build = build_dxf(primitive_doc, str(tmp_path / "fractional-inline-ocg-image.dxf"))
+    review = review_dxf(build, strict_primitive_inventory=True)
+    assert review.passed is True
+    assert not any(
+        layer in {"HIDDEN", "CENTERLINE"}
+        for layer in build.layer_by_primitive_id.values()
+    )
 
 
 def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
@@ -610,9 +707,10 @@ def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
         Page(layer_off), pixmap(covered_baseline), 1.0, (0, 0)
     ) == []
 
-    # A true candidate contribution on its own centerline remains admissible.
+    # A true candidate contribution outside the adjacent path's pixel cells
+    # remains admissible.
     visible_baseline = covered_baseline.copy()
-    visible_baseline[30, 10:91] = 0
+    visible_baseline[29, 10:91] = 0
     witnesses = run_pdf_module._page_pdf_source_layer_line_witnesses(
         Page(layer_off), pixmap(visible_baseline), 1.0, (0, 0)
     )

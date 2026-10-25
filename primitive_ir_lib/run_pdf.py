@@ -2716,9 +2716,10 @@ def _line_has_full_pixel_difference_support(
 
     Toggling an optional-content group removes every path in that group. A
     nearby path must not provide the pixel difference used to witness this
-    candidate, so samples inside another same-group path's paint bounds are
-    not evidence for this line. Pixel squares are tested against the candidate
-    stroke strip; an arbitrary adjacent row is not source support.
+    candidate, so pixels touched by another same-group path's paint bounds are
+    not evidence for this line. Pixel squares are tested against both the
+    candidate stroke strip and competing bounds, with a small rasterization
+    margin; an arbitrary adjacent row is not source support.
     """
     if (
         not isinstance(baseline_rgb, np.ndarray)
@@ -2756,6 +2757,7 @@ def _line_has_full_pixel_difference_support(
     sample_half_span = length / sample_count / 2.0
     normal_support = stroke_width_px / 2.0 + normal_pixel_extent
     search_radius = int(math.ceil(normal_support + 1.0))
+    competing_bounds_margin = 0.25
     for sample_index in range(sample_count + 1):
         fraction = (sample_index + 0.5) / (sample_count + 1)
         x = start_px[0] + dx * fraction
@@ -2779,7 +2781,10 @@ def _line_has_full_pixel_difference_support(
                 ):
                     continue
                 if any(
-                    left <= pixel_x <= right and top <= pixel_y <= bottom
+                    left - competing_bounds_margin < pixel_x + 1.0
+                    and right + competing_bounds_margin > pixel_x
+                    and top - competing_bounds_margin < pixel_y + 1.0
+                    and bottom + competing_bounds_margin > pixel_y
                     for left, top, right, bottom in competing_bounds_px
                 ):
                     continue
