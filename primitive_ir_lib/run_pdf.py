@@ -2768,7 +2768,7 @@ def _page_pdf_source_layer_line_witnesses(
     baseline_pixmap: fitz.Pixmap,
     pixel_scale: float,
     pixmap_origin: tuple[int, int],
-) -> list[RawLine]:
+) -> list[tuple[RawLine, str]]:
     """Return only uniquely addressable ISO layer strokes visible in the page render."""
     if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
         return []
@@ -2826,7 +2826,7 @@ def _page_pdf_source_layer_line_witnesses(
         difference_by_name[source_name] = off
         del off_pixmap
 
-    results: list[RawLine] = []
+    results: list[tuple[RawLine, str]] = []
     seen_seqnos: set[int] = set()
     for drawing in drawings:
         classification = _pdf_source_layer_classification(drawing)
@@ -2876,18 +2876,20 @@ def _page_pdf_source_layer_line_witnesses(
         ):
             continue
         results.append(
-            RawLine(
-                id=f"pdf-layer-line-{seqno}",
-                p1_px=first_px,
-                p2_px=second_px,
-                confidence=1.0,
-                bbox_px=(
-                    min(first_px[0], second_px[0]),
-                    min(first_px[1], second_px[1]),
-                    max(first_px[0], second_px[0]),
-                    max(first_px[1], second_px[1]),
+            (
+                RawLine(
+                    id=f"pdf-layer-line-{seqno}",
+                    p1_px=first_px,
+                    p2_px=second_px,
+                    confidence=1.0,
+                    bbox_px=(
+                        min(first_px[0], second_px[0]),
+                        min(first_px[1], second_px[1]),
+                        max(first_px[0], second_px[0]),
+                        max(first_px[1], second_px[1]),
+                    ),
                 ),
-                source_layer_classification=classification,
+                classification,
             )
         )
     return results

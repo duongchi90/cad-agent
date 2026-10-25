@@ -8,7 +8,7 @@
 **Base SHA:** `ade737f75ec214377e2e015a4a44ca4d9d42df42`
 **Required private/live gates:** B041 real-data source run and DXF review (executed); native AutoCAD save/reopen (not run; remains a separate acceptance gate).
 
-**Architecture:** Reuse the existing PDF renderer and raster LINE detections. A source-layer witness is eligible only after the current PDF render proves visible pixel contribution over its full span, source properties are supported, and one existing raster LINE uniquely matches both endpoints. Pass the canonical classification through the existing `RawLine`/`Primitive.layer` fields; the DXF builder accepts only the two exact canonical values as fallback when semantic ownership is absent.
+**Architecture:** Reuse the existing PDF renderer and raster LINE detections. A source-layer witness is eligible only after the current PDF render proves visible pixel contribution over its full span, source properties are supported, and one existing raster LINE uniquely matches both endpoints. Keep classification metadata alongside the PDF witness rather than adding it to shared `RawLine`; apply the verified label to the matching Primitive IR line in the existing `run_image` owner. The DXF builder accepts only the two exact canonical values as fallback when semantic ownership is absent.
 
 **Tech Stack:** Python 3.11, PyMuPDF, OpenCV/NumPy, ezdxf, pytest.
 
@@ -34,7 +34,7 @@
 
 ### Task 1: Fail-closed layer witness and DXF fallback
 
-**Files:** Modify `primitive_ir_lib/geometry_extraction.py`, `primitive_ir_lib/run_pdf.py`, `primitive_ir_lib/run_image.py`, `primitive_ir_lib/assemble.py`, `dxf_builder_lib/builder.py`; test the existing PDF/image and builder suites.
+**Files:** Modify `primitive_ir_lib/run_pdf.py`, `primitive_ir_lib/run_image.py`, `dxf_builder_lib/builder.py`; test the existing PDF/image and builder suites.
 
 - [ ] Write tests for full-span unique matching, partial-support rejection, ambiguous witnesses, exact canonical builder fallback, arbitrary-label rejection, semantic precedence logging, and unchanged geometry/entity inventory.
 - [ ] Run focused tests and confirm the new assertions fail before implementation.
@@ -46,7 +46,7 @@
 
 Code commit verified: `79c488e202de07fa7593d7d0d11b62de317aefdd`.
 
-- Focused owners and B041 real-data: `pytest primitive_ir_lib/tests/test_run_image.py primitive_ir_lib/tests/test_pdf_vector_arc.py dxf_builder_lib/tests/test_builder.py -q` with `CAD_AGENT_B041_CIRCLE_PDF` set to the hash-verified B041 source — 78 passed.
+- Focused owners and B041 real-data after the ownership-safe witness refactor: the same command — 78 passed.
 - Ruff on all eight changed Python files — PASS.
 - `git diff --check` — PASS.
 - `scripts/verify.ps1 -PythonExe 'C:\Users\t3407d\.codex\worktrees\b041-gdt-text-observation\cad-agent\.venv-py311\Scripts\python.exe'` — exit 0; .NET restore/build PASS (existing `MSB3277` WindowsBase warning), .NET tests 261 PASS, IPC offline 128 PASS, Python offline 3,882 PASS / 29 deselected / 88 subtests; the separate causal-RED oracle emitted its expected single marked failure. The verifier reported the private/live probes as unavailable-state SKIP and did not count them as PASS.

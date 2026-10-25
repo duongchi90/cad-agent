@@ -58,7 +58,6 @@ class RawLine:
     p2_px: Tuple[float, float]
     confidence: float
     bbox_px: Tuple[float, float, float, float]
-    source_layer_classification: Optional[str] = None
 
     def length_px(self) -> float:
         return float(np.hypot(self.p2_px[0] - self.p1_px[0], self.p2_px[1] - self.p1_px[1]))

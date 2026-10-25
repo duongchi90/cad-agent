@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from primitive_ir_lib.calibration_registry import add_record, get_verified_scale
-from primitive_ir_lib.assemble import build_document as assemble_document, line_to_primitive
+from primitive_ir_lib.assemble import build_document as assemble_document
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from primitive_ir_lib.models import Calibration
 from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError, main, run
@@ -546,14 +546,12 @@ def test_source_layer_classification_requires_mutual_unique_full_span_match():
 
     candidate = RawLine("candidate", (10.3, 20.1), (30.2, 20.1), 0.9, (10, 20, 31, 21))
     witness = RawLine("source", (10.0, 20.0), (30.0, 20.0), 1.0, (10, 20, 30, 20))
-    witness.source_layer_classification = "HIDDEN"
 
-    result = classify([candidate], [witness])
+    result = classify([candidate], [(witness, "HIDDEN")])
 
-    assert result[0] is candidate
-    assert result[0].source_layer_classification == "HIDDEN"
-    assert result[0].p1_px == (10.3, 20.1)
-    assert result[0].p2_px == (30.2, 20.1)
+    assert result == {"candidate": "HIDDEN"}
+    assert candidate.p1_px == (10.3, 20.1)
+    assert candidate.p2_px == (30.2, 20.1)
 
 
 def test_source_layer_classification_rejects_partial_and_ambiguous_support():
@@ -563,37 +561,43 @@ def test_source_layer_classification_rejects_partial_and_ambiguous_support():
     partial = RawLine("span-gap", (10, 20), (30, 20), 0.9, (10, 20, 30, 20))
     first = RawLine("first-fragment", (10, 20), (18, 20), 1.0, (10, 20, 18, 20))
     second = RawLine("second-fragment", (22, 20), (30, 20), 1.0, (22, 20, 30, 20))
-    first.source_layer_classification = "HIDDEN"
-    second.source_layer_classification = "HIDDEN"
 
     ambiguous_line = RawLine("ambiguous", (10, 20), (30, 20), 0.9, (10, 20, 30, 20))
     hidden = RawLine("hidden", (10, 20), (30, 20), 1.0, (10, 20, 30, 20))
     center = RawLine("center", (10, 20), (30, 20), 1.0, (10, 20, 30, 20))
-    hidden.source_layer_classification = "HIDDEN"
-    center.source_layer_classification = "CENTERLINE"
 
-    partial_result = classify([partial], [first, second])
-    ambiguous_result = classify([ambiguous_line], [hidden, center])
+    partial_result = classify([partial], [(first, "HIDDEN"), (second, "HIDDEN")])
+    ambiguous_result = classify(
+        [ambiguous_line], [(hidden, "HIDDEN"), (center, "CENTERLINE")]
+    )
 
-    assert partial_result[0].source_layer_classification is None
-    assert ambiguous_result[0].source_layer_classification is None
+    assert partial_result == {}
+    assert ambiguous_result == {}
 
 
-def test_line_to_primitive_preserves_verified_source_layer_classification():
-    raw = RawLine("source-line", (10, 20), (30, 20), 0.9, (10, 20, 30, 20))
-    raw.source_layer_classification = "CENTERLINE"
-
-    primitive = line_to_primitive(
-        raw,
-        Calibration(
+def test_verified_source_layer_classification_is_applied_to_line_primitive_only():
+    raw_line = RawLine("source-line", (10, 20), (30, 20), 0.9, (10, 20, 30, 20))
+    document = assemble_document(
+        file_name="source.png",
+        page_index=0,
+        image_width_px=100,
+        image_height_px=100,
+        calibration=Calibration(
             unit="mm", pixel_to_unit_scale=0.5, origin_px=(0, 100),
             method="manual_override",
         ),
+        raw_lines=[raw_line],
+        raw_circles=[],
+        raw_texts=[],
     )
 
-    assert primitive.layer == "CENTERLINE"
-    assert primitive.geometry.start.x == pytest.approx(5.0)
-    assert primitive.geometry.end.x == pytest.approx(15.0)
+    run_image_module._apply_pdf_source_layer_classifications(
+        document, {"source-line": "CENTERLINE"}
+    )
+
+    assert document.primitives[0].layer == "CENTERLINE"
+    assert document.primitives[0].geometry.start.x == pytest.approx(5.0)
+    assert document.primitives[0].geometry.end.x == pytest.approx(15.0)
 
 
 if __name__ == "__main__":
