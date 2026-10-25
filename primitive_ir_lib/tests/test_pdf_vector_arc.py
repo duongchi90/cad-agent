@@ -1050,7 +1050,46 @@ def test_b041_classifies_only_visible_source_layer_lines(tmp_path: Path) -> None
     # visible contour at its first endpoint. That endpoint pixel is unchanged
     # when the CENTERLINE OCG is hidden, so the full-span witness must leave
     # this one candidate unclassified while preserving the detected geometry.
-    assert layers == {"UNCLASSIFIED": 229, "CENTERLINE": 7, "HIDDEN": 6}
+    assert layers == {"UNCLASSIFIED": 232, "CENTERLINE": 7, "HIDDEN": 3}
+    # Three HIDDEN source strokes only share endpoint/corner pixels with a
+    # perpendicular peer. Those pixels cannot independently witness either
+    # complete stroke, so preserve their geometry as UNCLASSIFIED instead of
+    # borrowing the peer's paint evidence.
+    ambiguous_hidden_strokes = [
+        ((329.0, 410.0), (336.0, 410.0)),
+        ((402.0, 410.0), (409.0, 410.0)),
+        ((330.0, 404.0), (330.0, 411.0)),
+    ]
+    for expected_start, expected_end in ambiguous_hidden_strokes:
+        matches = [
+            primitive
+            for primitive in primitives
+            if primitive["type"] == "line"
+            and primitive["layer"] == "UNCLASSIFIED"
+            and (
+                (
+                    primitive["geometry"]["start"]["x"]
+                    == pytest.approx(expected_start[0], abs=0.5)
+                    and primitive["geometry"]["start"]["y"]
+                    == pytest.approx(expected_start[1], abs=0.5)
+                    and primitive["geometry"]["end"]["x"]
+                    == pytest.approx(expected_end[0], abs=0.5)
+                    and primitive["geometry"]["end"]["y"]
+                    == pytest.approx(expected_end[1], abs=0.5)
+                )
+                or (
+                    primitive["geometry"]["start"]["x"]
+                    == pytest.approx(expected_end[0], abs=0.5)
+                    and primitive["geometry"]["start"]["y"]
+                    == pytest.approx(expected_end[1], abs=0.5)
+                    and primitive["geometry"]["end"]["x"]
+                    == pytest.approx(expected_start[0], abs=0.5)
+                    and primitive["geometry"]["end"]["y"]
+                    == pytest.approx(expected_start[1], abs=0.5)
+                )
+            )
+        ]
+        assert len(matches) == 1
     unresolved_joined_dash = [
         primitive
         for primitive in primitives
