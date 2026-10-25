@@ -447,6 +447,29 @@ def detect_dimension_geometry(crop_bgr: np.ndarray) -> DimensionGeometryEvidence
     )
 
 
+def detect_extension_lines_for_baseline(
+    context_bgr: np.ndarray,
+    dimension_line: Segment,
+) -> tuple[Segment, ...]:
+    """Detect extension lines in a larger source crop without reselecting its baseline."""
+    if not isinstance(context_bgr, np.ndarray) or context_bgr.ndim not in {2, 3}:
+        raise ValueError("context_bgr must be a grayscale or BGR image")
+    if context_bgr.size == 0:
+        return ()
+    gray = context_bgr if context_bgr.ndim == 2 else cv2.cvtColor(context_bgr, cv2.COLOR_BGR2GRAY)
+    if gray.size == 0 or int(gray.max()) == int(gray.min()):
+        return ()
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        25,
+        10,
+    )
+    return _detect_extension_lines(_hough_segments(binary), dimension_line)
+
+
 def detect_dimension_geometry_regions(image_bgr: np.ndarray) -> tuple[tuple[int, int, int, int], ...]:
     """Return deterministic page regions containing independent dimension geometry."""
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim not in {2, 3}:
@@ -514,4 +537,5 @@ __all__ = [
     "Segment",
     "detect_dimension_geometry",
     "detect_dimension_geometry_regions",
+    "detect_extension_lines_for_baseline",
 ]
