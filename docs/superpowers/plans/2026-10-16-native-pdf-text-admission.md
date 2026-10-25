@@ -118,3 +118,27 @@
 - [x] Inspect exact diff and confirm the only changed paths are the approved owner, test, spec, and plan files.
 - [ ] Run canonical repository verification on a clean committed head, then refresh PR/check identities before publication.
 - [ ] Keep any follow-up outside this approved boundary (visibility automation, semantic association, Primitive IR, native action) unimplemented pending separate authority.
+
+### Task 6: B041 AIGDT GID 80 source-bound observation
+
+**Decision:** PO approved only the exact embedded B041 font profile and unverified source observation in this owner. This task does not add automatic admission, adjacent-span merging, a visibility exception, Primitive IR emission, or native output.
+
+**Frozen identity:** main `3a94b8a94ac8656d7786a20f0ba85570d9cc0b06` / tree `5d6a223db5f76530fc5252b3fe0d8ce2acfb3cb3`; PR #539 head `d574e6cdfb21f3e05a6a3097cb2d487c8f4af6e0` / tree `40c13a39226e4e9850d0c7901734274cc535dd27` remains untouched. B041 source/font/render identity and design boundary are in the spec amendment above.
+
+**Files:**
+- Modify: `cad_agent/fidelity.py`
+- Test: `tests/test_cad_agent_fidelity.py`
+- Update: this existing design spec and plan only.
+
+**Interfaces:**
+- Add an owner-local helper that accepts the actual page font resource bytes, source span, and uniquely matched text trace; returns a typed mapping-evidence record only for the exact approved B041 font SHA, GID 80, glyph `uniF06E`, and Windows Symbol cmap U+F06E. All other or ambiguous inputs return no mapping.
+- `_native_pdf_text_span_records` uses that mapping only after its current unique trace, opacity, writing-mode, and later-paint checks. The output remains a separate native span observation with `visibility="unverified"`; selection and output continue through existing explicit review and approval gates.
+
+- [ ] Add a real-data failing regression using `CAD_AGENT_B041_PDF`: prove three raw source spans decode to `⌀`, retain raw `n` and exact source/render/font evidence, while only the trace without later-paint overlap enters the current selectable collection; the other two remain excluded.
+- [ ] Add resolver-level negative cases using the actual embedded resources: same declared AIGDT name with different font bytes, ambiguous same-name font resources, wrong GID, missing/duplicate trace, and changed cmap/font identity must not receive the special mapping.
+- [ ] Run each focused regression and observe the intended RED before implementation.
+- [ ] Implement only the exact profile resolver inside `cad_agent.fidelity`; preserve all existing observation, approval, OCR-conflict, clipping, opacity, paint-order, transform, and fresh-reconstruction rules.
+- [ ] Run the focused new tests, then `tests/test_cad_agent_fidelity.py` and Ruff.
+- [ ] Run the canonical affected verification on the current-main-reconciled PR branch; report real-data/native gates not run separately.
+- [ ] Confirm only the four existing PR #522 owner/test/spec/plan paths differ from current main; confirm #539's published head and files remain untouched.
+- [ ] Keep PR #522 Draft; refresh hosted checks and independent exact-head reviews only after the implementation head is stable. No merge or native acceptance is implied.

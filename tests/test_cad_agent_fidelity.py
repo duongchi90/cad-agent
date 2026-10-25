@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -3193,3 +3194,86 @@ def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None
     assert quality["selected_profile"] == "filtered"
     assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
     assert [line.id for line in selected.lines] == ["main"]
+
+@pytest.mark.real_data
+def test_native_pdf_observation_maps_exact_b041_aigdt_gid80_to_unverified_diameter_text(
+    tmp_path: Path,
+) -> None:
+    """The exact embedded AIGDT glyph is mapped, but remains review-only TEXT evidence."""
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(
+        source, output, 144, "approved-test", workspace_root=Path.cwd(),
+    )
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_spans"]
+
+    assert len(native) == 1  # Only B041 trace 321 has no later paint overlap under current policy.
+    span = native[0]
+    assert span["content"] == "\u2300"
+    assert span["source_text_raw"] == "n"
+    assert span["source_font_resource"] == {
+        "xref": 24,
+        "resource_name": "F5",
+        "base_font": "ADSINV+AIGDT",
+    }
+    assert span["source_font_file_sha256"] == (
+        "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b"
+    )
+    assert span["source_glyph_id"] == 80
+    assert span["source_glyph_name"] == "uniF06E"
+    assert span["source_cmap_codepoint"] == 0xF06E
+    assert span["source_paint_evidence"]["sequence_number"] == 321
+    assert span["visibility"] == "unverified"
+    assert span["source_sha256"] == manifest["source"]["sha256"]
+    audit_path = output / observation["source_layout_audit"]["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert span["render_sha256"] == audit["source_page"]["render_sha256"]
+    assert observation["candidates"]  # OCR remains a separate typed collection.
+    assert all(candidate.get("source") != "native_pdf" for candidate in observation["candidates"])
+    assert not any(key in observation for key in ("TEXT", "MTEXT", "DIMENSION"))
+
+
+@pytest.mark.real_data
+def test_native_pdf_observation_rejects_spoofed_b041_aigdt_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AIGDT resource naming and GID 80 cannot substitute for exact embedded font bytes."""
+    from cad_agent import fidelity as fidelity_module
+
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert fidelity_module.sha256_file(source) == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    original_extract = fitz.Document.extract_font
+
+    def spoof_font(document: fitz.Document, xref: int, *args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        extracted = original_extract(document, xref, *args, **kwargs)
+        if xref == 24:
+            return (*extracted[:3], b"different embedded font bytes")
+        return extracted
+
+    monkeypatch.setattr(fitz.Document, "extract_font", spoof_font)
+    output = tmp_path / "private-staging-spoofed-font"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert not any(span.get("source_glyph_id") == 80 for span in observation["native_pdf_spans"])
+    assert not any(span.get("content") == "\u2300" for span in observation["native_pdf_spans"])

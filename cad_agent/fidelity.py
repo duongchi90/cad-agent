@@ -1407,6 +1407,64 @@ def _native_pdf_text_span_records(
     if not source_page.get_text("text").strip():
         return []
 
+    def b041_aigdt_glyph_observation(
+        content: str, span_font: Any, trace: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Decode only B041's exact embedded AIGDT diameter glyph as an observation."""
+        if content != "n" or span_font not in ("AIGDT", "ADSINV+AIGDT"):
+            return None
+        chars = trace.get("chars")
+        if not isinstance(chars, (tuple, list)) or len(chars) != 1:
+            return None
+        char = chars[0]
+        if not isinstance(char, (tuple, list)) or len(char) < 2 or char[0] != ord("n") or char[1] != 80:
+            return None
+        document = source_page.parent
+        if document is None:
+            return None
+        try:
+            from fontTools.ttLib import TTFont
+            from io import BytesIO
+
+            matches: list[tuple[int, bytes]] = []
+            for resource in source_page.get_fonts(full=True):
+                if len(resource) < 5 or resource[3] != "ADSINV+AIGDT" or resource[4] != "F5":
+                    continue
+                extracted = document.extract_font(resource[0])
+                if len(extracted) == 4 and isinstance(extracted[3], bytes):
+                    font_bytes = extracted[3]
+                    if hashlib.sha256(font_bytes).hexdigest() == "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b":
+                        matches.append((resource[0], font_bytes))
+            if len(matches) != 1:
+                return None
+            font_xref, font_bytes = matches[0]
+            font = TTFont(BytesIO(font_bytes), lazy=False)
+            glyph_order = font.getGlyphOrder()
+            if len(glyph_order) <= 80 or glyph_order[80] != "uniF06E":
+                return None
+            cmap_matches = [
+                table for table in font["cmap"].tables
+                if table.platformID == 3 and table.platEncID == 0 and table.format == 4
+                and table.cmap.get(0xF06E) == "uniF06E"
+            ]
+            if len(cmap_matches) != 1:
+                return None
+            return {
+                "content": "\u2300",
+                "source_text_raw": content,
+                "source_font_resource": {
+                    "xref": font_xref,
+                    "resource_name": "F5",
+                    "base_font": "ADSINV+AIGDT",
+                },
+                "source_font_file_sha256": "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b",
+                "source_glyph_id": 80,
+                "source_glyph_name": "uniF06E",
+                "source_cmap_codepoint": 0xF06E,
+            }
+        except (ImportError, AttributeError, IndexError, KeyError, RuntimeError, TypeError, ValueError):
+            return None
+
     try:
         paint_traces = source_page.get_texttrace()
         paint_log = source_page.get_bboxlog()
@@ -1606,6 +1664,7 @@ def _native_pdf_text_span_records(
                 if len(matching_traces) != 1:
                     continue
                 paint_trace, trace_text, text_agreement = matching_traces[0]
+                glyph_observation = b041_aigdt_glyph_observation(content, span.get("font"), paint_trace)
                 paint_type = paint_trace.get("type")
                 paint_opacity = paint_trace.get("opacity")
                 paint_wmode = paint_trace.get("wmode")
@@ -1665,6 +1724,8 @@ def _native_pdf_text_span_records(
                     "mapping_version": "displayed-page-box-v1",
                     "semantic_role": None,
                 })
+                if glyph_observation is not None:
+                    records[-1].update(glyph_observation)
     return records
 
 
