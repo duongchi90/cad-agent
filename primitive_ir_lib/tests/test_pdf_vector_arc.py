@@ -610,6 +610,66 @@ def test_pdf_layer_visibility_probe_fails_closed_when_layer_state_cannot_be_rest
         )
 
 
+def test_pdf_layer_visibility_probe_detects_silent_related_layer_state_change():
+    class Document:
+        def __init__(self):
+            self.configs = [
+                {"number": 0, "text": "Oculto (ISO)", "depth": 0, "type": "checkbox", "on": 1, "locked": 0},
+                {"number": 1, "text": "Other", "depth": 0, "type": "checkbox", "on": 0, "locked": 0},
+            ]
+
+        def layer_ui_configs(self):
+            return [dict(config) for config in self.configs]
+
+        def get_ocgs(self):
+            return {}
+
+        def get_oc(self, xref):
+            return None
+
+        def set_layer_ui_config(self, number, action):
+            if number == 0:
+                self.configs[0]["on"] = int(action == fitz.PDF_OC_ON)
+                if action == fitz.PDF_OC_ON:
+                    # Simulate a successful API return with a linked OCG silently
+                    # changed; attempting to restore that OCG also lies.
+                    self.configs[1]["on"] = 1
+            elif number == 1 and action == fitz.PDF_OC_ON:
+                self.configs[1]["on"] = 1
+
+    class Page:
+        rotation = 0
+        rotation_matrix = fitz.Matrix(1, 1)
+
+        def __init__(self):
+            self.parent = Document()
+
+        def get_drawings(self, *, extended):
+            assert extended is True
+            return [{
+                "layer": "Oculto (ISO)", "level": 0, "type": "s", "fill": None,
+                "stroke_opacity": 1.0, "blendmode": None, "dashes": "[] 0",
+                "width": 1.0, "items": [("l", (2.0, 5.0), (18.0, 5.0))],
+                "seqno": 0,
+            }]
+
+        def get_bboxlog(self):
+            return [("stroke-path", fitz.Rect(2.0, 4.5, 18.0, 5.5))]
+
+        def get_images(self, *, full):
+            assert full is True
+            return []
+
+        def get_pixmap(self, **kwargs):
+            return fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 10), False)
+
+    baseline = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 10), False)
+    with pytest.raises(RuntimeError, match="restore PDF optional-content layer state"):
+        run_pdf_module._page_pdf_source_layer_line_witnesses(
+            Page(), baseline, 1.0, (0, 0)
+        )
+
+
 @pytest.mark.real_data
 def test_b041_classifies_only_visible_source_layer_lines(tmp_path: Path) -> None:
     pdf_value = os.environ.get("CAD_AGENT_B041_CIRCLE_PDF")

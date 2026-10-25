@@ -2874,6 +2874,34 @@ def _pixmap_rgb_array(pixmap: fitz.Pixmap) -> Optional[np.ndarray]:
     return samples.reshape((pixmap.height, pixmap.width, pixmap.n))[:, :, :3].copy()
 
 
+def _restore_pdf_optional_content_state(document, expected_configs: list[dict]) -> bool:
+    """Restore every saved OCG visibility and verify the complete state by readback."""
+    restore_failed = False
+    for config in expected_configs:
+        number = config.get("number")
+        on = config.get("on")
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, int)
+            or number < 0
+            or isinstance(on, bool)
+            or on not in {0, 1}
+        ):
+            restore_failed = True
+            continue
+        try:
+            document.set_layer_ui_config(
+                number, fitz.PDF_OC_ON if on == 1 else fitz.PDF_OC_OFF
+            )
+        except Exception:
+            restore_failed = True
+    try:
+        observed_configs = document.layer_ui_configs()
+    except Exception:
+        return False
+    return not restore_failed and observed_configs == expected_configs
+
+
 def _page_pdf_source_layer_line_witnesses(
     page,
     baseline_pixmap: fitz.Pixmap,
@@ -2886,6 +2914,11 @@ def _page_pdf_source_layer_line_witnesses(
     document = page.parent
     try:
         ui_configs = document.layer_ui_configs()
+        if not isinstance(ui_configs, (tuple, list)) or any(
+            not isinstance(config, dict) for config in ui_configs
+        ):
+            return []
+        initial_ui_configs = [dict(config) for config in ui_configs]
         drawings = page.get_drawings(extended=True)
         bboxlog = page.get_bboxlog()
         optional_content_groups = document.get_ocgs()
@@ -2922,10 +2955,9 @@ def _page_pdf_source_layer_line_witnesses(
         except Exception:
             off_pixmap = None
         finally:
-            try:
-                document.set_layer_ui_config(number, fitz.PDF_OC_ON)
-            except Exception:
-                restore_failed = True
+            restore_failed = not _restore_pdf_optional_content_state(
+                document, initial_ui_configs
+            )
         if restore_failed:
             raise RuntimeError("Failed to restore PDF optional-content layer state")
         off = _pixmap_rgb_array(off_pixmap) if off_pixmap is not None else None
