@@ -368,6 +368,71 @@ def test_unique_roi_with_no_ocr_tokens_falls_back_to_full_cluster_crop(
     assert disposition.observation["attachment_candidates"] == []
 
 
+def test_unique_roi_cannot_suppress_full_crop_conflict_when_confirmation_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = synthetic_horizontal_dimension()
+    full_area = image.shape[0] * image.shape[1]
+
+    def text(value: str, bbox: tuple[int, int, int, int], confidence: float) -> RawText:
+        return RawText(
+            id=f"rawtext-{value}",
+            content=value,
+            bbox_px=bbox,
+            rotation_deg=0.0,
+            confidence=confidence,
+            source="text_tesseract",
+            parsed_value=float(value),
+            semantic_role="dimension_value",
+        )
+
+    def reader(crop: np.ndarray) -> list[RawText]:
+        if crop.shape[0] * crop.shape[1] < full_area:
+            return [text("4500", (20, 5, 80, 25), 0.92)]
+        return [
+            text("4500", (170, 5, 230, 35), 0.92),
+            text("4600", (260, 5, 320, 35), 0.91),
+        ]
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.dimension_observer.detect_text_candidate_rois",
+        lambda _: [],
+    )
+    baseline = observe_dimension_cluster(
+        image,
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=reader,
+        semantic_anchors=matching_horizontal_anchors(),
+        explicit_role="REFERENCE",
+        default_unit="mm",
+    )
+    assert baseline.disposition == "CONFLICT"
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.dimension_observer.detect_text_candidate_rois",
+        lambda _: [(160, 5, 260, 35)],
+    )
+    candidate = observe_dimension_cluster(
+        image,
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=reader,
+        semantic_anchors=matching_horizontal_anchors(),
+        explicit_role="REFERENCE",
+        default_unit="mm",
+    )
+
+    assert candidate.disposition == "CONFLICT"
+    assert candidate.observation is not None
+    assert candidate.observation["status"] == "CONFLICT"
+    assert set(candidate.observation["raw_text_candidates"]) == {"4500", "4600"}
+
+
 def test_unrelated_text_roi_away_from_dimension_line_is_not_selected() -> None:
     geometry = DimensionGeometryEvidence(
         dimension_line=((20.0, 50.0), (180.0, 50.0)),

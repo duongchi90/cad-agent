@@ -186,8 +186,11 @@ def _read_cluster_text(
     *,
     ocr_reader: OcrReader,
     geometry: DimensionGeometryEvidence,
+    confirmation_requested: bool = False,
 ) -> tuple[list[RawText], list[dict[str, object]]]:
-    """Use one image-derived ROI only when it aligns with the dimension line."""
+    """Use aligned ROIs for observation; confirmation reads the full cluster."""
+    if confirmation_requested:
+        return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
     rois = detect_text_candidate_rois(crop)
     if len(rois) != 1 or not _roi_supports_dimension_line(rois[0], geometry):
         return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
@@ -606,6 +609,7 @@ def observe_dimension_cluster(
         crop,
         ocr_reader=ocr_reader,
         geometry=geometry,
+        confirmation_requested=explicit_role is not None and bool(semantic_anchors),
     )
     parsed, parsed_candidates, parse_reasons = _select_parsed_candidate(
         raw_texts,
