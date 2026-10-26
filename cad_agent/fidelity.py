@@ -314,7 +314,16 @@ def _published_text_reconstruction_matches(
             document = ezdxf.readfile(output)
         except ezdxf.DXFError:
             return False
-        return len(document.modelspace().query("TEXT")) == report["emitted_text_entities"]
+        base_text_count = 0
+        if base_dxf is not None:
+            try:
+                base_document = ezdxf.readfile(base_dxf)
+            except ezdxf.DXFError:
+                return False
+            base_text_count = len(base_document.modelspace().query("TEXT"))
+        return len(document.modelspace().query("TEXT")) == (
+            base_text_count + report["emitted_text_entities"]
+        )
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return False
 

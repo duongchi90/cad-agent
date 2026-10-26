@@ -1489,6 +1489,52 @@ def test_native_pdf_text_reconstruction_refuses_retry_when_page_mapping_changes(
         )
 
 
+def test_native_pdf_text_reconstruction_reuses_retry_with_base_text(tmp_path: Path) -> None:
+    source = tmp_path / "base-text-retry.pdf"
+    output = tmp_path / "private-base-text-retry"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "RETRY NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    base_dxf = output / "base.dxf"
+    base_document = ezdxf.new("R2010")
+    base_document.modelspace().add_text("BASE NOTE", dxfattribs={"height": 2.5})
+    base_document.saveas(base_dxf)
+
+    first = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, base_dxf=base_dxf, workspace_root=Path.cwd(),
+    )
+    retry = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, base_dxf=base_dxf, workspace_root=Path.cwd(),
+    )
+
+    assert retry == first
+    entities = list(ezdxf.readfile(retry).modelspace().query("TEXT"))
+    assert sorted(entity.dxf.text for entity in entities) == ["BASE NOTE", "RETRY NOTE"]
+
+
 def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
