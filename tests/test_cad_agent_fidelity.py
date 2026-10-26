@@ -1420,6 +1420,75 @@ def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_pat
     assert all(record["source_font_name"] for record in report["text_sizing"])
 
 
+def test_native_pdf_text_approval_rejects_junctioned_output_directory(tmp_path: Path) -> None:
+    import subprocess
+
+    if os.name != "nt":
+        pytest.skip("Directory junction protection is Windows-specific.")
+
+    source = tmp_path / "approval-junction.pdf"
+    output = tmp_path / "private-approval-junction"
+    external = tmp_path / "outside-private-root"
+    external.mkdir()
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "APPROVED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    candidate = observation["candidates"][0]
+    approval_directory = output / "fidelity_text_approvals"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(approval_directory), str(external)],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"Directory junction creation unavailable: {result.stderr.strip() or result.stdout.strip()}")
+    try:
+        with pytest.raises(FidelityError, match="directory|private|identity"):
+            write_fidelity_text_approval(
+                source, output, manifest, 1, observation_path, [candidate["id"]], "junction-test",
+                workspace_root=Path.cwd(),
+            )
+        assert not (external / "page_01.json").exists()
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(approval_directory)], capture_output=True, check=False)
+
+
+def test_native_pdf_text_reconstruction_refuses_retry_when_page_mapping_changes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mapping-retry.pdf"
+    output = tmp_path / "private-mapping-retry"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "MAPPED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    candidate = json.loads(observation_path.read_text(encoding="utf-8"))["candidates"][0]
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [candidate["id"]], "mapping-test",
+        workspace_root=Path.cwd(),
+    )
+    published = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    assert published.is_file()
+
+    manifest["pages"][0]["pixel_to_paper_mm"]["used"] *= 2
+    with pytest.raises(FidelityError, match="already exists"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+
 def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

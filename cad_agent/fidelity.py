@@ -269,6 +269,7 @@ def _published_text_reconstruction_matches(
     manifest: dict[str, Any],
     approval_path: Path,
     base_dxf: Path | None,
+    expected_text_sizing: list[dict[str, Any]],
 ) -> bool:
     """Recognize only a complete prior publication for these exact inputs."""
     import stat
@@ -304,6 +305,7 @@ def _published_text_reconstruction_matches(
             or report.get("base_dxf_sha256") != expected_base
             or report.get("output_dxf_sha256") != sha256_file(output)
             or type(report.get("emitted_text_entities")) is not int
+            or report.get("text_sizing") != expected_text_sizing
         ):
             return False
         import ezdxf
@@ -2949,9 +2951,6 @@ def write_fidelity_text_approval(
                 },
             })
     output = output_root / "fidelity_text_approvals" / f"page_{page_number:02d}.json"
-    if output.exists():
-        raise FidelityError(f"Fidelity text approval already exists: {output}")
-    output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": "fidelity-text-approval-2.0" if native_span_ids else "fidelity-text-approval-1.0",
         "private_artifact": True,
@@ -2967,7 +2966,23 @@ def write_fidelity_text_approval(
         payload["approved_native_spans"] = approved_native_spans
         payload["native_selection"] = native_selection_artifact
         payload["unresolved"].append("native span visibility is an explicit item review bound to the selected source, render, and span; no semantic role or association is inferred")
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        with pin_directory_chain(output.parent.absolute()):
+            if not _is_within(output.parent, output_root):
+                raise FidelityError("Fidelity text approval output escaped the private root.")
+            if output.exists():
+                raise FidelityError(f"Fidelity text approval already exists: {output}")
+            descriptor = os.open(
+                output,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as approval_file:
+                approval_file.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    except FileIdentityError as exc:
+        raise FidelityError("Fidelity text approval output directory is unsafe.") from exc
+    except FileExistsError as exc:
+        raise FidelityError(f"Fidelity text approval already exists: {output}") from exc
     return payload
 
 
@@ -3406,7 +3421,12 @@ def run_fidelity_text_reconstruct(
         text_height = sizing["height_mm"]
         entity = model.add_text(content, dxfattribs={"layer": "FIDELITY_TEXT", "height": text_height, "width": sizing["width_factor"], "style": _ensure_unicode_text_style(document)})
         entity.set_placement((x0 * scale, (height_px - y1) * scale))
-        sizing_records.append({"id": candidate.get("id"), **sizing})
+        sizing_records.append({
+            "id": candidate.get("id"),
+            **sizing,
+            "insertion_mm": [x0 * scale, (height_px - y1) * scale],
+            "mapping_version": "rendered-page-pixel-to-paper-v1",
+        })
         emitted += 1
     for approved in native_to_emit:
         span = approved["span"]
@@ -3436,7 +3456,7 @@ def run_fidelity_text_reconstruct(
                 raise FidelityError("Text reconstruction output escaped the private fidelity root.")
             if root.exists():
                 if _published_text_reconstruction_matches(
-                    root, manifest, approval_path, base_dxf,
+                    root, manifest, approval_path, base_dxf, sizing_records,
                 ):
                     return root / "layout.dxf"
                 raise FidelityError(f"Text reconstruction already exists: {root}")
@@ -3480,7 +3500,7 @@ def run_fidelity_text_reconstruct(
                     _publish_staging_directory(staging_root, root, staging_identity)
                 except FileIdentityError as exc:
                     if _published_text_reconstruction_matches(
-                        root, manifest, approval_path, base_dxf,
+                        root, manifest, approval_path, base_dxf, sizing_records,
                     ):
                         try:
                             _remove_staging_reparse_alias(staging_root)
@@ -3498,7 +3518,7 @@ def run_fidelity_text_reconstruct(
                     _remove_staging_reparse_alias(staging_root)
                 except FileIdentityError as exc:
                     if _published_text_reconstruction_matches(
-                        root, manifest, approval_path, base_dxf,
+                        root, manifest, approval_path, base_dxf, sizing_records,
                     ):
                         raise FidelityError(
                             "Text reconstruction was published and verified, but staging cleanup failed; "
