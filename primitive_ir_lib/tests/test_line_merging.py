@@ -604,3 +604,26 @@ def test_irregular_gaps_are_not_misclassified_as_regular_dash_cadence():
         cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
 
     assert _source_dash_gap_intervals(image, 60, 0, np.pi / 2, 10, 124) == []
+
+
+
+def test_exact_line_cleanup_keeps_only_identical_geometry_with_matching_metadata():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    exact = _line((0.0, 0.0), (10.0, 0.0), "lower-confidence", confidence=0.7)
+    reversed_exact = _line((10.0, 0.0), (0.0, 0.0), "higher-confidence", confidence=0.9)
+    near_parallel = _line((0.0, 0.02), (10.0, 0.02), "near-parallel", confidence=0.8)
+    corner = _line((10.0, 0.0), (10.0, 10.0), "corner", confidence=0.8)
+    different_semantics = _line((0.0, 0.0), (10.0, 0.0), "semantic-variant", confidence=0.95)
+    different_semantics.source = "pdf_vector"
+    different_semantics.layer = "CENTERLINE"
+
+    result = _deduplicate_exact_raw_lines(
+        [exact, reversed_exact, near_parallel, corner, different_semantics]
+    )
+
+    assert len(result) == 4
+    assert {line.id for line in result} == {
+        "higher-confidence", "near-parallel", "corner", "semantic-variant"
+    }
+    assert different_semantics in result

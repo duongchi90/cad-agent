@@ -116,6 +116,49 @@ def _angle_mod_pi(dx: float, dy: float) -> float:
     return a
 
 
+def _freeze_metadata(value):
+    """Return a stable, hashable representation of optional RawLine metadata."""
+    if isinstance(value, dict):
+        return tuple(sorted((str(key), _freeze_metadata(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_metadata(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted((_freeze_metadata(item) for item in value), key=repr))
+    if hasattr(value, "tolist"):
+        return _freeze_metadata(value.tolist())
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
+    """Remove only exact undirected geometry duplicates with matching metadata.
+
+    Coordinates are never quantized or tolerance-matched. IDs and confidence
+    are excluded from the identity key; the highest-confidence record wins,
+    with original input order breaking confidence ties. Other present fields
+    are preserved as identity so provenance or semantic differences survive.
+    """
+    unique = {}
+    excluded = {"id", "p1_px", "p2_px", "confidence"}
+    for line in lines:
+        p1 = tuple(line.p1_px)
+        p2 = tuple(line.p2_px)
+        geometry = (p1, p2) if p1 <= p2 else (p2, p1)
+        metadata = tuple(sorted(
+            (name, _freeze_metadata(value))
+            for name, value in vars(line).items()
+            if name not in excluded
+        ))
+        key = (geometry, metadata)
+        current = unique.get(key)
+        if current is None or line.confidence > current.confidence:
+            unique[key] = line
+    return list(unique.values())
+
+
 def _angle_diff_mod_pi(a: float, b: float) -> float:
     d = abs(a - b) % math.pi
     return min(d, math.pi - d)
@@ -595,4 +638,4 @@ def merge_collinear_lines(
                 bbox_px=bbox,
             ))
 
-    return result
+    return _deduplicate_exact_raw_lines(result)
