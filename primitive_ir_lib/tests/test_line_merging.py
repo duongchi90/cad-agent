@@ -651,6 +651,42 @@ def test_exact_line_cleanup_preserves_distinct_typed_metadata():
         assert left in result and right in result
 
 
+def test_exact_line_cleanup_preserves_metadata_from_distinct_runtime_types_with_same_name():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    left_type = type("Marker", (tuple,), {"__module__": "shared.module"})
+    right_type = type("Marker", (tuple,), {"__module__": "shared.module"})
+    left_type.__qualname__ = right_type.__qualname__ = "Marker"
+    left = _line((0.0, 0.0), (10.0, 0.0), "left", confidence=0.7)
+    right = _line((10.0, 0.0), (0.0, 0.0), "right", confidence=0.9)
+    left.source_metadata = left_type(("source-a",))
+    right.source_metadata = right_type(("source-a",))
+
+    result = _deduplicate_exact_raw_lines([left, right])
+
+    assert len(result) == 2
+    assert left in result and right in result
+
+
+def test_exact_line_cleanup_preserves_ambiguous_metadata_values():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    cyclic_left = []
+    cyclic_left.append(cyclic_left)
+    cyclic_right = []
+    cyclic_right.append(cyclic_right)
+    lines = []
+    for index, metadata in enumerate((float("nan"), cyclic_left, cyclic_right)):
+        line = _line((0.0, 0.0), (10.0, 0.0), f"line-{index}", confidence=0.8)
+        line.source_metadata = metadata
+        lines.append(line)
+
+    result = _deduplicate_exact_raw_lines(lines)
+
+    assert len(result) == 3
+    assert result == lines
+
+
 def test_exact_line_cleanup_rejects_nonfinite_confidence():
     from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
 

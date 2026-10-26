@@ -116,45 +116,63 @@ def _angle_mod_pi(dx: float, dy: float) -> float:
     return a
 
 
-def _freeze_metadata(value):
+def _freeze_metadata(value, _active_ids=None):
     """Return a type-preserving key for metadata supported by the deduplicator.
 
     Unknown objects use identity keys: preserving an extra line is safer than
     treating custom equality or repr output as proof of metadata equivalence.
     """
     value_type = type(value)
-    type_tag = (value_type.__module__, value_type.__qualname__)
-    if isinstance(value, dict):
-        entries = tuple(
-            sorted(
-                ((_freeze_metadata(key), _freeze_metadata(item)) for key, item in value.items()),
-                key=repr,
+    # Keep actual runtime type identity, not user-controlled module/name labels.
+    type_tag = id(value_type)
+    if _active_ids is None:
+        _active_ids = set()
+
+    is_container = isinstance(value, (dict, list, tuple, set, frozenset))
+    tolist = getattr(value, "tolist", None)
+    is_array_like = callable(tolist)
+    if value_type is float and not math.isfinite(value):
+        # Non-finite values do not establish reliable metadata equivalence.
+        return ("ambiguous", object())
+    if is_container or is_array_like:
+        value_id = id(value)
+        if value_id in _active_ids:
+            # Preserve the records rather than failing or treating cycles as equal.
+            return ("ambiguous", object())
+        _active_ids.add(value_id)
+        try:
+            if isinstance(value, dict):
+                entries = tuple(
+                    sorted(
+                        ((_freeze_metadata(key, _active_ids), _freeze_metadata(item, _active_ids))
+                         for key, item in value.items()),
+                        key=repr,
+                    )
+                )
+                return ("dict", type_tag, entries)
+            if isinstance(value, list):
+                return ("list", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, tuple):
+                return ("tuple", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, set):
+                return ("set", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, frozenset):
+                return ("frozenset", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            dtype = getattr(value, "dtype", None)
+            shape = getattr(value, "shape", None)
+            return (
+                "array-like",
+                type_tag,
+                str(dtype) if dtype is not None else None,
+                tuple(shape) if shape is not None else None,
+                _freeze_metadata(tolist(), _active_ids),
             )
-        )
-        return ("dict", type_tag, entries)
-    if isinstance(value, list):
-        return ("list", type_tag, tuple(_freeze_metadata(item) for item in value))
-    if isinstance(value, tuple):
-        return ("tuple", type_tag, tuple(_freeze_metadata(item) for item in value))
-    if isinstance(value, set):
-        return ("set", type_tag, frozenset(_freeze_metadata(item) for item in value))
-    if isinstance(value, frozenset):
-        return ("frozenset", type_tag, frozenset(_freeze_metadata(item) for item in value))
+        finally:
+            _active_ids.remove(value_id)
     if value is None or value_type in (bool, int, str, bytes):
         return ("scalar", type_tag, value)
     if value_type is float:
         return ("scalar", type_tag, value.hex())
-    tolist = getattr(value, "tolist", None)
-    if callable(tolist):
-        dtype = getattr(value, "dtype", None)
-        shape = getattr(value, "shape", None)
-        return (
-            "array-like",
-            type_tag,
-            str(dtype) if dtype is not None else None,
-            tuple(shape) if shape is not None else None,
-            _freeze_metadata(tolist()),
-        )
     return ("identity", type_tag, id(value))
 
 
