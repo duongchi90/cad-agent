@@ -1482,8 +1482,10 @@ def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
     assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
 
 
-def test_native_pdf_text_reconstruction_postcommit_cleanup_failure_is_recoverable(
+@pytest.mark.parametrize("failure_site", ["publish-finalization", "staging-cleanup"])
+def test_native_pdf_text_reconstruction_postcommit_failure_is_recoverable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
 ) -> None:
     source = tmp_path / "postcommit-reconstruction.pdf"
     output = tmp_path / "private-postcommit-staging"
@@ -1520,13 +1522,19 @@ def test_native_pdf_text_reconstruction_postcommit_cleanup_failure_is_recoverabl
     def publish_by_rename(staging: Path, destination: Path, identity: tuple[int, int]) -> None:
         assert staging.parent == destination.parent
         os.rename(staging, destination)
+        if failure_site == "publish-finalization":
+            raise fidelity_module.FileIdentityError("injected postcommit publication finalization failure")
 
     def fail_cleanup(staging: Path) -> None:
         raise fidelity_module.FileIdentityError("injected postcommit cleanup failure")
 
     monkeypatch.setattr(fidelity_module, "_publish_staging_directory", publish_by_rename)
-    monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", fail_cleanup)
-    with pytest.raises(FidelityError, match=r"published.*cleanup"):
+    monkeypatch.setattr(
+        fidelity_module,
+        "_remove_staging_reparse_alias",
+        fail_cleanup if failure_site == "staging-cleanup" else lambda staging: None,
+    )
+    with pytest.raises(FidelityError, match=r"published and verified"):
         run_fidelity_text_reconstruct(
             source, output, manifest, approval_path, workspace_root=Path.cwd(),
         )
@@ -1536,6 +1544,9 @@ def test_native_pdf_text_reconstruction_postcommit_cleanup_failure_is_recoverabl
     assert output_dxf.is_file(), "the injected failure happens after atomic publication"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["output_dxf_sha256"] == fidelity_module.sha256_file(output_dxf)
+    assert report["staging_directory_identity"] == list(
+        (page_output.stat().st_dev, page_output.stat().st_ino)
+    )
 
     monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", lambda staging: None)
     assert run_fidelity_text_reconstruct(

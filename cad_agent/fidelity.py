@@ -290,11 +290,16 @@ def _published_text_reconstruction_matches(
         report = json.loads(report_path.read_text(encoding="utf-8"))
         expected_source = manifest.get("source", {}).get("sha256")
         expected_base = sha256_file(base_dxf) if base_dxf is not None else None
+        published_identity = report.get("staging_directory_identity") if isinstance(report, dict) else None
         if (
             not isinstance(report, dict)
             or report.get("state") != "needs_review"
             or report.get("profile") != "fidelity-layout-text"
             or report.get("source_sha256") != expected_source
+            or not isinstance(published_identity, list)
+            or len(published_identity) != 2
+            or any(type(value) is not int for value in published_identity)
+            or tuple(published_identity) != (root_stat.st_dev, root_stat.st_ino)
             or report.get("text_approval_sha256") != sha256_file(approval_path)
             or report.get("base_dxf_sha256") != expected_base
             or report.get("output_dxf_sha256") != sha256_file(output)
@@ -3450,6 +3455,7 @@ def run_fidelity_text_reconstruct(
                         "state": "needs_review",
                         "profile": "fidelity-layout-text",
                         "source_sha256": manifest["source"]["sha256"],
+                        "staging_directory_identity": list(staging_identity),
                         "text_approval_sha256": sha256_file(approval_path),
                         "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None,
                         "output_dxf_sha256": sha256_file(output),
@@ -3470,7 +3476,24 @@ def run_fidelity_text_reconstruct(
                     raise FidelityError("Text reconstruction staging escaped before publication.")
                 if root.exists():
                     raise FidelityError(f"Text reconstruction already exists: {root}")
-                _publish_staging_directory(staging_root, root, staging_identity)
+                try:
+                    _publish_staging_directory(staging_root, root, staging_identity)
+                except FileIdentityError as exc:
+                    if _published_text_reconstruction_matches(
+                        root, manifest, approval_path, base_dxf,
+                    ):
+                        try:
+                            _remove_staging_reparse_alias(staging_root)
+                        except FileIdentityError as cleanup_exc:
+                            raise FidelityError(
+                                "Text reconstruction was published and verified, but publication finalization "
+                                "and staging cleanup failed; an exact-input retry can safely reuse the output."
+                            ) from cleanup_exc
+                        raise FidelityError(
+                            "Text reconstruction was published and verified, but publication finalization failed; "
+                            "an exact-input retry can safely reuse the output."
+                        ) from exc
+                    raise
                 try:
                     _remove_staging_reparse_alias(staging_root)
                 except FileIdentityError as exc:
