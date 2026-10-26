@@ -113,5 +113,28 @@ class GuidanceContractTests(unittest.TestCase):
                 self.assertIn(term, content, f"{term!r} missing from {file_name}")
 
 
+    def test_disk_policy_checks_capacity_and_preserves_closed_evidence(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        for term in (
+            "free space and expected output size",
+            "KEEP",
+            "REGENERABLE",
+            "DISPOSABLE",
+            "dirty, active, unpushed, or unverified worktrees",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, agents)
+        for term in (
+            "Z:\\DuongChi\\Cad Agent",
+            "copy → hash/readback verification → reference reconciliation",
+            "DISK_FREE_BEFORE",
+            "DISK_FREE_AFTER",
+            "RECLAIMED_GB",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+
+
 if __name__ == "__main__":
     unittest.main()

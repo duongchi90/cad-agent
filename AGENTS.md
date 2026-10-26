@@ -86,4 +86,7 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 - Confirm `git diff --check` is clean and verification did not change repository status.
 - Leave no unresolved P0/P1 finding; give deferred P2 findings a reason and owner.
 - Route durable acceptance through `docs/STATUS.md`; keep transient state on GitHub.
+- Before heavy local jobs, check free space and expected output size on every affected volume. If safe headroom cannot be preserved, defer only that job and continue lightweight work.
+- At batch closure classify artifacts as `KEEP`, `REGENERABLE`, or `DISPOSABLE`; retain sources, accepted baselines, current candidates, unique tests, hashes, receipts, and required evidence. Clean only closed, unreferenced reproducible intermediates. Never remove dirty, active, unpushed, or unverified worktrees; remove an obsolete worktree only with `git worktree remove` after verifying its branch/commits, PR, untracked data, sessions/processes, and checkpoint references.
+- Use `Z:\DuongChi\Cad Agent` for long-term closed evidence only after verifying its mapped/network status, filesystem, capacity, access, speed, and durability; transfer by copy, hash/readback verification, reference reconciliation, then cleanup only after confirmed success.
 - Do not claim durable policy adoption from a document edit alone: require merge to canonical `main`, a fresh repository-only session recovery without chat history, and policy contract plus evidence-backed scenario checks. Otherwise report `PERSISTENCE_ACCEPTANCE_GATE=NOT_VERIFIED`.
