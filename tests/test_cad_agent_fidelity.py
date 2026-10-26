@@ -1485,6 +1485,8 @@ def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
 def test_native_pdf_text_reconstruction_pins_staging_before_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from cad_agent import fidelity as fidelity_module
+
     source = tmp_path / "staging-reparse-race.pdf"
     output = tmp_path / "private-staging"
     document = fitz.open()
@@ -1519,7 +1521,12 @@ def test_native_pdf_text_reconstruction_pins_staging_before_writing(
     outside = tmp_path / "outside-root"
     outside.mkdir()
     original_saveas = ezdxf.document.Drawing.saveas
+    original_rename = fidelity_module.os.rename
+    original_handle_rename = fidelity_module._set_file_information_by_handle
     staging_replacement_blocked: list[bool] = []
+    publication_race_triggered: list[bool] = []
+    staging_for_publication: list[Path] = []
+    displaced_staging: list[Path] = []
 
     def replace_staging_with_junction(
         drawing: ezdxf.document.Drawing, filename: str | Path, *args: object, **kwargs: object,
@@ -1527,6 +1534,7 @@ def test_native_pdf_text_reconstruction_pins_staging_before_writing(
         target = Path(filename)
         staging = target.parent
         if target.name == "layout.dxf" and staging.name.startswith(".page_01.staging-"):
+            staging_for_publication.append(staging)
             try:
                 staging.rmdir()
             except OSError:
@@ -1543,11 +1551,34 @@ def test_native_pdf_text_reconstruction_pins_staging_before_writing(
 
     monkeypatch.setattr(ezdxf.document.Drawing, "saveas", replace_staging_with_junction)
     page_output = output / "text_reconstruction" / "page_01"
+
+    def replace_staging_during_handle_publication(handle: object, destination: Path) -> None:
+        assert destination == page_output
+        assert staging_for_publication
+        staging = staging_for_publication[-1]
+        displaced = staging.with_name(f"{staging.name}.displaced")
+        original_rename(staging, displaced)
+        displaced_staging.append(displaced)
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(staging), str(outside)],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            original_rename(displaced, staging)
+            displaced_staging.clear()
+            pytest.skip(f"mklink /J unavailable: {result.stderr.strip()}")
+        publication_race_triggered.append(True)
+        original_handle_rename(handle, destination)
+
+    monkeypatch.setattr(
+        fidelity_module, "_set_file_information_by_handle", replace_staging_during_handle_publication,
+    )
     try:
         output_dxf = run_fidelity_text_reconstruct(
             source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
             workspace_root=Path.cwd(),
         )
+        assert publication_race_triggered, "test must replace the staging path after the object handle is bound"
         assert output_dxf.is_file()
         assert not (outside / "layout.dxf").exists(), "DXF must not be written through a staging junction"
         assert not (outside / "report.json").exists(), "report must not be written through a staging junction"
@@ -1555,6 +1586,11 @@ def test_native_pdf_text_reconstruction_pins_staging_before_writing(
     finally:
         if page_output.exists() and getattr(page_output.lstat(), "st_file_attributes", 0) & 0x400:
             page_output.rmdir()
+        for displaced in displaced_staging:
+            if displaced.exists():
+                import shutil
+
+                shutil.rmtree(displaced)
 
 
 def test_native_pdf_text_reconstruct_rejects_forged_mixed_overlap(

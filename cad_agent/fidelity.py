@@ -114,6 +114,156 @@ def _is_within(path: Path, parent: Path) -> bool:
     return True
 
 
+def _set_file_information_by_handle(handle: object, destination: Path) -> None:
+    """Rename an already-identified directory handle without re-resolving its source path."""
+    if os.name != "nt":
+        raise FileIdentityError("Directory publication requires Windows handle semantics.")
+    import ctypes
+    from ctypes import wintypes
+
+    class RenameFlags(ctypes.Union):
+        _fields_ = [("replace_if_exists", wintypes.BOOLEAN), ("flags", wintypes.DWORD)]
+
+    class RenameInfo(ctypes.Structure):
+        _fields_ = [
+            ("options", RenameFlags),
+            ("root_directory", wintypes.HANDLE),
+            ("file_name_length", wintypes.DWORD),
+            ("file_name", wintypes.WCHAR * 1),
+        ]
+
+    target = str(destination.absolute())
+    if target.startswith("\\\\?\\"):
+        extended_target = target
+    elif target.startswith("\\\\"):
+        extended_target = "\\\\?\\UNC\\" + target[2:]
+    else:
+        extended_target = "\\\\?\\" + target
+    encoded_name = (extended_target + "\0").encode("utf-16-le")
+    name_offset = RenameInfo.file_name.offset
+    buffer_size = ctypes.sizeof(RenameInfo) + len(encoded_name)
+    buffer = ctypes.create_string_buffer(buffer_size)
+    rename_info = ctypes.cast(buffer, ctypes.POINTER(RenameInfo)).contents
+    rename_info.options.replace_if_exists = False
+    rename_info.root_directory = None
+    rename_info.file_name_length = len(encoded_name) - 2
+    ctypes.memmove(ctypes.addressof(rename_info) + name_offset, encoded_name, len(encoded_name))
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, wintypes.INT, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    kernel.SetFileInformationByHandle.restype = wintypes.BOOL
+    ctypes.set_last_error(0)
+    if not kernel.SetFileInformationByHandle(handle, 3, buffer, buffer_size):
+        error = ctypes.get_last_error() or 1
+        raise ctypes.WinError(error, "Staging directory handle could not be published.")
+
+
+def _publish_staging_directory(staging: Path, destination: Path, identity: tuple[int, int]) -> None:
+    """Publish the exact staged directory object; never rename a replacement at its old path."""
+    if os.name != "nt" or not staging.is_absolute() or not destination.is_absolute():
+        raise FileIdentityError("Directory publication requires absolute Windows paths.")
+    if staging.parent != destination.parent:
+        raise FileIdentityError("Staging and final directories must share one pinned parent.")
+    try:
+        expected = os.stat(staging, follow_symlinks=False)
+    except OSError as exc:
+        raise FileIdentityError("Staging directory identity could not be verified.") from exc
+    if (
+        not os.path.isdir(staging)
+        or getattr(expected, "st_file_attributes", 0) & 0x0400
+        or (expected.st_dev, expected.st_ino) != identity
+    ):
+        raise FileIdentityError("Staging directory identity changed before publication.")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class Information(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD), ("created", wintypes.FILETIME),
+            ("accessed", wintypes.FILETIME), ("written", wintypes.FILETIME),
+            ("volume", wintypes.DWORD), ("size_high", wintypes.DWORD),
+            ("size_low", wintypes.DWORD), ("links", wintypes.DWORD),
+            ("index_high", wintypes.DWORD), ("index_low", wintypes.DWORD),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(Information),
+    ]
+    kernel.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel.CreateFileW(
+        str(staging),
+        0x0001 | 0x0080 | 0x00010000 | 0x00100000,
+        0x0001 | 0x0002 | 0x0004,
+        None,
+        3,
+        0x02000000 | 0x00200000,
+        None,
+    )
+    handle_value = ctypes.cast(handle, ctypes.c_void_p).value
+    if handle_value in (None, ctypes.c_void_p(-1).value):
+        raise FileIdentityError("Staging directory could not be opened for bound publication.")
+    try:
+        information = Information()
+        if not kernel.GetFileInformationByHandle(handle, ctypes.byref(information)):
+            raise FileIdentityError("Staging directory handle identity could not be verified.")
+        actual = (
+            int(information.volume),
+            (int(information.index_high) << 32) | int(information.index_low),
+        )
+        if information.attributes & 0x0400 or actual != identity:
+            raise FileIdentityError("Staging directory handle does not match the written object.")
+        if os.path.lexists(destination):
+            raise FileIdentityError("Final text reconstruction directory already exists.")
+        _set_file_information_by_handle(handle, destination)
+        try:
+            published = os.stat(destination, follow_symlinks=False)
+        except OSError as exc:
+            raise FileIdentityError("Published directory identity could not be verified.") from exc
+        published_identity = (published.st_dev, published.st_ino)
+        if (
+            not os.path.isdir(destination)
+            or getattr(published, "st_file_attributes", 0) & 0x0400
+            or published_identity != identity
+        ):
+            raise FileIdentityError("Published directory is not the staged directory object.")
+    finally:
+        if not kernel.CloseHandle(handle):
+            raise FileIdentityError("Staging directory handle could not be released.")
+
+
+def _remove_staging_reparse_alias(staging: Path) -> None:
+    """Unlink a substituted temporary alias without traversing its target."""
+    import stat
+
+    try:
+        value = os.stat(staging, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise FileIdentityError("Staging path could not be checked after publication.") from exc
+    if not (getattr(value, "st_file_attributes", 0) & 0x0400):
+        return
+    try:
+        if stat.S_ISDIR(value.st_mode):
+            os.rmdir(staging)
+        else:
+            os.unlink(staging)
+    except OSError as exc:
+        raise FileIdentityError("Substituted staging alias could not be safely unlinked.") from exc
+
+
 def _artifact(path: Path, output_root: Path) -> dict[str, str]:
     relative_path = path.resolve().relative_to(output_root.resolve())
     return {
@@ -3243,6 +3393,8 @@ def run_fidelity_text_reconstruct(
                     raise FidelityError("Text reconstruction staging escaped the private fidelity root.")
                 output = staging_root / "layout.dxf"
                 with pin_directory_chain(staging_root.absolute()):
+                    staging_stat = os.stat(staging_root, follow_symlinks=False)
+                    staging_identity = (staging_stat.st_dev, staging_stat.st_ino)
                     document.saveas(output)
                     report = {
                         "state": "needs_review",
@@ -3267,7 +3419,8 @@ def run_fidelity_text_reconstruct(
                     raise FidelityError("Text reconstruction staging escaped before publication.")
                 if root.exists():
                     raise FidelityError(f"Text reconstruction already exists: {root}")
-                os.rename(staging_root, root)
+                _publish_staging_directory(staging_root, root, staging_identity)
+                _remove_staging_reparse_alias(staging_root)
     except FileIdentityError as exc:
         raise FidelityError("Text reconstruction output must use a stable, non-reparse directory inside the private fidelity root.") from exc
     return root / "layout.dxf"
