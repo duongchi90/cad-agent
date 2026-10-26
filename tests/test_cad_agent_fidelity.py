@@ -1562,6 +1562,72 @@ def test_native_pdf_text_reconstruction_postcommit_failure_is_recoverable(
         )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point retry regression")
+def test_native_pdf_text_reconstruction_rejects_junctioned_existing_output_parent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "junction-retry.pdf"
+    output = tmp_path / "private-junction-retry"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "JUNCTION RETRY", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-junction-retry",
+        workspace_root=Path.cwd(),
+    )
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    page_output = output / "text_reconstruction" / "page_01"
+    output_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    expected_hash = fidelity_module.sha256_file(output_dxf)
+
+    external_root = tmp_path / "outside-private-root"
+    external_root.mkdir()
+    relocated_parent = external_root / "text_reconstruction"
+    page_output.parent.rename(relocated_parent)
+    junction_result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(page_output.parent), str(relocated_parent)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if junction_result.returncode != 0:
+        pytest.skip(
+            f"Directory junction creation unavailable: "
+            f"{junction_result.stderr.strip() or junction_result.stdout.strip()}"
+        )
+
+    with pytest.raises(FidelityError, match="private|directory|output"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    relocated_dxf = external_root / "text_reconstruction" / "page_01" / "layout.dxf"
+    assert fidelity_module.sha256_file(relocated_dxf) == expected_hash
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point race regression")
 def test_native_pdf_text_reconstruction_pins_staging_before_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

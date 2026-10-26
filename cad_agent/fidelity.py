@@ -3430,15 +3430,15 @@ def run_fidelity_text_reconstruct(
         })
         emitted += 1
     root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
-    if root.exists():
-        if _published_text_reconstruction_matches(root, manifest, approval_path, base_dxf):
-            return root / "layout.dxf"
-        raise FidelityError(f"Text reconstruction already exists: {root}")
     try:
         with pin_directory_chain(root.parent.absolute()):
             if not _is_within(root, output_root):
                 raise FidelityError("Text reconstruction output escaped the private fidelity root.")
             if root.exists():
+                if _published_text_reconstruction_matches(
+                    root, manifest, approval_path, base_dxf,
+                ):
+                    return root / "layout.dxf"
                 raise FidelityError(f"Text reconstruction already exists: {root}")
             with tempfile.TemporaryDirectory(
                 prefix=f".{root.name}.staging-", dir=root.parent,
