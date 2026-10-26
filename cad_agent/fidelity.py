@@ -264,6 +264,54 @@ def _remove_staging_reparse_alias(staging: Path) -> None:
         raise FileIdentityError("Substituted staging alias could not be safely unlinked.") from exc
 
 
+def _published_text_reconstruction_matches(
+    root: Path,
+    manifest: dict[str, Any],
+    approval_path: Path,
+    base_dxf: Path | None,
+) -> bool:
+    """Recognize only a complete prior publication for these exact inputs."""
+    import stat
+
+    output = root / "layout.dxf"
+    report_path = root / "report.json"
+    try:
+        root_stat = os.stat(root, follow_symlinks=False)
+        output_stat = os.stat(output, follow_symlinks=False)
+        report_stat = os.stat(report_path, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(root_stat.st_mode)
+            or not stat.S_ISREG(output_stat.st_mode)
+            or not stat.S_ISREG(report_stat.st_mode)
+            or any(getattr(value, "st_file_attributes", 0) & 0x0400
+                   for value in (root_stat, output_stat, report_stat))
+        ):
+            return False
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        expected_source = manifest.get("source", {}).get("sha256")
+        expected_base = sha256_file(base_dxf) if base_dxf is not None else None
+        if (
+            not isinstance(report, dict)
+            or report.get("state") != "needs_review"
+            or report.get("profile") != "fidelity-layout-text"
+            or report.get("source_sha256") != expected_source
+            or report.get("text_approval_sha256") != sha256_file(approval_path)
+            or report.get("base_dxf_sha256") != expected_base
+            or report.get("output_dxf_sha256") != sha256_file(output)
+            or type(report.get("emitted_text_entities")) is not int
+        ):
+            return False
+        import ezdxf
+
+        try:
+            document = ezdxf.readfile(output)
+        except ezdxf.DXFError:
+            return False
+        return len(document.modelspace().query("TEXT")) == report["emitted_text_entities"]
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return False
+
+
 def _artifact(path: Path, output_root: Path) -> dict[str, str]:
     relative_path = path.resolve().relative_to(output_root.resolve())
     return {
@@ -3378,6 +3426,8 @@ def run_fidelity_text_reconstruct(
         emitted += 1
     root = output_root / "text_reconstruction" / f"page_{page['page']:02d}"
     if root.exists():
+        if _published_text_reconstruction_matches(root, manifest, approval_path, base_dxf):
+            return root / "layout.dxf"
         raise FidelityError(f"Text reconstruction already exists: {root}")
     try:
         with pin_directory_chain(root.parent.absolute()):
@@ -3399,6 +3449,7 @@ def run_fidelity_text_reconstruct(
                     report = {
                         "state": "needs_review",
                         "profile": "fidelity-layout-text",
+                        "source_sha256": manifest["source"]["sha256"],
                         "text_approval_sha256": sha256_file(approval_path),
                         "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None,
                         "output_dxf_sha256": sha256_file(output),
@@ -3420,7 +3471,17 @@ def run_fidelity_text_reconstruct(
                 if root.exists():
                     raise FidelityError(f"Text reconstruction already exists: {root}")
                 _publish_staging_directory(staging_root, root, staging_identity)
-                _remove_staging_reparse_alias(staging_root)
+                try:
+                    _remove_staging_reparse_alias(staging_root)
+                except FileIdentityError as exc:
+                    if _published_text_reconstruction_matches(
+                        root, manifest, approval_path, base_dxf,
+                    ):
+                        raise FidelityError(
+                            "Text reconstruction was published and verified, but staging cleanup failed; "
+                            "an exact-input retry can safely reuse the output."
+                        ) from exc
+                    raise
     except FileIdentityError as exc:
         raise FidelityError("Text reconstruction output must use a stable, non-reparse directory inside the private fidelity root.") from exc
     return root / "layout.dxf"

@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
+import cad_agent.fidelity as fidelity_module
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from primitive_ir_lib.text_extraction import RawText
 from cad_agent.fidelity import (
@@ -1479,6 +1480,75 @@ def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
     assert output_dxf.is_file()
     assert (page_output / "report.json").is_file()
     assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
+
+
+def test_native_pdf_text_reconstruction_postcommit_cleanup_failure_is_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "postcommit-reconstruction.pdf"
+    output = tmp_path / "private-postcommit-staging"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "POSTCOMMIT NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    page_output = output / "text_reconstruction" / "page_01"
+
+    def publish_by_rename(staging: Path, destination: Path, identity: tuple[int, int]) -> None:
+        assert staging.parent == destination.parent
+        os.rename(staging, destination)
+
+    def fail_cleanup(staging: Path) -> None:
+        raise fidelity_module.FileIdentityError("injected postcommit cleanup failure")
+
+    monkeypatch.setattr(fidelity_module, "_publish_staging_directory", publish_by_rename)
+    monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", fail_cleanup)
+    with pytest.raises(FidelityError, match=r"published.*cleanup"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+    output_dxf = page_output / "layout.dxf"
+    report_path = page_output / "report.json"
+    assert output_dxf.is_file(), "the injected failure happens after atomic publication"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["output_dxf_sha256"] == fidelity_module.sha256_file(output_dxf)
+
+    monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", lambda staging: None)
+    assert run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    ) == output_dxf
+    assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
+
+    report["source_sha256"] = "0" * 64
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(FidelityError, match="already exists"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point race regression")
