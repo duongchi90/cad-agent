@@ -47,7 +47,7 @@ def _title_block_roi(image_width: int, image_height: int) -> Bbox:
     """Return the conventional lower-right title-block search area."""
     return (
         int(image_width * 0.58),
-        int(image_height * 0.67),
+        int(image_height * 0.50),
         image_width,
         image_height,
     )

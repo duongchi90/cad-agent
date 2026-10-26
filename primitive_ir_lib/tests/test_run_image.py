@@ -15,10 +15,21 @@ from primitive_ir_lib.calibration_registry import add_record, get_verified_scale
 from primitive_ir_lib.assemble import build_document as assemble_document
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from primitive_ir_lib.models import Calibration
-from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError, main, run
+from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError, _title_block_roi, main, run
 from primitive_ir_lib.text_extraction import RawText
 from primitive_ir_lib.validator import validate_document
 import primitive_ir_lib.run_image as run_image_module
+
+
+def test_title_block_roi_includes_scale_label_above_lower_third():
+    # Observed scale-label bounds in the frozen 6740x4768 Gunnerus render.
+    x0, y0, x1, y1 = _title_block_roi(6740, 4768)
+    scale_label_bbox = (6041, 2555, 6138, 2575)
+
+    assert x0 <= scale_label_bbox[0]
+    assert y0 <= scale_label_bbox[1]
+    assert x1 >= scale_label_bbox[2]
+    assert y1 >= scale_label_bbox[3]
 
 
 def test_run_image_writes_valid_primitive_ir_with_manual_scale():
