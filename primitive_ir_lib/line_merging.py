@@ -117,20 +117,45 @@ def _angle_mod_pi(dx: float, dy: float) -> float:
 
 
 def _freeze_metadata(value):
-    """Return a stable, hashable representation of optional RawLine metadata."""
+    """Return a type-preserving key for metadata supported by the deduplicator.
+
+    Unknown objects use identity keys: preserving an extra line is safer than
+    treating custom equality or repr output as proof of metadata equivalence.
+    """
+    value_type = type(value)
+    type_tag = (value_type.__module__, value_type.__qualname__)
     if isinstance(value, dict):
-        return tuple(sorted((str(key), _freeze_metadata(item)) for key, item in value.items()))
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_metadata(item) for item in value)
+        entries = tuple(
+            sorted(
+                ((_freeze_metadata(key), _freeze_metadata(item)) for key, item in value.items()),
+                key=repr,
+            )
+        )
+        return ("dict", type_tag, entries)
+    if isinstance(value, list):
+        return ("list", type_tag, tuple(_freeze_metadata(item) for item in value))
+    if isinstance(value, tuple):
+        return ("tuple", type_tag, tuple(_freeze_metadata(item) for item in value))
     if isinstance(value, set):
-        return tuple(sorted((_freeze_metadata(item) for item in value), key=repr))
-    if hasattr(value, "tolist"):
-        return _freeze_metadata(value.tolist())
-    try:
-        hash(value)
-    except TypeError:
-        return repr(value)
-    return value
+        return ("set", type_tag, frozenset(_freeze_metadata(item) for item in value))
+    if isinstance(value, frozenset):
+        return ("frozenset", type_tag, frozenset(_freeze_metadata(item) for item in value))
+    if value is None or value_type in (bool, int, str, bytes):
+        return ("scalar", type_tag, value)
+    if value_type is float:
+        return ("scalar", type_tag, value.hex())
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        dtype = getattr(value, "dtype", None)
+        shape = getattr(value, "shape", None)
+        return (
+            "array-like",
+            type_tag,
+            str(dtype) if dtype is not None else None,
+            tuple(shape) if shape is not None else None,
+            _freeze_metadata(tolist()),
+        )
+    return ("identity", type_tag, id(value))
 
 
 def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
@@ -144,6 +169,12 @@ def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
     unique = {}
     excluded = {"id", "p1_px", "p2_px", "confidence"}
     for line in lines:
+        try:
+            confidence = float(line.confidence)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("RawLine confidence must be finite") from None
+        if not math.isfinite(confidence):
+            raise ValueError("RawLine confidence must be finite")
         p1 = tuple(line.p1_px)
         p2 = tuple(line.p2_px)
         geometry = (p1, p2) if p1 <= p2 else (p2, p1)
@@ -154,9 +185,9 @@ def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
         ))
         key = (geometry, metadata)
         current = unique.get(key)
-        if current is None or line.confidence > current.confidence:
-            unique[key] = line
-    return list(unique.values())
+        if current is None or confidence > current[1]:
+            unique[key] = (line, confidence)
+    return [line for line, _ in unique.values()]
 
 
 def _angle_diff_mod_pi(a: float, b: float) -> float:

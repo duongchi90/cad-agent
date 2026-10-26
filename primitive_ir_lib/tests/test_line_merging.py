@@ -627,3 +627,40 @@ def test_exact_line_cleanup_keeps_only_identical_geometry_with_matching_metadata
         "higher-confidence", "near-parallel", "corner", "semantic-variant"
     }
     assert different_semantics in result
+
+
+def test_exact_line_cleanup_preserves_distinct_typed_metadata():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    distinct_metadata_pairs = [
+        (["pdf_vector"], ("pdf_vector",)),
+        ({1: "scan"}, {"1": "scan"}),
+        ({"scan"}, ["scan"]),
+        (True, 1),
+    ]
+
+    for index, (left_metadata, right_metadata) in enumerate(distinct_metadata_pairs):
+        left = _line((0.0, 0.0), (10.0, 0.0), f"left-{index}", confidence=0.7)
+        right = _line((10.0, 0.0), (0.0, 0.0), f"right-{index}", confidence=0.9)
+        left.source_metadata = left_metadata
+        right.source_metadata = right_metadata
+
+        result = _deduplicate_exact_raw_lines([left, right])
+
+        assert len(result) == 2, (left_metadata, right_metadata)
+        assert left in result and right in result
+
+
+def test_exact_line_cleanup_rejects_nonfinite_confidence():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    for index, confidence in enumerate((float("nan"), float("inf"), float("-inf"))):
+        valid = _line((0.0, 0.0), (10.0, 0.0), f"valid-{index}", confidence=0.9)
+        invalid = _line((10.0, 0.0), (0.0, 0.0), f"invalid-{index}", confidence=confidence)
+
+        try:
+            _deduplicate_exact_raw_lines([valid, invalid])
+        except ValueError as error:
+            assert "confidence must be finite" in str(error)
+        else:
+            raise AssertionError(f"nonfinite confidence was accepted: {confidence}")
