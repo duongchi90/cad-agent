@@ -198,6 +198,8 @@ def _read_cluster_text(
         return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
 
     raw_texts, evidence = _read_multi_angle_ocr(text_crop, ocr_reader=ocr_reader)
+    if not raw_texts:
+        return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
     shifted_texts = [
         RawText(
             id=raw.id,

@@ -304,6 +304,70 @@ def test_multiple_text_rois_keep_cross_angle_ocr_conflict_unresolved(
     assert validate_visual_contract(register, contract="dimension_register") == register
 
 
+def test_unique_roi_with_no_ocr_tokens_falls_back_to_full_cluster_crop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = synthetic_horizontal_dimension()
+    full_area = image.shape[0] * image.shape[1]
+    seen_areas: list[int] = []
+
+    def reader(crop: np.ndarray) -> list[RawText]:
+        area = crop.shape[0] * crop.shape[1]
+        seen_areas.append(area)
+        if area < full_area:
+            return []
+        return [RawText(
+            id="rawtext-full-crop-4500",
+            content="4500",
+            bbox_px=(170, 5, 230, 35),
+            rotation_deg=0.0,
+            confidence=0.92,
+            source="text_tesseract",
+            parsed_value=4500.0,
+            semantic_role="dimension_value",
+        )]
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.dimension_observer.detect_text_candidate_rois",
+        lambda _: [],
+    )
+    baseline = observe_dimension_cluster(
+        image,
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=reader,
+    )
+    assert baseline.observation is not None
+    assert baseline.observation["value"] == 4500.0
+    seen_areas.clear()
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.dimension_observer.detect_text_candidate_rois",
+        lambda _: [(160, 5, 260, 35)],
+    )
+    disposition = observe_dimension_cluster(
+        image,
+        horizontal_dimension_cluster(),
+        page_id="PAGE-001",
+        view_id="SIDE",
+        source_sha256="1" * 64,
+        ocr_reader=reader,
+    )
+
+    assert seen_areas == [30 * 100] * 4 + [full_area] * 4
+    assert disposition.observation is not None
+    assert disposition.observation["value"] == 4500.0
+    assert disposition.observation["source_evidence"]["crop_sha256"] == baseline.observation[
+        "source_evidence"
+    ]["crop_sha256"]
+    assert disposition.observation["raw_text_candidates"] == ["4500"]
+    assert disposition.observation["source_evidence"]["bbox"] == [0.0, 0.0, 420.0, 140.0]
+    assert disposition.observation["role"] == "AMBIGUOUS"
+    assert disposition.observation["attachment_candidates"] == []
+
+
 def test_unrelated_text_roi_away_from_dimension_line_is_not_selected() -> None:
     geometry = DimensionGeometryEvidence(
         dimension_line=((20.0, 50.0), (180.0, 50.0)),
