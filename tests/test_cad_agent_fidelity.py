@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -1478,6 +1479,82 @@ def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
     assert output_dxf.is_file()
     assert (page_output / "report.json").is_file()
     assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point race regression")
+def test_native_pdf_text_reconstruction_pins_staging_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "staging-reparse-race.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "STAGING RACE", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    original_saveas = ezdxf.document.Drawing.saveas
+    staging_replacement_blocked: list[bool] = []
+
+    def replace_staging_with_junction(
+        drawing: ezdxf.document.Drawing, filename: str | Path, *args: object, **kwargs: object,
+    ) -> None:
+        target = Path(filename)
+        staging = target.parent
+        if target.name == "layout.dxf" and staging.name.startswith(".page_01.staging-"):
+            try:
+                staging.rmdir()
+            except OSError:
+                staging_replacement_blocked.append(True)
+            else:
+                result = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(staging), str(outside)],
+                    capture_output=True, text=True, check=False,
+                )
+                if result.returncode != 0:
+                    staging.mkdir()
+                    pytest.skip(f"mklink /J unavailable: {result.stderr.strip()}")
+        original_saveas(drawing, filename, *args, **kwargs)
+
+    monkeypatch.setattr(ezdxf.document.Drawing, "saveas", replace_staging_with_junction)
+    page_output = output / "text_reconstruction" / "page_01"
+    try:
+        output_dxf = run_fidelity_text_reconstruct(
+            source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+            workspace_root=Path.cwd(),
+        )
+        assert output_dxf.is_file()
+        assert not (outside / "layout.dxf").exists(), "DXF must not be written through a staging junction"
+        assert not (outside / "report.json").exists(), "report must not be written through a staging junction"
+        assert staging_replacement_blocked, "staging directory must not be replaceable during output writes"
+    finally:
+        if page_output.exists() and getattr(page_output.lstat(), "st_file_attributes", 0) & 0x400:
+            page_output.rmdir()
 
 
 def test_native_pdf_text_reconstruct_rejects_forged_mixed_overlap(

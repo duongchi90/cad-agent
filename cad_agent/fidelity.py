@@ -3242,26 +3242,29 @@ def run_fidelity_text_reconstruct(
                 if not _is_within(staging_root, output_root):
                     raise FidelityError("Text reconstruction staging escaped the private fidelity root.")
                 output = staging_root / "layout.dxf"
-                document.saveas(output)
-                report = {
-                    "state": "needs_review",
-                    "profile": "fidelity-layout-text",
-                    "text_approval_sha256": sha256_file(approval_path),
-                    "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None,
-                    "output_dxf_sha256": sha256_file(output),
-                    "emitted_text_entities": emitted,
-                    "text_sizing": sizing_records,
-                    "unresolved": [
-                        "text content was human-approved but placement/height/style remain reviewable",
-                        "no model export",
-                    ],
-                }
-                try:
-                    (staging_root / "report.json").write_text(
-                        json.dumps(report, indent=2) + "\n", encoding="utf-8",
-                    )
-                except OSError as exc:
-                    raise FidelityError("Text reconstruction report could not be published.") from exc
+                with pin_directory_chain(staging_root.absolute()):
+                    document.saveas(output)
+                    report = {
+                        "state": "needs_review",
+                        "profile": "fidelity-layout-text",
+                        "text_approval_sha256": sha256_file(approval_path),
+                        "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None,
+                        "output_dxf_sha256": sha256_file(output),
+                        "emitted_text_entities": emitted,
+                        "text_sizing": sizing_records,
+                        "unresolved": [
+                            "text content was human-approved but placement/height/style remain reviewable",
+                            "no model export",
+                        ],
+                    }
+                    try:
+                        (staging_root / "report.json").write_text(
+                            json.dumps(report, indent=2) + "\n", encoding="utf-8",
+                        )
+                    except OSError as exc:
+                        raise FidelityError("Text reconstruction report could not be published.") from exc
+                if not _is_within(staging_root, output_root):
+                    raise FidelityError("Text reconstruction staging escaped before publication.")
                 if root.exists():
                     raise FidelityError(f"Text reconstruction already exists: {root}")
                 os.rename(staging_root, root)
