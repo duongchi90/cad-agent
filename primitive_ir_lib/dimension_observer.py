@@ -157,6 +157,79 @@ def _read_multi_angle_ocr(
     return raw_texts, evidence
 
 
+def _roi_supports_dimension_line(roi: Bbox, geometry: DimensionGeometryEvidence) -> bool:
+    if geometry.dimension_line is None:
+        return False
+    x0, y0, x1, y1 = roi
+    first, second = geometry.dimension_line
+    dx = abs(second[0] - first[0])
+    dy = abs(second[1] - first[1])
+    if dx >= dy:
+        roi_length, cross_size = x1 - x0, y1 - y0
+        overlap = min(x1, max(first[0], second[0])) - max(x0, min(first[0], second[0]))
+        line_position = (first[1] + second[1]) / 2.0
+        gap = max(y0 - line_position, line_position - y1, 0.0)
+    else:
+        roi_length, cross_size = y1 - y0, x1 - x0
+        overlap = min(y1, max(first[1], second[1])) - max(y0, min(first[1], second[1]))
+        line_position = (first[0] + second[0]) / 2.0
+        gap = max(x0 - line_position, line_position - x1, 0.0)
+    return (
+        roi_length >= cross_size
+        and overlap >= roi_length * 0.5
+        and gap <= max(2.0, cross_size * 0.5)
+    )
+
+
+def _read_cluster_text(
+    crop: np.ndarray,
+    *,
+    ocr_reader: OcrReader,
+    geometry: DimensionGeometryEvidence,
+    confirmation_requested: bool = False,
+) -> tuple[list[RawText], list[dict[str, object]]]:
+    """Use aligned ROIs for observation; confirmation reads the full cluster."""
+    if confirmation_requested:
+        return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
+    rois = detect_text_candidate_rois(crop)
+    if len(rois) != 1 or not _roi_supports_dimension_line(rois[0], geometry):
+        return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
+
+    left, top, right, bottom = rois[0]
+    text_crop = crop[top:bottom, left:right]
+    if text_crop.size == 0:
+        return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
+
+    raw_texts, evidence = _read_multi_angle_ocr(text_crop, ocr_reader=ocr_reader)
+    if not raw_texts:
+        return _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
+    shifted_texts = [
+        RawText(
+            id=raw.id,
+            content=raw.content,
+            bbox_px=(
+                raw.bbox_px[0] + left,
+                raw.bbox_px[1] + top,
+                raw.bbox_px[2] + left,
+                raw.bbox_px[3] + top,
+            ),
+            rotation_deg=raw.rotation_deg,
+            confidence=raw.confidence,
+            source=raw.source,
+            parsed_value=raw.parsed_value,
+            semantic_role=raw.semantic_role,
+        )
+        for raw in raw_texts
+    ]
+    shifted_evidence = []
+    for item in evidence:
+        shifted = dict(item)
+        x0, y0, x1, y1 = shifted["bbox"]
+        shifted["bbox"] = [x0 + left, y0 + top, x1 + left, y1 + top]
+        shifted_evidence.append(shifted)
+    return shifted_texts, shifted_evidence
+
+
 def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
     """Return stable reading-order candidate clusters without running OCR."""
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim not in {2, 3}:
@@ -531,12 +604,17 @@ def observe_dimension_cluster(
     bbox = _clip_bbox(cluster.bbox_px, width=width, height=height)
     x0, y0, x1, y1 = bbox
     crop = image_bgr[y0:y1, x0:x1]
-    raw_texts, ocr_evidence = _read_multi_angle_ocr(crop, ocr_reader=ocr_reader)
+    geometry = detect_dimension_geometry(crop)
+    raw_texts, ocr_evidence = _read_cluster_text(
+        crop,
+        ocr_reader=ocr_reader,
+        geometry=geometry,
+        confirmation_requested=explicit_role is not None and bool(semantic_anchors),
+    )
     parsed, parsed_candidates, parse_reasons = _select_parsed_candidate(
         raw_texts,
         default_unit=default_unit,
     )
-    geometry = detect_dimension_geometry(crop)
     geometry, local_anchors = _context_geometry_and_local_anchors(
         image_bgr,
         bbox=bbox,
