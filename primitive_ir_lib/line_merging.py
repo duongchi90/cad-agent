@@ -116,6 +116,98 @@ def _angle_mod_pi(dx: float, dy: float) -> float:
     return a
 
 
+def _freeze_metadata(value, _active_ids=None):
+    """Return a type-preserving key for metadata supported by the deduplicator.
+
+    Unknown objects use identity keys: preserving an extra line is safer than
+    treating custom equality or repr output as proof of metadata equivalence.
+    """
+    value_type = type(value)
+    # Keep actual runtime type identity, not user-controlled module/name labels.
+    type_tag = id(value_type)
+    if _active_ids is None:
+        _active_ids = set()
+
+    is_container = isinstance(value, (dict, list, tuple, set, frozenset))
+    tolist = getattr(value, "tolist", None)
+    is_array_like = callable(tolist)
+    if value_type is float and not math.isfinite(value):
+        # Non-finite values do not establish reliable metadata equivalence.
+        return ("ambiguous", object())
+    if is_container or is_array_like:
+        value_id = id(value)
+        if value_id in _active_ids:
+            # Preserve the records rather than failing or treating cycles as equal.
+            return ("ambiguous", object())
+        _active_ids.add(value_id)
+        try:
+            if isinstance(value, dict):
+                entries = tuple(
+                    sorted(
+                        ((_freeze_metadata(key, _active_ids), _freeze_metadata(item, _active_ids))
+                         for key, item in value.items()),
+                        key=repr,
+                    )
+                )
+                return ("dict", type_tag, entries)
+            if isinstance(value, list):
+                return ("list", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, tuple):
+                return ("tuple", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, set):
+                return ("set", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, frozenset):
+                return ("frozenset", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            dtype = getattr(value, "dtype", None)
+            shape = getattr(value, "shape", None)
+            return (
+                "array-like",
+                type_tag,
+                str(dtype) if dtype is not None else None,
+                tuple(shape) if shape is not None else None,
+                _freeze_metadata(tolist(), _active_ids),
+            )
+        finally:
+            _active_ids.remove(value_id)
+    if value is None or value_type in (bool, int, str, bytes):
+        return ("scalar", type_tag, value)
+    if value_type is float:
+        return ("scalar", type_tag, value.hex())
+    return ("identity", type_tag, id(value))
+
+
+def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
+    """Remove only exact undirected geometry duplicates with matching metadata.
+
+    Coordinates are never quantized or tolerance-matched. IDs and confidence
+    are excluded from the identity key; the highest-confidence record wins,
+    with original input order breaking confidence ties. Other present fields
+    are preserved as identity so provenance or semantic differences survive.
+    """
+    unique = {}
+    excluded = {"id", "p1_px", "p2_px", "confidence"}
+    for line in lines:
+        try:
+            confidence = float(line.confidence)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("RawLine confidence must be finite") from None
+        if not math.isfinite(confidence):
+            raise ValueError("RawLine confidence must be finite")
+        p1 = tuple(line.p1_px)
+        p2 = tuple(line.p2_px)
+        geometry = (p1, p2) if p1 <= p2 else (p2, p1)
+        metadata = tuple(sorted(
+            (name, _freeze_metadata(value))
+            for name, value in vars(line).items()
+            if name not in excluded
+        ))
+        key = (geometry, metadata)
+        current = unique.get(key)
+        if current is None or confidence > current[1]:
+            unique[key] = (line, confidence)
+    return [line for line, _ in unique.values()]
+
+
 def _angle_diff_mod_pi(a: float, b: float) -> float:
     d = abs(a - b) % math.pi
     return min(d, math.pi - d)
@@ -595,4 +687,4 @@ def merge_collinear_lines(
                 bbox_px=bbox,
             ))
 
-    return result
+    return _deduplicate_exact_raw_lines(result)
