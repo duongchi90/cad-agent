@@ -969,6 +969,49 @@ def test_run_pdf_does_not_materialize_page_clipped_vector_circle(
     assert circle_count == 0, "page-clipped source geometry cannot become a complete CIRCLE"
 
 
+def test_run_pdf_manifest_and_render_use_the_same_source_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import primitive_ir_lib.run_pdf as run_pdf_module
+
+    pdf_path = tmp_path / "source.pdf"
+    output_dir = tmp_path / "out"
+    original_doc = fitz.open()
+    original_page = original_doc.new_page(width=120, height=80)
+    original_page.draw_rect(fitz.Rect(10, 10, 40, 40), color=None, fill=(1, 0, 0))
+    original_bytes = original_doc.tobytes()
+    original_doc.close()
+
+    replacement_doc = fitz.open()
+    replacement_page = replacement_doc.new_page(width=120, height=80)
+    replacement_page.draw_rect(fitz.Rect(70, 10, 100, 40), color=None, fill=(0, 0, 1))
+    replacement_bytes = replacement_doc.tobytes()
+    replacement_doc.close()
+    pdf_path.write_bytes(original_bytes)
+
+    original_open = fitz.open
+    expected_doc = original_open(stream=original_bytes, filetype="pdf")
+    expected_render = expected_doc[0].get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False).tobytes("png")
+    expected_doc.close()
+    substituted = False
+
+    def replace_source_before_open(*args: object, **kwargs: object) -> fitz.Document:
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            pdf_path.write_bytes(replacement_bytes)
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(run_pdf_module.fitz, "open", replace_source_before_open)
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72)
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    rendered = (output_dir / "rendered" / "page_01.png").read_bytes()
+    assert substituted
+    assert manifest["source_pdf_sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    assert rendered == expected_render, "render must come from the bytes identified by the manifest"
+
+
 def test_run_pdf_rejects_circle_erased_by_white_paint_on_gray_paper(tmp_path: Path) -> None:
     pdf_path = tmp_path / "gray-paper-circle-erasure.pdf"
     output_dir = tmp_path / "out"

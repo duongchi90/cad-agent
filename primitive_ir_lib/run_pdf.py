@@ -3573,6 +3573,9 @@ def run_pdf(
     if auto_calibrate and calibration_registry_path is not None and not calibration_id_prefix:
         raise ValueError("calibration_registry_path cần đi kèm calibration_id_prefix")
 
+    source_pdf_bytes = pdf_path.read_bytes()
+    source_pdf_sha256 = hashlib.sha256(source_pdf_bytes).hexdigest()
+
     render_dir = output_dir / "rendered"
     ir_dir = output_dir / "primitive_ir"
     manifest_path = output_dir / "manifest.json"
@@ -3582,7 +3585,7 @@ def run_pdf(
     manifest = {
         "status": "in_progress",
         "source_pdf": pdf_path.name,
-        "source_pdf_sha256": _sha256_file(pdf_path),
+        "source_pdf_sha256": source_pdf_sha256,
         "render_dpi": dpi,
         "scale_mm_per_px": scale_mm_per_px if scale_mm_per_px is not None else "auto",
         "pdf_vector_text_visibility": "not_assessed",
@@ -3601,7 +3604,7 @@ def run_pdf(
         render_dir.mkdir(parents=True, exist_ok=True)
         ir_dir.mkdir(parents=True, exist_ok=True)
         _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
-        document = fitz.open(str(pdf_path))
+        document = fitz.open(stream=source_pdf_bytes, filetype="pdf")
         for index, page in enumerate(document, start=1):
             current_page_index = index - 1
             require_all_vector_witnesses, vector_circle_witnesses, suspect_regions = (
