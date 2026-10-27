@@ -2,11 +2,12 @@
 
 Status: durable principles with actor-specific history.
 
-Fresh latest #305/#429 governs execution. #429 comment 5903652026 establishes
-SOLO_CODEX, SUBAGENTS_DISABLED=YES, MAX_ACTIVE_SUBAGENTS=0. The five scheduled
-Web SOLs remain independent radar/review only. Historical Luna/SOL actor names
-below explain prior delegation; they do not override this overlay. The accepted
-BVTL product run is #461, not an active historical control sequence.
+Current AGENTS.md and applicable #429 govern execution. The older
+SUBAGENTS_DISABLED/MAX_ACTIVE_SUBAGENTS=0 wording tied to #429 comment 5903652026
+is historical: current AGENTS.md and #429 comment 6188621435 permit one bounded
+Local PO consultation for a genuine hard decision, without parallel PO,
+descendants or mutation authority. The five scheduled Web SOLs remain independent
+radar/review only. The accepted BVTL run is #461, not an active control sequence.
 
 This document defines durable operating rules. It intentionally does **not** cache mutable branch heads, PR state, CI state, runtime PID/HWND, or the current numbered control sequence. Read GitHub fresh for those facts.
 
@@ -49,9 +50,10 @@ Human involvement must be minimized. Agents must exhaust safe GitHub/offline wor
 
 No agent may fabricate owner approval, measurements, source identity, provider consent, or live AutoCAD evidence.
 
-## 3. Luna Max Solo — primary execution owner
+## 3. Luna — primary execution owner
 
-Luna Max Solo is the primary local PO/executor for the active product frontier.
+GPT-6 Luna with Medium reasoning is the production executor. The delegated Local
+PO is GPT-6.1 Sol with High reasoning; Luna handles routine decisions directly.
 
 Luna may:
 
@@ -74,6 +76,44 @@ Luna must:
 - consolidate genuinely unavoidable Human actions instead of asking for repeated NETLOAD/restart/click confirmations.
 
 Luna is not required to stop after every PR and wait for manual PO relay. It continues to the furthest safe completed state allowed by current GitHub contracts.
+
+### Local PO model protection
+
+The secret-free standard is `docs/templates/PO_SOL.toml`, independent of mutable
+user settings. Keep executor defaults `gpt-6-luna` / `medium`; Local PO must use
+`gpt-6.1-sol` / `high`. Before each admitted PO call, run the on-demand guard:
+
+```powershell
+.\.venv-py311\Scripts\python.exe scripts/po_model_guard.py --repair
+```
+
+It resolves CODEX_HOME (environment or `~/.codex`), repairs only the authorized
+model defaults and `agents/po-sol.toml`, then reads effective configuration through
+the current official App Server. Higher-layer overrides or unsupported runtime
+observability fail closed for PO. It creates no agent, daemon, watcher or store.
+If runtime discovery is ambiguous, supply the verified current official executable
+with `--codex-exe`; never run an unknown downloaded executable to repair settings.
+
+Check the live agent inventory: no other active PO. Use the existing subagent
+call with explicit model `gpt-6.1-sol`, effort `high` and no inherited conversation
+fork when explicit overrides require it. Select the named PO definition when the
+client supports that selector; explicit call settings and runtime checks remain
+mandatory. Keep its scope bounded and read-only, without descendants or review
+substitution. Record the call's UTC start boundary and returned thread/turn IDs.
+After completion, rerun the guard with `--thread-id`, `--turn-id` and `--not-before`.
+It requires the exact fresh runtime model/effort, generated-token evidence and
+completion. A role name, prompt, settings read, thread metadata or AI self-report
+alone is insufficient. These are client runtime records, not backend weight
+attestation. Unsupported record/schema versions mean NOT_VERIFIED.
+
+Configuration VERIFIED is separate from PO runtime VERIFIED. Never consume a
+mismatched/unobservable PO result or claim that an old session changed model
+because configuration was repaired. Hold only the hard decision; continue lawful
+independent Luna work. Recheck on the next admitted call after restart/update;
+do not create a periodic check or a new consultation for routine work. No change
+to Human Gates, Security/Integration Web independence or exact-head requirements.
+Canonical persistence is NOT_VERIFIED until merge and a fresh repository-only
+session verifies this procedure; a local installation alone does not prove it.
 
 ## 4. SOL Web — governance, architecture, audit, security, evidence, lookahead
 
