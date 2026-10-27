@@ -33,7 +33,7 @@ from primitive_ir_lib.table_extraction import build_cells, detect_grid
 from primitive_ir_lib.view_calibration import detect_view_candidates
 from dxf_builder_lib.builder import _ensure_unicode_text_style
 
-from .file_integrity import FileIdentityError, pin_directory_chain
+from .file_integrity import FileIdentityError, assert_path_identity, open_bound_file, pin_directory_chain
 from .manifest import ManifestError, sha256_file, verify_source, write_manifest
 
 FIDELITY_MANIFEST_NAME = "fidelity-run-manifest.json"
@@ -264,11 +264,45 @@ def _remove_staging_reparse_alias(staging: Path) -> None:
         raise FileIdentityError("Substituted staging alias could not be safely unlinked.") from exc
 
 
+def _read_text_base_snapshot(path: Path) -> tuple[Any, str]:
+    """Parse and hash the same immutable bytes with the existing ezdxf readers."""
+    from io import BytesIO, TextIOWrapper
+
+    import ezdxf
+    from ezdxf.filemanagement import dxf_stream_info
+    from ezdxf.lldxf.tagger import binary_tags_loader
+
+    try:
+        descriptor, opened_stat = open_bound_file(
+            path, flags=os.O_RDONLY | getattr(os, "O_BINARY", 0), label="Base layout DXF",
+        )
+        with os.fdopen(descriptor, "rb") as stream:
+            data = stream.read()
+            after = os.fstat(stream.fileno())
+            assert_path_identity(path, opened_stat, label="Base layout DXF")
+            if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+                opened_stat.st_size, opened_stat.st_mtime_ns, opened_stat.st_ctime_ns,
+            ):
+                raise FileIdentityError("Base layout DXF changed during snapshot read.")
+    except (FileIdentityError, OSError) as exc:
+        raise FidelityError("Base layout DXF must remain a stable non-reparse file during snapshot read.") from exc
+    digest = hashlib.sha256(data).hexdigest()
+    if data.startswith(b"AutoCAD Binary DXF\r\n\x1a\x00"):
+        document = ezdxf.document.Drawing.load(binary_tags_loader(data, errors="surrogateescape"))
+    else:
+        with TextIOWrapper(BytesIO(data), encoding="utf-8", errors="ignore") as header_stream:
+            info = dxf_stream_info(header_stream)
+        with TextIOWrapper(BytesIO(data), encoding=info.encoding, errors="surrogateescape") as text_stream:
+            document = ezdxf.read(text_stream)
+    return document, digest
+
+
 def _published_text_reconstruction_matches(
     root: Path,
     manifest: dict[str, Any],
     approval_path: Path,
-    base_dxf: Path | None,
+    base_dxf_sha256: str | None,
+    base_text_count: int,
     expected_text_sizing: list[dict[str, Any]],
 ) -> bool:
     """Recognize only a complete prior publication for these exact inputs."""
@@ -290,7 +324,6 @@ def _published_text_reconstruction_matches(
             return False
         report = json.loads(report_path.read_text(encoding="utf-8"))
         expected_source = manifest.get("source", {}).get("sha256")
-        expected_base = sha256_file(base_dxf) if base_dxf is not None else None
         published_identity = report.get("staging_directory_identity") if isinstance(report, dict) else None
         if (
             not isinstance(report, dict)
@@ -302,7 +335,7 @@ def _published_text_reconstruction_matches(
             or any(type(value) is not int for value in published_identity)
             or tuple(published_identity) != (root_stat.st_dev, root_stat.st_ino)
             or report.get("text_approval_sha256") != sha256_file(approval_path)
-            or report.get("base_dxf_sha256") != expected_base
+            or report.get("base_dxf_sha256") != base_dxf_sha256
             or report.get("output_dxf_sha256") != sha256_file(output)
             or type(report.get("emitted_text_entities")) is not int
             or report.get("text_sizing") != expected_text_sizing
@@ -314,13 +347,6 @@ def _published_text_reconstruction_matches(
             document = ezdxf.readfile(output)
         except ezdxf.DXFError:
             return False
-        base_text_count = 0
-        if base_dxf is not None:
-            try:
-                base_document = ezdxf.readfile(base_dxf)
-            except ezdxf.DXFError:
-                return False
-            base_text_count = len(base_document.modelspace().query("TEXT"))
         return len(document.modelspace().query("TEXT")) == (
             base_text_count + report["emitted_text_entities"]
         )
@@ -3401,7 +3427,11 @@ def run_fidelity_text_reconstruct(
         raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
     import ezdxf
 
-    document = ezdxf.readfile(base_dxf) if base_dxf is not None else ezdxf.new("R2010")
+    if base_dxf is not None:
+        document, base_dxf_sha256 = _read_text_base_snapshot(base_dxf)
+    else:
+        document, base_dxf_sha256 = ezdxf.new("R2010"), None
+    base_text_count = len(document.modelspace().query("TEXT"))
     document.header["$INSUNITS"] = 4
     model = document.modelspace()
     scale = float(page["pixel_to_paper_mm"]["used"])
@@ -3465,7 +3495,7 @@ def run_fidelity_text_reconstruct(
                 raise FidelityError("Text reconstruction output escaped the private fidelity root.")
             if root.exists():
                 if _published_text_reconstruction_matches(
-                    root, manifest, approval_path, base_dxf, sizing_records,
+                    root, manifest, approval_path, base_dxf_sha256, base_text_count, sizing_records,
                 ):
                     return root / "layout.dxf"
                 raise FidelityError(f"Text reconstruction already exists: {root}")
@@ -3486,7 +3516,7 @@ def run_fidelity_text_reconstruct(
                         "source_sha256": manifest["source"]["sha256"],
                         "staging_directory_identity": list(staging_identity),
                         "text_approval_sha256": sha256_file(approval_path),
-                        "base_dxf_sha256": sha256_file(base_dxf) if base_dxf else None,
+                        "base_dxf_sha256": base_dxf_sha256,
                         "output_dxf_sha256": sha256_file(output),
                         "emitted_text_entities": emitted,
                         "text_sizing": sizing_records,
@@ -3509,7 +3539,7 @@ def run_fidelity_text_reconstruct(
                     _publish_staging_directory(staging_root, root, staging_identity)
                 except FileIdentityError as exc:
                     if _published_text_reconstruction_matches(
-                        root, manifest, approval_path, base_dxf, sizing_records,
+                        root, manifest, approval_path, base_dxf_sha256, base_text_count, sizing_records,
                     ):
                         try:
                             _remove_staging_reparse_alias(staging_root)
@@ -3527,7 +3557,7 @@ def run_fidelity_text_reconstruct(
                     _remove_staging_reparse_alias(staging_root)
                 except FileIdentityError as exc:
                     if _published_text_reconstruction_matches(
-                        root, manifest, approval_path, base_dxf, sizing_records,
+                        root, manifest, approval_path, base_dxf_sha256, base_text_count, sizing_records,
                     ):
                         raise FidelityError(
                             "Text reconstruction was published and verified, but staging cleanup failed; "
@@ -3611,7 +3641,7 @@ def write_fidelity_text_review_index(source: Path, output_root: Path, manifest: 
             f'<h3>Native PDF spans</h3><p>Checking a row confirms this exact span is visible and legible in the displayed source render. It remains a separate native span selection; it is not OCR approval and does not create DXF.</p>'
             f'<div class="scroll"><table><thead><tr><th>Per-span visibility review</th><th>ID</th><th>Exact PDF text</th><th>Bbox px</th><th>Source font</th><th>Source size</th></tr></thead><tbody>{"".join(native_rows)}</tbody></table></div></section>'
         )
-    source_json = json.dumps(manifest["source"], ensure_ascii=False)
+    source_json = json.dumps(manifest["source"], ensure_ascii=False).replace("<", "\\u003c")
     native_by_page_json = json.dumps(native_by_page, ensure_ascii=True).replace("<", "\\u003c")
     page_html = """<!doctype html><meta charset='utf-8'><title>Duyệt chữ PDF riêng tư</title><style>body{font:15px system-ui,sans-serif;margin:20px;background:#f4f6f8;color:#18212b}header,section{background:#fff;border:1px solid #d9e0e6;border-radius:10px;padding:16px;margin:14px 0}h1{margin:0 0 6px}h2{margin:0 0 12px;font-size:18px}h3{margin:20px 0 8px}small{font-weight:400;color:#5d6b78}button{padding:10px 14px;border:0;border-radius:7px;background:#075985;color:#fff;font-weight:600;margin-right:8px}p{line-height:1.45}.scroll{overflow-x:auto;margin-top:12px}table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid #e4e9ed;padding:8px;text-align:left;vertical-align:top}th{background:#f8fafc}code{font-size:12px}.source-frame{position:relative;width:100%;line-height:0}.source-frame img{display:block;width:100%;height:auto;border:1px solid #cad3dc}.source-frame svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.source-frame rect{fill:rgba(255,165,0,.15);stroke:#e65100;stroke-width:2;vector-effect:non-scaling-stroke}label{cursor:pointer}</style><header><h1>Duyệt ứng viên chữ - riêng tư</h1><p>OCR and native PDF spans use separate selection fields. A native checkbox records your per-span visibility review for the exact source render. The separate approval step is still required; selection alone never creates DXF.</p><button onclick='copyIds()'>Sao chép ID</button><button onclick='downloadSelection()'>Tải tệp lựa chọn</button><p id='result' aria-live='polite'></p></header>""" + "\n".join(cards) + f"""<script>const source={source_json};const nativeByPage={native_by_page_json};function selected(){{const byPage={{}};document.querySelectorAll('input[data-kind]:checked').forEach(x=>{{const entry=byPage[x.dataset.page]??={{page:Number(x.dataset.page),candidate_ids:[],native_span_ids:[],native_span_reviews:[]}};if(x.dataset.kind==='native_pdf_spans'){{entry.native_span_ids.push(x.value);entry.native_span_reviews.push({{span:nativeByPage[x.dataset.page][x.value],visible_and_legible:true}});}}else{{entry.candidate_ids.push(x.value);}}byPage[x.dataset.page]=entry;}});return Object.values(byPage);}}function copyIds(){{const items=selected();const text=items.map(x=>'Trang '+x.page+': OCR '+x.candidate_ids.join(', ')+'; native '+x.native_span_ids.join(', ')).join('\\n');navigator.clipboard.writeText(text);document.querySelector('#result').textContent=text?'Đã sao chép.':'Chưa chọn ứng viên nào.';}}function downloadSelection(){{const selections=selected();if(!selections.length){{document.querySelector('#result').textContent='Chưa chọn ứng viên nào.';return;}}const blob=new Blob([JSON.stringify({{schema_version:'fidelity-text-selection-1.0',source,selections}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='fidelity-text-selection.json';link.click();URL.revokeObjectURL(link.href);document.querySelector('#result').textContent='Đã tải tệp lựa chọn.';}}</script>"""
     review_root.mkdir(parents=True, exist_ok=True)

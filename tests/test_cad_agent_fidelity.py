@@ -1306,6 +1306,54 @@ def test_native_pdf_text_review_shows_source_bound_visibility_choices(tmp_path: 
     assert "VISIBLE NATIVE" in review_html
 
 
+@pytest.mark.parametrize("source_name", [
+    '</script><script id="injected">console.log("proof")</script>',
+    '</ScRiPt><img src=x onerror="console.log(1)">',
+    'Bản vẽ <1> & "quoted".pdf',
+])
+def test_native_pdf_text_review_keeps_manifest_source_name_inside_script_data(
+    tmp_path: Path, source_name: str,
+) -> None:
+    from html.parser import HTMLParser
+
+    class ReviewParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.tags: list[str] = []
+            self.script_data: list[str] = []
+            self.in_script = False
+
+        def handle_starttag(self, tag: str, attrs: list) -> None:
+            self.tags.append(tag)
+            self.in_script = tag == "script"
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "script":
+                self.in_script = False
+
+        def handle_data(self, data: str) -> None:
+            if self.in_script:
+                self.script_data.append(data)
+
+    source = tmp_path / "review-source.pdf"
+    output = tmp_path / "private-review"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    # A supplied manifest can retain the genuine PDF hash while changing its name.
+    manifest["source"]["name"] = source_name
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    review = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
+    parser = ReviewParser()
+    parser.feed(review.read_text(encoding="utf-8"))
+
+    assert parser.tags.count("script") == 1
+    assert "img" not in parser.tags[parser.tags.index("script") + 1:]
+    script = "".join(parser.script_data)
+    source_json = script.removeprefix("const source=").split(";const nativeByPage=", 1)[0]
+    assert json.loads(source_json) == manifest["source"]
+
+
 def test_native_pdf_text_selection_creates_typed_per_span_approval(tmp_path: Path) -> None:
     source = tmp_path / "native-selected.pdf"
     output = tmp_path / "private-staging"
@@ -1533,6 +1581,94 @@ def test_native_pdf_text_reconstruction_reuses_retry_with_base_text(tmp_path: Pa
     assert retry == first
     entities = list(ezdxf.readfile(retry).modelspace().query("TEXT"))
     assert sorted(entity.dxf.text for entity in entities) == ["BASE NOTE", "RETRY NOTE"]
+
+
+@pytest.mark.parametrize("dxf_format", ["asc", "bin"])
+@pytest.mark.parametrize("version", ["R2000", "R2010"])
+def test_text_base_snapshot_preserves_existing_dxf_encoding_and_bytes(
+    tmp_path: Path, dxf_format: str, version: str,
+) -> None:
+    import hashlib
+
+    base = tmp_path / "encoded-base.dxf"
+    drawing = ezdxf.new(version)
+    drawing.encoding = "cp1252"
+    drawing.modelspace().add_text("BASE Ø ± café", dxfattribs={"height": 2.5})
+    drawing.saveas(base, fmt=dxf_format)
+    expected = base.read_bytes()
+
+    snapshot, digest = fidelity_module._read_text_base_snapshot(base)
+
+    assert digest == hashlib.sha256(expected).hexdigest()
+    assert [e.dxf.text for e in snapshot.modelspace().query("TEXT")] == ["BASE Ø ± café"]
+    assert snapshot.dxfversion == drawing.dxfversion
+    assert base.read_bytes() == expected
+
+
+@pytest.mark.parametrize("dxf_format", ["asc", "bin"])
+def test_native_pdf_text_reconstruction_binds_base_read_and_retry_to_same_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dxf_format: str,
+) -> None:
+    import hashlib
+
+    source = tmp_path / "snapshot-retry.pdf"
+    output = tmp_path / "private-snapshot-retry"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "RETRY NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    spans = json.loads(observation.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection = output / "selection.json"
+    selection.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0", "source": manifest["source"],
+        "selections": [{"page": 1, "candidate_ids": [], "native_span_ids": [s["id"] for s in spans],
+                        "native_span_reviews": [{"span": s, "visible_and_legible": True} for s in spans]}],
+    }), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval = output / "fidelity_text_approvals/page_01.json"
+    base = output / "base.dxf"
+    replacement = output / "replacement.dxf"
+    for path, content in [(base, "BASE A"), (replacement, "BASE B")]:
+        drawing = ezdxf.new("R2010")
+        drawing.modelspace().add_text(content, dxfattribs={"height": 2.5})
+        drawing.saveas(path, fmt=dxf_format)
+    original_sha = hashlib.sha256(base.read_bytes()).hexdigest()
+    replacement_bytes = replacement.read_bytes()
+    original_read = ezdxf.readfile
+    original_load = ezdxf.document.Drawing.load
+    swapped = False
+
+    def read_then_replace(cls, *args, **kwargs):
+        nonlocal swapped
+        drawing = original_load(*args, **kwargs)
+        if not swapped and [e.dxf.text for e in drawing.modelspace().query("TEXT")] == ["BASE A"]:
+            base.write_bytes(replacement_bytes)
+            swapped = True
+        return drawing
+
+    monkeypatch.setattr(ezdxf.document.Drawing, "load", classmethod(read_then_replace))
+    first = run_fidelity_text_reconstruct(
+        source, output, manifest, approval, base_dxf=base, workspace_root=Path.cwd(),
+    )
+    assert swapped
+    assert sorted(e.dxf.text for e in original_read(first).modelspace().query("TEXT")) == ["BASE A", "RETRY NOTE"]
+    report = json.loads(first.with_name("report.json").read_text(encoding="utf-8"))
+    refused = False
+    try:
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval, base_dxf=base, workspace_root=Path.cwd(),
+        )
+    except FidelityError as error:
+        assert "already exists" in str(error)
+        refused = True
+    assert report["base_dxf_sha256"] == original_sha and refused, (
+        "BASE A output must bind BASE A bytes, and must not be reused as BASE B merely because TEXT counts match"
+    )
 
 
 def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
