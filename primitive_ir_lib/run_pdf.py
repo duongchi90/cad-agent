@@ -1930,6 +1930,42 @@ def _page_circle_witnesses(
             continue
 
         cx, cy, radius = circle
+        # A fitted path can be geometrically closed while lying partly or
+        # wholly outside the page's visible render frame. Such a path has no
+        # complete rendered perimeter to support a source witness.
+        try:
+            stroke_width = float(drawing.get("width") or 0.0)
+            if not math.isfinite(stroke_width) or stroke_width < 0.0:
+                raise ValueError("invalid circle stroke width")
+            margin = stroke_width / 2.0
+            circle_bounds = fitz.Rect(
+                cx - radius - margin,
+                cy - radius - margin,
+                cx + radius + margin,
+                cy + radius + margin,
+            ) * page_transform
+            render_bounds = page.rect
+            fully_in_render_frame = (
+                all(
+                    math.isfinite(value)
+                    for value in (
+                        circle_bounds.x0,
+                        circle_bounds.y0,
+                        circle_bounds.x1,
+                        circle_bounds.y1,
+                    )
+                )
+                and circle_bounds.x0 >= render_bounds.x0 - 1e-4
+                and circle_bounds.y0 >= render_bounds.y0 - 1e-4
+                and circle_bounds.x1 <= render_bounds.x1 + 1e-4
+                and circle_bounds.y1 <= render_bounds.y1 + 1e-4
+            )
+        except (TypeError, ValueError, OverflowError):
+            fully_in_render_frame = False
+        if not fully_in_render_frame:
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
+            continue
+
         witness_level = int(drawing.get("level") or 0)
         prior_clip_context = any(
             int(prior.get("level") or 0) < witness_level

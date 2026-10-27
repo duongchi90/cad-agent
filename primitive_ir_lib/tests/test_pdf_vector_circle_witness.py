@@ -135,6 +135,31 @@ def test_later_crossing_line_invalidates_full_circle_witness() -> None:
     assert suspect_regions
 
 
+@pytest.mark.parametrize(
+    "center,rotation",
+    [
+        (fitz.Point(1000, 1000), 0),
+        (fitz.Point(5, 200), 0),
+        (fitz.Point(1000, 1000), 90),
+        (fitz.Point(5, 200), 90),
+    ],
+    ids=["outside-page", "partially-clipped", "rotated-outside-page", "rotated-partially-clipped"],
+)
+def test_off_page_or_partially_clipped_circle_is_not_a_validated_witness(
+    center: fitz.Point, rotation: int
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=600, height=400)
+    page.set_rotation(rotation)
+    page.draw_circle(center, 100, color=(0.05, 0.05, 0.05), width=1.5)
+
+    _, witnesses, suspect_regions = _page_circle_witnesses(page, 1.0)
+    document.close()
+
+    assert witnesses == []
+    assert suspect_regions
+
+
 def test_later_remote_stroke_only_quad_frame_preserves_full_circle_witness() -> None:
     document = fitz.open()
     page = document.new_page(width=600, height=600)
@@ -920,6 +945,28 @@ def test_run_pdf_rejects_white_on_white_circle_witness(tmp_path: Path) -> None:
         "white-on-white vector geometry cannot witness a visible circle"
     )
     assert visible_circle_count >= 1, "a visible source circle must remain recognized"
+
+
+@pytest.mark.parametrize(
+    "center",
+    [fitz.Point(1000, 1000), fitz.Point(5, 200)],
+    ids=["outside-page", "partially-clipped"],
+)
+def test_run_pdf_does_not_materialize_page_clipped_vector_circle(
+    tmp_path: Path, center: fitz.Point
+) -> None:
+    pdf_path = tmp_path / "page-clipped-circle.pdf"
+    output_dir = tmp_path / "out"
+    document = fitz.open()
+    page = document.new_page(width=600, height=400)
+    page.draw_circle(center, 100, color=(0.05, 0.05, 0.05), width=1.5)
+    document.save(pdf_path)
+    document.close()
+
+    run_pdf(pdf_path, output_dir, scale_mm_per_px=1.0, dpi=72, preset="real_scan_tuned_v1")
+
+    circle_count = _circle_primitive_count(output_dir / "primitive_ir" / "page_01.json")
+    assert circle_count == 0, "page-clipped source geometry cannot become a complete CIRCLE"
 
 
 def test_run_pdf_rejects_circle_erased_by_white_paint_on_gray_paper(tmp_path: Path) -> None:
