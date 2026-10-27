@@ -269,8 +269,6 @@ def _read_text_base_snapshot(path: Path) -> tuple[Any, str]:
     from io import BytesIO, TextIOWrapper
 
     import ezdxf
-    from ezdxf.filemanagement import dxf_stream_info
-    from ezdxf.lldxf.tagger import binary_tags_loader
 
     try:
         descriptor, opened_stat = open_bound_file(
@@ -288,10 +286,10 @@ def _read_text_base_snapshot(path: Path) -> tuple[Any, str]:
         raise FidelityError("Base layout DXF must remain a stable non-reparse file during snapshot read.") from exc
     digest = hashlib.sha256(data).hexdigest()
     if data.startswith(b"AutoCAD Binary DXF\r\n\x1a\x00"):
-        document = ezdxf.document.Drawing.load(binary_tags_loader(data, errors="surrogateescape"))
+        document = ezdxf.document.Drawing.load(ezdxf.lldxf.tagger.binary_tags_loader(data, errors="surrogateescape"))
     else:
         with TextIOWrapper(BytesIO(data), encoding="utf-8", errors="ignore") as header_stream:
-            info = dxf_stream_info(header_stream)
+            info = ezdxf.filemanagement.dxf_stream_info(header_stream)
         with TextIOWrapper(BytesIO(data), encoding=info.encoding, errors="surrogateescape") as text_stream:
             document = ezdxf.read(text_stream)
     return document, digest
