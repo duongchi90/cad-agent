@@ -93,6 +93,12 @@ the current official App Server. Higher-layer overrides or unsupported runtime
 observability fail closed for PO. It creates no agent, daemon, watcher or store.
 If runtime discovery is ambiguous, supply the verified current official executable
 with `--codex-exe`; never run an unknown downloaded executable to repair settings.
+Existing reparse paths are refused even when no repair is needed. A repair pins
+the existing directory owner and holds one exclusive, nontruncating Windows file
+handle through comparison, write, flush, readback and any rollback. A competing
+writer or racing creation makes that PO boundary fail closed. This is an in-place
+repair, not crash-atomic or cross-file-atomic recovery: interruption or failed
+rollback may leave incomplete settings and must remain NOT_VERIFIED.
 
 Check the live agent inventory: no other active PO. Use the existing subagent
 call with explicit model `gpt-6.1-sol`, effort `high` and no inherited conversation
@@ -102,7 +108,9 @@ mandatory. Keep its scope bounded and read-only, without descendants or review
 substitution. Record the call's UTC start boundary and returned thread/turn IDs.
 After completion, rerun the guard with `--thread-id`, `--turn-id` and `--not-before`.
 It requires the exact fresh runtime model/effort, generated-token evidence and
-completion. A role name, prompt, settings read, thread metadata or AI self-report
+completion. Token counts must be non-bool integers, with positive output during
+the active unfinished turn; other-turn or post-completion usage is not evidence.
+A role name, prompt, settings read, thread metadata or AI self-report
 alone is insufficient. These are client runtime records, not backend weight
 attestation. Unsupported record/schema versions mean NOT_VERIFIED.
 

@@ -14,11 +14,17 @@ import shutil
 import sqlite3
 import stat
 import subprocess
-import tempfile
+import sys
 import threading
 import time
 import tomllib
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from cad_agent.file_integrity import FileIdentityError, is_single_link_regular_non_reparse, pin_directory_chain
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "docs/templates/PO_SOL.toml"
 EXPECTED = {"model": "gpt-6-luna", "model_reasoning_effort": "medium"}
@@ -55,33 +61,94 @@ def _setting(text: str, section: str | None, key: str, value: str) -> str:
     return text[:start] + part + text[end:]
 
 
-def _write(path: Path, data: bytes, before: bytes | None) -> None:
-    # Never follow a config/agent junction or symlink into an unrelated target.
+def _check_path(path: Path) -> None:
     for item in (path, *path.parents):
-        if item.exists() and (item.is_symlink() or getattr(item.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
-            raise GuardError("reparse/symlink configuration path; repair refused")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
+        try:
+            info = item.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise GuardError("reparse/symlink configuration path; observation or repair refused")
+
+
+def _read_config(path: Path) -> bytes | None:
+    _check_path(path)
     try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.po-", delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        current = path.read_bytes() if path.exists() else None
-        if current != before:
-            raise GuardError("configuration changed during repair; retry at next PO boundary")
-        os.replace(temporary, path)
-        if path.read_bytes() != data:
-            raise GuardError("configuration readback failed")
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    _check_path(path)
+    return data
+
+
+def _store(descriptor: int, data: bytes) -> None:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    remaining = memoryview(data)
+    while remaining:
+        count = os.write(descriptor, remaining)
+        if count <= 0:
+            raise GuardError("configuration write made no progress")
+        remaining = remaining[count:]
+    os.ftruncate(descriptor, len(data))
+    os.fsync(descriptor)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if os.read(descriptor, len(data) + 1) != data:
+        raise GuardError("configuration readback failed")
+
+
+def _write(path: Path, data: bytes, before: bytes | None) -> None:
+    # Windows sharing exclusion covers non-cooperating settings writers too.
+    if os.name != "nt":
+        raise GuardError("configuration repair requires the supported Windows environment")
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    _check_path(path)
+    try:
+        with pin_directory_chain(path.absolute().parent):
+            expected_stat = path.lstat() if before is not None else None
+            handle = kernel.CreateFileW(str(path.absolute()), 0xC0000000, 0, None,
+                                       3 if before is not None else 1, 0x00200000, None)
+            if handle in (None, ctypes.c_void_p(-1).value):
+                raise GuardError("exclusive configuration custody unavailable; file preserved")
+            try:
+                descriptor = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+            except Exception:
+                kernel.CloseHandle(handle)
+                raise
+            try:
+                opened_stat = os.fstat(descriptor)
+                if not is_single_link_regular_non_reparse(opened_stat) or (
+                    expected_stat is not None and not os.path.samestat(expected_stat, opened_stat)
+                ):
+                    raise GuardError("configuration file identity changed; repair refused")
+                original = os.read(descriptor, opened_stat.st_size + 1)
+                if original != (before or b""):
+                    raise GuardError("configuration changed during repair; file preserved")
+                try:
+                    _store(descriptor, data)
+                except Exception as error:
+                    try:
+                        _store(descriptor, original)
+                    except Exception as rollback_error:
+                        raise GuardError("configuration rollback NOT_VERIFIED; PO only remains pending") from rollback_error
+                    raise GuardError("configuration write failed; original bytes restored") from error
+            finally:
+                os.close(descriptor)
+    except (OSError, FileIdentityError) as error:
+        raise GuardError("configuration custody unavailable; PO only remains pending") from error
 
 
 def ensure_configuration(home: Path, *, repair: bool, read_effective) -> dict:
     path = home / "config.toml"
-    before = path.read_bytes() if path.exists() else None
+    before = _read_config(path)
     current = _parse(before or b"")
     if not isinstance(current.get("agents", {}), dict):
         raise GuardError("invalid agents table; configuration preserved")
@@ -107,7 +174,7 @@ def ensure_configuration(home: Path, *, repair: bool, read_effective) -> dict:
     standard = _parse(baseline)
     if (standard.get("model"), standard.get("model_reasoning_effort")) != (PO_MODEL, PO_EFFORT):
         raise GuardError("PO template identity mismatch")
-    prior_role = role.read_bytes() if role.exists() else None
+    prior_role = _read_config(role)
     if prior_role != baseline:
         if not repair:
             raise GuardError("PO definition missing or changed; run with --repair")
@@ -116,6 +183,8 @@ def ensure_configuration(home: Path, *, repair: bool, read_effective) -> dict:
     effective = read_effective(home)
     if any(effective.get(k) != v for k, v in EXPECTED.items()) or any(effective.get("agents", {}).get(k) != v for k, v in AGENTS.items()):
         raise GuardError("effective override mismatch; PO only remains pending")
+    if _parse(_read_config(path) or b"") != expected or _read_config(role) != baseline:
+        raise GuardError("configuration changed during effective read; PO only remains pending")
     return {"configuration": "VERIFIED", "repaired": repaired, "executor_defaults": EXPECTED,
             "po_model": PO_MODEL, "po_effort": PO_EFFORT, "runtime": "NOT_VERIFIED"}
 
@@ -198,7 +267,14 @@ def verify_turn(events: list[dict], turn_id: str, not_before: str) -> dict:
             executed = completed = False
         elif context and event.get("type") == "event_msg":
             if payload.get("type") == "token_count":
-                executed |= payload.get("info", {}).get("last_token_usage", {}).get("output_tokens", 0) > 0
+                if completed or payload.get("turn_id", turn_id) != turn_id:
+                    raise GuardError("output usage is not bound to the active unfinished turn")
+                info = payload.get("info")
+                usage = info.get("last_token_usage") if isinstance(info, dict) else None
+                tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
+                if type(tokens) is not int or tokens < 0:
+                    raise GuardError("runtime output tokens must be a non-bool nonnegative integer")
+                executed |= tokens > 0
             if payload.get("type") == "task_complete" and payload.get("turn_id") == turn_id:
                 completed = True
     if not context or _timestamp(context["timestamp"]) < _timestamp(not_before) or not executed or not completed:

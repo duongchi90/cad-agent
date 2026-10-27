@@ -1,6 +1,6 @@
 # PO model protection implementation plan
 
-Status: executing
+Status: executing (independent-review repairs; canonical adoption pending)
 Base SHA: 4993a522e9739892e2653eed253d237b08c99a50
 Completion Head SHA: not yet established
 Approval: explicit Human directive, 2026-10-27, permanent PO model configuration protection.
@@ -21,6 +21,13 @@ introduce a transport, daemon, database, or production dependency.
   production PR heads unchanged.
 - [ ] Run focused tests, real isolated configuration/update simulations, one
   new bounded read-only PO call and canonical verification. Publish exact evidence.
+
+Review repair: reject malformed/borrowed token evidence and already-correct
+reparse paths. Replace compare-then-replace with same-handle exclusive Windows
+custody and rollback, reusing file_integrity directory pinning. The bounded
+Sol/high write-seam decision requires competing-process, writable-mapping,
+racing-creation and partial-write controls. In-place repair remains non-atomic
+under process interruption; no claim of automatic crash recovery is admitted.
 
 Acceptance: configuration and runtime evidence are separate. A configured model,
 role name, old session or AI self-report is insufficient. Failure holds only the
