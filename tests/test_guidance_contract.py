@@ -30,30 +30,48 @@ class GuidanceContractTests(unittest.TestCase):
 
     def test_every_cad_edit_uses_engineering_first_and_measured_acceptance(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn("For every CAD draw/edit task", agents)
-        self.assertIn("dimension text or visual appearance alone is not proof", agents)
-        self.assertIn("keep simple-task checks proportionate", agents)
+        self.assertIn("Apply engineering-first reasoning to every CAD operation", agents)
+        self.assertIn("measure geometry rather than labels or appearance", agents)
+        self.assertIn("proportionate to scope", agents)
         self.assertIn("docs/AI_OPERATING_MODEL.md", agents)
 
         model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8").lower()
         for term in (
-            "source dimensions, angles, units, scale, views, symbols",
-            "datums and geometric relationships",
-            "intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies",
+            "revision:** reuse a trustworthy native base",
+            "source-supported bounded delta",
+            "reconstruction:** understand the full drawing",
+            "native_edit:** reuse correct native geometry and verify only the edited scope",
+            "driving",
+            "reference",
+            "redundant",
+            "conflicting",
+            "unresolved",
+            "associate each with the feature or relationship it measures",
+            "ocr text is evidence to classify, not an automatic constraint",
+            "mark missing or conflicting information instead of silently guessing",
+            "datums, centerlines, intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies",
             "construction order",
             "do not follow image stroke order",
-            "reuse verified native cad",
-            "derive geometry only from source evidence and constraints",
+            "derive only geometry determined by dimensions, relationships, and constraints",
+            "use pixel evidence only for geometry the source does not determine",
             "never invent missing geometry",
-            "measure actual cad lengths, angles, radii/diameters, positions, alignment, and applicable constraints",
-            "compare measurements with source and tolerances",
-            "diagnose the cause, repair, and verify again",
+            "dimension_observer",
+            "constraint_solving",
+            "dimension_pilot",
+            "dxf_builder",
+            "native cad owners",
+            "create native cad dimensions only when required",
+            "derive their measured values from constructed geometry",
+            "never use text overrides to mask a mismatch",
+            "measure actual cad lengths, angles, radii/diameters, positions, alignment, center distances, chain/overall dimensions, and applicable constraints within the affected scope",
+            "compare them with source values and tolerances",
+            "dimension text or visual appearance alone is not proof",
+            "identify the first causal boundary",
+            "re-measure affected geometry and relationships",
             "native readback and save/reopen when applicable",
-            "dimension text or an image that looks right is not geometric proof",
-            "use engineering conventions/practice and specialized software only when needed",
             "reuse validated knowledge",
-            "keep checks proportionate for simple tasks",
-            "do not claim `verified` until critical dimensions, angles, and relationships are checked and applicable acceptance gates pass",
+            "keep simple-task checks proportionate",
+            "do not claim `verified` until critical checks within the applicable scope and acceptance gates pass",
         ):
             with self.subTest(term=term):
                 self.assertIn(term, model)

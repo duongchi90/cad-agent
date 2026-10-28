@@ -173,16 +173,22 @@ primitive_ir_lib
 
 ### CAD drawing and editing workflow
 
-For every operation that draws or changes CAD geometry, understand the source before construction:
+Apply engineering-first reasoning to every CAD operation, with checks limited to the work’s scope:
 
-1. Read source dimensions, angles, units, scale, views, symbols, engineering intent, and the human creation/inspection workflow.
-2. Identify datums and geometric relationships, including intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies.
-3. Establish construction order: distinguish explicit source geometry from derived geometry; do not follow image stroke order as an engineering sequence.
-4. Reuse verified native CAD when it is correct. Otherwise derive geometry only from source evidence and constraints; never invent missing geometry.
-5. Measure actual CAD lengths, angles, radii/diameters, positions, alignment, and applicable constraints. Dimension text or an image that looks right is not geometric proof.
-6. Compare measurements with source and tolerances; diagnose the cause, repair, and verify again. Use native readback and save/reopen when applicable.
-7. Use engineering conventions/practice and specialized software only when needed. Reuse validated knowledge; keep checks proportionate for simple tasks.
-8. Do not claim `VERIFIED` until critical dimensions, angles, and relationships are checked and applicable acceptance gates pass.
+- **REVISION:** Reuse a trustworthy native base and make only the source-supported bounded delta. Measure the changed geometry and relationships affected by that delta.
+- **RECONSTRUCTION:** Understand the full drawing, dimensions, datums, relationships, dependencies, and construction order before building. Account for all views and dimensions needed to explain the drawing.
+- **NATIVE_EDIT:** Reuse correct native geometry and verify only the edited scope and its affected dependencies; do not re-audit unaffected geometry unless an acceptance contract requires it.
+
+For reconstruction, and for any revision or native edit whose scope requires it:
+
+1. Identify drawing type, view layout, units, scale, applicable drafting standards, symbols, and engineering intent. Use domain practice or specialized software when needed; reuse validated knowledge instead of repeating settled research.
+2. Read relevant source dimensions, including lengths, angles, diameters, radii, and tolerances; associate each with the feature or relationship it measures. Classify each as `DRIVING`, `REFERENCE`, `REDUNDANT`, `CONFLICTING`, or `UNRESOLVED`. OCR text is evidence to classify, not an automatic constraint. Mark missing or conflicting information instead of silently guessing.
+3. Identify datums, centerlines, intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies between features.
+4. Plan construction order: separate explicit source geometry from derived geometry and resolve constrained geometry before underdetermined details. Do not follow image stroke order as an engineering sequence.
+5. Reuse verified native CAD when correct. Otherwise derive only geometry determined by dimensions, relationships, and constraints; use pixel evidence only for geometry the source does not determine. Never invent missing geometry.
+6. Reuse existing `dimension_observer`, `constraint_solving`, `dimension_pilot`, `dxf_builder`, and native CAD owners when applicable. Create native CAD dimensions only when required by the drawing or requested output; derive their measured values from constructed geometry, never use text overrides to mask a mismatch.
+7. Measure actual CAD lengths, angles, radii/diameters, positions, alignment, center distances, chain/overall dimensions, and applicable constraints within the affected scope. Compare them with source values and tolerances; dimension text or visual appearance alone is not proof. Use native readback and save/reopen when applicable.
+8. When verification finds an error, identify the first causal boundary, repair the smallest responsible owner, and re-measure affected geometry and relationships. Do not claim `VERIFIED` until critical checks within the applicable scope and acceptance gates pass. Keep simple-task checks proportionate.
 
 ## 8. Visual Supervisor / R5 authority
 
