@@ -28,6 +28,10 @@ from primitive_ir_lib.line_merging import merge_collinear_lines
 from primitive_ir_lib.line_merging import _source_dash_gap_intervals
 from primitive_ir_lib.run_image import run as run_image
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
+from primitive_ir_lib.assemble import build_document
+from primitive_ir_lib.calibration import Calibration
+from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.reviewer import review_dxf
 
 
 def _line(p1, p2, id_, confidence=0.9):
@@ -79,6 +83,102 @@ def test_internal_witness_barrier_survives_overlapping_hough_segments():
     assert len(segments) == 2, segments
     assert segments[0][1] == segments[1][0]
     assert abs(segments[0][1] - 200) <= 3
+
+
+def test_singleton_barrier_clips_keep_geometry_unique_ids_and_dxf_inventory(
+    monkeypatch, tmp_path,
+):
+    """A nearby split witness must clip a lone overlapping interval exactly once."""
+    barrier_left = _line((150, 80), (200, 100), "barrier-left")
+    barrier_right = _line((200, 100), (250, 120), "barrier-right")
+    long_line = _line((100, 100), (300, 100), "long-horizontal")
+    separate_collinear_line = _line((450, 100), (500, 100), "separate-horizontal")
+
+    def split_only_the_oblique_witness(line, image):
+        if line.id == long_line.id:
+            return [line]
+        if line.id == "oblique-barrier":
+            return [barrier_left, barrier_right]
+        return [line]
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.line_merging.split_raw_line_at_internal_witness_lines",
+        split_only_the_oblique_witness,
+    )
+    image = np.full((220, 520, 3), 255, dtype=np.uint8)
+    oblique = _line((150, 80), (250, 120), "oblique-barrier")
+
+    merged = merge_collinear_lines(
+        [oblique, long_line, separate_collinear_line],
+        blocking_texts=[],
+        image_bgr=image,
+        use_tick_mark_detection=False,
+    )
+
+    horizontal = sorted(
+        (tuple(line.p1_px), tuple(line.p2_px), line.id)
+        for line in merged
+        if abs(line.p1_px[1] - line.p2_px[1]) < 1e-9
+        and abs(line.p1_px[1] - 100) < 1e-9
+        and min(line.p1_px[0], line.p2_px[0]) >= 100
+        and max(line.p1_px[0], line.p2_px[0]) <= 300
+    )
+    assert [(a, b) for a, b, _ in horizontal] == [
+        ((100.0, 100.0), (200.0, 100.0)),
+        ((200.0, 100.0), (300.0, 100.0)),
+    ]
+    assert len({identity for _, _, identity in horizontal}) == len(horizontal)
+
+    document = build_document(
+        file_name="barrier-fixture.png",
+        page_index=0,
+        image_width_px=520,
+        image_height_px=220,
+        calibration=Calibration(
+            unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0),
+            method="manual_override",
+        ),
+        raw_lines=merged,
+        raw_circles=[],
+        raw_texts=[],
+    )
+    built = build_dxf(document, str(tmp_path / "barrier-candidate.dxf"))
+    review = review_dxf(built, strict_primitive_inventory=True)
+    assert review.passed, review.mismatches
+
+
+def test_off_axis_singleton_clip_preserves_source_line_geometry():
+    """Clipping an offset singleton must not snap it to the cluster axis."""
+    image = np.full((240, 560, 3), 255, dtype=np.uint8)
+    cv2.line(image, (100, 95), (300, 115), (0, 0, 0), 1)
+    cv2.line(image, (200, 80), (200, 135), (0, 0, 0), 1)
+    cv2.line(image, (198, 105), (250, 105), (0, 0, 0), 1)
+
+    reference = _line((400, 100), (500, 100), "reference")
+    target = _line((198, 105), (250, 105), "target")
+    barrier_source = _line((100, 95), (300, 115), "barrier-source")
+
+    merged = merge_collinear_lines(
+        [reference, target, barrier_source],
+        blocking_texts=[],
+        image_bgr=image,
+        use_tick_mark_detection=False,
+    )
+
+    clipped = [line for line in merged if line.id.startswith("rawline-clipped-")]
+    assert len(clipped) == 2
+    segments = sorted(
+        (min(line.p1_px[0], line.p2_px[0]), max(line.p1_px[0], line.p2_px[0]))
+        for line in clipped
+    )
+    assert abs(segments[0][0] - 198.0) < 1e-6
+    assert abs(segments[0][1] - segments[1][0]) < 1e-6
+    assert abs(segments[1][1] - 250.0) < 1e-6
+    assert all(
+        abs(line.p1_px[1] - 105.0) < 1e-6
+        and abs(line.p2_px[1] - 105.0) < 1e-6
+        for line in clipped
+    ), [(line.p1_px, line.p2_px) for line in clipped]
 
 
 def test_does_not_merge_across_dimension_chain_boundary():
@@ -504,3 +604,99 @@ def test_irregular_gaps_are_not_misclassified_as_regular_dash_cadence():
         cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
 
     assert _source_dash_gap_intervals(image, 60, 0, np.pi / 2, 10, 124) == []
+
+
+
+def test_exact_line_cleanup_keeps_only_identical_geometry_with_matching_metadata():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    exact = _line((0.0, 0.0), (10.0, 0.0), "lower-confidence", confidence=0.7)
+    reversed_exact = _line((10.0, 0.0), (0.0, 0.0), "higher-confidence", confidence=0.9)
+    near_parallel = _line((0.0, 0.02), (10.0, 0.02), "near-parallel", confidence=0.8)
+    corner = _line((10.0, 0.0), (10.0, 10.0), "corner", confidence=0.8)
+    different_semantics = _line((0.0, 0.0), (10.0, 0.0), "semantic-variant", confidence=0.95)
+    different_semantics.source = "pdf_vector"
+    different_semantics.layer = "CENTERLINE"
+
+    result = _deduplicate_exact_raw_lines(
+        [exact, reversed_exact, near_parallel, corner, different_semantics]
+    )
+
+    assert len(result) == 4
+    assert {line.id for line in result} == {
+        "higher-confidence", "near-parallel", "corner", "semantic-variant"
+    }
+    assert different_semantics in result
+
+
+def test_exact_line_cleanup_preserves_distinct_typed_metadata():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    distinct_metadata_pairs = [
+        (["pdf_vector"], ("pdf_vector",)),
+        ({1: "scan"}, {"1": "scan"}),
+        ({"scan"}, ["scan"]),
+        (True, 1),
+    ]
+
+    for index, (left_metadata, right_metadata) in enumerate(distinct_metadata_pairs):
+        left = _line((0.0, 0.0), (10.0, 0.0), f"left-{index}", confidence=0.7)
+        right = _line((10.0, 0.0), (0.0, 0.0), f"right-{index}", confidence=0.9)
+        left.source_metadata = left_metadata
+        right.source_metadata = right_metadata
+
+        result = _deduplicate_exact_raw_lines([left, right])
+
+        assert len(result) == 2, (left_metadata, right_metadata)
+        assert left in result and right in result
+
+
+def test_exact_line_cleanup_preserves_metadata_from_distinct_runtime_types_with_same_name():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    left_type = type("Marker", (tuple,), {"__module__": "shared.module"})
+    right_type = type("Marker", (tuple,), {"__module__": "shared.module"})
+    left_type.__qualname__ = right_type.__qualname__ = "Marker"
+    left = _line((0.0, 0.0), (10.0, 0.0), "left", confidence=0.7)
+    right = _line((10.0, 0.0), (0.0, 0.0), "right", confidence=0.9)
+    left.source_metadata = left_type(("source-a",))
+    right.source_metadata = right_type(("source-a",))
+
+    result = _deduplicate_exact_raw_lines([left, right])
+
+    assert len(result) == 2
+    assert left in result and right in result
+
+
+def test_exact_line_cleanup_preserves_ambiguous_metadata_values():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    cyclic_left = []
+    cyclic_left.append(cyclic_left)
+    cyclic_right = []
+    cyclic_right.append(cyclic_right)
+    lines = []
+    for index, metadata in enumerate((float("nan"), cyclic_left, cyclic_right)):
+        line = _line((0.0, 0.0), (10.0, 0.0), f"line-{index}", confidence=0.8)
+        line.source_metadata = metadata
+        lines.append(line)
+
+    result = _deduplicate_exact_raw_lines(lines)
+
+    assert len(result) == 3
+    assert result == lines
+
+
+def test_exact_line_cleanup_rejects_nonfinite_confidence():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    for index, confidence in enumerate((float("nan"), float("inf"), float("-inf"))):
+        valid = _line((0.0, 0.0), (10.0, 0.0), f"valid-{index}", confidence=0.9)
+        invalid = _line((10.0, 0.0), (0.0, 0.0), f"invalid-{index}", confidence=confidence)
+
+        try:
+            _deduplicate_exact_raw_lines([valid, invalid])
+        except ValueError as error:
+            assert "confidence must be finite" in str(error)
+        else:
+            raise AssertionError(f"nonfinite confidence was accepted: {confidence}")
