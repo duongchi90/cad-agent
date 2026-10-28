@@ -39,7 +39,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from .builder import BuildResult, validate_contour_joins
+from .builder import BuildResult, DimensionLineExpectation, validate_contour_joins
 
 _DEFAULT_TOLERANCE_MM = 1e-6
 _ROTATION_TOLERANCE_DEG = 1e-4
@@ -117,6 +117,17 @@ class ReviewResult:
                     f"        [{cm.field}] expected={cm.expected!r} actual={cm.actual!r} — {cm.message}"
                 )
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class DimensionLineIntegrityResult:
+    qualification: str
+    semantic_review: ReviewResult | None
+    mismatches: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return self.qualification == "QUALIFIED"
 
 
 def _dist(a, b) -> float:
@@ -269,6 +280,20 @@ def review_dxf(
         ) from exc
 
     doc = ezdxf.readfile(build_result.output_path)
+    return _review_dxf_loaded(
+        build_result, doc, tolerance_mm,
+        strict_primitive_inventory=strict_primitive_inventory,
+    )
+
+
+def _review_dxf_loaded(
+    build_result: BuildResult,
+    doc,
+    tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+    *,
+    strict_primitive_inventory: bool = False,
+) -> ReviewResult:
+    """Run the legacy semantic/graphics review on an already loaded document."""
     db = doc.entitydb
 
     mismatches: List[str] = []
@@ -598,3 +623,165 @@ def review_dxf(
         contour_mismatches=contour_mismatches,
         dimension_measurement_by_id=dimension_measurement_by_id,
     )
+
+
+def _dimension_line_match(expected, actual, tolerance_mm: float) -> bool:
+    return (
+        _dist3(expected[0], actual[0]) <= tolerance_mm
+        and _dist3(expected[1], actual[1]) <= tolerance_mm
+    ) or (
+        _dist3(expected[0], actual[1]) <= tolerance_mm
+        and _dist3(expected[1], actual[0]) <= tolerance_mm
+    )
+
+
+def _has_complete_line_matching(expected, actual, tolerance_mm: float) -> bool:
+    """Deterministic augmenting-path matching; preserves duplicate multiplicity."""
+    edges = [
+        [index for index, candidate in enumerate(actual)
+         if _dimension_line_match(line, candidate, tolerance_mm)]
+        for line in expected
+    ]
+    matched_expected_by_actual: dict[int, int] = {}
+
+    def augment(expected_index: int, visited: set[int]) -> bool:
+        for actual_index in edges[expected_index]:
+            if actual_index in visited:
+                continue
+            visited.add(actual_index)
+            previous = matched_expected_by_actual.get(actual_index)
+            if previous is None or augment(previous, visited):
+                matched_expected_by_actual[actual_index] = expected_index
+                return True
+        return False
+
+    return all(augment(index, set()) for index in range(len(expected)))
+
+
+def review_dxf_with_dimension_line_integrity(
+    build_result: BuildResult,
+    tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+) -> DimensionLineIntegrityResult:
+    """Combine the unchanged review with captured anonymous-block LINE integrity."""
+    expectations = getattr(build_result, "dimension_line_expectations", None)
+    if (
+        type(build_result) is not BuildResult
+        or type(expectations) is not tuple
+        or not expectations
+        or len(expectations) != build_result.dimension_count
+        or len(expectations) > 256
+        or any(type(item) is not DimensionLineExpectation for item in expectations)
+    ):
+        return DimensionLineIntegrityResult("UNKNOWN", None, ("missing or invalid ephemeral expectations",))
+    expected_handles = build_result.dimension_handle_by_cross_validation_id
+    expectation_ids = [item.validation_id for item in expectations]
+    expectation_handles = [item.dimension_handle for item in expectations]
+    if (
+        len(expected_handles) != build_result.dimension_count
+        or set(expectation_ids) != set(expected_handles)
+        or len(set(expectation_ids)) != len(expectation_ids)
+        or len(set(expectation_handles)) != len(expectation_handles)
+        or any(
+        item.validation_id not in expected_handles
+        or expected_handles[item.validation_id] != item.dimension_handle
+        or any(not math.isfinite(value)
+               for line in item.line_endpoints for point in line for value in point)
+        for item in expectations
+        )
+    ):
+        return DimensionLineIntegrityResult(
+            "UNKNOWN", None,
+            ("expectations are not a complete unique mapping or contain non-finite geometry",),
+        )
+    if (
+        isinstance(tolerance_mm, bool)
+        or not isinstance(tolerance_mm, (int, float))
+        or not math.isfinite(tolerance_mm)
+        or tolerance_mm < 0
+        or tolerance_mm > _DEFAULT_TOLERANCE_MM
+    ):
+        return DimensionLineIntegrityResult("UNKNOWN", None,
+                                            ("tolerance is outside the approved policy",))
+    try:
+        import ezdxf
+    except ImportError as exc:
+        raise ImportError(
+            "Cần cài package 'ezdxf' để dùng Reviewer #1: "
+            "pip install ezdxf --break-system-packages"
+        ) from exc
+
+    doc = ezdxf.readfile(build_result.output_path)
+    semantic_review = _review_dxf_loaded(build_result, doc, tolerance_mm)
+    db = doc.entitydb
+    line_mismatches: list[str] = []
+    for expectation in expectations:
+        if (
+            not expectation.validation_id
+            or not expectation.dimension_handle
+            or not expectation.block_name
+            or not expectation.line_endpoints
+            or len(expectation.line_endpoints) > 64
+        ):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("malformed or incomplete expectations",))
+        dimension = db.get(expectation.dimension_handle)
+        if dimension is None or dimension.dxftype() != "DIMENSION":
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("missing or reassociated DIMENSION identity",))
+        if (int(dimension.dxf.dimtype) & 7) != 0:
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION type",))
+        try:
+            insertion = tuple(float(value) for value in dimension.dxf.insert)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION insertion transform",))
+        if (
+            len(insertion) != 3
+            or not all(math.isfinite(value) for value in insertion)
+            or insertion != (0.0, 0.0, 0.0)
+        ):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION insertion transform",))
+        extrusion = tuple(dimension.dxf.get("extrusion", (0.0, 0.0, 1.0)))
+        if extrusion != (0.0, 0.0, 1.0):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION extrusion",))
+        try:
+            actual_block_name = dimension.dxf.geometry
+            block = doc.blocks.get(actual_block_name)
+        except (AttributeError, KeyError, TypeError):
+            block = None
+            actual_block_name = None
+        if (block is None or actual_block_name != expectation.block_name
+                or tuple(block.base_point) != (0.0, 0.0, 0.0)):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("missing, reassociated, or unsupported anonymous block",))
+        actual_lines = []
+        for entity in block:
+            if entity.dxftype() != "LINE":
+                continue
+            try:
+                endpoints = (tuple(float(v) for v in entity.dxf.start),
+                             tuple(float(v) for v in entity.dxf.end))
+                if not all(math.isfinite(v) for point in endpoints for v in point):
+                    return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                        ("non-finite emitted LINE",))
+                actual_lines.append(endpoints)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                    ("malformed emitted LINE",))
+        expected_lines = expectation.line_endpoints
+        if len(actual_lines) != len(expected_lines) or not _has_complete_line_matching(
+            expected_lines, actual_lines, tolerance_mm,
+        ):
+            line_mismatches.append(
+                f"{expectation.validation_id}: anonymous block LINE inventory differs "
+                f"(expected {len(expected_lines)}, actual {len(actual_lines)})"
+            )
+    if line_mismatches:
+        return DimensionLineIntegrityResult("FAILED", semantic_review, tuple(line_mismatches))
+    if not semantic_review.passed:
+        return DimensionLineIntegrityResult("FAILED", semantic_review,
+                                            ("existing semantic/graphics review did not pass",))
+    return DimensionLineIntegrityResult("QUALIFIED", semantic_review)
