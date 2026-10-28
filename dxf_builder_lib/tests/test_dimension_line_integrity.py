@@ -90,6 +90,35 @@ def test_integrity_review_classifies_line_and_frame_changes(tmp_path, change, qu
     assert result.passed is (qualification == "QUALIFIED")
 
 
+def test_nonzero_dimension_insert_is_unknown_with_unchanged_anonymous_block_lines(tmp_path):
+    built = build_dxf(
+        _document(), str(tmp_path / "insert-transform.dxf"), build_dimensions=True,
+        capture_dimension_line_integrity=True,
+    )
+    expectation = built.dimension_line_expectations[0]
+    doc = ezdxf.readfile(built.output_path)
+    dimension = doc.entitydb[expectation.dimension_handle]
+    block = doc.blocks[expectation.block_name]
+    lines_before = [
+        (tuple(entity.dxf.start), tuple(entity.dxf.end))
+        for entity in block if entity.dxftype() == "LINE"
+    ]
+
+    dimension.dxf.insert = (7.0, 11.0, 0.0)
+    doc.saveas(built.output_path)
+
+    reopened = ezdxf.readfile(built.output_path)
+    reopened_lines = [
+        (tuple(entity.dxf.start), tuple(entity.dxf.end))
+        for entity in reopened.blocks[expectation.block_name]
+        if entity.dxftype() == "LINE"
+    ]
+    assert reopened_lines == lines_before
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "UNKNOWN"
+    assert any("insert" in item.lower() for item in result.mismatches)
+
+
 def test_missing_ephemeral_expectation_is_unknown_and_legacy_review_stays_passed(tmp_path):
     built = build_dxf(
         _document(), str(tmp_path / "legacy.dxf"), build_dimensions=True,

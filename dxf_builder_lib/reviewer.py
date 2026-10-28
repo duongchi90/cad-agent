@@ -713,6 +713,18 @@ def review_dxf_with_dimension_line_integrity(
         if (int(dimension.dxf.dimtype) & 7) != 0:
             return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
                                                 ("unsupported DIMENSION type",))
+        try:
+            insertion = tuple(float(value) for value in dimension.dxf.insert)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION insertion transform",))
+        if (
+            len(insertion) != 3
+            or not all(math.isfinite(value) for value in insertion)
+            or insertion != (0.0, 0.0, 0.0)
+        ):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION insertion transform",))
         extrusion = tuple(dimension.dxf.get("extrusion", (0.0, 0.0, 1.0)))
         if extrusion != (0.0, 0.0, 1.0):
             return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
