@@ -28,6 +28,20 @@ class GuidanceContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Agent working agreement: `AGENTS.md`", readme)
 
+    def test_hard_engineering_work_starts_from_domain_and_source_evidence(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for term in (
+            "domain conventions and physical assumptions",
+            "human workflow",
+            "industry-tool practice",
+            "current CAD-Agent owner",
+            "source-grounded evidence with falsifying controls",
+            "smallest testable change",
+            "not a new approval gate",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, agents)
+
     def test_workstation_limits_and_recovery_policy_are_durable(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")

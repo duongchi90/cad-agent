@@ -24,6 +24,7 @@ Read only the current source needed for the task:
 ## Product and implementation rules
 
 - Reuse existing owners and APIs first. For new production behavior, identify the current reachable causal RED, use a failing regression test or benchmark before implementation, and prefer the smallest repair or thin adapter. Obtain design approval before changing behavior.
+- For hard or novel engineering problems, establish domain conventions and physical assumptions, the human workflow, relevant industry-tool practice, and the current CAD-Agent owner before choosing an approach. Validate against source-grounded evidence with falsifying controls; reuse established knowledge, then make the smallest testable change. This is guidance, not a new approval gate.
 - Complete the task’s internal/external reuse review before adding production behavior. Stop for product-owner review when licensing, reproducibility, architecture ownership, or benchmark benefit is unclear.
 - Do not create a custom production Codex transport; use the approved official SDK/App Server/fallback order in `docs/AI_OPERATING_MODEL.md`.
 - Keep one writer for overlapping files. Keep changes scoped; run focused checks after each task.
