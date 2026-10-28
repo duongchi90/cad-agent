@@ -674,16 +674,34 @@ def review_dxf_with_dimension_line_integrity(
     ):
         return DimensionLineIntegrityResult("UNKNOWN", None, ("missing or invalid ephemeral expectations",))
     expected_handles = build_result.dimension_handle_by_cross_validation_id
-    if any(
+    expectation_ids = [item.validation_id for item in expectations]
+    expectation_handles = [item.dimension_handle for item in expectations]
+    if (
+        len(expected_handles) != build_result.dimension_count
+        or set(expectation_ids) != set(expected_handles)
+        or len(set(expectation_ids)) != len(expectation_ids)
+        or len(set(expectation_handles)) != len(expectation_handles)
+        or any(
         item.validation_id not in expected_handles
         or expected_handles[item.validation_id] != item.dimension_handle
         or any(not math.isfinite(value)
                for line in item.line_endpoints for point in line for value in point)
         for item in expectations
+        )
     ):
-        return DimensionLineIntegrityResult("UNKNOWN", None, ("expectations are inconsistent or non-finite",))
-    if not math.isfinite(tolerance_mm) or tolerance_mm < 0:
-        return DimensionLineIntegrityResult("UNKNOWN", None, ("invalid tolerance",))
+        return DimensionLineIntegrityResult(
+            "UNKNOWN", None,
+            ("expectations are not a complete unique mapping or contain non-finite geometry",),
+        )
+    if (
+        isinstance(tolerance_mm, bool)
+        or not isinstance(tolerance_mm, (int, float))
+        or not math.isfinite(tolerance_mm)
+        or tolerance_mm < 0
+        or tolerance_mm > _DEFAULT_TOLERANCE_MM
+    ):
+        return DimensionLineIntegrityResult("UNKNOWN", None,
+                                            ("tolerance is outside the approved policy",))
     try:
         import ezdxf
     except ImportError as exc:

@@ -31,6 +31,22 @@ def _document() -> PrimitiveIRDocument:
     )
 
 
+def _two_dimension_document() -> PrimitiveIRDocument:
+    document = _document()
+    second_line = Primitive(
+        id="line-2", type="line", source="geometry_opencv", confidence=1.0,
+        trace=Trace(bbox_px=(0, 10, 100, 20)),
+        geometry=LineGeometry(start=Point2D(0, 10), end=Point2D(100, 10)),
+    )
+    document.primitives.append(second_line)
+    document.cross_validations.append(CrossValidation(
+        text_primitive_id="text-2", geometry_primitive_id="line-2",
+        status="confirmed", text_value=100.0,
+        geometry_measured_length=100.0, delta_percent=0.0,
+    ))
+    return document
+
+
 def test_opt_in_capture_detects_deleted_dimension_definition_line(tmp_path):
     built = build_dxf(
         _document(), str(tmp_path / "candidate.dxf"), build_dimensions=True,
@@ -117,6 +133,37 @@ def test_nonzero_dimension_insert_is_unknown_with_unchanged_anonymous_block_line
     result = review_dxf_with_dimension_line_integrity(built)
     assert result.qualification == "UNKNOWN"
     assert any("insert" in item.lower() for item in result.mismatches)
+
+
+def test_duplicate_expectation_cannot_skip_second_dimension_line_integrity(tmp_path):
+    from dataclasses import replace
+
+    built = build_dxf(
+        _two_dimension_document(), str(tmp_path / "duplicate-expectation.dxf"),
+        build_dimensions=True, capture_dimension_line_integrity=True,
+    )
+    first, second = built.dimension_line_expectations
+    doc = ezdxf.readfile(built.output_path)
+    second_block = doc.blocks[second.block_name]
+    line = next(entity for entity in second_block if entity.dxftype() == "LINE")
+    second_block.delete_entity(line)
+    doc.saveas(built.output_path)
+
+    built.dimension_line_expectations = (first, replace(first))
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "UNKNOWN"
+    assert any("unique" in item.lower() or "bijective" in item.lower()
+               for item in result.mismatches)
+
+
+def test_integrity_tolerance_cannot_exceed_approved_policy(tmp_path):
+    built = build_dxf(
+        _document(), str(tmp_path / "oversized-tolerance.dxf"),
+        build_dimensions=True, capture_dimension_line_integrity=True,
+    )
+    result = review_dxf_with_dimension_line_integrity(built, tolerance_mm=1.0)
+    assert result.qualification == "UNKNOWN"
+    assert any("tolerance" in item.lower() for item in result.mismatches)
 
 
 def test_missing_ephemeral_expectation_is_unknown_and_legacy_review_stays_passed(tmp_path):
