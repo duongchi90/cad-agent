@@ -28,19 +28,35 @@ class GuidanceContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("Agent working agreement: `AGENTS.md`", readme)
 
-    def test_hard_engineering_work_starts_from_domain_and_source_evidence(self) -> None:
+    def test_every_cad_edit_uses_engineering_first_and_measured_acceptance(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("For every CAD draw/edit task", agents)
+        self.assertIn("dimension text or visual appearance alone is not proof", agents)
+        self.assertIn("keep simple-task checks proportionate", agents)
+        self.assertIn("docs/AI_OPERATING_MODEL.md", agents)
+
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8").lower()
         for term in (
-            "domain conventions and physical assumptions",
-            "human workflow",
-            "industry-tool practice",
-            "current CAD-Agent owner",
-            "source-grounded evidence with falsifying controls",
-            "smallest testable change",
-            "not a new approval gate",
+            "source dimensions, angles, units, scale, views, symbols",
+            "datums and geometric relationships",
+            "intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies",
+            "construction order",
+            "do not follow image stroke order",
+            "reuse verified native cad",
+            "derive geometry only from source evidence and constraints",
+            "never invent missing geometry",
+            "measure actual cad lengths, angles, radii/diameters, positions, alignment, and applicable constraints",
+            "compare measurements with source and tolerances",
+            "diagnose the cause, repair, and verify again",
+            "native readback and save/reopen when applicable",
+            "dimension text or an image that looks right is not geometric proof",
+            "use engineering conventions/practice and specialized software only when needed",
+            "reuse validated knowledge",
+            "keep checks proportionate for simple tasks",
+            "do not claim `verified` until critical dimensions, angles, and relationships are checked and applicable acceptance gates pass",
         ):
             with self.subTest(term=term):
-                self.assertIn(term, agents)
+                self.assertIn(term, model)
 
     def test_workstation_limits_and_recovery_policy_are_durable(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")

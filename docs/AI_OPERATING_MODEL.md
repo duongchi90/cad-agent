@@ -163,6 +163,19 @@ primitive_ir_lib
 - AutoCAD Mechanical operations stay behind the existing `mcp_integration_lib` FileIPC/.NET boundary.
 - `cad_agent` remains thin orchestration/composition and must not absorb duplicate CAD algorithms or truth stores.
 
+### CAD drawing and editing workflow
+
+For every operation that draws or changes CAD geometry, understand the source before construction:
+
+1. Read source dimensions, angles, units, scale, views, symbols, engineering intent, and the human creation/inspection workflow.
+2. Identify datums and geometric relationships, including intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies.
+3. Establish construction order: distinguish explicit source geometry from derived geometry; do not follow image stroke order as an engineering sequence.
+4. Reuse verified native CAD when it is correct. Otherwise derive geometry only from source evidence and constraints; never invent missing geometry.
+5. Measure actual CAD lengths, angles, radii/diameters, positions, alignment, and applicable constraints. Dimension text or an image that looks right is not geometric proof.
+6. Compare measurements with source and tolerances; diagnose the cause, repair, and verify again. Use native readback and save/reopen when applicable.
+7. Use engineering conventions/practice and specialized software only when needed. Reuse validated knowledge; keep checks proportionate for simple tasks.
+8. Do not claim `VERIFIED` until critical dimensions, angles, and relationships are checked and applicable acceptance gates pass.
+
 ## 8. Visual Supervisor / R5 authority
 
 The Visual Supervisor is a product evidence authority, not the coding agent and not the repair executor.
