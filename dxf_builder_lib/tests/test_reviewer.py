@@ -551,6 +551,75 @@ def test_review_flags_insert_rotation_mismatch_after_manual_dxf_edit():
     print("OK   test_review_flags_insert_rotation_mismatch_after_manual_dxf_edit")
 
 
+@pytest.mark.parametrize(
+    "actual,want_pass",
+    [(0.0, True), (0.5e-4, True), (2e-4, False)],
+    ids=["equal", "within-tolerance", "outside-tolerance"],
+)
+def test_insert_rotation_preserves_finite_absolute_tolerance(
+    tmp_path, actual, want_pass,
+):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    edit_doc = ezdxf.readfile(out_path)
+    entity = edit_doc.entitydb.get(build_result.component_handle_by_part_id[part_id])
+    entity.dxf.rotation = actual
+    edit_doc.saveas(out_path)
+    before = Path(out_path).read_bytes()
+
+    review_result = review_dxf(build_result)
+
+    assert review_result.passed == want_pass
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == "rotation_deg"
+        for mismatch in review_result.component_mismatches
+    ) is (not want_pass)
+    assert Path(out_path).read_bytes() == before
+
+
+@pytest.mark.parametrize("actual", [math.nan, math.inf, -math.inf], ids=["nan", "positive-infinity", "negative-infinity"])
+def test_review_rejects_nonfinite_saved_insert_rotation(tmp_path, actual):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    edit_doc = ezdxf.readfile(out_path)
+    entity = edit_doc.entitydb.get(build_result.component_handle_by_part_id[part_id])
+    entity.dxf.rotation = actual
+    edit_doc.saveas(out_path)
+
+    reopened = ezdxf.readfile(out_path)
+    saved_actual = reopened.entitydb.get(build_result.component_handle_by_part_id[part_id]).dxf.rotation
+    assert math.isnan(saved_actual) if math.isnan(actual) else saved_actual == actual
+    before = Path(out_path).read_bytes()
+
+    review_result = review_dxf(build_result)
+
+    assert not review_result.passed
+    assert any(
+        mismatch.part_id == part_id
+        and mismatch.field == "rotation_deg"
+        and (math.isnan(mismatch.actual) if math.isnan(actual) else mismatch.actual == actual)
+        for mismatch in review_result.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == before
+
+
+@pytest.mark.parametrize("expected", [math.nan, math.inf, -math.inf], ids=["nan", "positive-infinity", "negative-infinity"])
+def test_review_rejects_nonfinite_expected_insert_rotation_without_mutating_candidate(
+    tmp_path, expected,
+):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    build_result.written_component_by_part_id[part_id]["rotation_deg"] = expected
+    before = Path(out_path).read_bytes()
+
+    review_result = review_dxf(build_result)
+
+    assert not review_result.passed
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == "rotation_deg"
+        and (math.isnan(mismatch.expected) if math.isnan(expected) else mismatch.expected == expected)
+        for mismatch in review_result.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == before
+
+
 def test_review_flags_insert_attrib_value_mismatch_after_manual_dxf_edit():
     if not _HAS_EZDXF:
         print("SKIP test_review_flags_insert_attrib_value_mismatch_after_manual_dxf_edit — chưa cài ezdxf")
