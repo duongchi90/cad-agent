@@ -1873,6 +1873,22 @@ def _page_circle_witnesses(
     page_transform = page.rotation_matrix
 
     image_paint_operations = _image_paint_operations(page)
+    text_paint_operations: Optional[list[tuple[int, fitz.Rect]]]
+    try:
+        text_paint_operations = []
+        for span in page.get_texttrace():
+            sequence = span.get("seqno")
+            rect = fitz.Rect(span.get("bbox"))
+            if isinstance(sequence, bool) or not isinstance(sequence, int):
+                raise ValueError("PDF text paint sequence is unavailable")
+            if not all(math.isfinite(value) for value in (rect.x0, rect.y0, rect.x1, rect.y1)):
+                raise ValueError("PDF text paint bounds are non-finite")
+            if not rect.is_empty:
+                text_paint_operations.append((sequence, rect))
+    except Exception:
+        # Without ordered text bounds, a vector circle cannot be independently
+        # cleared of later text paint; fail closed for this page's witnesses.
+        text_paint_operations = None
     annotation_rects: list[fitz.Rect] = []
     for annotation in page.annots() or ():
         annotation_rects.append(annotation.rect)
@@ -1914,6 +1930,42 @@ def _page_circle_witnesses(
             continue
 
         cx, cy, radius = circle
+        # A fitted path can be geometrically closed while lying partly or
+        # wholly outside the page's visible render frame. Such a path has no
+        # complete rendered perimeter to support a source witness.
+        try:
+            stroke_width = float(drawing.get("width") or 0.0)
+            if not math.isfinite(stroke_width) or stroke_width < 0.0:
+                raise ValueError("invalid circle stroke width")
+            margin = stroke_width / 2.0
+            circle_bounds = fitz.Rect(
+                cx - radius - margin,
+                cy - radius - margin,
+                cx + radius + margin,
+                cy + radius + margin,
+            ) * page_transform
+            render_bounds = page.rect
+            fully_in_render_frame = (
+                all(
+                    math.isfinite(value)
+                    for value in (
+                        circle_bounds.x0,
+                        circle_bounds.y0,
+                        circle_bounds.x1,
+                        circle_bounds.y1,
+                    )
+                )
+                and circle_bounds.x0 >= render_bounds.x0 - 1e-4
+                and circle_bounds.y0 >= render_bounds.y0 - 1e-4
+                and circle_bounds.x1 <= render_bounds.x1 + 1e-4
+                and circle_bounds.y1 <= render_bounds.y1 + 1e-4
+            )
+        except (TypeError, ValueError, OverflowError):
+            fully_in_render_frame = False
+        if not fully_in_render_frame:
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
+            continue
+
         witness_level = int(drawing.get("level") or 0)
         prior_clip_context = any(
             int(prior.get("level") or 0) < witness_level
@@ -1932,13 +1984,19 @@ def _page_circle_witnesses(
 
         # A later drawing/clip/group touching this perimeter can obscure or
         # alter the witness. Conservatively reject rather than infer visibility.
-        occluded = False
+        occluded = text_paint_operations is None
         drawing_sequence = drawing.get("seqno")
         occluder_rects = annotation_rects + [
             rect
             for sequence, rect in image_paint_operations
             if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
         ]
+        if text_paint_operations is not None:
+            occluder_rects.extend(
+                rect
+                for sequence, rect in text_paint_operations
+                if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
+            )
         for rect in occluder_rects:
             dx = max(rect.x0 - cx, 0.0, cx - rect.x1)
             dy = max(rect.y0 - cy, 0.0, cy - rect.y1)
@@ -3515,6 +3573,9 @@ def run_pdf(
     if auto_calibrate and calibration_registry_path is not None and not calibration_id_prefix:
         raise ValueError("calibration_registry_path cần đi kèm calibration_id_prefix")
 
+    source_pdf_bytes = pdf_path.read_bytes()
+    source_pdf_sha256 = hashlib.sha256(source_pdf_bytes).hexdigest()
+
     render_dir = output_dir / "rendered"
     ir_dir = output_dir / "primitive_ir"
     manifest_path = output_dir / "manifest.json"
@@ -3524,7 +3585,7 @@ def run_pdf(
     manifest = {
         "status": "in_progress",
         "source_pdf": pdf_path.name,
-        "source_pdf_sha256": _sha256_file(pdf_path),
+        "source_pdf_sha256": source_pdf_sha256,
         "render_dpi": dpi,
         "scale_mm_per_px": scale_mm_per_px if scale_mm_per_px is not None else "auto",
         "pdf_vector_text_visibility": "not_assessed",
@@ -3543,7 +3604,7 @@ def run_pdf(
         render_dir.mkdir(parents=True, exist_ok=True)
         ir_dir.mkdir(parents=True, exist_ok=True)
         _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
-        document = fitz.open(str(pdf_path))
+        document = fitz.open(stream=source_pdf_bytes, filetype="pdf")
         for index, page in enumerate(document, start=1):
             current_page_index = index - 1
             require_all_vector_witnesses, vector_circle_witnesses, suspect_regions = (
@@ -3603,7 +3664,7 @@ def run_pdf(
             }
             if require_all_vector_witnesses or vector_circle_witnesses or suspect_regions:
                 vector_kwargs = {
-                    "pdf_vector_circle_witnesses": vector_circle_witnesses,
+                    "validated_pdf_vector_circle_witnesses": vector_circle_witnesses,
                     "pdf_vector_circle_suspect_regions": suspect_regions,
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
