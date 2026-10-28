@@ -171,6 +171,25 @@ primitive_ir_lib
 - AutoCAD Mechanical operations stay behind the existing `mcp_integration_lib` FileIPC/.NET boundary.
 - `cad_agent` remains thin orchestration/composition and must not absorb duplicate CAD algorithms or truth stores.
 
+### CAD drawing and editing workflow
+
+Apply engineering-first reasoning to every CAD operation, with checks limited to the work’s scope:
+
+- **REVISION:** Reuse a trustworthy native base and make only the source-supported bounded delta. Measure the changed geometry and relationships affected by that delta.
+- **RECONSTRUCTION:** Understand the full drawing, dimensions, datums, relationships, dependencies, and construction order before building. Account for all views and dimensions needed to explain the drawing.
+- **NATIVE_EDIT:** Reuse correct native geometry and verify only the edited scope and its affected dependencies; do not re-audit unaffected geometry unless an acceptance contract requires it.
+
+For reconstruction, and for any revision or native edit whose scope requires it:
+
+1. Identify drawing type, view layout, units, scale, applicable drafting standards, symbols, and engineering intent. Use domain practice or specialized software when needed; reuse validated knowledge instead of repeating settled research.
+2. Read relevant source dimensions, including lengths, angles, diameters, radii, and tolerances; associate each with the feature or relationship it measures. Classify each as `DRIVING`, `REFERENCE`, `REDUNDANT`, `CONFLICTING`, or `UNRESOLVED`. OCR text is evidence to classify, not an automatic constraint. Mark missing or conflicting information instead of silently guessing.
+3. Identify datums, centerlines, intersections, tangency, concentricity, parallel/perpendicular, symmetry, and dependencies between features.
+4. Plan construction order: separate explicit source geometry from derived geometry and resolve constrained geometry before underdetermined details. Do not follow image stroke order as an engineering sequence.
+5. Reuse verified native CAD when correct. Otherwise derive only geometry determined by dimensions, relationships, and constraints; use pixel evidence only for geometry the source does not determine. Never invent missing geometry.
+6. Reuse existing `dimension_observer`, `constraint_solving`, `dimension_pilot`, `dxf_builder`, and native CAD owners when applicable. Create native CAD dimensions only when required by the drawing or requested output; derive their measured values from constructed geometry, never use text overrides to mask a mismatch.
+7. Measure actual CAD lengths, angles, radii/diameters, positions, alignment, center distances, chain/overall dimensions, and applicable constraints within the affected scope. Compare them with source values and tolerances; dimension text or visual appearance alone is not proof. Use native readback and save/reopen when applicable.
+8. When verification finds an error, identify the first causal boundary, repair the smallest responsible owner, and re-measure affected geometry and relationships. Do not claim `VERIFIED` until critical checks within the applicable scope and acceptance gates pass. Keep simple-task checks proportionate.
+
 ## 8. Visual Supervisor / R5 authority
 
 The Visual Supervisor is a product evidence authority, not the coding agent and not the repair executor.
@@ -225,6 +244,37 @@ General safety rules:
 - no hidden or ambiguous receiver accepted as the live target;
 - no fake PASS from missing provider/runtime prerequisites;
 - one physical bootstrap may be reused across a batch of live work when exact identity proves the session remains valid.
+
+### Resource-aware workstation use and recovery
+
+The workstation has limited resources. Minimize CPU, RAM, and I/O without weakening safety or evidence:
+
+- Run one heavy local job by default: a full suite, large build, bulk PDF/raster processing, heavy benchmark, or native AutoCAD operation. Do not overlap heavy jobs without current evidence that the machine can support them. Lightweight read-only, GitHub, analysis, and review work may continue when it adds little local load.
+- Reuse valid processes, sessions, environments, and immutable verification results. Do not start duplicate workers or applications to retry an unclassified failure.
+- Keep one Luna-managed Edge window by default and at most two. This is a window limit, not an operating-system process limit. Reuse the existing window; do not create another profile, InPrivate session, or browser instance to bypass the cap. Close only tabs/windows Luna opened and verified it owns; preserve user sessions, cookies, and cache.
+- Keep one Luna-managed DWG open by default and at most two. Use only one exclusive mutable AutoCAD lane. Do not open a third drawing or create another AutoCAD instance to bypass the cap. Verify drawing identity, ownership, save state, and active command before closing; never close a user-owned drawing or save over source, reference/gold, or accepted drawings.
+- Before recovery, classify the failure and inspect available process, document, receiver, transaction, save, and rollback state. Stop launching heavy work if the machine is slow or overloaded. Close or stop only completed, verified Luna-owned work that is safe to end. Retry only after the relevant condition changes; no blind native retry.
+- A failed screenshot or Computer Use surface blocks only actions that require that observation or control. Hold the dependent native boundary, preserve custody, and continue independently authorized work. A blocked action or lane is not a project stop, but continuity never waives a mandatory safety, evidence, CI, or review gate.
+
+### Disk space and closed-artifact lifecycle
+
+- Before a heavy local job, check free capacity on every affected volume and estimate its outputs plus a safe margin. If the margin cannot be preserved, defer only that job and continue lightweight work.
+- At each closed batch classify artifacts: `KEEP` for sources, accepted baselines, current candidates, unique tests, hashes, receipts, and required evidence; `REGENERABLE` for reproducible outputs still needed temporarily; `DISPOSABLE` for closed, unreferenced intermediates. Delete only verified `DISPOSABLE` items after checking process, checkpoint, PR, and rollback references. Record `DISK_FREE_BEFORE`, `DISK_FREE_AFTER`, `NEW_DATA_GB`, `ARCHIVED_GB`, `RECLAIMED_GB`, `KEEP`, `DISPOSABLE_CLEANED`, and `NEXT_ACTION`.
+- Reuse existing worktrees. A branch or open PR alone does not require a mounted checkout. Never remove a dirty, active, unpushed, or unverified worktree. Before removing an obsolete one, verify its Git state, pushed/reachable commits, untracked/ignored data, active session/process/AutoCAD references, and checkpoint/PR dependencies; use `git worktree remove` without `--force`. Never use `git clean -xfd`, `git worktree prune`, branch deletion, or aggressive Git GC for recovery.
+- Treat `Z:\DuongChi\Cad Agent` as a candidate archive location, not an assumed safe destination. Before first use verify whether it is mapped/network storage, filesystem, free capacity, effective access, measured transfer/readback behavior, and available durability/backup guarantees. Use it only for closed evidence and source archives when those checks are adequate. Transfer by copy → hash/readback verification → reference reconciliation; clean the original only after confirmed success. Do not relocate active Git internals, live AutoCAD/FileIPC files, or executable environments blindly.
+
+### PO, reviewer, and checkpoint continuity
+
+- Use the Local PO only for a genuine hard product, scope, contract, or owner decision. Prefer a cheap reliable oracle first; send one compact packet per bounded decision and reuse closed evidence. Do not use PO for routine work or create parallel PO consultations.
+- Keep one controlling review attempt per role and exact packet. Preserve request/attempt IDs, BASE/HEAD/TREE, scope, evidence references, limits, and NOT_RUN. Before same-role channel failover, retire the old channel for that packet; late output stays non-controlling. If the head changes, treat the old verdict as historical and obtain a current exact-head review where required.
+- Track review delivery as distinct states: `REQUEST_RECORDED` means the exact packet exists on GitHub; `DELIVERY_CONFIRMED` requires observable evidence it was submitted to the intended ChatGPT Web conversation; `RESPONSE_OBSERVED` requires visible reviewer output associated with that request; `TERMINAL_CURRENT` requires a complete verdict matching ROLE, REQUEST_ID, CONTROLLING_ATTEMPT_ID, BASE, HEAD, and TREE. Do not promote one state into another without evidence. A GitHub request comment proves only `REQUEST_RECORDED`; a required canonical review receipt must be present on GitHub and match the controlling attempt and exact identity.
+- Verify delivery using existing observation after dispatch. At about 5 minutes without observed progress, make one lightweight state check if needed; at about 15 minutes, classify the actual channel using current #429 states; at 30 minutes, perform a bounded liveness diagnosis for unresolved delivery or observability uncertainty. These are diagnostic checkpoints, not response deadlines or automatic failover triggers. Never interrupt a reviewer merely because a time threshold elapsed. Do not repeatedly reopen or poll when the same state is already established and no new evidence is expected; do not create a background monitor.
+- For `IDLE_NO_SUBSTANTIVE_RESPONSE` or `COMPLETE_NONTERMINAL`, allow one bounded response opportunity and at most one wake; do not nudge while generating, repeatedly nudge, duplicate the packet, or create parallel attempts. Channel exhaustion, delay, or a pending optional review does not stop unrelated authorized execution. Required independent Security, Integration, hosted CI, and package acceptance gates still control the actions they gate.
+- If a reviewer is visibly generating, do not message or interrupt. If the UI indicates generating but progress cannot be confirmed, classify the state as `OBSERVABILITY_UNKNOWN`; do not infer reviewer health. For `MODAL_BLOCKING`, use only authorized UI handling and do not automatically change to Work mode. If available tools cannot inspect/control the channel, report `DELIVERY_STATE=UNKNOWN` or `RESPONSE_STATE=OBSERVABILITY_UNKNOWN`, name the missing capability, hold only the affected gate, and continue independent authorized work.
+- Before failover, fresh-read PR identity and GitHub receipts, inspect the old channel state, preserve the exact request/attempt identity, and retire the old channel as controlling for that packet. Fail over only to the same reviewer role; same-HEAD failover follows current #429 continuity, and a current canonical receipt prevents redispatch. Late retired-channel output is non-controlling. A HEAD change makes old verdicts stale and requires fresh request/attempt identities and independent exact-head reviews. Do not blindly resend or duplicate a review.
+- Preserve first-pass reviewer independence. Reviewers must not inherit another role’s verdict as their initial finding, and do not create bot-to-bot confirmation loops or repeated no-op reviews. A confirmation is useful only when it changes a decision or closes a required gate.
+- At handoff, record a closed checkpoint: role/package, frozen source identity, current main and exact PR identity when relevant, first unsatisfied boundary, completed closed batches, material evidence references, current verdict, NOT_RUN, forbidden actions, and next authorized action. Reuse still-valid immutable evidence; re-evaluate only claims affected by material identity change.
+- Triage PRs and blocked lanes by the first current mandatory or product boundary. Pending reviews block only their gated promotion/merge. Continue safe independent product work without creating duplicate work, weakening gates, or inventing a new backlog/control plane.
 
 ## 11. Evidence semantics
 
