@@ -30,6 +30,7 @@ CONTRACTS = {
     "drawing-setup-plan.json": "drawing_setup_plan",
     "drawing-setup-audit.json": "drawing_setup_audit",
     "drawing-setup-evidence.json": "drawing_setup_evidence",
+    "layer-standard-check.json": "layer_standard_check",
 }
 
 
@@ -488,3 +489,68 @@ def test_ids_extensions_and_finite_numbers_are_strict(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="finite"):
         canonical_json_sha256({"value": float("nan")})
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "classification", "matching_rules", "standard_count", "nonstandard_count", "percentage"),
+    [
+        (
+            "MISC",
+            "STANDARD",
+            [{"kind": "EXACT_NAME", "value": "A-WALL"}],
+            2,
+            0,
+            100.0,
+        ),
+        ("A-WALL", "NONSTANDARD", [], 1, 1, 50.0),
+    ],
+)
+def test_layer_standard_contract_recomputes_rule_witnesses(
+    tmp_path: Path,
+    layer_name: str,
+    classification: str,
+    matching_rules: list[dict[str, str]],
+    standard_count: int,
+    nonstandard_count: int,
+    percentage: float,
+) -> None:
+    payload = json.loads(
+        (EXAMPLES / "layer-standard-check.json").read_text(encoding="utf-8")
+    )
+    payload["layers"][1].update(
+        {
+            "name": layer_name,
+            "classification": classification,
+            "matching_rules": matching_rules,
+        }
+    )
+    payload["standard_count"] = standard_count
+    payload["nonstandard_count"] = nonstandard_count
+    payload["standard_percentage"] = percentage
+    path = tmp_path / "contradictory-layer-standard-check.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="classification.*rules"):
+        read_contract(path, contract="layer_standard_check")
+
+
+@pytest.mark.parametrize(
+    ("field", "claim"),
+    [
+        ("audit_origin_authentication", "AUTHENTICATED"),
+        ("layer_inventory_completeness", "VERIFIED"),
+        ("classification_basis", "LIVE_DWG_LAYER_TABLE"),
+    ],
+)
+def test_layer_standard_contract_rejects_unsupported_provenance_claims(
+    tmp_path: Path, field: str, claim: str
+) -> None:
+    payload = json.loads(
+        (EXAMPLES / "layer-standard-check.json").read_text(encoding="utf-8")
+    )
+    payload[field] = claim
+    path = tmp_path / "unsupported-provenance-claim.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DrawingContractError, match="authentication|completeness|basis"):
+        read_contract(path, contract="layer_standard_check")

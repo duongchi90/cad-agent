@@ -34,6 +34,7 @@ constraint_solving.py.
 
 from __future__ import annotations
 
+import logging
 import math
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -63,6 +64,11 @@ _LAYER_BY_PART_TYPE: Dict[str, Tuple[str, int]] = {
 }
 _DEFAULT_LAYER: Tuple[str, int] = ("UNCLASSIFIED", 8)
 _TEXT_LAYER: Tuple[str, int] = ("TEXT", 7)  # trắng/đen
+_LAYER_BY_PDF_SOURCE_CLASSIFICATION: Dict[str, Tuple[str, int]] = {
+    "HIDDEN": ("HIDDEN", 8),
+    "CENTERLINE": ("CENTERLINE", 8),
+}
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,14 @@ class NativeLinearDimensionSpec:
     geometry_primitive_id: str
     approved_value_mm: float | None
     source_ref: str
+
+
+@dataclass(frozen=True)
+class DimensionLineExpectation:
+    validation_id: str
+    dimension_handle: str
+    block_name: str
+    line_endpoints: tuple[tuple[tuple[float, float, float], tuple[float, float, float]], ...]
 
 
 @dataclass
@@ -107,6 +121,12 @@ class BuildResult:
     # Source-declared endpoint connections, independent of per-entity write truth.
     # Empty preserves legacy roundtrip-only review; no connections are inferred.
     contour_join_by_id: Dict[str, dict] = field(default_factory=dict)
+    # Optional, ephemeral evidence; intentionally omitted from persisted build evidence.
+    dimension_line_expectations: Optional[tuple[DimensionLineExpectation, ...]] = None
+
+
+_MAX_DIMENSION_LINE_EXPECTATIONS = 256
+_MAX_LINES_PER_DIMENSION_EXPECTATION = 64
 
 
 def validate_contour_joins(joins: object) -> None:
@@ -144,7 +164,18 @@ def _layer_for_primitive(prim: Primitive, part_type_by_id: Dict[str, str]) -> Tu
         return _TEXT_LAYER
     part_type = part_type_by_id.get(prim.id)
     if part_type is not None:
-        return _LAYER_BY_PART_TYPE.get(part_type, _DEFAULT_LAYER)
+        effective = _LAYER_BY_PART_TYPE.get(part_type, _DEFAULT_LAYER)
+        if prim.type == "line" and prim.layer in _LAYER_BY_PDF_SOURCE_CLASSIFICATION:
+            _LOGGER.warning(
+                "PDF_SOURCE_LAYER_OVERRIDE primitive_id=%s requested=%s effective=%s "
+                "reason=semantic_doc_precedence",
+                prim.id,
+                prim.layer,
+                effective[0],
+            )
+        return effective
+    if prim.type == "line":
+        return _LAYER_BY_PDF_SOURCE_CLASSIFICATION.get(prim.layer, _DEFAULT_LAYER)
     return _DEFAULT_LAYER
 
 
@@ -177,10 +208,15 @@ def _add_confirmed_dimensions(
     msp,
     dimension_specs: Sequence[NativeLinearDimensionSpec],
     written_geometry_by_primitive_id: Dict[str, dict],
-) -> tuple[Dict[str, str], Dict[str, dict]]:
+    *,
+    capture_line_integrity: bool = False,
+) -> tuple[Dict[str, str], Dict[str, dict], tuple[DimensionLineExpectation, ...] | None]:
     """Emit dimensions from the exact line geometry already written to DXF."""
     handles: Dict[str, str] = {}
     written: Dict[str, dict] = {}
+    expectations: list[DimensionLineExpectation] = []
+    if capture_line_integrity and len(dimension_specs) > _MAX_DIMENSION_LINE_EXPECTATIONS:
+        raise ValueError("dimension line integrity capture resource limit exceeded")
     for spec in dimension_specs:
         line = written_geometry_by_primitive_id.get(
             spec.geometry_primitive_id
@@ -219,6 +255,29 @@ def _add_confirmed_dimensions(
         override.render()
         dimension = override.dimension
         handles[spec.id] = dimension.dxf.handle
+        if capture_line_integrity:
+            block_name = dimension.dxf.geometry
+            block = doc.blocks.get(block_name)
+            if block is None or tuple(block.base_point) != (0.0, 0.0, 0.0):
+                raise ValueError("dimension line integrity capture has unsupported block frame")
+            if int(dimension.dxf.dimtype) & 7 != 0:
+                raise ValueError("dimension line integrity capture supports linear type 0 only")
+            extrusion = tuple(dimension.dxf.get("extrusion", (0.0, 0.0, 1.0)))
+            if extrusion != (0.0, 0.0, 1.0):
+                raise ValueError("dimension line integrity capture has unsupported extrusion")
+            lines = [entity for entity in block if entity.dxftype() == "LINE"]
+            if not lines or len(lines) > _MAX_LINES_PER_DIMENSION_EXPECTATION:
+                raise ValueError("dimension line integrity capture incomplete or resource limit exceeded")
+            endpoints = []
+            for line_entity in lines:
+                start = tuple(float(value) for value in line_entity.dxf.start)
+                end = tuple(float(value) for value in line_entity.dxf.end)
+                if not all(math.isfinite(value) for value in (*start, *end)):
+                    raise ValueError("dimension line integrity capture contains non-finite LINE")
+                endpoints.append((start, end))
+            expectations.append(DimensionLineExpectation(
+                spec.id, dimension.dxf.handle, block_name, tuple(endpoints),
+            ))
         written[spec.id] = {
             "layer": "DIMENSIONS",
             "measurement": length,
@@ -226,7 +285,7 @@ def _add_confirmed_dimensions(
             "geometry_primitive_id": spec.geometry_primitive_id,
             "source_ref": spec.source_ref,
         }
-    return handles, written
+    return handles, written, tuple(expectations) if capture_line_integrity else None
 
 
 def _dimension_specs_from_cross_validations(
@@ -274,6 +333,8 @@ def build_dxf(
     build_dimensions: bool = False,
     dimension_specs: Optional[Sequence[NativeLinearDimensionSpec]] = None,
     contour_join_by_id: Optional[Dict[str, dict]] = None,
+    *,
+    capture_dimension_line_integrity: bool = False,
 ) -> BuildResult:
     """Build 1 file DXF thật từ `primitive_doc`. Trả về `BuildResult` —
     không raise nếu 1 primitive không vẽ được (thiếu geometry/text_data),
@@ -291,6 +352,10 @@ def build_dxf(
 
     Raise ImportError nếu chưa cài `ezdxf`.
     """
+    if type(capture_dimension_line_integrity) is not bool:
+        raise ValueError("capture_dimension_line_integrity must be a bool")
+    if capture_dimension_line_integrity and not build_dimensions:
+        raise ValueError("capture_dimension_line_integrity requires build_dimensions=True")
     if primitive_doc.calibration.status != "verified":
         raise ValueError(
             "Primitive IR calibration is needs_verification; DXF build is "
@@ -397,13 +462,17 @@ def build_dxf(
         (
             result.dimension_handle_by_cross_validation_id,
             result.written_dimension_by_cross_validation_id,
+            result.dimension_line_expectations,
         ) = _add_confirmed_dimensions(
             doc,
             msp,
             active_dimension_specs,
             result.written_geometry_by_primitive_id,
+            capture_line_integrity=capture_dimension_line_integrity,
         )
         result.dimension_count = len(result.dimension_handle_by_cross_validation_id)
+        if capture_dimension_line_integrity and result.dimension_count == 0:
+            raise ValueError("dimension line integrity cannot qualify zero dimensions")
 
     if build_components and semantic_doc is not None:
         from .semantic_components import assemble_semantic_components

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import cad_agent.drawing_setup as drawing_setup_module
 from cad_agent.cli import main
 from cad_agent.drawing_contracts import DrawingContractError, canonical_json_sha256, read_contract
 from cad_agent.drawing_setup import (
@@ -18,7 +19,7 @@ from cad_agent.drawing_setup import (
     evaluate_setup_plan,
     require_setup_verified,
 )
-from cad_agent.manifest import sha256_file
+from cad_agent.manifest import sha256_file, write_manifest
 from drawing_setup_fixtures import (
     approved_setup_plan,
     apply_test_mutation,
@@ -40,6 +41,28 @@ def _approved_mappings(root: Path) -> tuple[dict[str, object], dict[str, object]
     )
 
 
+def _layer_classifier():
+    classifier = getattr(drawing_setup_module, "create_layer_standard_check", None)
+    assert callable(classifier), "the existing Drawing Setup owner must expose classification"
+    return classifier
+
+
+def test_write_manifest_does_not_follow_preexisting_temporary_symlink(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+    protected = tmp_path / "source.dwg"
+    protected.write_bytes(b"source drawing bytes")
+    temporary_link = output.with_suffix(output.suffix + ".tmp")
+    try:
+        temporary_link.symlink_to(protected)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"filesystem symlink creation is unavailable: {exc}")
+
+    write_manifest(output, {"status": "CLASSIFIED"})
+
+    assert protected.read_bytes() == b"source drawing bytes"
+    assert json.loads(output.read_text(encoding="utf-8")) == {"status": "CLASSIFIED"}
+
+
 def _create_plan(
     *,
     run_id: str,
@@ -57,6 +80,250 @@ def _create_plan(
         template_manifest=template_manifest,
         template_file=template_file,
     )
+
+
+def test_layer_standard_check_classifies_every_audited_layer_by_literal_rules(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "drawing-setup-audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = [
+        {"name": "A-WALL", "linetype": "Continuous", "plottable": True},
+        {"name": "a-wall", "linetype": "Continuous", "plottable": True},
+        {"name": "MISC", "linetype": "Continuous", "plottable": True},
+        {"name": "MISC", "linetype": "Continuous", "plottable": True},
+    ]
+    write_manifest(audit_path, audit)
+    rules = {
+        "allowed_exact_names": ["A-WALL"],
+        "allowed_prefixes": ["A-"],
+        "case_sensitive": False,
+    }
+
+    result = _layer_classifier()(audit_path, rules)
+
+    assert result == {
+        "schema_version": "layer-standard-check-1.0",
+        "status": "CLASSIFIED",
+        "classification_scope": "LAYER_NAME_RULES_ONLY",
+        "audit_origin_authentication": "NOT_AUTHENTICATED",
+        "layer_inventory_completeness": "NOT_VERIFIED",
+        "classification_basis": "CALLER_SUPPLIED_AUDIT_LAYER_NAMES",
+        "engineering_compliance": "NOT_EVALUATED",
+        "audit_full_path": str(audit_path.resolve()),
+        "audit_sha256": sha256_file(audit_path),
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256": sha256_file(drawing),
+        "rules": rules,
+        "layer_count": 4,
+        "standard_count": 2,
+        "nonstandard_count": 2,
+        "standard_percentage": 50.0,
+        "layers": [
+            {
+                "name": "A-WALL",
+                "classification": "STANDARD",
+                "matching_rules": [
+                    {"kind": "EXACT_NAME", "value": "A-WALL"},
+                    {"kind": "PREFIX", "value": "A-"},
+                ],
+            },
+            {
+                "name": "a-wall",
+                "classification": "STANDARD",
+                "matching_rules": [
+                    {"kind": "EXACT_NAME", "value": "A-WALL"},
+                    {"kind": "PREFIX", "value": "A-"},
+                ],
+            },
+            {"name": "MISC", "classification": "NONSTANDARD", "matching_rules": []},
+            {"name": "MISC", "classification": "NONSTANDARD", "matching_rules": []},
+        ],
+    }
+
+
+def test_layer_standard_check_does_not_authenticate_pre_submission_audit_edits(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    # This schema-valid list may have been shortened before classification.
+    audit["layers"] = [{"name": "A-WALL", "linetype": "Continuous", "plottable": True}]
+    write_manifest(audit_path, audit)
+
+    result = _layer_classifier()(
+        audit_path,
+        {"allowed_exact_names": ["A-WALL"], "allowed_prefixes": [], "case_sensitive": True},
+    )
+
+    assert result["layer_count"] == 1
+    assert result["audit_origin_authentication"] == "NOT_AUTHENTICATED"
+    assert result["layer_inventory_completeness"] == "NOT_VERIFIED"
+    assert result["classification_basis"] == "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"
+
+
+def test_layer_standard_check_does_not_trim_or_ignore_case_when_not_requested(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = [
+        {"name": "a-wall", "linetype": "Continuous", "plottable": True},
+        {"name": " A-WALL ", "linetype": "Continuous", "plottable": True},
+    ]
+    write_manifest(audit_path, audit)
+    rules = {
+        "allowed_exact_names": ["A-WALL"],
+        "allowed_prefixes": ["A-"],
+        "case_sensitive": True,
+    }
+
+    result = _layer_classifier()(audit_path, rules)
+
+    assert [item["classification"] for item in result["layers"]] == [
+        "NONSTANDARD",
+        "NONSTANDARD",
+    ]
+
+
+def test_layer_standard_check_reports_empty_table_without_compliance_pass(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = []
+    write_manifest(audit_path, audit)
+
+    result = _layer_classifier()(
+        audit_path,
+        {"allowed_exact_names": [], "allowed_prefixes": [], "case_sensitive": True},
+    )
+
+    assert result["status"] == "EMPTY_TABLE"
+    assert result["layer_count"] == 0
+    assert result["standard_count"] == 0
+    assert result["nonstandard_count"] == 0
+    assert result["standard_percentage"] is None
+    assert result["engineering_compliance"] == "NOT_EVALUATED"
+    assert result["layers"] == []
+
+
+def test_layer_standard_check_rejects_stale_drawing_source(tmp_path: Path) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"original drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = []
+    write_manifest(audit_path, audit)
+    drawing.write_bytes(b"changed drawing bytes")
+
+    with pytest.raises(DrawingSetupError, match="source hash"):
+        _layer_classifier()(
+            audit_path,
+            {"allowed_exact_names": [], "allowed_prefixes": [], "case_sensitive": True},
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("changed", True), ("dbmod_after", 1)],
+)
+def test_layer_standard_check_rejects_mutated_or_inconsistent_audit(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit[field] = value
+    write_manifest(audit_path, audit)
+
+    with pytest.raises(DrawingSetupError):
+        _layer_classifier()(
+            audit_path,
+            {"allowed_exact_names": [], "allowed_prefixes": [], "case_sensitive": True},
+        )
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"allowed_exact_names": [], "allowed_prefixes": []},
+        {"allowed_exact_names": [], "allowed_prefixes": [""], "case_sensitive": True},
+        {
+            "allowed_exact_names": [],
+            "allowed_prefixes": [],
+            "case_sensitive": True,
+            "default_allowed": True,
+        },
+    ],
+)
+def test_layer_standard_check_rejects_rules_without_exact_explicit_semantics(
+    tmp_path: Path, rules: dict[str, object]
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = []
+    write_manifest(audit_path, audit)
+
+    with pytest.raises(DrawingSetupError):
+        _layer_classifier()(audit_path, rules)
+
+
+def test_layer_standard_check_cli_writes_valid_read_only_result(tmp_path: Path) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "drawing-setup-audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = [
+        {"name": "A-WALL", "linetype": "Continuous", "plottable": True},
+        {"name": "MISC", "linetype": "Continuous", "plottable": True},
+    ]
+    write_manifest(audit_path, audit)
+    rules_path = tmp_path / "rules.json"
+    rules = {"allowed_exact_names": ["A-WALL"], "allowed_prefixes": [], "case_sensitive": True}
+    rules_path.write_text(json.dumps(rules), encoding="utf-8")
+    output = tmp_path / "layer-standard-check.json"
+
+    assert main([
+        "layer-standard-check", "--audit", str(audit_path),
+        "--rules", str(rules_path), "--output", str(output),
+    ]) == 0
+
+    result = read_contract(output, contract="layer_standard_check")
+    assert result["status"] == "CLASSIFIED"
+    assert result["audit_origin_authentication"] == "NOT_AUTHENTICATED"
+    assert result["layer_inventory_completeness"] == "NOT_VERIFIED"
+    assert result["classification_basis"] == "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"
+    assert result["engineering_compliance"] == "NOT_EVALUATED"
+    assert result["standard_count"] == 1
+    assert result["nonstandard_count"] == 1
 
 
 def _policy_plan(
