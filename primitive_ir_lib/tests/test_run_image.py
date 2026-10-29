@@ -13,7 +13,7 @@ import pytest
 
 from primitive_ir_lib.calibration_registry import add_record, get_verified_scale
 from primitive_ir_lib.assemble import build_document as assemble_document
-from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine, RawPdfLine
 from primitive_ir_lib.models import Calibration
 from primitive_ir_lib.run_image import CalibrationCandidateUnavailableError, _title_block_roi, main, run
 from primitive_ir_lib.text_extraction import RawText
@@ -30,6 +30,188 @@ def test_title_block_roi_includes_scale_label_above_lower_third():
     assert y0 <= scale_label_bbox[1]
     assert x1 >= scale_label_bbox[2]
     assert y1 >= scale_label_bbox[3]
+
+
+def test_run_image_serializes_pdf_vector_lines_through_existing_primitive_owner(tmp_path):
+    image_path = tmp_path / "page.png"
+    output_path = tmp_path / "primitive_ir.json"
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+    pdf_line = RawPdfLine(
+        id="pdf-line-source-bound",
+        p1_px=(10.0, 20.0),
+        p2_px=(90.0, 20.0),
+        confidence=1.0,
+        bbox_px=(10.0, 20.0, 90.0, 20.0),
+        source_pdf_sha256="a" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="b" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+        source_layer="UNCLASSIFIED_SOURCE_LAYER",
+        source_seqno=4,
+        source_item_index=0,
+    )
+
+    with patch(
+        "primitive_ir_lib.run_image.extract_raw_geometry",
+        return_value=RawGeometry(),
+    ):
+        run(
+            image_path=str(image_path),
+            output_path=str(output_path),
+            scale_mm_per_px=0.5,
+            preset="default",
+            pdf_vector_lines=[pdf_line],
+        )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    pdf_lines = [
+        primitive for primitive in payload["primitives"]
+        if primitive["source"] == "geometry_pdfvector"
+    ]
+    assert len(pdf_lines) == 1
+    assert pdf_lines[0]["type"] == "line"
+    assert pdf_lines[0]["geometry"]["start"] == {"x": 5.0, "y": 30.0}
+    assert pdf_lines[0]["geometry"]["end"] == {"x": 45.0, "y": 30.0}
+    assert pdf_lines[0]["trace"]["source_pdf_sha256"] == "a" * 64
+    assert pdf_lines[0]["trace"]["source_render_sha256"] == "b" * 64
+    assert validate_document(payload) == []
+
+
+def test_pdf_vector_lines_stay_out_of_raster_merge_calibration_and_cross_validation(
+    tmp_path, monkeypatch
+):
+    image_path = tmp_path / "page.png"
+    output_path = tmp_path / "primitive_ir.json"
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+    raster_line = RawLine(
+        id="raster-line",
+        p1_px=(5.0, 5.0),
+        p2_px=(30.0, 5.0),
+        confidence=0.8,
+        bbox_px=(5.0, 5.0, 30.0, 5.0),
+    )
+    pdf_line = RawPdfLine(
+        id="pdf-line-source-bound",
+        p1_px=(40.0, 20.0),
+        p2_px=(90.0, 20.0),
+        confidence=1.0,
+        bbox_px=(40.0, 20.0, 90.0, 20.0),
+        source_pdf_sha256="a" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="b" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+        source_layer="UNCLASSIFIED_SOURCE_LAYER",
+        source_seqno=4,
+        source_item_index=0,
+    )
+    calibration_line_inputs = []
+    merge_line_inputs = []
+    cross_validation_line_inputs = []
+    calibration = Calibration(
+        unit="mm",
+        pixel_to_unit_scale=0.5,
+        origin_px=(0.0, float(image.shape[0])),
+        method="manual_override",
+    )
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_raw_geometry",
+        lambda *_args, **_kwargs: RawGeometry(lines=[raster_line]),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.detect_text_candidate_rois", lambda _image: []
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.auto_estimate_calibration",
+        lambda texts, lines, height, unit: (
+            calibration_line_inputs.extend(lines) or calibration
+        ),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.merge_collinear_lines",
+        lambda lines, **_kwargs: (merge_line_inputs.extend(lines) or lines),
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.cross_validate",
+        lambda _texts, lines, _calibration, **_kwargs: (
+            cross_validation_line_inputs.extend(lines) or []
+        ),
+    )
+
+    run(
+        image_path=str(image_path),
+        output_path=str(output_path),
+        auto_calibrate=True,
+        merge_lines=True,
+        pdf_vector_lines=[pdf_line],
+    )
+
+    assert calibration_line_inputs == [raster_line]
+    assert merge_line_inputs == [raster_line]
+    assert cross_validation_line_inputs == [raster_line]
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    sources = [primitive["source"] for primitive in payload["primitives"]]
+    assert sources.count("geometry_pdfvector") == 1
+    assert sources.count("geometry_opencv") == 1
+    assert validate_document(payload) == []
+
+
+def test_pdf_source_path_raster_overlap_and_text_collision_are_refused():
+    source = RawPdfLine(
+        id="pdf-source",
+        p1_px=(0.0, 0.0),
+        p2_px=(100.0, 0.0),
+        confidence=1.0,
+        bbox_px=(0.0, 0.0, 100.0, 0.0),
+        source_pdf_sha256="a" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="b" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+        source_layer="SOURCE",
+        source_seqno=4,
+        source_item_index=0,
+    )
+
+    def raster_line(line_id, first, second):
+        return RawLine(
+            id=line_id,
+            p1_px=first,
+            p2_px=second,
+            confidence=0.8,
+            bbox_px=(
+                min(first[0], second[0]),
+                min(first[1], second[1]),
+                max(first[0], second[0]),
+                max(first[1], second[1]),
+            ),
+        )
+
+    assert run_image_module._pdf_line_path_overlaps_raster(
+        [source], [raster_line("coincident", (25.0, 0.0), (75.0, 0.0))], []
+    )
+    assert not run_image_module._pdf_line_path_overlaps_raster(
+        [source], [raster_line("crossing", (50.0, -20.0), (50.0, 20.0))], []
+    )
+    assert not run_image_module._pdf_line_path_overlaps_raster(
+        [source], [raster_line("parallel-separated", (0.0, 4.0), (100.0, 4.0))], []
+    )
+    text = RawText(
+        id="overlapping-text",
+        content="GUNNERUS",
+        bbox_px=(45, -5, 55, 5),
+        rotation_deg=0.0,
+        confidence=1.0,
+        source="text_pdfvector",
+    )
+    assert run_image_module._pdf_line_path_overlaps_raster([source], [], [text])
 
 
 def test_run_image_writes_valid_primitive_ir_with_manual_scale():

@@ -17,7 +17,13 @@ import numpy as np
 import pytest
 
 import primitive_ir_lib.run_pdf as run_pdf_module
-from primitive_ir_lib.run_pdf import _page_vector_arcs, _page_vector_line_witnesses, run_pdf
+from primitive_ir_lib.run_pdf import (
+    _axis_aligned_clip_rect,
+    _page_vector_arcs,
+    _page_vector_line_witnesses,
+    _source_path_pixel_supported_items,
+    run_pdf,
+)
 from primitive_ir_lib.geometry_extraction import RawArc, RawGeometry, RawLine
 import primitive_ir_lib.run_image as run_image_module
 from primitive_ir_lib.run_image import _line_is_explained_by_pdf_arc
@@ -25,6 +31,53 @@ from primitive_ir_lib.validator import validate_document
 from dxf_builder_lib.builder import build_dxf
 from dxf_builder_lib.reviewer import review_dxf
 from semantic_ir_lib.io_utils import load_primitive_ir_document
+
+
+def test_axis_aligned_quad_clip_is_proven_as_rectangle() -> None:
+    quad = fitz.Quad(
+        fitz.Point(10.0, 20.0),
+        fitz.Point(10.0, 0.0),
+        fitz.Point(40.0, 20.0),
+        fitz.Point(40.0, 0.0),
+    )
+    clip = {
+        "type": "clip",
+        "items": [("qu", quad)],
+        "scissor": fitz.Rect(10.0, 0.0, 40.0, 20.0),
+    }
+
+    assert _axis_aligned_clip_rect(clip) == fitz.Rect(10.0, 0.0, 40.0, 20.0)
+
+
+def test_skewed_quad_clip_is_not_treated_as_axis_aligned_rectangle() -> None:
+    quad = fitz.Quad(
+        fitz.Point(10.0, 20.0),
+        fitz.Point(12.0, 0.0),
+        fitz.Point(40.0, 20.0),
+        fitz.Point(38.0, 0.0),
+    )
+    clip = {
+        "type": "clip",
+        "items": [("qu", quad)],
+        "scissor": fitz.Rect(10.0, 0.0, 40.0, 20.0),
+    }
+
+    assert _axis_aligned_clip_rect(clip) is None
+
+
+def test_source_path_subpixel_item_requires_connected_visible_support() -> None:
+    connected = [((0.0, 0.0), (0.4, 0.0)), ((0.4, 0.0), (2.4, 0.0))]
+    disconnected = [((0.0, 0.0), (0.4, 0.0)), ((3.0, 0.0), (5.0, 0.0))]
+
+    assert _source_path_pixel_supported_items(connected, {1}) == {0, 1}
+    assert _source_path_pixel_supported_items(disconnected, {1}) == {1}
+    assert _source_path_pixel_supported_items(connected, set()) == set()
+
+
+def test_source_path_does_not_allow_unwitnessed_long_item() -> None:
+    endpoints = [((0.0, 0.0), (0.4, 0.0)), ((0.4, 0.0), (10.4, 0.0))]
+
+    assert _source_path_pixel_supported_items(endpoints, {0}) == {0}
 
 
 def _write_quarter_arc_pdf(
@@ -423,7 +476,9 @@ def _write_ocg_fractional_inline_image_false_pixel_witness_pdf(path: Path) -> No
     document.close()
 
 
-def _write_ocg_text_false_pixel_witness_pdf(path: Path) -> None:
+def _write_ocg_text_false_pixel_witness_pdf(
+    path: Path, *, outline_text: bool = False
+) -> None:
     """Build a PDF where OCG text paints over a covered ISO source line."""
     document = fitz.open()
     page = document.new_page(width=600, height=600)
@@ -439,6 +494,7 @@ def _write_ocg_text_false_pixel_witness_pdf(path: Path) -> None:
     page.insert_text(
         (50, 300), "_" * 167, fontname="cour", fontsize=5,
         color=(0, 0, 0), oc=ocg, overlay=True,
+        render_mode=1 if outline_text else 0,
     )
     # Independent visible source geometry is a positive control outside text.
     page.draw_line(
@@ -626,6 +682,90 @@ def test_ocg_text_paint_cannot_witness_covered_source_layer_line(tmp_path: Path)
     assert review.passed is True
 
 
+def test_pdf_vector_line_candidate_rejects_later_text_cover_but_keeps_visible_line(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ocg-text-false-pdf-vector-line.pdf"
+    _write_ocg_text_false_pixel_witness_pdf(source)
+
+    with fitz.open(source) as document:
+        page = document[0]
+        drawings = page.get_drawings(extended=True)
+        hidden_candidate = next(
+            drawing for drawing in drawings
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(300.0)
+        )
+        visible_candidate = next(
+            drawing for drawing in drawings
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(400.0)
+        )
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        common = {
+            "include_pdf_vector_lines": True,
+            "source_pdf_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "source_page_index": 0,
+            "render_dpi": 72,
+        }
+        hidden = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            pixmap,
+            1.0,
+            (pixmap.x, pixmap.y),
+            _candidate_seqnos={hidden_candidate["seqno"]},
+            **common,
+        )
+        visible = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            pixmap,
+            1.0,
+            (pixmap.x, pixmap.y),
+            _candidate_seqnos={visible_candidate["seqno"]},
+            **common,
+        )
+
+    assert isinstance(hidden, tuple) and hidden[1] == []
+    assert isinstance(visible, tuple) and len(visible[1]) == 1
+    assert visible[1][0].p1_px == pytest.approx((50.0, 400.0))
+    assert visible[1][0].p2_px == pytest.approx((549.0, 400.0))
+
+
+def test_pdf_vector_line_candidate_rejects_stroked_text_outline_conflict(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ocg-stroke-text-false-pdf-vector-line.pdf"
+    _write_ocg_text_false_pixel_witness_pdf(source, outline_text=True)
+
+    with fitz.open(source) as document:
+        page = document[0]
+        candidate = next(
+            drawing for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(300.0)
+        )
+        stroke_text = next(
+            span for span in page.get_texttrace()
+            if span.get("layer") == "Oculto (ISO)"
+        )
+        assert page.get_bboxlog()[stroke_text["seqno"]][0] == "stroke-text"
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        result = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            pixmap,
+            1.0,
+            (pixmap.x, pixmap.y),
+            include_pdf_vector_lines=True,
+            source_pdf_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            source_page_index=0,
+            render_dpi=72,
+            _candidate_seqnos={candidate["seqno"]},
+        )
+
+    assert isinstance(result, tuple)
+    assert result[1] == []
+
+
 def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
     tmp_path: Path,
 ):
@@ -662,6 +802,20 @@ def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
     changed = np.any(baseline != layer_off, axis=2)
     assert not changed[300, 50:551].any(), "the hidden vector stroke changed its own pixel row"
     assert changed[301, 50:551].all(), "the OCG neighbor-pixel control did not render"
+
+    source_result = run_pdf_module._page_pdf_source_layer_line_witnesses(
+        page,
+        baseline_pixmap,
+        1.0,
+        (baseline_pixmap.x, baseline_pixmap.y),
+        include_pdf_vector_lines=True,
+        source_pdf_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_page_index=0,
+        render_dpi=72,
+        _candidate_seqnos={candidate["seqno"]},
+    )
+    assert isinstance(source_result, tuple)
+    assert source_result[1] == []  # Incomplete group/clip ancestry fails closed.
 
     output = tmp_path / "pipeline"
     run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)

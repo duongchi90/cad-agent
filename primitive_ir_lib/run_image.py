@@ -29,7 +29,7 @@ from .assemble import build_document
 from .calibration import Calibration, auto_estimate_calibration
 from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
-from .geometry_extraction import RawArc, RawLine, extract_raw_geometry
+from .geometry_extraction import RawArc, RawLine, RawPdfLine, extract_raw_geometry
 from .io_utils import save_document
 from .line_merging import merge_collinear_lines
 from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
@@ -437,6 +437,118 @@ def _apply_pdf_source_layer_classifications(
             primitive.layer = classification
 
 
+def _pdf_line_path_overlaps_raster(
+    source_lines: List[RawPdfLine], raster_lines: List[RawLine], raw_texts: List[RawText]
+) -> bool:
+    """Refuse a whole PDF path when raster/text composition is not unambiguous."""
+    if not source_lines:
+        return False
+    cell_size = 256.0
+
+    def cells(bounds: tuple[float, float, float, float], margin: float = 0.0) -> list[tuple[int, int]]:
+        left, top, right, bottom = bounds
+        x0 = math.floor((left - margin) / cell_size)
+        y0 = math.floor((top - margin) / cell_size)
+        x1 = math.floor((right + margin) / cell_size)
+        y1 = math.floor((bottom + margin) / cell_size)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 256:
+            return []
+        return [(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)]
+
+    raster_by_cell: dict[tuple[int, int], list[int]] = {}
+    broad_raster: list[int] = []
+    for index, raster in enumerate(raster_lines):
+        occupied = cells(raster.bbox_px, 1.5)
+        if not occupied:
+            broad_raster.append(index)
+            continue
+        for cell in occupied:
+            raster_by_cell.setdefault(cell, []).append(index)
+    text_by_cell: dict[tuple[int, int], list[int]] = {}
+    broad_text: list[int] = []
+    for index, text in enumerate(raw_texts):
+        occupied = cells(text.bbox_px)
+        if not occupied:
+            broad_text.append(index)
+            continue
+        for cell in occupied:
+            text_by_cell.setdefault(cell, []).append(index)
+
+    cosine_limit = math.cos(math.radians(2.0))
+    for source in source_lines:
+        source_cells = cells(source.bbox_px)
+        nearby_text: set[int] = set(
+            broad_text if source_cells else range(len(raw_texts))
+        )
+        for cell in source_cells:
+            nearby_text.update(text_by_cell.get(cell, ()))
+        for text_index in nearby_text:
+            left, top, right, bottom = raw_texts[text_index].bbox_px
+            source_left, source_top, source_right, source_bottom = source.bbox_px
+            if (
+                source_left < right and source_right > left
+                and source_top < bottom and source_bottom > top
+            ):
+                return True
+        source_dx = source.p2_px[0] - source.p1_px[0]
+        source_dy = source.p2_px[1] - source.p1_px[1]
+        source_length = math.hypot(source_dx, source_dy)
+        if not math.isfinite(source_length) or source_length <= 1e-6:
+            return True
+        source_unit = (source_dx / source_length, source_dy / source_length)
+        source_left, source_top, source_right, source_bottom = source.bbox_px
+        source_cells = cells(source.bbox_px, 1.5)
+        nearby_raster: set[int] = set(
+            broad_raster if source_cells else range(len(raster_lines))
+        )
+        for cell in source_cells:
+            nearby_raster.update(raster_by_cell.get(cell, ()))
+        for raster_index in nearby_raster:
+            raster = raster_lines[raster_index]
+            raster_left, raster_top, raster_right, raster_bottom = raster.bbox_px
+            if (
+                source_left - 1.5 > raster_right
+                or source_right + 1.5 < raster_left
+                or source_top - 1.5 > raster_bottom
+                or source_bottom + 1.5 < raster_top
+            ):
+                continue
+            raster_dx = raster.p2_px[0] - raster.p1_px[0]
+            raster_dy = raster.p2_px[1] - raster.p1_px[1]
+            raster_length = math.hypot(raster_dx, raster_dy)
+            if not math.isfinite(raster_length) or raster_length <= 1e-6:
+                return True
+            cosine = abs(
+                (source_dx * raster_dx + source_dy * raster_dy)
+                / (source_length * raster_length)
+            )
+            if cosine < cosine_limit:
+                continue
+            source_to_raster = (
+                raster.p1_px[0] - source.p1_px[0],
+                raster.p1_px[1] - source.p1_px[1],
+            )
+            perpendicular = abs(
+                source_unit[0] * source_to_raster[1]
+                - source_unit[1] * source_to_raster[0]
+            )
+            if perpendicular > 1.5:
+                continue
+            projections = (
+                (raster.p1_px[0] - source.p1_px[0]) * source_unit[0]
+                + (raster.p1_px[1] - source.p1_px[1]) * source_unit[1],
+                (raster.p2_px[0] - source.p1_px[0]) * source_unit[0]
+                + (raster.p2_px[1] - source.p1_px[1]) * source_unit[1],
+            )
+            overlap = max(
+                0.0,
+                min(source_length, max(projections)) - max(0.0, min(projections)),
+            )
+            if overlap >= 0.5 * min(source_length, raster_length):
+                return True
+    return False
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -463,6 +575,7 @@ def run(
     pdf_vector_arcs: Optional[List[RawArc]] = None,
     pdf_vector_line_witnesses: Optional[List[RawLine]] = None,
     pdf_layer_line_witnesses: Optional[List[Tuple[RawLine, str]]] = None,
+    pdf_vector_lines: Optional[List[RawPdfLine]] = None,
     source_page_index: int = 0,
     image_bytes: Optional[bytes] = None,
 ) -> str:
@@ -577,6 +690,17 @@ def run(
     raw_lines.extend(
         line for witnessed_intervals in pdf_witnessed_lines.values() for line in witnessed_intervals
     )
+    grouped_pdf_paths: dict[tuple[int, int, str], list[RawPdfLine]] = {}
+    for line in pdf_vector_lines or []:
+        grouped_pdf_paths.setdefault(
+            (line.source_page_index, line.source_seqno, line.source_layer), []
+        ).append(line)
+    pdf_vector_lines = [
+        line
+        for path_lines in grouped_pdf_paths.values()
+        if not _pdf_line_path_overlaps_raster(path_lines, raw_lines, raw_texts)
+        for line in path_lines
+    ]
 
     if view_candidates_output_path is not None:
         if view_candidates_dpi is None:
@@ -643,6 +767,7 @@ def run(
         raw_texts=raw_texts,
         raw_arcs=pdf_vector_arcs,
         sha256=image_sha256,
+        raw_pdf_lines=pdf_vector_lines,
     )
     _apply_pdf_source_layer_classifications(document, pdf_layer_classifications)
     document.cross_validations = cross_validate(
