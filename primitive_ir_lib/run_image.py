@@ -524,16 +524,6 @@ def _pdf_line_overlaps_raster(
             )
             if cosine < cosine_limit:
                 continue
-            source_to_raster = (
-                raster.p1_px[0] - source.p1_px[0],
-                raster.p1_px[1] - source.p1_px[1],
-            )
-            perpendicular = abs(
-                source_unit[0] * source_to_raster[1]
-                - source_unit[1] * source_to_raster[0]
-            )
-            if perpendicular > 1.5:
-                continue
             projections = (
                 (raster.p1_px[0] - source.p1_px[0]) * source_unit[0]
                 + (raster.p1_px[1] - source.p1_px[1]) * source_unit[1],
@@ -545,7 +535,30 @@ def _pdf_line_overlaps_raster(
                 min(source_length, max(projections)) - max(0.0, min(projections)),
             )
             if overlap > 1e-6:
-                return True
+                overlap_start = max(0.0, min(projections))
+                overlap_end = min(source_length, max(projections))
+                projection_delta = projections[1] - projections[0]
+                if abs(projection_delta) <= 1e-6:
+                    continue
+                raster_t_start = (overlap_start - projections[0]) / projection_delta
+                raster_t_end = (overlap_end - projections[0]) / projection_delta
+                perpendiculars = tuple(
+                    source_unit[0] * (point[1] - source.p1_px[1])
+                    - source_unit[1] * (point[0] - source.p1_px[0])
+                    for point in (raster.p1_px, raster.p2_px)
+                )
+                signed_start = perpendiculars[0] + (
+                    perpendiculars[1] - perpendiculars[0]
+                ) * raster_t_start
+                signed_end = perpendiculars[0] + (
+                    perpendiculars[1] - perpendiculars[0]
+                ) * raster_t_end
+                minimum_perpendicular = (
+                    0.0 if signed_start * signed_end <= 0.0
+                    else min(abs(signed_start), abs(signed_end))
+                )
+                if minimum_perpendicular <= 1.5:
+                    return True
     return False
 
 

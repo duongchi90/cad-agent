@@ -217,6 +217,54 @@ def test_pdf_source_path_raster_overlap_and_text_collision_are_refused():
     assert run_image_module._pdf_line_overlaps_raster([source], [], [text])
 
 
+def test_pdf_source_raster_overlap_checks_full_near_parallel_segment():
+    source = RawPdfLine(
+        id="pdf-source",
+        p1_px=(0.0, 0.0),
+        p2_px=(1000.0, 0.0),
+        confidence=1.0,
+        bbox_px=(0.0, 0.0, 1000.0, 0.0),
+        source_pdf_sha256="a" * 64,
+        source_page_index=0,
+        source_transform=(1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        render_sha256="b" * 64,
+        render_dpi=72,
+        render_origin_px=(0, 0),
+        source_layer="SOURCE",
+        source_seqno=4,
+        source_item_index=0,
+    )
+    raster = RawLine(
+        id="near-parallel-raster",
+        p1_px=(0.0, 2.0),
+        p2_px=(1000.0, 1.0),
+        confidence=0.8,
+        bbox_px=(0.0, 1.0, 1000.0, 2.0),
+    )
+
+    assert run_image_module._pdf_line_overlaps_raster([source], [raster], [])
+    reversed_raster = RawLine(
+        id="near-parallel-raster-reversed",
+        p1_px=(1000.0, 1.0),
+        p2_px=(0.0, 2.0),
+        confidence=0.8,
+        bbox_px=(0.0, 1.0, 1000.0, 2.0),
+    )
+    assert run_image_module._pdf_line_overlaps_raster(
+        [source], [reversed_raster], []
+    )
+    separated_raster = RawLine(
+        id="parallel-raster-separated-throughout",
+        p1_px=(0.0, 2.1),
+        p2_px=(1000.0, 4.0),
+        confidence=0.8,
+        bbox_px=(0.0, 2.1, 1000.0, 4.0),
+    )
+    assert not run_image_module._pdf_line_overlaps_raster(
+        [source], [separated_raster], []
+    )
+
+
 def test_run_image_refuses_only_overlapping_item_from_compound_pdf_path(
     tmp_path, monkeypatch
 ):
