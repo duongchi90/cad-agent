@@ -271,6 +271,17 @@ def review_dxf(
     build (theo handle) với `written_geometry_by_primitive_id`. Raise
     ImportError nếu chưa cài `ezdxf` (cùng chiến lược lazy-import khác
     trong dự án)."""
+    if isinstance(tolerance_mm, bool) or type(tolerance_mm) not in (int, float):
+        raise ValueError("tolerance_mm must be a finite non-negative int or float")
+    try:
+        finite_tolerance = math.isfinite(tolerance_mm)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "tolerance_mm must be a finite non-negative int or float"
+        ) from exc
+    if not finite_tolerance or tolerance_mm < 0:
+        raise ValueError("tolerance_mm must be a finite non-negative int or float")
+
     try:
         import ezdxf
     except ImportError as exc:
