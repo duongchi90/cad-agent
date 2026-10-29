@@ -1077,6 +1077,66 @@ class DotNetIPCClientTests(unittest.TestCase):
             )
             self.assertTrue(result["payload"]["model_space_inventory"]["enumeration_complete"])
 
+    def test_drawing_setup_audit_rejects_inventory_identity_crossbind(self) -> None:
+        drawing_path = r"C:\temp\setup-lite.dwg"
+        requested_hash = "a" * 64
+        inventory = {
+            "drawing_full_path": drawing_path,
+            "drawing_sha256_before": requested_hash,
+            "drawing_sha256_after": requested_hash,
+            "dbmod_before": 0,
+            "dbmod_after": 0,
+            "process_id": 123,
+            "plugin_version": "test",
+            "plugin_binary_path": r"C:\plugin.dll",
+            "plugin_binary_sha256": "c" * 64,
+            "enumeration_complete": True,
+            "entity_count": 0,
+            "bounds_complete": True,
+            "entities": [],
+        }
+        payload = {
+            "schema_version": "drawing-setup-audit-1.0",
+            "drawing_full_path": drawing_path,
+            "drawing_sha256": requested_hash,
+            "dbmod_before": 0,
+            "dbmod_after": 0,
+            "changed": False,
+            "variables": {},
+            "current_layer": "0",
+            "custom_properties": {},
+            "layers": [],
+            "styles": {"text": ["Standard"], "dimension": ["Standard"], "mleader": ["Standard"], "table": ["Standard"]},
+            "layouts": [],
+            "font_report": {"missing": [], "substituted": []},
+            "model_space_inventory": inventory,
+        }
+        mismatches = (
+            ("hash", {"drawing_sha256_before": "b" * 64, "drawing_sha256_after": "b" * 64}),
+            ("path", {"drawing_full_path": r"C:\temp\other.dwg"}),
+        )
+
+        for field, mismatch in mismatches:
+            with self.subTest(field=field), TemporaryDirectory() as temporary:
+                candidate = copy.deepcopy(payload)
+                candidate["model_space_inventory"].update(mismatch)
+                ipc_dir = Path(temporary)
+                client = DotNetIPCClient(
+                    ipc_dir=ipc_dir,
+                    trigger=FakeDispatcher(ipc_dir, candidate),
+                )
+
+                with self.assertRaisesRegex(
+                    DotNetIPCProtocolError,
+                    "ModelSpace inventory identity does not match the requested drawing",
+                ):
+                    client.drawing_setup_audit(
+                        drawing_path,
+                        drawing_sha256=requested_hash,
+                        include_model_space_inventory=True,
+                        request_id=f"setup-lite-inventory-crossbind-{field}",
+                    )
+
     def test_drawing_setup_audit_rejects_incomplete_requested_inventory(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)

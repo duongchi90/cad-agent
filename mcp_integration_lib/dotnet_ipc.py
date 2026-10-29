@@ -837,6 +837,25 @@ class DotNetIPCClient:
                     raise DotNetIPCProtocolError(
                         f"drawing_setup_audit result has invalid ModelSpace inventory: {exc}"
                     ) from exc
+                inventory = payload["model_space_inventory"]
+                try:
+                    inventory_path = normalize_windows_absolute_path(
+                        inventory["drawing_full_path"]
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise DotNetIPCProtocolError(
+                        "ModelSpace inventory identity does not match the requested drawing"
+                    ) from exc
+                if (
+                    inventory_path.casefold() != normalized_path.casefold()
+                    or inventory["drawing_sha256_before"].casefold()
+                    != normalized_sha256.casefold()
+                    or inventory["drawing_sha256_after"].casefold()
+                    != normalized_sha256.casefold()
+                ):
+                    raise DotNetIPCProtocolError(
+                        "ModelSpace inventory identity does not match the requested drawing"
+                    )
             if result["success"] is not True:
                 errors = result.get("errors", [])
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"
