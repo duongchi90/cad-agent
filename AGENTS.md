@@ -24,6 +24,7 @@ Read only the current source needed for the task:
 ## Product and implementation rules
 
 - Reuse existing owners and APIs first. For new production behavior, identify the current reachable causal RED, use a failing regression test or benchmark before implementation, and prefer the smallest repair or thin adapter. Obtain design approval before changing behavior.
+- Apply engineering-first reasoning to every CAD operation, proportionate to scope: in REVISION, reuse a trustworthy native base and verify the bounded source-supported delta plus affected relationships; in RECONSTRUCTION, understand the full drawing, dimension roles/feature associations, datums, dependencies, and construction order; in NATIVE_EDIT, verify only the affected scope. Classify dimensions as DRIVING, REFERENCE, REDUNDANT, CONFLICTING, or UNRESOLVED; OCR text alone is not a constraint. Reuse correct native geometry and owners, derive only from evidence, and measure geometry rather than labels or appearance. Do not use DIMENSION text to hide a mismatch or require a DIMENSION when it is not needed. Use native readback/save-reopen when applicable. See `docs/AI_OPERATING_MODEL.md`.
 - Complete the task’s internal/external reuse review before adding production behavior. Stop for product-owner review when licensing, reproducibility, architecture ownership, or benchmark benefit is unclear.
 - Do not create a custom production Codex transport; use the approved official SDK/App Server/fallback order in `docs/AI_OPERATING_MODEL.md`.
 - Keep one writer for overlapping files. Keep changes scoped; run focused checks after each task.
@@ -56,6 +57,8 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 - Human approval remains required for unverified calibration; ambiguous recognition requiring product judgment; credentials, billing, or private-data authority; unknown executable or trust expansion; source/customer/accepted-drawing mutation; destructive or irreversible high-cost action; and genuinely ambiguous product requirements. Production DXF mutation outside the active package’s explicit disposable-candidate authority remains subject to human approval.
 - Preserve the original DXF and establish rollback before AutoCAD Mechanical repair. Keep live AutoCAD/FileIPC work exclusive; bind actions to the verified process, document, and configured IPC path. Do not infer that FileIPC moved from `C:\temp`; verify `CAD_AGENT_DOTNET_IPC_DIR` and current process configuration.
 - Prefer `D:\Cad agent temp` for new project scratch/build/test/evidence outputs when the owning tool allows it. On repository refresh, verify the current scratch and IPC locations before use.
+- Keep local resource use bounded: one heavy local job by default; one Luna-managed Edge window by default, maximum two; one Luna-managed DWG by default, maximum two, with one exclusive mutable AutoCAD lane. Do not open a third window/drawing or count/close user-owned resources.
+- Reuse valid sessions and evidence. Before recovery, identify the owned process/document, active command, unsaved state, and rollback path; never blindly retry or terminate user-owned work. A blocked lane does not stop independent authorized work.
 - Do not alter architecture, public schemas, or package boundaries outside the approved task.
 
 ## Executor and hard-reasoning consultation
@@ -85,3 +88,7 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 - Confirm `git diff --check` is clean and verification did not change repository status.
 - Leave no unresolved P0/P1 finding; give deferred P2 findings a reason and owner.
 - Route durable acceptance through `docs/STATUS.md`; keep transient state on GitHub.
+- Before heavy local jobs, check free space and expected output size on every affected volume. If safe headroom cannot be preserved, defer only that job and continue lightweight work.
+- At batch closure classify artifacts as `KEEP`, `REGENERABLE`, or `DISPOSABLE`; retain sources, accepted baselines, current candidates, unique tests, hashes, receipts, and required evidence. Clean only closed, unreferenced reproducible intermediates. Never remove dirty, active, unpushed, or unverified worktrees; remove an obsolete worktree only with `git worktree remove` after verifying its branch/commits, PR, untracked data, sessions/processes, and checkpoint references.
+- Use `Z:\DuongChi\Cad Agent` for long-term closed evidence only after verifying its mapped/network status, filesystem, capacity, access, speed, and durability; transfer by copy, hash/readback verification, reference reconciliation, then cleanup only after confirmed success.
+- Do not claim durable policy adoption from a document edit alone: require merge to canonical `main`, a fresh repository-only session recovery without chat history, and policy contract plus evidence-backed scenario checks. Otherwise report `PERSISTENCE_ACCEPTANCE_GATE=NOT_VERIFIED`.

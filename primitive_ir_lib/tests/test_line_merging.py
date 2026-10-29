@@ -604,3 +604,99 @@ def test_irregular_gaps_are_not_misclassified_as_regular_dash_cadence():
         cv2.line(image, (60, start), (60, end), (0, 0, 0), 2)
 
     assert _source_dash_gap_intervals(image, 60, 0, np.pi / 2, 10, 124) == []
+
+
+
+def test_exact_line_cleanup_keeps_only_identical_geometry_with_matching_metadata():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    exact = _line((0.0, 0.0), (10.0, 0.0), "lower-confidence", confidence=0.7)
+    reversed_exact = _line((10.0, 0.0), (0.0, 0.0), "higher-confidence", confidence=0.9)
+    near_parallel = _line((0.0, 0.02), (10.0, 0.02), "near-parallel", confidence=0.8)
+    corner = _line((10.0, 0.0), (10.0, 10.0), "corner", confidence=0.8)
+    different_semantics = _line((0.0, 0.0), (10.0, 0.0), "semantic-variant", confidence=0.95)
+    different_semantics.source = "pdf_vector"
+    different_semantics.layer = "CENTERLINE"
+
+    result = _deduplicate_exact_raw_lines(
+        [exact, reversed_exact, near_parallel, corner, different_semantics]
+    )
+
+    assert len(result) == 4
+    assert {line.id for line in result} == {
+        "higher-confidence", "near-parallel", "corner", "semantic-variant"
+    }
+    assert different_semantics in result
+
+
+def test_exact_line_cleanup_preserves_distinct_typed_metadata():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    distinct_metadata_pairs = [
+        (["pdf_vector"], ("pdf_vector",)),
+        ({1: "scan"}, {"1": "scan"}),
+        ({"scan"}, ["scan"]),
+        (True, 1),
+    ]
+
+    for index, (left_metadata, right_metadata) in enumerate(distinct_metadata_pairs):
+        left = _line((0.0, 0.0), (10.0, 0.0), f"left-{index}", confidence=0.7)
+        right = _line((10.0, 0.0), (0.0, 0.0), f"right-{index}", confidence=0.9)
+        left.source_metadata = left_metadata
+        right.source_metadata = right_metadata
+
+        result = _deduplicate_exact_raw_lines([left, right])
+
+        assert len(result) == 2, (left_metadata, right_metadata)
+        assert left in result and right in result
+
+
+def test_exact_line_cleanup_preserves_metadata_from_distinct_runtime_types_with_same_name():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    left_type = type("Marker", (tuple,), {"__module__": "shared.module"})
+    right_type = type("Marker", (tuple,), {"__module__": "shared.module"})
+    left_type.__qualname__ = right_type.__qualname__ = "Marker"
+    left = _line((0.0, 0.0), (10.0, 0.0), "left", confidence=0.7)
+    right = _line((10.0, 0.0), (0.0, 0.0), "right", confidence=0.9)
+    left.source_metadata = left_type(("source-a",))
+    right.source_metadata = right_type(("source-a",))
+
+    result = _deduplicate_exact_raw_lines([left, right])
+
+    assert len(result) == 2
+    assert left in result and right in result
+
+
+def test_exact_line_cleanup_preserves_ambiguous_metadata_values():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    cyclic_left = []
+    cyclic_left.append(cyclic_left)
+    cyclic_right = []
+    cyclic_right.append(cyclic_right)
+    lines = []
+    for index, metadata in enumerate((float("nan"), cyclic_left, cyclic_right)):
+        line = _line((0.0, 0.0), (10.0, 0.0), f"line-{index}", confidence=0.8)
+        line.source_metadata = metadata
+        lines.append(line)
+
+    result = _deduplicate_exact_raw_lines(lines)
+
+    assert len(result) == 3
+    assert result == lines
+
+
+def test_exact_line_cleanup_rejects_nonfinite_confidence():
+    from primitive_ir_lib.line_merging import _deduplicate_exact_raw_lines
+
+    for index, confidence in enumerate((float("nan"), float("inf"), float("-inf"))):
+        valid = _line((0.0, 0.0), (10.0, 0.0), f"valid-{index}", confidence=0.9)
+        invalid = _line((10.0, 0.0), (0.0, 0.0), f"invalid-{index}", confidence=confidence)
+
+        try:
+            _deduplicate_exact_raw_lines([valid, invalid])
+        except ValueError as error:
+            assert "confidence must be finite" in str(error)
+        else:
+            raise AssertionError(f"nonfinite confidence was accepted: {confidence}")
