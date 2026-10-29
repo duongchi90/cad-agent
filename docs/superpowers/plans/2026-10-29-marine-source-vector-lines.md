@@ -1,4 +1,9 @@
 # Marine Source Vector LINE Integration Plan
+**Status:** executing
+**Base SHA:** `69415762cd7fd78229f60016c5cf8ab47791e791`
+**Current implementation/evidence HEAD:** `04c197be4a8af17424160e67d6b567d6ea13d73f`
+**Canonical verification:** `scripts/verify.ps1 -PythonExe .\.venv-py311\Scripts\python.exe` — PASS; 261 .NET tests, 128 dotnet_ipc checks, 4,014 Python tests, 147 subtests; 40 deselected and the verifier's expected causal-RED oracle recorded separately.
+**Required gates:** hosted CI and exact-head Security/Integration reviews pending; native DWG save/close/reopen NOT RUN because this source-line regression uses test-only scale and is not a calibrated drawing candidate.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -74,6 +79,6 @@
 
 - [x] Build DXF from the actual candidate IR; all IR LINE entities emitted, no skipped primitives, and the source LINE path had no raster/text overlap under the existing refusal screen.
 - [x] Run the frozen Gunnerus `real_data` regression: 1 passed; exact PDF SHA matched, all candidate lines reached the existing builder, and `review_dxf(strict_primitive_inventory=True)` passed. Focused PDF/image/geometry suite: 135 passed, 2 B041-gated skips; added outline-control test passed in a later targeted run. Ruff and `git diff --check` passed.
-- [ ] Run canonical `scripts/verify.ps1` after the final implementation on a clean candidate commit; the script refuses to run with the current uncommitted worktree.
+- [x] Run canonical `scripts/verify.ps1` after the implementation commit on a clean tree: PASS at `04c197be4a8af17424160e67d6b567d6ea13d73f`; a first verifier attempt exposed and corrected an architecture-contract violation in the test, then the full verifier passed.
 - [ ] Record native DWG save/close/reopen/readback as NOT RUN unless its dedicated authorized gate is available; never infer it from IR/DXF success.
 - [ ] Recheck current main, exact PR head/tree, hosted CI, independent Security/Integration receipts, and any required native gate before readiness or merge.
