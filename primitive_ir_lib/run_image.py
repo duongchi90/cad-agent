@@ -47,7 +47,7 @@ def _title_block_roi(image_width: int, image_height: int) -> Bbox:
     """Return the conventional lower-right title-block search area."""
     return (
         int(image_width * 0.58),
-        int(image_height * 0.67),
+        int(image_height * 0.50),
         image_width,
         image_height,
     )
@@ -455,6 +455,7 @@ def run(
     calibration_status: str = "verified",
     calibration_source_sha256: Optional[str] = None,
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
+    validated_pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
     pdf_vector_texts: Optional[List[RawText]] = None,
@@ -502,12 +503,14 @@ def run(
     if (
         require_pdf_vector_circle_witness
         or pdf_vector_circle_witnesses
+        or validated_pdf_vector_circle_witnesses
         or pdf_vector_circle_suspect_regions
     ):
         raw_geometry = extract_raw_geometry(
             image,
             preset=preset,
             pdf_vector_circle_witnesses=pdf_vector_circle_witnesses,
+            validated_pdf_vector_circle_witnesses=validated_pdf_vector_circle_witnesses,
             pdf_vector_circle_suspect_regions=pdf_vector_circle_suspect_regions,
             require_pdf_vector_circle_witness=require_pdf_vector_circle_witness,
         )

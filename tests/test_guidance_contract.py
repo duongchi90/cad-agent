@@ -76,6 +76,32 @@ class GuidanceContractTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, model)
 
+    def test_new_solution_design_checks_prior_art_and_reuses_closed_research(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        for term in (
+            "existing implementations/APIs/libraries",
+            "evidence-backed methods",
+            "reuse, quality, cost, and owner fit",
+            "smallest real-case A/B",
+            "design anew only when evidence shows they fall short",
+            "Keep research proportionate",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, agents)
+        for term in (
+            "inspect current implementations, APIs, and libraries",
+            "established methods, algorithms, or research",
+            "source code or reproducible evidence",
+            "reuse potential, quality, cost, and fit with existing owners",
+            "smallest real-case A/B",
+            "evidence shows existing options cannot meet the requirement",
+            "Keep research proportionate to difficulty",
+            "reuse completed findings unless new evidence changes the decision",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+
     def test_workstation_limits_and_recovery_policy_are_durable(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
