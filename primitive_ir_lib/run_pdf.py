@@ -34,6 +34,48 @@ from .run_image import PDF_TEXT_CONFLICT_POLICY_VERSION, run
 from .text_extraction import RawText
 
 
+_CompetingStroke = tuple[tuple[float, float], tuple[float, float], float]
+_CompetingStrokeEntry = tuple[
+    int,
+    tuple[float, float, float, float],
+    _CompetingStroke,
+]
+
+
+def _collect_nearby_competing_strokes(
+    buckets: dict[tuple[int, int], list[_CompetingStrokeEntry]],
+    broad: list[_CompetingStrokeEntry] | tuple[_CompetingStrokeEntry, ...],
+    query_cells: set[tuple[int, int]] | None,
+    candidate_seqno: int,
+    query: tuple[float, float, float, float],
+    fallback_entries: list[_CompetingStrokeEntry] | tuple[_CompetingStrokeEntry, ...],
+) -> tuple[_CompetingStroke, ...]:
+    def overlaps_query(entry: _CompetingStrokeEntry) -> bool:
+        seqno, bounds, _ = entry
+        return (
+            seqno != candidate_seqno
+            and bounds[0] <= query[2]
+            and bounds[2] >= query[0]
+            and bounds[1] <= query[3]
+            and bounds[3] >= query[1]
+        )
+
+    if query_cells is None:
+        return tuple(
+            entry[2] for entry in fallback_entries if overlaps_query(entry)
+        )
+
+    candidates: set[_CompetingStrokeEntry] = set()
+    for entry in broad:
+        if overlaps_query(entry):
+            candidates.add(entry)
+    for cell in query_cells:
+        for entry in buckets.get(cell, ()):
+            if overlaps_query(entry):
+                candidates.add(entry)
+    return tuple(entry[2] for entry in candidates)
+
+
 def _candidate_crop_bbox(
     candidate: dict, width: int, height: int, padding_px: int = 12
 ) -> tuple[int, int, int, int]:
@@ -3670,21 +3712,13 @@ def _page_pdf_source_layer_line_witnesses(
             return ()
         buckets, broad = indexed
         query_cells = stroke_cells(start, end, width_px)
-        if query_cells is None:
-            candidates = competing_strokes_by_layer_precise[source_name]
-        else:
-            candidate_entries = set(broad)
-            for cell in query_cells:
-                candidate_entries.update(buckets.get(cell, ()))
-            candidates = candidate_entries
-        return tuple(
-            stroke
-            for seqno, bounds, stroke in candidates
-            if seqno != candidate_seqno
-            and bounds[0] <= query[2]
-            and bounds[2] >= query[0]
-            and bounds[1] <= query[3]
-            and bounds[3] >= query[1]
+        return _collect_nearby_competing_strokes(
+            buckets,
+            broad,
+            query_cells,
+            candidate_seqno,
+            query,
+            competing_strokes_by_layer_precise[source_name],
         )
 
     results: list[tuple[RawLine, str]] = []

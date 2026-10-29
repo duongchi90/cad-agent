@@ -80,6 +80,46 @@ def test_source_path_does_not_allow_unwitnessed_long_item() -> None:
     assert _source_path_pixel_supported_items(endpoints, {0}) == {0}
 
 
+def test_competing_stroke_index_filters_bounds_before_deduplicating() -> None:
+    kept_stroke = ((0.0, 0.0), (1.0, 0.0), 1.0)
+    same_seqno_stroke = ((0.0, 0.2), (1.0, 0.2), 1.0)
+    outside_stroke = ((5.0, 5.0), (6.0, 5.0), 1.0)
+    kept = (2, (0.0, -0.5, 1.0, 0.5), kept_stroke)
+    same_seqno = (1, (0.0, -0.5, 1.0, 0.5), same_seqno_stroke)
+    outside = (3, (5.0, 4.5, 6.0, 5.5), outside_stroke)
+    buckets = {
+        (0, 0): [kept, same_seqno, outside],
+        (1, 0): [kept],
+    }
+    broad = [(4, (0.5, -0.5, 1.5, 0.5), ((0.5, 0.0), (1.5, 0.0), 1.0))]
+
+    actual = run_pdf_module._collect_nearby_competing_strokes(
+        buckets,
+        broad,
+        {(0, 0), (1, 0)},
+        1,
+        (0.0, -0.25, 1.0, 0.25),
+        (),
+    )
+
+    assert set(actual) == {
+        kept_stroke,
+        ((0.5, 0.0), (1.5, 0.0), 1.0),
+    }
+    assert len(actual) == 2
+
+
+def test_competing_stroke_fallback_preserves_source_list_multiplicity() -> None:
+    stroke = ((0.0, 0.0), (1.0, 0.0), 1.0)
+    entry = (2, (0.0, -0.5, 1.0, 0.5), stroke)
+
+    actual = run_pdf_module._collect_nearby_competing_strokes(
+        {}, (), None, 1, (0.0, -0.25, 1.0, 0.25), (entry, entry)
+    )
+
+    assert actual == (stroke, stroke)
+
+
 def _write_quarter_arc_pdf(
     path: Path,
     *,
