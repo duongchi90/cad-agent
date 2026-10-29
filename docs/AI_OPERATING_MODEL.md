@@ -136,6 +136,8 @@ Every implementation PR must include a truthful Reuse Declaration covering:
 
 A new engine/store/transport/catalog/daemon/control plane is not justified because it is convenient or aesthetically cleaner. It requires measured evidence that current owners cannot close the product boundary safely and economically.
 
+Before designing a new technical solution, inspect current implementations, APIs, and libraries, plus relevant established methods, algorithms, or research. Prefer approaches supported by source code or reproducible evidence; compare reuse potential, quality, cost, and fit with existing owners. For a real product need, use the smallest real-case A/B that can distinguish viable options. Design a new approach only when evidence shows existing options cannot meet the requirement. Keep research proportionate to difficulty and reuse completed findings unless new evidence changes the decision.
+
 ## 6. Product roadmap
 
 The active product roadmap is:
