@@ -360,6 +360,30 @@ def _review_dxf_loaded(
             )
             continue
 
+        if written["type"] == "line":
+            modelspace = doc.modelspace()
+            expected_owner = modelspace.block_record_handle
+            actual_owner = entity.dxf.get("owner")
+            actual_owner_record = db.get(actual_owner) if actual_owner else None
+            actual_owner_name = (
+                actual_owner_record.dxf.get("name")
+                if actual_owner_record is not None
+                and actual_owner_record.dxftype() == "BLOCK_RECORD"
+                else "UNKNOWN"
+            )
+            is_modelspace_member = entity in modelspace
+            if actual_owner != expected_owner or not is_modelspace_member:
+                actual_owner_label = (
+                    f"{actual_owner_name} ({actual_owner})"
+                    if actual_owner
+                    else "MISSING"
+                )
+                mismatches.append(
+                    f"{pid}: LINE handle '{handle}' expected ModelSpace owner "
+                    f"'{expected_owner}', actual owner '{actual_owner_label}'; "
+                    f"ModelSpace membership={is_modelspace_member}"
+                )
+
         actual_layer = entity.dxf.layer
         if expected_layer is not None and actual_layer != expected_layer:
             mismatches.append(
