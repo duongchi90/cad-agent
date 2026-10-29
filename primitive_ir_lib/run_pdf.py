@@ -66,11 +66,20 @@ def _collect_nearby_competing_strokes(
         )
 
     candidates: set[_CompetingStrokeEntry] = set()
+    checked_entry_ids: set[int] = set()
     for entry in broad:
+        entry_id = id(entry)
+        if entry_id in checked_entry_ids:
+            continue
+        checked_entry_ids.add(entry_id)
         if overlaps_query(entry):
             candidates.add(entry)
     for cell in query_cells:
         for entry in buckets.get(cell, ()):
+            entry_id = id(entry)
+            if entry_id in checked_entry_ids:
+                continue
+            checked_entry_ids.add(entry_id)
             if overlaps_query(entry):
                 candidates.add(entry)
     return tuple(entry[2] for entry in candidates)
@@ -3598,7 +3607,7 @@ def _page_pdf_source_layer_line_witnesses(
             if seqno not in line_path_seqnos
         )
 
-    competing_cell_size = 64.0
+    competing_cell_size = 8.0
 
     def stroke_cells(
         first: tuple[float, float], second: tuple[float, float], width_px: float

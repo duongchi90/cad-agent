@@ -120,6 +120,33 @@ def test_competing_stroke_fallback_preserves_source_list_multiplicity() -> None:
     assert actual == (stroke, stroke)
 
 
+def test_competing_stroke_index_checks_repeated_bucket_entry_once() -> None:
+    class CountingBounds:
+        def __init__(self, values: tuple[float, float, float, float]) -> None:
+            self.values = values
+            self.reads = 0
+
+        def __getitem__(self, index: int) -> float:
+            self.reads += 1
+            return self.values[index]
+
+    stroke = ((5.0, 5.0), (6.0, 5.0), 1.0)
+    bounds = CountingBounds((-1.0, 2.0, 2.0, 3.0))
+    entry = (2, bounds, stroke)
+
+    actual = run_pdf_module._collect_nearby_competing_strokes(
+        {(0, 0): [entry], (1, 0): [entry]},
+        (),
+        {(0, 0), (1, 0)},
+        1,
+        (0.0, -0.25, 1.0, 0.25),
+        (),
+    )
+
+    assert actual == ()
+    assert bounds.reads == 3
+
+
 def _write_quarter_arc_pdf(
     path: Path,
     *,
