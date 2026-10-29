@@ -274,10 +274,10 @@ def test_run_image_refuses_only_overlapping_item_from_compound_pdf_path(
     assert cv2.imwrite(str(image_path), image)
     raster_line = RawLine(
         id="raster-overlap",
-        p1_px=(95.0, 0.0),
-        p2_px=(195.0, 0.0),
+        p1_px=(0.0, 2.0),
+        p2_px=(100.0, 1.0),
         confidence=0.8,
-        bbox_px=(95.0, 0.0, 195.0, 0.0),
+        bbox_px=(0.0, 1.0, 100.0, 2.0),
     )
     source_identity = {
         "source_pdf_sha256": "a" * 64,
