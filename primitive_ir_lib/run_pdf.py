@@ -3598,7 +3598,7 @@ def _page_pdf_source_layer_line_witnesses(
             if seqno not in line_path_seqnos
         )
 
-    competing_cell_size = 256.0
+    competing_cell_size = 64.0
 
     def stroke_cells(
         first: tuple[float, float], second: tuple[float, float], width_px: float
