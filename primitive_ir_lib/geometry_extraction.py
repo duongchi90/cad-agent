@@ -465,6 +465,7 @@ def extract_circles(
         for local_x, local_y, r in circ:
             x = float(local_x) + x0
             y = float(local_y) + y0
+            radius = float(r)
 
             # Halo khiến cùng một circle có thể được phát hiện ở hai tile kề
             # nhau. HoughCircles đã dùng minDist trong từng tile; áp cùng ngưỡng
@@ -476,7 +477,6 @@ def extract_circles(
             ):
                 continue
 
-            radius = float(r)
             bbox = (x - radius, y - radius, x + radius, y + radius)
             raw_circles.append(RawCircle(
                 id=new_id("rawcirc"),
@@ -601,6 +601,7 @@ def _extract_supplemental_large_circles(
     scale_x = work_width / float(width)
     scale_y = work_height / float(height)
     source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    radius_scale = (scale_x + scale_y) / 2.0
     max_work_radius = min(work_width, work_height) // 2 - 2
     effective_max_radius = int(circle_kwargs.get("max_radius", 200))
     first_radius = max(1, int(np.floor(effective_max_radius * min(scale_x, scale_y))) + 1)
@@ -626,7 +627,6 @@ def _extract_supplemental_large_circles(
             min_dist=1,
         )
 
-        radius_scale = (scale_x + scale_y) / 2.0
         for candidate in candidates:
             center_x = candidate.center_px[0] / scale_x
             center_y = candidate.center_px[1] / scale_y
@@ -789,6 +789,7 @@ def extract_raw_geometry(
     preset: str = "default",
     *,
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
+    validated_pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
     **kwargs,
@@ -815,6 +816,7 @@ def extract_raw_geometry(
         "canny_low", "canny_high", "hough_threshold", "min_line_length", "max_line_gap")}
     circle_kwargs = {k: v for k, v in merged.items() if k in (
         "min_radius", "max_radius", "param1", "param2", "min_dist")}
+    source_gray = None
     circles = extract_circles(image_bgr, **circle_kwargs)
     if (
         preset == "real_scan_tuned_v1"
@@ -837,15 +839,23 @@ def extract_raw_geometry(
     if (
         require_pdf_vector_circle_witness
         or pdf_vector_circle_witnesses
+        or validated_pdf_vector_circle_witnesses
         or pdf_vector_circle_suspect_regions
     ):
-        witnesses = pdf_vector_circle_witnesses or []
+        if source_gray is None:
+            source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        witnesses = [
+            (witness, True) for witness in (pdf_vector_circle_witnesses or [])
+        ]
+        witnesses.extend(
+            (witness, False)
+            for witness in (validated_pdf_vector_circle_witnesses or [])
+        )
         suspect_regions = pdf_vector_circle_suspect_regions or []
-        source_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         source_witnesses: list[Tuple[float, float, float]] = []
         min_radius = kwargs.get("min_radius")
         max_radius = kwargs.get("max_radius")
-        for witness in witnesses:
+        for witness, require_raster_support in witnesses:
             try:
                 if len(witness) != 3:
                     continue
@@ -874,7 +884,7 @@ def extract_raw_geometry(
                 and witness_radius > max_radius
             ):
                 continue
-            if not _circle_has_distributed_source_support(
+            if require_raster_support and not _circle_has_distributed_source_support(
                 source_gray, witness_x, witness_y, witness_radius
             ):
                 continue
