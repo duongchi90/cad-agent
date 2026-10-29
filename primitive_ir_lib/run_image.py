@@ -47,7 +47,7 @@ def _title_block_roi(image_width: int, image_height: int) -> Bbox:
     """Return the conventional lower-right title-block search area."""
     return (
         int(image_width * 0.58),
-        int(image_height * 0.67),
+        int(image_height * 0.50),
         image_width,
         image_height,
     )
@@ -370,6 +370,73 @@ def _union_overlapping_pdf_witness_intervals(
     )
 
 
+def _classify_pdf_layer_line_witnesses(
+    lines: List[RawLine],
+    witnesses: List[Tuple[RawLine, str]],
+    endpoint_tolerance_px: float = 1.0,
+) -> dict[str, str]:
+    """Return classifications only for mutual unique full-span witnesses."""
+    if (
+        isinstance(endpoint_tolerance_px, bool)
+        or not math.isfinite(endpoint_tolerance_px)
+        or endpoint_tolerance_px <= 0
+    ):
+        return {}
+    eligible = [
+        (index, witness, classification)
+        for index, (witness, classification) in enumerate(witnesses)
+        if classification in {"HIDDEN", "CENTERLINE"}
+    ]
+    classification_by_witness_index = {
+        index: classification for index, _, classification in eligible
+    }
+    matches_by_line: dict[int, list[int]] = {}
+    matches_by_witness: dict[int, list[int]] = {}
+
+    def endpoints_match(line: RawLine, witness: RawLine) -> bool:
+        direct = max(
+            math.dist(line.p1_px, witness.p1_px),
+            math.dist(line.p2_px, witness.p2_px),
+        )
+        reverse = max(
+            math.dist(line.p1_px, witness.p2_px),
+            math.dist(line.p2_px, witness.p1_px),
+        )
+        return math.isfinite(direct) and math.isfinite(reverse) and min(direct, reverse) <= endpoint_tolerance_px
+
+    for line_index, line in enumerate(lines):
+        for witness_index, witness, _ in eligible:
+            if endpoints_match(line, witness):
+                matches_by_line.setdefault(line_index, []).append(witness_index)
+                matches_by_witness.setdefault(witness_index, []).append(line_index)
+
+    classifications_by_line_id: dict[str, str] = {}
+    for line_index, witness_indices in matches_by_line.items():
+        if len(witness_indices) != 1:
+            continue
+        witness_index = witness_indices[0]
+        if len(matches_by_witness.get(witness_index, ())) != 1:
+            continue
+        classifications_by_line_id[lines[line_index].id] = (
+            classification_by_witness_index[witness_index]
+        )
+    return classifications_by_line_id
+
+
+def _apply_pdf_source_layer_classifications(
+    document, classifications_by_line_id: dict[str, str]
+) -> None:
+    """Apply verified PDF layer labels to matching LINE primitives only."""
+    if not classifications_by_line_id:
+        return
+    for primitive in document.primitives:
+        if primitive.type != "line":
+            continue
+        classification = classifications_by_line_id.get(primitive.id)
+        if classification in {"HIDDEN", "CENTERLINE"}:
+            primitive.layer = classification
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -388,12 +455,14 @@ def run(
     calibration_status: str = "verified",
     calibration_source_sha256: Optional[str] = None,
     pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
+    validated_pdf_vector_circle_witnesses: Optional[List[Tuple[float, float, float]]] = None,
     pdf_vector_circle_suspect_regions: Optional[List[dict | Tuple[float, float, float, float]]] = None,
     require_pdf_vector_circle_witness: bool = False,
     pdf_vector_texts: Optional[List[RawText]] = None,
     text_conflict_report: Optional[dict] = None,
     pdf_vector_arcs: Optional[List[RawArc]] = None,
     pdf_vector_line_witnesses: Optional[List[RawLine]] = None,
+    pdf_layer_line_witnesses: Optional[List[Tuple[RawLine, str]]] = None,
     source_page_index: int = 0,
     image_bytes: Optional[bytes] = None,
 ) -> str:
@@ -434,12 +503,14 @@ def run(
     if (
         require_pdf_vector_circle_witness
         or pdf_vector_circle_witnesses
+        or validated_pdf_vector_circle_witnesses
         or pdf_vector_circle_suspect_regions
     ):
         raw_geometry = extract_raw_geometry(
             image,
             preset=preset,
             pdf_vector_circle_witnesses=pdf_vector_circle_witnesses,
+            validated_pdf_vector_circle_witnesses=validated_pdf_vector_circle_witnesses,
             pdf_vector_circle_suspect_regions=pdf_vector_circle_suspect_regions,
             require_pdf_vector_circle_witness=require_pdf_vector_circle_witness,
         )
@@ -500,6 +571,9 @@ def run(
                 break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=ocr_texts, image_bgr=image)
+    pdf_layer_classifications = _classify_pdf_layer_line_witnesses(
+        raw_lines, pdf_layer_line_witnesses or []
+    )
     raw_lines.extend(
         line for witnessed_intervals in pdf_witnessed_lines.values() for line in witnessed_intervals
     )
@@ -570,6 +644,7 @@ def run(
         raw_arcs=pdf_vector_arcs,
         sha256=image_sha256,
     )
+    _apply_pdf_source_layer_classifications(document, pdf_layer_classifications)
     document.cross_validations = cross_validate(
         decision_texts,
         raw_lines,

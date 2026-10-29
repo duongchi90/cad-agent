@@ -1873,6 +1873,22 @@ def _page_circle_witnesses(
     page_transform = page.rotation_matrix
 
     image_paint_operations = _image_paint_operations(page)
+    text_paint_operations: Optional[list[tuple[int, fitz.Rect]]]
+    try:
+        text_paint_operations = []
+        for span in page.get_texttrace():
+            sequence = span.get("seqno")
+            rect = fitz.Rect(span.get("bbox"))
+            if isinstance(sequence, bool) or not isinstance(sequence, int):
+                raise ValueError("PDF text paint sequence is unavailable")
+            if not all(math.isfinite(value) for value in (rect.x0, rect.y0, rect.x1, rect.y1)):
+                raise ValueError("PDF text paint bounds are non-finite")
+            if not rect.is_empty:
+                text_paint_operations.append((sequence, rect))
+    except Exception:
+        # Without ordered text bounds, a vector circle cannot be independently
+        # cleared of later text paint; fail closed for this page's witnesses.
+        text_paint_operations = None
     annotation_rects: list[fitz.Rect] = []
     for annotation in page.annots() or ():
         annotation_rects.append(annotation.rect)
@@ -1914,6 +1930,42 @@ def _page_circle_witnesses(
             continue
 
         cx, cy, radius = circle
+        # A fitted path can be geometrically closed while lying partly or
+        # wholly outside the page's visible render frame. Such a path has no
+        # complete rendered perimeter to support a source witness.
+        try:
+            stroke_width = float(drawing.get("width") or 0.0)
+            if not math.isfinite(stroke_width) or stroke_width < 0.0:
+                raise ValueError("invalid circle stroke width")
+            margin = stroke_width / 2.0
+            circle_bounds = fitz.Rect(
+                cx - radius - margin,
+                cy - radius - margin,
+                cx + radius + margin,
+                cy + radius + margin,
+            ) * page_transform
+            render_bounds = page.rect
+            fully_in_render_frame = (
+                all(
+                    math.isfinite(value)
+                    for value in (
+                        circle_bounds.x0,
+                        circle_bounds.y0,
+                        circle_bounds.x1,
+                        circle_bounds.y1,
+                    )
+                )
+                and circle_bounds.x0 >= render_bounds.x0 - 1e-4
+                and circle_bounds.y0 >= render_bounds.y0 - 1e-4
+                and circle_bounds.x1 <= render_bounds.x1 + 1e-4
+                and circle_bounds.y1 <= render_bounds.y1 + 1e-4
+            )
+        except (TypeError, ValueError, OverflowError):
+            fully_in_render_frame = False
+        if not fully_in_render_frame:
+            suspect_regions.append(_suspect_geometry(drawing, pixel_scale, page_transform))
+            continue
+
         witness_level = int(drawing.get("level") or 0)
         prior_clip_context = any(
             int(prior.get("level") or 0) < witness_level
@@ -1932,13 +1984,19 @@ def _page_circle_witnesses(
 
         # A later drawing/clip/group touching this perimeter can obscure or
         # alter the witness. Conservatively reject rather than infer visibility.
-        occluded = False
+        occluded = text_paint_operations is None
         drawing_sequence = drawing.get("seqno")
         occluder_rects = annotation_rects + [
             rect
             for sequence, rect in image_paint_operations
             if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
         ]
+        if text_paint_operations is not None:
+            occluder_rects.extend(
+                rect
+                for sequence, rect in text_paint_operations
+                if drawing_sequence is None or sequence < 0 or sequence > drawing_sequence
+            )
         for rect in occluder_rects:
             dx = max(rect.x0 - cx, 0.0, cx - rect.x1)
             dy = max(rect.y0 - cy, 0.0, cy - rect.y1)
@@ -2368,6 +2426,8 @@ def _page_vector_arcs(
             return None
         return result
 
+
+
     def flatten_arc_items(
         items: list[tuple],
     ) -> Optional[list[tuple[tuple[float, float], tuple[float, float], float]]]:
@@ -2667,6 +2727,568 @@ def _page_vector_arcs(
     return results
 
 
+
+def _pdf_source_layer_classification(drawing: dict) -> Optional[str]:
+    """Recognize only the two reviewed ISO source-layer names and simple strokes."""
+    classification = {
+        "Oculto (ISO)": "HIDDEN",
+        "Linha de centro (ISO)": "CENTERLINE",
+    }.get(drawing.get("layer"))
+    width = drawing.get("width")
+    level = drawing.get("level")
+    if (
+        classification is None
+        or isinstance(level, bool)
+        or not isinstance(level, int)
+        or level < 0
+        or drawing.get("type") != "s"
+        or drawing.get("fill") is not None
+        or drawing.get("scissor") is not None
+        or drawing.get("stroke_opacity") != 1.0
+        or drawing.get("blendmode") not in {None, "Normal"}
+        or drawing.get("dashes") != "[] 0"
+        or not isinstance(width, (int, float))
+        or isinstance(width, bool)
+        or not math.isfinite(float(width))
+        or width <= 0
+    ):
+        return None
+    items = drawing.get("items")
+    if not isinstance(items, (tuple, list)) or len(items) != 1:
+        return None
+    item = items[0]
+    if not isinstance(item, (tuple, list)) or len(item) != 3 or item[0] != "l":
+        return None
+    return classification
+
+
+def _line_has_full_pixel_difference_support(
+    baseline_rgb: np.ndarray,
+    layer_off_rgb: np.ndarray,
+    start_px: tuple[float, float],
+    end_px: tuple[float, float],
+    stroke_width_px: float,
+    competing_bounds_px: tuple[tuple[float, float, float, float], ...] = (),
+) -> bool:
+    """Require changed pixels to overlap the candidate stroke's raster footprint.
+
+    Toggling an optional-content group removes every path in that group. A
+    nearby path must not provide the pixel difference used to witness this
+    candidate, so pixels touched by another same-group path's paint bounds are
+    not evidence for this line. Pixel squares are tested against both the
+    candidate stroke strip and competing bounds, with a small rasterization
+    margin; an arbitrary adjacent row is not source support.
+    """
+    if (
+        not isinstance(baseline_rgb, np.ndarray)
+        or not isinstance(layer_off_rgb, np.ndarray)
+        or baseline_rgb.ndim != 3
+        or layer_off_rgb.shape != baseline_rgb.shape
+        or baseline_rgb.shape[2] < 3
+        or not math.isfinite(stroke_width_px)
+        or stroke_width_px <= 0
+    ):
+        return False
+    coordinates = (*start_px, *end_px)
+    if not all(math.isfinite(value) for value in coordinates):
+        return False
+    for bounds in competing_bounds_px:
+        if (
+            len(bounds) != 4
+            or not all(math.isfinite(value) for value in bounds)
+            or bounds[0] > bounds[2]
+            or bounds[1] > bounds[3]
+        ):
+            return False
+    dx = end_px[0] - start_px[0]
+    dy = end_px[1] - start_px[1]
+    length = math.hypot(dx, dy)
+    if not math.isfinite(length) or length <= 1e-6:
+        return False
+    differences = np.any(baseline_rgb[:, :, :3] != layer_off_rgb[:, :, :3], axis=2)
+    height, width = differences.shape
+    normal_x, normal_y = -dy / length, dx / length
+    tangent_x, tangent_y = dx / length, dy / length
+    normal_pixel_extent = 0.5 * (abs(normal_x) + abs(normal_y))
+    tangent_pixel_extent = 0.5 * (abs(tangent_x) + abs(tangent_y))
+    sample_count = max(2, int(math.ceil(length * 2.0)))
+    sample_half_span = length / sample_count / 2.0
+    normal_support = stroke_width_px / 2.0 + normal_pixel_extent
+    search_radius = int(math.ceil(normal_support + 1.0))
+    competing_bounds_margin = 0.25
+    for sample_index in range(sample_count + 1):
+        fraction = (sample_index + 0.5) / (sample_count + 1)
+        x = start_px[0] + dx * fraction
+        y = start_px[1] + dy * fraction
+        supported = False
+        center_x = int(math.floor(x))
+        center_y = int(math.floor(y))
+        for pixel_y in range(center_y - search_radius, center_y + search_radius + 2):
+            for pixel_x in range(center_x - search_radius, center_x + search_radius + 2):
+                if not (0 <= pixel_x < width and 0 <= pixel_y < height):
+                    continue
+                pixel_center_x = pixel_x + 0.5
+                pixel_center_y = pixel_y + 0.5
+                offset_x = pixel_center_x - x
+                offset_y = pixel_center_y - y
+                normal_distance = abs(offset_x * normal_x + offset_y * normal_y)
+                tangent_distance = offset_x * tangent_x + offset_y * tangent_y
+                if (
+                    normal_distance >= normal_support
+                    or abs(tangent_distance) >= sample_half_span + tangent_pixel_extent
+                ):
+                    continue
+                if any(
+                    left - competing_bounds_margin < pixel_x + 1.0
+                    and right + competing_bounds_margin > pixel_x
+                    and top - competing_bounds_margin < pixel_y + 1.0
+                    and bottom + competing_bounds_margin > pixel_y
+                    for left, top, right, bottom in competing_bounds_px
+                ):
+                    continue
+                if differences[pixel_y, pixel_x]:
+                    supported = True
+                    break
+            if supported:
+                break
+        if not supported:
+            return False
+    return True
+
+
+def _source_layer_line_has_safe_ancestry(
+    drawings: list[dict],
+    candidate_index: int,
+    full_page_group_index: Optional[int],
+) -> bool:
+    """Reject scoped source strokes unless their clip/compositing context is proven safe."""
+    if not (0 <= candidate_index < len(drawings)):
+        return False
+    candidate = drawings[candidate_index]
+    level = candidate.get("level")
+    items = candidate.get("items")
+    width = candidate.get("width")
+    if (
+        isinstance(level, bool)
+        or not isinstance(level, int)
+        or level < 0
+        or not isinstance(items, (tuple, list))
+        or len(items) != 1
+        or not isinstance(width, (int, float))
+        or isinstance(width, bool)
+        or not math.isfinite(float(width))
+        or width <= 0
+    ):
+        return False
+    item = items[0]
+    if len(item) != 3 or item[0] != "l":
+        return False
+    try:
+        first = fitz.Point(item[1])
+        second = fitz.Point(item[2])
+        margin = float(width) / 2.0
+        stroke_bounds = fitz.Rect(
+            min(first.x, second.x) - margin,
+            min(first.y, second.y) - margin,
+            max(first.x, second.x) + margin,
+            max(first.y, second.y) + margin,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not stroke_bounds.is_valid or stroke_bounds.is_empty:
+        return False
+
+    # Extended drawing levels form a scope stack. A later sibling at the same
+    # level closes the prior clip/group; only active ancestors affect a path.
+    scopes: list[tuple[int, int, dict]] = []
+    active_ancestors: list[tuple[int, dict]] = []
+    for index, drawing in enumerate(drawings[: candidate_index + 1]):
+        current_level = drawing.get("level")
+        if isinstance(current_level, bool) or not isinstance(current_level, int) or current_level < 0:
+            return False
+        while scopes and scopes[-1][0] >= current_level:
+            scopes.pop()
+        if index == candidate_index:
+            active_ancestors = [(scope_index, scope) for _, scope_index, scope in scopes]
+            break
+        if drawing.get("type") in {"group", "clip"}:
+            scopes.append((current_level, index, drawing))
+
+    for scope_index, scope in active_ancestors:
+        if scope.get("type") == "group":
+            # Only the separately verified page-level wrapper is considered
+            # neutral context. Nested groups are not accepted based on opacity
+            # and Normal blend mode alone because their compositing is contextual.
+            if scope_index != full_page_group_index:
+                return False
+        elif scope.get("type") == "clip":
+            if not _clip_fully_contains_rect(scope, stroke_bounds):
+                return False
+    return True
+
+
+def _pixmap_rgb_array(pixmap: fitz.Pixmap) -> Optional[np.ndarray]:
+    if pixmap.n < 3:
+        return None
+    samples = np.frombuffer(pixmap.samples, dtype=np.uint8)
+    expected = pixmap.height * pixmap.width * pixmap.n
+    if samples.size != expected:
+        return None
+    return samples.reshape((pixmap.height, pixmap.width, pixmap.n))[:, :, :3].copy()
+
+
+def _restore_pdf_optional_content_state(document, expected_configs: list[dict]) -> bool:
+    """Restore every saved OCG visibility and verify the complete state by readback."""
+    restore_failed = False
+    for config in expected_configs:
+        number = config.get("number")
+        on = config.get("on")
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, int)
+            or number < 0
+            or isinstance(on, bool)
+            or on not in {0, 1}
+        ):
+            restore_failed = True
+            continue
+        try:
+            document.set_layer_ui_config(
+                number, fitz.PDF_OC_ON if on == 1 else fitz.PDF_OC_OFF
+            )
+        except Exception:
+            restore_failed = True
+    try:
+        observed_configs = document.layer_ui_configs()
+    except Exception:
+        return False
+    return not restore_failed and observed_configs == expected_configs
+
+
+def _page_pdf_source_layer_line_witnesses(
+    page,
+    baseline_pixmap: fitz.Pixmap,
+    pixel_scale: float,
+    pixmap_origin: tuple[int, int],
+) -> list[tuple[RawLine, str]]:
+    """Return only uniquely addressable ISO layer strokes visible in the page render."""
+    if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
+        return []
+    document = page.parent
+    try:
+        ui_configs = document.layer_ui_configs()
+        if not isinstance(ui_configs, (tuple, list)) or any(
+            not isinstance(config, dict) for config in ui_configs
+        ):
+            return []
+        initial_ui_configs = [dict(config) for config in ui_configs]
+        drawings = page.get_drawings(extended=True)
+        bboxlog = page.get_bboxlog()
+        optional_content_groups = document.get_ocgs()
+        page_images = page.get_images(full=True)
+        image_info = page.get_image_info(xrefs=True)
+    except Exception:
+        return []
+    config_by_name: dict[str, dict] = {}
+    for source_name in ("Oculto (ISO)", "Linha de centro (ISO)"):
+        matches = [config for config in ui_configs if config.get("text") == source_name]
+        if len(matches) == 1 and matches[0].get("on") == 1:
+            config_by_name[source_name] = matches[0]
+    if not config_by_name:
+        return []
+    try:
+        text_spans = page.get_texttrace()
+    except Exception:
+        return []
+    baseline = _pixmap_rgb_array(baseline_pixmap)
+    if baseline is None:
+        return []
+    origin_x, origin_y = pixmap_origin
+    transform = page.rotation_matrix
+    source_layers = {drawing.get("layer") for drawing in drawings}
+    difference_by_name: dict[str, np.ndarray] = {}
+    for source_name, config in config_by_name.items():
+        if source_name not in source_layers:
+            continue
+        number = config.get("number")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            continue
+        off_pixmap = None
+        restore_failed = False
+        try:
+            document.set_layer_ui_config(number, fitz.PDF_OC_OFF)
+            off_pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(pixel_scale, pixel_scale), alpha=False
+            )
+        except Exception:
+            off_pixmap = None
+        finally:
+            restore_failed = not _restore_pdf_optional_content_state(
+                document, initial_ui_configs
+            )
+        if restore_failed:
+            raise RuntimeError("Failed to restore PDF optional-content layer state")
+        off = _pixmap_rgb_array(off_pixmap) if off_pixmap is not None else None
+        if (
+            off is None
+            or off.shape != baseline.shape
+            or off_pixmap.x != baseline_pixmap.x
+            or off_pixmap.y != baseline_pixmap.y
+        ):
+            continue
+        difference_by_name[source_name] = off
+        del off_pixmap
+
+    competing_bounds_by_layer: dict[str, dict[int, tuple[float, float, float, float]]] = {}
+    invalid_competitor_layers: set[str] = set()
+    for drawing in drawings:
+        source_name = drawing.get("layer")
+        if source_name not in difference_by_name:
+            continue
+        seqno = drawing.get("seqno")
+        if (
+            isinstance(seqno, bool)
+            or not isinstance(seqno, int)
+            or not (0 <= seqno < len(bboxlog))
+        ):
+            invalid_competitor_layers.add(source_name)
+            continue
+        try:
+            record = bboxlog[seqno]
+            if len(record) != 2:
+                raise ValueError("invalid bounding-box record")
+            bounds = fitz.Rect(record[1])
+            if (
+                not bounds.is_valid
+                or bounds.is_empty
+                or not all(math.isfinite(value) for value in bounds)
+            ):
+                raise ValueError("invalid path bounds")
+            bounds *= transform
+            competing_bounds_by_layer.setdefault(source_name, {})[seqno] = (
+                bounds.x0 * pixel_scale - origin_x,
+                bounds.y0 * pixel_scale - origin_y,
+                bounds.x1 * pixel_scale - origin_x,
+                bounds.y1 * pixel_scale - origin_y,
+            )
+        except (IndexError, TypeError, ValueError, OverflowError):
+            invalid_competitor_layers.add(source_name)
+
+    # Text paint is not returned by get_drawings(). Texttrace binds each text
+    # paint sequence to its OCG; use the corresponding bboxlog bounds as
+    # competing evidence so OCG text cannot impersonate a covered source line.
+    for span in text_spans:
+        if not isinstance(span, dict):
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+        source_name = span.get("layer")
+        if source_name not in difference_by_name:
+            continue
+        seqno = span.get("seqno")
+        if isinstance(seqno, bool) or not isinstance(seqno, int) or not (0 <= seqno < len(bboxlog)):
+            invalid_competitor_layers.add(source_name)
+            continue
+        try:
+            record = bboxlog[seqno]
+            if len(record) != 2 or record[0] not in {"fill-text", "stroke-text"}:
+                raise ValueError("text trace does not match text paint")
+            bounds = fitz.Rect(record[1])
+            if (
+                not bounds.is_valid
+                or bounds.is_empty
+                or not all(math.isfinite(value) for value in bounds)
+            ):
+                raise ValueError("invalid text paint bounds")
+            bounds *= transform
+            bounds_px = (
+                bounds.x0 * pixel_scale - origin_x,
+                bounds.y0 * pixel_scale - origin_y,
+                bounds.x1 * pixel_scale - origin_x,
+                bounds.y1 * pixel_scale - origin_y,
+            )
+            if not all(math.isfinite(value) for value in bounds_px):
+                raise ValueError("invalid transformed text paint bounds")
+            competing_bounds_by_layer.setdefault(source_name, {})[seqno] = bounds_px
+        except (IndexError, TypeError, ValueError, OverflowError):
+            invalid_competitor_layers.add(source_name)
+
+    # PDF image paint operations are absent from get_drawings(). An image with
+    # its own OCG can therefore change the layer-toggle render inside a vector
+    # candidate's stroke even though it has no peer path seqno. Treat its full
+    # paint rectangle as competing evidence; transparency cannot be inferred
+    # safely from the rectangle alone.
+    group_name_by_xref = {
+        xref: entry.get("name")
+        for xref, entry in optional_content_groups.items()
+        if isinstance(xref, int) and isinstance(entry, dict)
+    }
+    for image in page_images:
+        try:
+            image_xref = image[0]
+            if (
+                isinstance(image_xref, bool)
+                or not isinstance(image_xref, int)
+                or image_xref <= 0
+            ):
+                invalid_competitor_layers.update(difference_by_name)
+                continue
+            group_xref = document.get_oc(image_xref)
+            if group_xref is None:
+                continue
+            source_name = group_name_by_xref.get(group_xref)
+            if source_name is None:
+                invalid_competitor_layers.update(difference_by_name)
+                continue
+            if source_name not in difference_by_name:
+                continue
+            image_rects = page.get_image_rects(image_xref)
+            if not image_rects:
+                invalid_competitor_layers.add(source_name)
+                continue
+            for image_index, image_rect in enumerate(image_rects):
+                bounds = fitz.Rect(image_rect)
+                if not bounds.is_valid or bounds.is_empty or not all(math.isfinite(v) for v in bounds):
+                    invalid_competitor_layers.add(source_name)
+                    continue
+                bounds *= transform
+                competing_bounds_by_layer.setdefault(source_name, {})[-(image_xref * 1000 + image_index + 1)] = (
+                    bounds.x0 * pixel_scale - origin_x,
+                    bounds.y0 * pixel_scale - origin_y,
+                    bounds.x1 * pixel_scale - origin_x,
+                    bounds.y1 * pixel_scale - origin_y,
+                )
+        except (IndexError, TypeError, ValueError, OverflowError, RuntimeError):
+            # If its OCG or bounds cannot be resolved, its pixels cannot be
+            # excluded from any active source-layer attribution probe.
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+
+    # get_images() omits inline PDF images (their xref is zero). Their OCG
+    # relationship is not exposed by get_image_info(), so any pixel in their
+    # paint rectangle is ambiguous evidence for every source-layer probe.
+    # Exclude those rectangles for all probed groups; malformed metadata makes
+    # the affected classification fail closed.
+    for image_index, image in enumerate(image_info):
+        if not isinstance(image, dict):
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+        image_xref = image.get("xref")
+        if (
+            isinstance(image_xref, bool)
+            or not isinstance(image_xref, int)
+            or image_xref < 0
+        ):
+            invalid_competitor_layers.update(difference_by_name)
+            continue
+        if image_xref != 0:
+            continue
+        try:
+            bounds = fitz.Rect(image["bbox"])
+            if (
+                not bounds.is_valid
+                or bounds.is_empty
+                or not all(math.isfinite(value) for value in bounds)
+            ):
+                raise ValueError("invalid inline image bounds")
+            bounds *= transform
+            bounds_px = (
+                bounds.x0 * pixel_scale - origin_x,
+                bounds.y0 * pixel_scale - origin_y,
+                bounds.x1 * pixel_scale - origin_x,
+                bounds.y1 * pixel_scale - origin_y,
+            )
+            if not all(math.isfinite(value) for value in bounds_px):
+                raise ValueError("invalid transformed inline image bounds")
+            for source_name in difference_by_name:
+                competing_bounds_by_layer.setdefault(source_name, {})[
+                    -(2_000_000_000 + image_index)
+                ] = bounds_px
+        except (KeyError, TypeError, ValueError, OverflowError):
+            invalid_competitor_layers.update(difference_by_name)
+
+    results: list[tuple[RawLine, str]] = []
+    seen_seqnos: set[int] = set()
+    full_page_group_index = _full_page_transparency_group_index(page, drawings)
+    for drawing_index, drawing in enumerate(drawings):
+        classification = _pdf_source_layer_classification(drawing)
+        if (
+            classification is None
+            or drawing.get("layer") not in difference_by_name
+            or not _source_layer_line_has_safe_ancestry(
+                drawings, drawing_index, full_page_group_index
+            )
+        ):
+            continue
+        seqno = drawing.get("seqno")
+        if (
+            isinstance(seqno, bool)
+            or not isinstance(seqno, int)
+            or seqno < 0
+            or seqno >= len(bboxlog)
+            or seqno in seen_seqnos
+        ):
+            continue
+        seen_seqnos.add(seqno)
+        try:
+            record = bboxlog[seqno]
+            if len(record) != 2 or record[0] != "stroke-path":
+                continue
+            source_bounds = fitz.Rect(record[1])
+            item = drawing["items"][0]
+            first = fitz.Point(item[1]) * transform
+            second = fitz.Point(item[2]) * transform
+            first_px = (
+                first.x * pixel_scale - origin_x,
+                first.y * pixel_scale - origin_y,
+            )
+            second_px = (
+                second.x * pixel_scale - origin_x,
+                second.y * pixel_scale - origin_y,
+            )
+            stroke_width_px = float(drawing["width"]) * pixel_scale
+        except (IndexError, TypeError, ValueError, OverflowError):
+            continue
+        if (
+            not source_bounds.is_valid
+            or source_bounds.is_empty
+            or not all(math.isfinite(value) for value in source_bounds)
+            or drawing["layer"] in invalid_competitor_layers
+            or not all(math.isfinite(value) for point in (first_px, second_px) for value in point)
+            or not _line_has_full_pixel_difference_support(
+                baseline,
+                difference_by_name[drawing["layer"]],
+                first_px,
+                second_px,
+                stroke_width_px,
+                tuple(
+                    bounds
+                    for other_seqno, bounds in competing_bounds_by_layer.get(
+                        drawing["layer"], {}
+                    ).items()
+                    if other_seqno != seqno
+                ),
+            )
+        ):
+            continue
+        results.append(
+            (
+                RawLine(
+                    id=f"pdf-layer-line-{seqno}",
+                    p1_px=first_px,
+                    p2_px=second_px,
+                    confidence=1.0,
+                    bbox_px=(
+                        min(first_px[0], second_px[0]),
+                        min(first_px[1], second_px[1]),
+                        max(first_px[0], second_px[0]),
+                        max(first_px[1], second_px[1]),
+                    ),
+                ),
+                classification,
+            )
+        )
+    return results
+
 def _opaque_stroke_fully_covers_line(
     drawing: dict,
     line_start: fitz.Point,
@@ -2951,6 +3573,9 @@ def run_pdf(
     if auto_calibrate and calibration_registry_path is not None and not calibration_id_prefix:
         raise ValueError("calibration_registry_path cần đi kèm calibration_id_prefix")
 
+    source_pdf_bytes = pdf_path.read_bytes()
+    source_pdf_sha256 = hashlib.sha256(source_pdf_bytes).hexdigest()
+
     render_dir = output_dir / "rendered"
     ir_dir = output_dir / "primitive_ir"
     manifest_path = output_dir / "manifest.json"
@@ -2960,7 +3585,7 @@ def run_pdf(
     manifest = {
         "status": "in_progress",
         "source_pdf": pdf_path.name,
-        "source_pdf_sha256": _sha256_file(pdf_path),
+        "source_pdf_sha256": source_pdf_sha256,
         "render_dpi": dpi,
         "scale_mm_per_px": scale_mm_per_px if scale_mm_per_px is not None else "auto",
         "pdf_vector_text_visibility": "not_assessed",
@@ -2979,7 +3604,7 @@ def run_pdf(
         render_dir.mkdir(parents=True, exist_ok=True)
         ir_dir.mkdir(parents=True, exist_ok=True)
         _validate_pdf_output_tree(output_dir, pdf_path, manifest_path)
-        document = fitz.open(str(pdf_path))
+        document = fitz.open(stream=source_pdf_bytes, filetype="pdf")
         for index, page in enumerate(document, start=1):
             current_page_index = index - 1
             require_all_vector_witnesses, vector_circle_witnesses, suspect_regions = (
@@ -3003,6 +3628,9 @@ def run_pdf(
                 dpi,
                 manifest["source_pdf_sha256"],
                 index - 1,
+            )
+            pdf_layer_line_witnesses = _page_pdf_source_layer_line_witnesses(
+                page, pixmap, scale, (pixmap.x, pixmap.y)
             )
             pdf_vector_line_witnesses = (
                 _page_vector_line_witnesses(page, scale, (pixmap.x, pixmap.y))
@@ -3036,7 +3664,7 @@ def run_pdf(
             }
             if require_all_vector_witnesses or vector_circle_witnesses or suspect_regions:
                 vector_kwargs = {
-                    "pdf_vector_circle_witnesses": vector_circle_witnesses,
+                    "validated_pdf_vector_circle_witnesses": vector_circle_witnesses,
                     "pdf_vector_circle_suspect_regions": suspect_regions,
                     "require_pdf_vector_circle_witness": require_all_vector_witnesses,
                 }
@@ -3044,6 +3672,8 @@ def run_pdf(
                 vector_kwargs["pdf_vector_arcs"] = pdf_vector_arcs
             if pdf_vector_line_witnesses:
                 vector_kwargs["pdf_vector_line_witnesses"] = pdf_vector_line_witnesses
+            if pdf_layer_line_witnesses:
+                vector_kwargs["pdf_layer_line_witnesses"] = pdf_layer_line_witnesses
 
             def process_page_ir(path: Path) -> None:
                 (
