@@ -194,14 +194,17 @@ def test_pdf_source_path_raster_overlap_and_text_collision_are_refused():
             ),
         )
 
-    assert run_image_module._pdf_line_path_overlaps_raster(
+    assert run_image_module._pdf_line_overlaps_raster(
         [source], [raster_line("coincident", (25.0, 0.0), (75.0, 0.0))], []
     )
-    assert not run_image_module._pdf_line_path_overlaps_raster(
+    assert not run_image_module._pdf_line_overlaps_raster(
         [source], [raster_line("crossing", (50.0, -20.0), (50.0, 20.0))], []
     )
-    assert not run_image_module._pdf_line_path_overlaps_raster(
+    assert not run_image_module._pdf_line_overlaps_raster(
         [source], [raster_line("parallel-separated", (0.0, 4.0), (100.0, 4.0))], []
+    )
+    assert run_image_module._pdf_line_overlaps_raster(
+        [source], [raster_line("five-pixel-partial-overlap", (95.0, 0.0), (195.0, 0.0))], []
     )
     text = RawText(
         id="overlapping-text",
@@ -211,7 +214,86 @@ def test_pdf_source_path_raster_overlap_and_text_collision_are_refused():
         confidence=1.0,
         source="text_pdfvector",
     )
-    assert run_image_module._pdf_line_path_overlaps_raster([source], [], [text])
+    assert run_image_module._pdf_line_overlaps_raster([source], [], [text])
+
+
+def test_run_image_refuses_only_overlapping_item_from_compound_pdf_path(
+    tmp_path, monkeypatch
+):
+    image_path = tmp_path / "page.png"
+    output_path = tmp_path / "primitive_ir.json"
+    image = np.full((200, 220, 3), 255, dtype=np.uint8)
+    assert cv2.imwrite(str(image_path), image)
+    raster_line = RawLine(
+        id="raster-overlap",
+        p1_px=(95.0, 0.0),
+        p2_px=(195.0, 0.0),
+        confidence=0.8,
+        bbox_px=(95.0, 0.0, 195.0, 0.0),
+    )
+    source_identity = {
+        "source_pdf_sha256": "a" * 64,
+        "source_page_index": 0,
+        "source_transform": (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        "render_sha256": "b" * 64,
+        "render_dpi": 72,
+        "render_origin_px": (0, 0),
+        "source_layer": "SOURCE",
+        "source_seqno": 9,
+    }
+    overlapping_source_item = RawPdfLine(
+        id="pdf-item-a",
+        p1_px=(100.0, 0.0),
+        p2_px=(0.0, 0.0),
+        confidence=1.0,
+        bbox_px=(0.0, 0.0, 100.0, 0.0),
+        source_item_index=0,
+        **source_identity,
+    )
+    independently_witnessed_sibling = RawPdfLine(
+        id="pdf-item-b",
+        p1_px=(0.0, 0.0),
+        p2_px=(0.0, 50.0),
+        confidence=1.0,
+        bbox_px=(0.0, 0.0, 0.0, 50.0),
+        source_item_index=1,
+        **source_identity,
+    )
+    monkeypatch.setattr(
+        "primitive_ir_lib.run_image.extract_raw_geometry",
+        lambda *_args, **_kwargs: RawGeometry(lines=[raster_line]),
+    )
+
+    run(
+        image_path=str(image_path),
+        output_path=str(output_path),
+        scale_mm_per_px=1.0,
+        preset="default",
+        pdf_vector_lines=[overlapping_source_item, independently_witnessed_sibling],
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    pdf_lines = [
+        primitive for primitive in payload["primitives"]
+        if primitive["source"] == "geometry_pdfvector"
+    ]
+    assert [primitive["id"] for primitive in pdf_lines] == ["pdf-item-b"]
+    assert sum(
+        primitive["source"] == "geometry_opencv" and primitive["type"] == "line"
+        for primitive in payload["primitives"]
+    ) == 1
+    assert validate_document(payload) == []
+
+    from dxf_builder_lib.builder import build_dxf
+    from dxf_builder_lib.reviewer import review_dxf
+    from semantic_ir_lib.io_utils import load_primitive_ir_document
+
+    build = build_dxf(
+        load_primitive_ir_document(str(output_path)), str(tmp_path / "candidate.dxf")
+    )
+    review = review_dxf(build, strict_primitive_inventory=True)
+    assert not build.skipped_primitive_ids
+    assert review.passed is True
 
 
 def test_run_image_writes_valid_primitive_ir_with_manual_scale():

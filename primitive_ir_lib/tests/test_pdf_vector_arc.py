@@ -65,11 +65,11 @@ def test_skewed_quad_clip_is_not_treated_as_axis_aligned_rectangle() -> None:
     assert _axis_aligned_clip_rect(clip) is None
 
 
-def test_source_path_subpixel_item_requires_connected_visible_support() -> None:
+def test_source_path_subpixel_item_requires_its_own_visible_support() -> None:
     connected = [((0.0, 0.0), (0.4, 0.0)), ((0.4, 0.0), (2.4, 0.0))]
     disconnected = [((0.0, 0.0), (0.4, 0.0)), ((3.0, 0.0), (5.0, 0.0))]
 
-    assert _source_path_pixel_supported_items(connected, {1}) == {0, 1}
+    assert _source_path_pixel_supported_items(connected, {1}) == {1}
     assert _source_path_pixel_supported_items(disconnected, {1}) == {1}
     assert _source_path_pixel_supported_items(connected, set()) == set()
 
@@ -964,6 +964,62 @@ def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
     )
     assert len(witnesses) == 1
     assert witnesses[0][1] == "HIDDEN"
+
+
+def test_pdf_vector_path_does_not_admit_covered_subpixel_item_from_visible_sibling():
+    def admitted_indexes(*, covered: bool, dpi: int) -> set[int]:
+        document = fitz.open()
+        page = document.new_page(width=100, height=100)
+        layer_xref = document.add_ocg("Source linework")
+        page.draw_polyline(
+            [fitz.Point(10.0, 30.0), fitz.Point(10.3, 30.0), fitz.Point(12.3, 30.0)],
+            color=(0, 0, 0),
+            width=0.4,
+            oc=layer_xref,
+        )
+        if covered:
+            page.draw_rect(
+                fitz.Rect(9.0, 29.0, 10.3, 31.0),
+                color=None,
+                fill=(1, 1, 1),
+                overlay=True,
+            )
+        source_bytes = document.tobytes()
+        document.close()
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+        with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+            page = source_pdf[0]
+            path = next(
+                drawing
+                for drawing in page.get_drawings(extended=True)
+                if drawing.get("layer") == "Source linework"
+            )
+            assert [item[0] for item in path["items"]] == ["l", "l"]
+            scale = dpi / 72.0
+            baseline_pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(scale, scale), alpha=False
+            )
+            _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+                page,
+                baseline_pixmap,
+                scale,
+                (baseline_pixmap.x, baseline_pixmap.y),
+                include_pdf_vector_lines=True,
+                source_pdf_sha256=source_sha256,
+                source_page_index=0,
+                render_dpi=dpi,
+                _candidate_seqnos={path["seqno"]},
+            )
+        return {line.source_item_index for line in source_lines}
+
+    # At 72 DPI, the short visible item is unresolved because its only changed
+    # pixel is also explained by its sibling, so it fails closed.
+    assert admitted_indexes(covered=True, dpi=72) == {1}
+    assert admitted_indexes(covered=False, dpi=72) == {1}
+    # At 288 DPI, the existing pipeline's own render distinguishes the item.
+    assert admitted_indexes(covered=True, dpi=288) == {1}
+    assert admitted_indexes(covered=False, dpi=288) == {0, 1}
 
 
 def test_source_layer_witness_fails_closed_when_image_ocg_readback_fails():

@@ -29,7 +29,7 @@ def _segment_key(start: tuple[float, float], end: tuple[float, float]) -> tuple:
 
 
 def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_value = os.environ.get(_SOURCE_ENV)
     if not source_value:
@@ -40,6 +40,8 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     assert source_sha256 == _SOURCE_SHA256
 
+    dpi = 144
+    scale = dpi / 72.0
     with fitz.open(stream=source_bytes, filetype="pdf") as pdf:
         page = pdf[0]
         assert page.rotation == 270
@@ -54,10 +56,16 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         source_items = source_path["items"]
         assert len(source_items) == 796
         assert all(item[0] == "l" for item in source_items)
-
-        dpi = 72
-        scale = dpi / 72.0
         pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        expected: Counter[tuple] = Counter()
+        rotation = page.rotation_matrix
+        for item in source_items:
+            first = fitz.Point(item[1]) * rotation
+            second = fitz.Point(item[2]) * rotation
+            first_px = (first.x * scale - pixmap.x, first.y * scale - pixmap.y)
+            second_px = (second.x * scale - pixmap.x, second.y * scale - pixmap.y)
+            expected[_segment_key(first_px, second_px)] += 1
+
         render_sha256 = hashlib.sha256(pixmap.tobytes("png")).hexdigest()
         result = run_pdf_module._page_pdf_source_layer_line_witnesses(
             page,
@@ -72,17 +80,10 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         )
         assert isinstance(result, tuple) and len(result) == 2
         _, source_lines = result
+        render_origin = (pixmap.x, pixmap.y)
+        render_bytes = pixmap.tobytes("png")
 
-        expected: Counter[tuple] = Counter()
-        rotation = page.rotation_matrix
-        for item in source_items:
-            first = fitz.Point(item[1]) * rotation
-            second = fitz.Point(item[2]) * rotation
-            first_px = (first.x * scale - pixmap.x, first.y * scale - pixmap.y)
-            second_px = (second.x * scale - pixmap.x, second.y * scale - pixmap.y)
-            expected[_segment_key(first_px, second_px)] += 1
-
-    assert len(source_lines) == 751
+    assert len(source_lines) == 577
     assert any("-i183-layer-03_Lines_Waterlines" in line.id for line in source_lines)
     assert len({line.id for line in source_lines}) == len(source_lines)
     actual: Counter[tuple] = Counter()
@@ -93,7 +94,7 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         assert line.source_page_index == 0
         assert line.render_sha256 == render_sha256
         assert line.render_dpi == dpi
-        assert line.render_origin_px == (pixmap.x, pixmap.y)
+        assert line.render_origin_px == render_origin
         assert line.source_item_index is not None
         assert line.p1_px != line.p2_px
         actual[_segment_key(line.p1_px, line.p2_px)] += 1
@@ -102,10 +103,20 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     # Run the existing image owner with its actual raster geometry and
     # duplicate/ambiguity screen. The test-only scale checks conversion only;
     # it is not drawing-scale evidence or calibration acceptance.
-    render_bytes = pixmap.tobytes("png")
     rendered_path = tmp_path / "page.png"
     rendered_path.write_bytes(render_bytes)
     ir_path = tmp_path / "primitive_ir.json"
+    extracted_raster_lines = []
+    extract_raw_geometry = run_image_module.extract_raw_geometry
+
+    def capture_raster_lines(*args, **kwargs):
+        geometry = extract_raw_geometry(*args, **kwargs)
+        extracted_raster_lines.extend(geometry.lines)
+        return geometry
+
+    monkeypatch.setattr(
+        run_image_module, "extract_raw_geometry", capture_raster_lines
+    )
     run_image_module.run(
         image_path=str(rendered_path),
         output_path=str(ir_path),
@@ -118,8 +129,22 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     payload = json.loads(ir_path.read_text(encoding="utf-8"))
     assert validate_document(payload) == []
     ir_lines = [p for p in payload["primitives"] if p["source"] == "geometry_pdfvector"]
-    assert len(ir_lines) == len(source_lines)
+    expected_ir_line_ids = [
+        line.id for line in source_lines
+        if not run_image_module._pdf_line_overlaps_raster(
+            [line], extracted_raster_lines, []
+        )
+    ]
+    assert len(expected_ir_line_ids) == 573
+    assert [line["id"] for line in ir_lines] == expected_ir_line_ids
     assert all(p["type"] == "line" for p in ir_lines)
+    raster_ir_lines = [
+        primitive for primitive in payload["primitives"]
+        if primitive["source"] == "geometry_opencv" and primitive["type"] == "line"
+    ]
+    assert {line["id"] for line in raster_ir_lines} == {
+        line.id for line in extracted_raster_lines
+    }
 
     dxf_path = tmp_path / "gunnerus-source-lines.dxf"
     build_result = build_dxf(
@@ -131,10 +156,14 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         primitive["type"] == "line" for primitive in payload["primitives"]
     )
     assert build_result.entity_count == len(payload["primitives"])
+    retained_source_lines = [
+        line for line in source_lines if line.id in build_result.handle_by_primitive_id
+    ]
+    assert len(retained_source_lines) == 573
+    assert len(source_lines) - len(retained_source_lines) == 4
     assert all(
-        line.id in build_result.handle_by_primitive_id
-        and build_result.written_geometry_by_primitive_id[line.id]["type"] == "line"
-        for line in source_lines
+        build_result.written_geometry_by_primitive_id[line.id]["type"] == "line"
+        for line in retained_source_lines
     )
     review = review_dxf(build_result, strict_primitive_inventory=True)
     assert review.passed is True

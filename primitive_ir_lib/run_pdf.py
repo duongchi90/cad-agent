@@ -3062,47 +3062,18 @@ def _source_path_pixel_supported_items(
     endpoints_px: list[tuple[tuple[float, float], tuple[float, float]]],
     supported_item_indexes: set[int],
 ) -> set[int]:
-    """Return witnessed items plus attached subpixel joins in each visible component."""
+    """Return only source items with their own rendered-pixel support."""
     if not endpoints_px or not supported_item_indexes:
         return set()
     if any(index < 0 or index >= len(endpoints_px) for index in supported_item_indexes):
         return set()
-    endpoint_members: dict[tuple[float, float], set[int]] = {}
-    short_unwitnessed: set[int] = set()
-    for index, (first, second) in enumerate(endpoints_px):
+    for first, second in endpoints_px:
         if not all(math.isfinite(value) for point in (first, second) for value in point):
             return set()
         length = math.dist(first, second)
         if not math.isfinite(length) or length <= 1e-6:
             return set()
-        if index not in supported_item_indexes and length <= 1.0:
-            short_unwitnessed.add(index)
-        for point in (first, second):
-            endpoint_members.setdefault(
-                (round(point[0], 6), round(point[1], 6)), set()
-            ).add(index)
-
-    eligible = supported_item_indexes | short_unwitnessed
-    neighbors: dict[int, set[int]] = {index: set() for index in eligible}
-    for members in endpoint_members.values():
-        eligible_members = members & eligible
-        for index in eligible_members:
-            neighbors[index].update(eligible_members - {index})
-    remaining = set(eligible)
-    admitted: set[int] = set()
-    while remaining:
-        root = remaining.pop()
-        component = {root}
-        stack = [root]
-        while stack:
-            current = stack.pop()
-            discovered = neighbors[current] & remaining
-            remaining.difference_update(discovered)
-            component.update(discovered)
-            stack.extend(discovered)
-        if component.intersection(supported_item_indexes):
-            admitted.update(component)
-    return admitted
+    return set(supported_item_indexes)
 
 
 def _source_layer_active_ancestors(
@@ -3967,6 +3938,24 @@ def _page_pdf_source_layer_line_witnesses(
                 competing_bounds = nearby_competing_bounds(
                     source_layer, seqno, query_bounds
                 )
+                competing_strokes = nearby_competing_strokes(
+                    source_layer, seqno, query_bounds, first_px, second_px,
+                    stroke_width_px,
+                )
+                if math.dist(first_px, second_px) <= 1.0:
+                    # A subpixel item in a compound path can otherwise borrow
+                    # its only changed pixel from a visible sibling item.
+                    competing_strokes += tuple(
+                        (other_start, other_end, stroke_width_px)
+                        for other_index, (other_start, other_end) in enumerate(
+                            transformed_endpoints
+                        )
+                        if other_index != sibling_index
+                        and min(other_start[0], other_end[0]) <= query_bounds[2]
+                        and max(other_start[0], other_end[0]) >= query_bounds[0]
+                        and min(other_start[1], other_end[1]) <= query_bounds[3]
+                        and max(other_start[1], other_end[1]) >= query_bounds[1]
+                    )
                 has_pixel_support = _line_has_full_pixel_difference_support(
                     baseline,
                     difference_by_name[source_layer],
@@ -3975,10 +3964,7 @@ def _page_pdf_source_layer_line_witnesses(
                     stroke_width_px,
                     competing_bounds,
                     difference_mask_by_name.get(source_layer),
-                    nearby_competing_strokes(
-                        source_layer, seqno, query_bounds, first_px, second_px,
-                        stroke_width_px,
-                    ),
+                    competing_strokes,
                 )
                 if has_pixel_support:
                     supported_item_indexes.add(sibling_index)

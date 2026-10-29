@@ -437,10 +437,10 @@ def _apply_pdf_source_layer_classifications(
             primitive.layer = classification
 
 
-def _pdf_line_path_overlaps_raster(
+def _pdf_line_overlaps_raster(
     source_lines: List[RawPdfLine], raster_lines: List[RawLine], raw_texts: List[RawText]
 ) -> bool:
-    """Refuse a whole PDF path when raster/text composition is not unambiguous."""
+    """Refuse a source LINE item when raster/text composition is ambiguous."""
     if not source_lines:
         return False
     cell_size = 256.0
@@ -544,7 +544,7 @@ def _pdf_line_path_overlaps_raster(
                 0.0,
                 min(source_length, max(projections)) - max(0.0, min(projections)),
             )
-            if overlap >= 0.5 * min(source_length, raster_length):
+            if overlap > 1e-6:
                 return True
     return False
 
@@ -690,16 +690,9 @@ def run(
     raw_lines.extend(
         line for witnessed_intervals in pdf_witnessed_lines.values() for line in witnessed_intervals
     )
-    grouped_pdf_paths: dict[tuple[int, int, str], list[RawPdfLine]] = {}
-    for line in pdf_vector_lines or []:
-        grouped_pdf_paths.setdefault(
-            (line.source_page_index, line.source_seqno, line.source_layer), []
-        ).append(line)
     pdf_vector_lines = [
-        line
-        for path_lines in grouped_pdf_paths.values()
-        if not _pdf_line_path_overlaps_raster(path_lines, raw_lines, raw_texts)
-        for line in path_lines
+        line for line in pdf_vector_lines or []
+        if not _pdf_line_overlaps_raster([line], raw_lines, raw_texts)
     ]
 
     if view_candidates_output_path is not None:
