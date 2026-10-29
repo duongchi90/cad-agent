@@ -818,6 +818,16 @@ class DotNetIPCClient:
                 and normalized_parameters.get("include_model_space_inventory") is True
                 and result["success"] is True
             ):
+                result_drawing_path = result.get("drawing_full_path")
+                if (
+                    normalized_path is None
+                    or not isinstance(result_drawing_path, str)
+                    or normalize_windows_absolute_path(result_drawing_path).casefold()
+                    != normalized_path.casefold()
+                ):
+                    raise DotNetIPCProtocolError(
+                        "drawing_setup_audit result drawing_full_path does not match the requested drawing"
+                    )
                 payload = result.get("payload")
                 if not isinstance(payload, dict) or not isinstance(
                     payload.get("model_space_inventory"), dict

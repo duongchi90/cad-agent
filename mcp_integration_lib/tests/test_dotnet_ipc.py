@@ -392,9 +392,15 @@ def _nested_mapping_keys(value: object) -> set[str]:
 
 
 class FakeDispatcher:
-    def __init__(self, ipc_dir: Path, payload: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        ipc_dir: Path,
+        payload: dict[str, object] | None = None,
+        result_overrides: dict[str, object] | None = None,
+    ) -> None:
         self.ipc_dir = ipc_dir
         self.payload = payload or {}
+        self.result_overrides = result_overrides or {}
         self.requests: list[dict[str, object]] = []
         self.request_bytes = b""
 
@@ -404,9 +410,11 @@ class FakeDispatcher:
         self.request_bytes = request_files[0].read_bytes()
         request = json.loads(self.request_bytes.decode("utf-8"))
         self.requests.append(request)
+        result = _result(request, self.payload)
+        result.update(self.result_overrides)
         atomic_write_json(
             result_path(self.ipc_dir, str(request["request_id"])),
-            _result(request, self.payload),
+            result,
         )
 
     @staticmethod
@@ -1112,24 +1120,27 @@ class DotNetIPCClientTests(unittest.TestCase):
             "model_space_inventory": inventory,
         }
         mismatches = (
-            ("hash", {"drawing_sha256_before": "b" * 64, "drawing_sha256_after": "b" * 64}),
-            ("path", {"drawing_full_path": r"C:\temp\other.dwg"}),
+            ("hash", {"drawing_sha256_before": "b" * 64, "drawing_sha256_after": "b" * 64}, {}),
+            ("path", {"drawing_full_path": r"C:\temp\other.dwg"}, {}),
+            ("outer_result_path", {}, {"drawing_full_path": r"C:\temp\other-result.dwg"}),
         )
 
-        for field, mismatch in mismatches:
+        for field, mismatch, result_overrides in mismatches:
             with self.subTest(field=field), TemporaryDirectory() as temporary:
                 candidate = copy.deepcopy(payload)
                 candidate["model_space_inventory"].update(mismatch)
                 ipc_dir = Path(temporary)
                 client = DotNetIPCClient(
                     ipc_dir=ipc_dir,
-                    trigger=FakeDispatcher(ipc_dir, candidate),
+                    trigger=FakeDispatcher(ipc_dir, candidate, result_overrides),
+                )
+                message = (
+                    "drawing_setup_audit result drawing_full_path does not match the requested drawing"
+                    if field == "outer_result_path"
+                    else "ModelSpace inventory identity does not match the requested drawing"
                 )
 
-                with self.assertRaisesRegex(
-                    DotNetIPCProtocolError,
-                    "ModelSpace inventory identity does not match the requested drawing",
-                ):
+                with self.assertRaisesRegex(DotNetIPCProtocolError, message):
                     client.drawing_setup_audit(
                         drawing_path,
                         drawing_sha256=requested_hash,
