@@ -135,7 +135,16 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
             [line], extracted_raster_lines, []
         )
     ]
-    assert len(expected_ir_line_ids) == 573
+    # The full-segment overlap check conservatively rejects seven short
+    # source items that approach the same rendered raster stroke within the
+    # overlap interval. Keep those source/raster conflicts out of admitted
+    # PDF vectors; do not preserve the earlier start-offset-only count.
+    additional_overlap_items = {709, 710, 712, 715, 717, 718, 719}
+    assert additional_overlap_items.isdisjoint({
+        line.source_item_index for line in source_lines
+        if line.id in expected_ir_line_ids
+    })
+    assert len(expected_ir_line_ids) == 566
     assert [line["id"] for line in ir_lines] == expected_ir_line_ids
     assert all(p["type"] == "line" for p in ir_lines)
     raster_ir_lines = [
@@ -159,8 +168,8 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     retained_source_lines = [
         line for line in source_lines if line.id in build_result.handle_by_primitive_id
     ]
-    assert len(retained_source_lines) == 573
-    assert len(source_lines) - len(retained_source_lines) == 4
+    assert len(retained_source_lines) == 566
+    assert len(source_lines) - len(retained_source_lines) == 11
     assert all(
         build_result.written_geometry_by_primitive_id[line.id]["type"] == "line"
         for line in retained_source_lines
