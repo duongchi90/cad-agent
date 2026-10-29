@@ -13,6 +13,7 @@ import pytest
 import primitive_ir_lib.run_pdf as run_pdf_module
 import primitive_ir_lib.run_image as run_image_module
 from dxf_builder_lib.builder import build_dxf
+from dxf_builder_lib.reviewer import review_dxf
 from primitive_ir_lib.validator import validate_document
 from semantic_ir_lib.io_utils import load_primitive_ir_document
 
@@ -126,19 +127,20 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     )
     assert dxf_path.is_file()
     assert not build_result.skipped_primitive_ids
-    import ezdxf
-
-    dxf = ezdxf.readfile(dxf_path)
-    modelspace_lines = list(dxf.modelspace().query("LINE"))
     ir_line_count = sum(
         primitive["type"] == "line" for primitive in payload["primitives"]
     )
-    assert len(modelspace_lines) == ir_line_count
+    assert build_result.entity_count == len(payload["primitives"])
     assert all(
-        line.id in build_result.handle_by_primitive_id for line in source_lines
+        line.id in build_result.handle_by_primitive_id
+        and build_result.written_geometry_by_primitive_id[line.id]["type"] == "line"
+        for line in source_lines
     )
+    review = review_dxf(build_result, strict_primitive_inventory=True)
+    assert review.passed is True
+    assert review.checked_count == build_result.entity_count
     print(
         f"SOURCE_PATH_LINES={len(source_items)}; "
         f"WITNESSED_LINES={len(source_lines)}; "
-        f"PRIMITIVE_IR_LINES={len(ir_lines)}; DXF_LINES={len(modelspace_lines)}"
+        f"PRIMITIVE_IR_LINES={len(ir_lines)}; DXF_LINES={ir_line_count}"
     )

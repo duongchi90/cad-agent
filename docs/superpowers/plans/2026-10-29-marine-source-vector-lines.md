@@ -73,7 +73,7 @@
 - Test: `primitive_ir_lib/tests/test_marine_source_vector_lines.py`
 
 - [x] Build DXF from the actual candidate IR; all IR LINE entities emitted, no skipped primitives, and the source LINE path had no raster/text overlap under the existing refusal screen.
-- [x] Run the frozen Gunnerus `real_data` regression: 1 passed; exact PDF SHA matched. Focused PDF/image/geometry suite: 135 passed, 2 B041-gated skips; added outline-control test passed in a later targeted run. Ruff and `git diff --check` passed.
+- [x] Run the frozen Gunnerus `real_data` regression: 1 passed; exact PDF SHA matched, all candidate lines reached the existing builder, and `review_dxf(strict_primitive_inventory=True)` passed. Focused PDF/image/geometry suite: 135 passed, 2 B041-gated skips; added outline-control test passed in a later targeted run. Ruff and `git diff --check` passed.
 - [ ] Run canonical `scripts/verify.ps1` after the final implementation on a clean candidate commit; the script refuses to run with the current uncommitted worktree.
 - [ ] Record native DWG save/close/reopen/readback as NOT RUN unless its dedicated authorized gate is available; never infer it from IR/DXF success.
 - [ ] Recheck current main, exact PR head/tree, hosted CI, independent Security/Integration receipts, and any required native gate before readiness or merge.
