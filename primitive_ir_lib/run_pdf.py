@@ -4029,11 +4029,6 @@ def _page_pdf_source_layer_line_witnesses(
                     other_length = math.dist(other_start, other_end)
                     if candidate_length <= 1.0:
                         return True
-                    # A short adjacent item cannot explain a long candidate's
-                    # rendered extent. Keeping it as a competitor can erase
-                    # real, independently supported vertices in dense curves.
-                    if other_length <= 1.0:
-                        return False
                     join_x, join_y = next(iter(shared))
                     other_tip = other_end if other_start == (join_x, join_y) else other_start
                     candidate_tip = second_px if first_px == (join_x, join_y) else first_px
@@ -4047,15 +4042,27 @@ def _page_pdf_source_layer_line_witnesses(
                     sine = abs(candidate_dx * other_dy - candidate_dy * other_dx) / (
                         candidate_length * other_length
                     )
+                    competing_radius = other_stroke_width / 2.0 + math.sqrt(0.5)
                     projected_overlap = min(
                         candidate_length,
                         dot / candidate_length,
                     )
                     if sine > 1e-12:
-                        competing_radius = other_stroke_width / 2.0 + math.sqrt(0.5)
                         projected_overlap = min(
                             projected_overlap, competing_radius / sine
                         )
+                    if other_length <= 1.0:
+                        # A short sibling can explain a short candidate's
+                        # entire sampled extent even when it is too short to
+                        # explain a longer line. Match the last sample used by
+                        # _line_has_full_pixel_difference_support and include
+                        # the sibling's raster footprint when deciding.
+                        sample_count = max(2, math.ceil(candidate_length * 2.0))
+                        last_sample_fraction = (sample_count + 0.5) / (
+                            sample_count + 2.0
+                        )
+                        last_sample_distance = candidate_length * last_sample_fraction
+                        return projected_overlap + competing_radius >= last_sample_distance
                     # Ignore a one-pixel-scale contact at an ordinary join.
                     raster_footprint_diameter = (
                         other_stroke_width + 2.0 * math.sqrt(0.5)
