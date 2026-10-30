@@ -361,6 +361,12 @@ def build_dxf(
             "Primitive IR calibration is needs_verification; DXF build is "
             "refused until a hash-bound approval marks it verified."
         )
+    if primitive_doc.calibration.unit != "mm":
+        raise ValueError(
+            "DXF build requires canonical millimetres: Primitive IR "
+            "calibration unit must be exactly 'mm'; convert coordinates to "
+            "canonical millimetres before calling build_dxf."
+        )
     if dimension_specs is not None:
         if not build_dimensions:
             raise ValueError("dimension_specs requires build_dimensions=True")
