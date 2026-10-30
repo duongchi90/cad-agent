@@ -83,12 +83,13 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         render_origin = (pixmap.x, pixmap.y)
         render_bytes = pixmap.tobytes("png")
 
-    # The stricter per-item witness excludes item 493: its ~1 px rendered
-    # extent is inseparable from nearby same-path waterline items at this DPI.
-    # Keep the ambiguity fail-closed instead of counting shared pixels as an
-    # independent witness.
-    assert len(source_lines) == 576
-    assert 493 not in {line.source_item_index for line in source_lines}
+    # The strict scalar per-item witness excludes short/overlapping source
+    # segments whose pixels cannot be independently attributed within this
+    # continuous path at 144 DPI. Preserve ambiguity fail-closed instead of
+    # counting the same-path sibling pixels as an independent witness.
+    admitted_item_indexes = {line.source_item_index for line in source_lines}
+    assert len(source_lines) == 574
+    assert {493, 533, 577}.isdisjoint(admitted_item_indexes)
     assert any("-i183-layer-03_Lines_Waterlines" in line.id for line in source_lines)
     assert len({line.id for line in source_lines}) == len(source_lines)
     actual: Counter[tuple] = Counter()
@@ -140,16 +141,15 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
             [line], extracted_raster_lines, []
         )
     ]
-    # The full-segment overlap check conservatively rejects seven short
-    # source items that approach the same rendered raster stroke within the
-    # overlap interval. Keep those source/raster conflicts out of admitted
-    # PDF vectors; do not preserve the earlier start-offset-only count.
+    # Eleven items fail source/raster conflict arbitration; seven known short
+    # overlaps remain explicitly guarded below. Keep the conflict set
+    # fail-closed rather than preserve the earlier start-offset-only count.
     additional_overlap_items = {709, 710, 712, 715, 717, 718, 719}
     assert additional_overlap_items.isdisjoint({
         line.source_item_index for line in source_lines
         if line.id in expected_ir_line_ids
     })
-    assert len(expected_ir_line_ids) == 565
+    assert len(expected_ir_line_ids) == 563
     assert [line["id"] for line in ir_lines] == expected_ir_line_ids
     assert all(p["type"] == "line" for p in ir_lines)
     raster_ir_lines = [
@@ -173,7 +173,7 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     retained_source_lines = [
         line for line in source_lines if line.id in build_result.handle_by_primitive_id
     ]
-    assert len(retained_source_lines) == 565
+    assert len(retained_source_lines) == 563
     assert len(source_lines) - len(retained_source_lines) == 11
     assert all(
         build_result.written_geometry_by_primitive_id[line.id]["type"] == "line"

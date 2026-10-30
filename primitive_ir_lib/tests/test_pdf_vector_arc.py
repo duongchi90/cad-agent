@@ -429,6 +429,60 @@ def test_source_layer_witness_requires_full_rendered_pixel_support():
     assert not visible(adjacent_ocg_paint, layer_off, (10, 30), (90, 30), 1.0)
 
 
+def test_source_layer_fast_witness_matches_scalar_endpoint_samples():
+    visible = run_pdf_module._line_has_full_pixel_difference_support
+    baseline = np.full((32, 32, 3), 255, dtype=np.uint8)
+    layer_off = baseline.copy()
+    baseline[20, 10] = 0
+
+    def scalar_oracle_has_full_pixel_support() -> bool:
+        start_px = (10.3, 20.5)
+        end_px = (11.4, 20.5)
+        stroke_width_px = 0.1
+        dx = end_px[0] - start_px[0]
+        dy = end_px[1] - start_px[1]
+        length = math.hypot(dx, dy)
+        tangent_x, tangent_y = dx / length, dy / length
+        normal_x, normal_y = -tangent_y, tangent_x
+        sample_count = max(2, math.ceil(length * 2.0))
+        tangent_pixel_extent = 0.5 * (abs(tangent_x) + abs(tangent_y))
+        normal_pixel_extent = 0.5 * (abs(normal_x) + abs(normal_y))
+        sample_half_span = length / sample_count / 2.0
+        normal_support = stroke_width_px / 2.0 + normal_pixel_extent
+        differences = np.any(baseline[:, :, :3] != layer_off[:, :, :3], axis=2)
+
+        for sample_index in range(sample_count + 1):
+            fraction = (sample_index + 0.5) / (sample_count + 1)
+            x = start_px[0] + dx * fraction
+            y = start_px[1] + dy * fraction
+            supported = any(
+                differences[pixel_y, pixel_x]
+                and abs(
+                    (pixel_x + 0.5 - x) * normal_x
+                    + (pixel_y + 0.5 - y) * normal_y
+                ) < normal_support
+                and abs(
+                    (pixel_x + 0.5 - x) * tangent_x
+                    + (pixel_y + 0.5 - y) * tangent_y
+                ) < sample_half_span + tangent_pixel_extent
+                for pixel_y in range(max(0, math.floor(y) - 3), min(32, math.floor(y) + 5))
+                for pixel_x in range(max(0, math.floor(x) - 3), min(32, math.floor(x) + 5))
+            )
+            if not supported:
+                return False
+        return True
+
+    # The one changed pixel covers the fast grid's old final sample but misses
+    # the scalar oracle's final sample.
+    assert not scalar_oracle_has_full_pixel_support()
+    assert not visible(baseline, layer_off, (10.3, 20.5), (11.4, 20.5), 0.1)
+
+    # A second changed pixel covers the scalar endpoint sample as well.
+    baseline[20, 11] = 0
+    assert scalar_oracle_has_full_pixel_support()
+    assert visible(baseline, layer_off, (10.3, 20.5), (11.4, 20.5), 0.1)
+
+
 def _write_ocg_group_false_pixel_witness_pdf(path: Path) -> None:
     """Build a real PDF whose adjacent OCG raster ink can impersonate a hidden vector line."""
     document = fitz.open()

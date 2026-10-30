@@ -2931,7 +2931,7 @@ def _line_has_full_pixel_difference_support(
     competing_bounds_margin = 0.25
     samples = sample_count + 1
     sample_fractions = [
-        (sample_index + 0.5) / (samples + 1) for sample_index in range(samples)
+        (sample_index + 0.5) / samples for sample_index in range(samples)
     ]
     sample_x = np.asarray(
         [start_px[0] + dx * fraction for fraction in sample_fractions],
@@ -4059,7 +4059,7 @@ def _page_pdf_source_layer_line_witnesses(
                         # the sibling's raster footprint when deciding.
                         sample_count = max(2, math.ceil(candidate_length * 2.0))
                         last_sample_fraction = (sample_count + 0.5) / (
-                            sample_count + 2.0
+                            sample_count + 1.0
                         )
                         last_sample_distance = candidate_length * last_sample_fraction
                         sample_half_span = candidate_length / sample_count / 2.0
