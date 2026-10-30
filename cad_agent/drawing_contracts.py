@@ -408,7 +408,7 @@ def _validate_audit(payload: dict[str, Any]) -> None:
     contract = "drawing_setup_audit"
     required = {"schema_version","drawing_full_path","drawing_sha256","changed","dbmod_before","dbmod_after","variables","current_layer","custom_properties","layers","styles","layouts","font_report"}
     _common(payload, contract=contract, version="drawing-setup-audit-1.0", required={"schema_version"})
-    _keys(payload, contract=contract, required=required)
+    _keys(payload, contract=contract, required=required, optional={"model_space_inventory"})
     _string(payload["drawing_full_path"], contract=contract, path="drawing_full_path")
     _sha(payload["drawing_sha256"], contract=contract, path="drawing_sha256")
     _bool(payload["changed"], contract=contract, path="changed")
@@ -453,6 +453,71 @@ def _validate_audit(payload: dict[str, Any]) -> None:
     _keys(font, contract=contract, required={"missing","substituted"})
     _strings(font["missing"], contract=contract, path="font_report.missing", min_items=0)
     _strings(font["substituted"], contract=contract, path="font_report.substituted", min_items=0)
+    if "model_space_inventory" in payload:
+        inventory = _object(payload["model_space_inventory"], contract=contract, path="model_space_inventory")
+        inventory_fields = {
+            "drawing_full_path", "drawing_sha256_before", "drawing_sha256_after",
+            "dbmod_before", "dbmod_after", "process_id", "plugin_version",
+            "plugin_binary_path", "plugin_binary_sha256", "entity_count",
+            "enumeration_complete", "bounds_complete", "entities",
+        }
+        _keys(inventory, contract=contract, required=inventory_fields)
+        _string(inventory["drawing_full_path"], contract=contract, path="model_space_inventory.drawing_full_path")
+        for key in ("drawing_sha256_before", "drawing_sha256_after", "plugin_binary_sha256"):
+            _sha(inventory[key].lower() if isinstance(inventory[key], str) else inventory[key], contract=contract, path=f"model_space_inventory.{key}")
+        if inventory["drawing_sha256_before"].lower() != inventory["drawing_sha256_after"].lower():
+            _fail(contract, "ModelSpace drawing hash changed during inventory")
+        if any(
+            isinstance(inventory[key], bool) or not isinstance(inventory[key], int)
+            for key in ("dbmod_before", "dbmod_after")
+        ):
+            _fail(contract, "ModelSpace inventory DBMOD values must be integers")
+        if inventory["dbmod_before"] != 0 or inventory["dbmod_after"] != 0:
+            _fail(contract, "ModelSpace inventory requires DBMOD=0 before and after")
+        if (
+            payload["dbmod_before"] != inventory["dbmod_before"]
+            or payload["dbmod_after"] != inventory["dbmod_after"]
+        ):
+            _fail(contract, "ModelSpace inventory DBMOD values do not match audit DBMOD values")
+        if isinstance(inventory["process_id"], bool) or not isinstance(inventory["process_id"], int) or inventory["process_id"] <= 0:
+            _fail(contract, "ModelSpace inventory process_id must be positive")
+        for key in ("plugin_version", "plugin_binary_path"):
+            _string(inventory[key], contract=contract, path=f"model_space_inventory.{key}")
+        _sha(inventory["plugin_binary_sha256"], contract=contract, path="model_space_inventory.plugin_binary_sha256")
+        count = inventory["entity_count"]
+        if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 50000:
+            _fail(contract, "ModelSpace entity_count is out of range")
+        if inventory["enumeration_complete"] is not True or not isinstance(inventory["bounds_complete"], bool):
+            _fail(contract, "ModelSpace inventory completion flags are invalid")
+        entities = inventory["entities"]
+        if not isinstance(entities, list) or len(entities) != count:
+            _fail(contract, "ModelSpace entities must match entity_count")
+        handles: set[str] = set()
+        all_bounds_complete = True
+        for index, raw_entity in enumerate(entities):
+            entity = _object(raw_entity, contract=contract, path=f"model_space_inventory.entities[{index}]")
+            _keys(entity, contract=contract, required={"handle", "type", "bounds_status", "bounds"})
+            handle = _string(entity["handle"], contract=contract, path=f"model_space_inventory.entities[{index}].handle")
+            if re.fullmatch(r"[0-9A-Fa-f]+", handle) is None or handle.upper() in handles:
+                _fail(contract, "ModelSpace entity handles must be unique hexadecimal values")
+            handles.add(handle.upper())
+            _string(entity["type"], contract=contract, path=f"model_space_inventory.entities[{index}].type")
+            status = entity["bounds_status"]
+            if status == "BOUNDS_READ":
+                bounds = entity["bounds"]
+                if not isinstance(bounds, list) or len(bounds) != 6:
+                    _fail(contract, "readable ModelSpace bounds must contain six numbers")
+                values = [_number(value, contract=contract, path=f"model_space_inventory.entities[{index}].bounds") for value in bounds]
+                if any(values[i] > values[i + 3] for i in range(3)):
+                    _fail(contract, "ModelSpace bounds minimum exceeds maximum")
+            elif status in {"UNSUPPORTED", "UNREADABLE", "NONFINITE"}:
+                all_bounds_complete = False
+                if entity["bounds"] is not None:
+                    _fail(contract, "unreadable ModelSpace bounds must be null")
+            else:
+                _fail(contract, "ModelSpace bounds_status is invalid")
+        if inventory["bounds_complete"] is not all_bounds_complete:
+            _fail(contract, "ModelSpace bounds_complete is inconsistent")
 
 
 def _validate_blocker(value: object, *, contract: str, path: str) -> None:
@@ -693,15 +758,20 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], None]] = {
 
 def read_contract(path: Path, *, contract: str) -> dict[str, object]:
     """Read, validate, and return a Drawing Setup contract from JSON."""
-    key = contract.replace("-", "_")
-    validator = _VALIDATORS.get(key)
-    if validator is None:
-        raise DrawingContractError(f"unsupported contract kind: {contract}")
     source = Path(path)
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise DrawingContractError(f"Cannot read {contract}: {source}") from exc
+    return validate_contract_payload(payload, contract=contract)
+
+
+def validate_contract_payload(payload: object, *, contract: str) -> dict[str, object]:
+    """Validate an in-memory Drawing Setup contract with its canonical validator."""
+    key = contract.replace("-", "_")
+    validator = _VALIDATORS.get(key)
+    if validator is None:
+        raise DrawingContractError(f"unsupported contract kind: {contract}")
     if not isinstance(payload, dict):
         raise DrawingContractError(f"{contract}: root must be an object")
     validator(payload)

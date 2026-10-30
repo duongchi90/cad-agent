@@ -14,6 +14,7 @@ from .drawing_contracts import (
     _layer_rule_witnesses,
     canonical_json_sha256,
     read_contract_with_sha256,
+    validate_contract_payload,
 )
 from .manifest import sha256_file
 
@@ -284,6 +285,22 @@ def create_setup_audit(
         raise _fail(f"drawing setup audit IPC payload is missing {', '.join(missing)}")
 
     copied = {field: copy.deepcopy(payload[field]) for field in _AUDIT_PAYLOAD_FIELDS}
+    if "model_space_inventory" in payload:
+        inventory = payload["model_space_inventory"]
+        if not isinstance(inventory, Mapping):
+            raise _fail("ModelSpace inventory must be an object")
+        before_hash = inventory.get("drawing_sha256_before")
+        after_hash = inventory.get("drawing_sha256_after")
+        if (
+            not isinstance(inventory.get("drawing_full_path"), str)
+            or Path(str(inventory["drawing_full_path"])).resolve() != drawing_path
+            or not isinstance(before_hash, str)
+            or not isinstance(after_hash, str)
+            or before_hash.lower() != drawing_sha256
+            or after_hash.lower() != drawing_sha256
+        ):
+            raise _fail("ModelSpace inventory path/hash does not match the audited drawing")
+        copied["model_space_inventory"] = copy.deepcopy(inventory)
     if copied["changed"] is not False:
         raise _fail("drawing setup audit payload must be read-only")
     dbmod_before = copied["dbmod_before"]
@@ -307,7 +324,7 @@ def create_setup_audit(
         json.dumps(audit, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise _fail("drawing setup audit IPC payload is not strict JSON") from exc
-    return audit
+    return validate_contract_payload(audit, contract="drawing_setup_audit")
 
 
 def create_layer_standard_check(
