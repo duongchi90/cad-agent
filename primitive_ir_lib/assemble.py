@@ -13,7 +13,7 @@ import math
 from typing import List, Optional
 
 from .calibration import Calibration
-from .geometry_extraction import RawArc, RawCircle, RawLine
+from .geometry_extraction import RawArc, RawCircle, RawLine, RawPdfLine
 from .models import (
     ArcGeometry, CircleGeometry, LineGeometry, Primitive,
     PrimitiveIRDocument, SourceDocument, Trace, now_iso,
@@ -83,6 +83,29 @@ def pdf_vector_arc_to_primitive(raw: RawArc, calibration: Calibration) -> Primit
     )
 
 
+def pdf_vector_line_to_primitive(raw: RawPdfLine, calibration: Calibration) -> Primitive:
+    start = calibration.pixel_to_cad(*raw.p1_px)
+    end = calibration.pixel_to_cad(*raw.p2_px)
+    return Primitive(
+        id=raw.id,
+        type="line",
+        source="geometry_pdfvector",
+        confidence=raw.confidence,
+        geometry=LineGeometry(start, end),
+        trace=Trace(
+            bbox_px=raw.bbox_px,
+            extraction_tool="pymupdf-visible-vector-line-v1",
+            extracted_at=now_iso(),
+            source_pdf_sha256=raw.source_pdf_sha256,
+            source_page_index=raw.source_page_index,
+            source_transform=raw.source_transform,
+            source_render_sha256=raw.render_sha256,
+            source_render_dpi=raw.render_dpi,
+            source_render_origin_px=raw.render_origin_px,
+        ),
+    )
+
+
 def text_to_primitive(raw: RawText, calibration: Calibration, height_px: float = 20.0) -> Primitive:
     """height_px: chiều cao chữ ước lượng bằng pixel (mặc định lấy chiều cao
     bbox nếu không truyền riêng) -> quy đổi ra đơn vị CAD bằng scale."""
@@ -130,6 +153,7 @@ def build_document(
     raw_texts: List[RawText],
     raw_arcs: Optional[List[RawArc]] = None,
     sha256: Optional[str] = None,
+    raw_pdf_lines: Optional[List[RawPdfLine]] = None,
 ) -> PrimitiveIRDocument:
     """Entry point chính: sinh PrimitiveIRDocument đầy đủ (chưa có
     cross_validations — gọi cross_validation.cross_validate() rồi gán vào
@@ -139,6 +163,7 @@ def build_document(
     primitives += [line_to_primitive(l, calibration) for l in raw_lines]
     primitives += [circle_to_primitive(c, calibration) for c in raw_circles]
     primitives += [pdf_vector_arc_to_primitive(a, calibration) for a in (raw_arcs or [])]
+    primitives += [pdf_vector_line_to_primitive(line, calibration) for line in (raw_pdf_lines or [])]
     primitives += [text_to_primitive(t, calibration) for t in raw_texts]
 
     return PrimitiveIRDocument(

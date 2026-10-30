@@ -22,15 +22,67 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import fitz
 import numpy as np
 
 from .calibration_registry import get_verified_scale
-from .geometry_extraction import RawArc, RawLine
+from .geometry_extraction import RawArc, RawLine, RawPdfLine
 from .models import new_id
 from .run_image import PDF_TEXT_CONFLICT_POLICY_VERSION, run
 from .text_extraction import RawText
+
+
+_CompetingStroke = tuple[tuple[float, float], tuple[float, float], float]
+_CompetingStrokeEntry = tuple[
+    int,
+    tuple[float, float, float, float],
+    _CompetingStroke,
+]
+
+
+def _collect_nearby_competing_strokes(
+    buckets: dict[tuple[int, int], list[_CompetingStrokeEntry]],
+    broad: list[_CompetingStrokeEntry] | tuple[_CompetingStrokeEntry, ...],
+    query_cells: set[tuple[int, int]] | None,
+    candidate_seqno: int,
+    query: tuple[float, float, float, float],
+    fallback_entries: list[_CompetingStrokeEntry] | tuple[_CompetingStrokeEntry, ...],
+) -> tuple[_CompetingStroke, ...]:
+    def overlaps_query(entry: _CompetingStrokeEntry) -> bool:
+        seqno, bounds, _ = entry
+        return (
+            seqno != candidate_seqno
+            and bounds[0] <= query[2]
+            and bounds[2] >= query[0]
+            and bounds[1] <= query[3]
+            and bounds[3] >= query[1]
+        )
+
+    if query_cells is None:
+        return tuple(
+            entry[2] for entry in fallback_entries if overlaps_query(entry)
+        )
+
+    candidates: set[_CompetingStrokeEntry] = set()
+    checked_entry_ids: set[int] = set()
+    for entry in broad:
+        entry_id = id(entry)
+        if entry_id in checked_entry_ids:
+            continue
+        checked_entry_ids.add(entry_id)
+        if overlaps_query(entry):
+            candidates.add(entry)
+    for cell in query_cells:
+        for entry in buckets.get(cell, ()):
+            entry_id = id(entry)
+            if entry_id in checked_entry_ids:
+                continue
+            checked_entry_ids.add(entry_id)
+            if overlaps_query(entry):
+                candidates.add(entry)
+    return tuple(entry[2] for entry in candidates)
 
 
 def _candidate_crop_bbox(
@@ -1305,6 +1357,42 @@ def _axis_aligned_clip_rect(drawing: dict) -> Optional[fitz.Rect]:
         except (TypeError, ValueError, OverflowError):
             return None
         return clip_rect if scissor_rect.is_valid and all(math.isfinite(value) for value in scissor_rect) else None
+
+    if len(items) == 1 and isinstance(items[0], (tuple, list)) and items[0][0] == "qu":
+        try:
+            quad = items[0][1]
+            points = (quad.ul, quad.ur, quad.lr, quad.ll)
+            coordinates = tuple((float(point.x), float(point.y)) for point in points)
+            if not all(math.isfinite(value) for point in coordinates for value in point):
+                return None
+            x0 = min(point[0] for point in coordinates)
+            y0 = min(point[1] for point in coordinates)
+            x1 = max(point[0] for point in coordinates)
+            y1 = max(point[1] for point in coordinates)
+            expected_corners = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+            unmatched = list(expected_corners)
+            for point in coordinates:
+                matches = [
+                    index for index, corner in enumerate(unmatched)
+                    if abs(point[0] - corner[0]) <= 0.02
+                    and abs(point[1] - corner[1]) <= 0.02
+                ]
+                if len(matches) != 1:
+                    return None
+                unmatched.pop(matches[0])
+            clip_rect = fitz.Rect(x0, y0, x1, y1)
+            scissor_rect = fitz.Rect(scissor)
+        except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
+            return None
+        if (
+            not clip_rect.is_valid
+            or clip_rect.is_empty
+            or not all(math.isfinite(value) for value in clip_rect)
+            or not scissor_rect.is_valid
+            or not all(math.isfinite(value) for value in scissor_rect)
+        ):
+            return None
+        return clip_rect
 
     if len(items) != 4:
         return None
@@ -2769,22 +2857,28 @@ def _line_has_full_pixel_difference_support(
     end_px: tuple[float, float],
     stroke_width_px: float,
     competing_bounds_px: tuple[tuple[float, float, float, float], ...] = (),
+    difference_mask: Optional[np.ndarray] = None,
+    competing_strokes_px: tuple[
+        tuple[tuple[float, float], tuple[float, float], float], ...
+    ] = (),
 ) -> bool:
     """Require changed pixels to overlap the candidate stroke's raster footprint.
 
     Toggling an optional-content group removes every path in that group. A
-    nearby path must not provide the pixel difference used to witness this
-    candidate, so pixels touched by another same-group path's paint bounds are
-    not evidence for this line. Pixel squares are tested against both the
+    nearby independent path must not provide the pixel difference used to
+    witness this candidate, so pixels touched by another same-group path's paint bounds are
+    not evidence for this line. Segments in one PDF stroke path share one paint
+    operation, so joins are not treated as independent competing paths.
+    Pixel squares are tested against both the
     candidate stroke strip and competing bounds, with a small rasterization
     margin; an arbitrary adjacent row is not source support.
     """
     if (
         not isinstance(baseline_rgb, np.ndarray)
         or not isinstance(layer_off_rgb, np.ndarray)
-        or baseline_rgb.ndim != 3
+        or baseline_rgb.ndim not in {2, 3}
         or layer_off_rgb.shape != baseline_rgb.shape
-        or baseline_rgb.shape[2] < 3
+        or (baseline_rgb.ndim == 3 and baseline_rgb.shape[2] < 3)
         or not math.isfinite(stroke_width_px)
         or stroke_width_px <= 0
     ):
@@ -2800,12 +2894,29 @@ def _line_has_full_pixel_difference_support(
             or bounds[1] > bounds[3]
         ):
             return False
+    for first, second, width in competing_strokes_px:
+        if (
+            len(first) != 2
+            or len(second) != 2
+            or not all(math.isfinite(value) for value in (*first, *second, width))
+            or width <= 0
+        ):
+            return False
     dx = end_px[0] - start_px[0]
     dy = end_px[1] - start_px[1]
     length = math.hypot(dx, dy)
     if not math.isfinite(length) or length <= 1e-6:
         return False
-    differences = np.any(baseline_rgb[:, :, :3] != layer_off_rgb[:, :, :3], axis=2)
+    if difference_mask is None:
+        differences = (
+            baseline_rgb != layer_off_rgb
+            if baseline_rgb.ndim == 2
+            else np.any(baseline_rgb[:, :, :3] != layer_off_rgb[:, :, :3], axis=2)
+        )
+    else:
+        if difference_mask.shape != baseline_rgb.shape[:2] or difference_mask.dtype != np.bool_:
+            return False
+        differences = difference_mask
     height, width = differences.shape
     normal_x, normal_y = -dy / length, dx / length
     tangent_x, tangent_y = dx / length, dy / length
@@ -2815,7 +2926,127 @@ def _line_has_full_pixel_difference_support(
     sample_half_span = length / sample_count / 2.0
     normal_support = stroke_width_px / 2.0 + normal_pixel_extent
     search_radius = int(math.ceil(normal_support + 1.0))
+    if height <= 0 or width <= 0:
+        return False
     competing_bounds_margin = 0.25
+    samples = sample_count + 1
+    sample_fractions = [
+        (sample_index + 0.5) / samples for sample_index in range(samples)
+    ]
+    sample_x = np.asarray(
+        [start_px[0] + dx * fraction for fraction in sample_fractions],
+        dtype=np.float64,
+    )
+    sample_y = np.asarray(
+        [start_px[1] + dy * fraction for fraction in sample_fractions],
+        dtype=np.float64,
+    )
+    pixel_offsets = np.arange(
+        -search_radius, search_radius + 2, dtype=np.int64
+    )
+    pixels_per_sample = int(pixel_offsets.size * pixel_offsets.size)
+    # Bound temporary arrays for unusually long, high-resolution paths while
+    # still evaluating the exact same per-sample pixel neighborhood.
+    samples_per_chunk = max(1, min(samples, 100_000 // max(1, pixels_per_sample)))
+    all_offsets_x, all_offsets_y = np.meshgrid(pixel_offsets, pixel_offsets)
+    offsets_x = all_offsets_x.ravel()[None, :]
+    offsets_y = all_offsets_y.ravel()[None, :]
+
+    vector_rejected = False
+    for chunk_start in range(0, samples, samples_per_chunk):
+        chunk_end = min(samples, chunk_start + samples_per_chunk)
+        x = sample_x[chunk_start:chunk_end, None]
+        y = sample_y[chunk_start:chunk_end, None]
+        center_x = np.floor(x).astype(np.int64)
+        center_y = np.floor(y).astype(np.int64)
+        pixel_x = center_x + offsets_x
+        pixel_y = center_y + offsets_y
+        valid = (pixel_x >= 0) & (pixel_x < width) & (pixel_y >= 0) & (pixel_y < height)
+        pixel_center_x = pixel_x + 0.5
+        pixel_center_y = pixel_y + 0.5
+        offset_x = pixel_center_x - x
+        offset_y = pixel_center_y - y
+        normal_distance = np.abs(offset_x * normal_x + offset_y * normal_y)
+        tangent_distance = np.abs(offset_x * tangent_x + offset_y * tangent_y)
+        tangent_support = sample_half_span + tangent_pixel_extent
+        normal_inside = normal_distance < normal_support
+        tangent_inside = tangent_distance < tangent_support
+        eligible = valid & normal_inside & tangent_inside
+        boundary_pixels = (
+            np.abs(normal_distance - normal_support) <= 1e-12
+        ) | (np.abs(tangent_distance - tangent_support) <= 1e-12)
+        for row, column in zip(*np.nonzero(boundary_pixels)):
+            sample_index = chunk_start + row
+            fraction = sample_fractions[sample_index]
+            sample_px = start_px[0] + dx * fraction
+            sample_py = start_px[1] + dy * fraction
+            pixel_offset_x = int(pixel_x[row, column]) + 0.5 - sample_px
+            pixel_offset_y = int(pixel_y[row, column]) + 0.5 - sample_py
+            normal_inside[row, column] = (
+                abs(pixel_offset_x * normal_x + pixel_offset_y * normal_y)
+                < normal_support
+            )
+            tangent_inside[row, column] = (
+                abs(pixel_offset_x * tangent_x + pixel_offset_y * tangent_y)
+                < tangent_support
+            )
+        eligible = valid & normal_inside & tangent_inside
+        safe_x = np.clip(pixel_x, 0, width - 1)
+        safe_y = np.clip(pixel_y, 0, height - 1)
+        eligible &= differences[safe_y, safe_x]
+
+        for left, top, right, bottom in competing_bounds_px:
+            eligible &= ~(
+                (left - competing_bounds_margin < pixel_x + 1.0)
+                & (right + competing_bounds_margin > pixel_x)
+                & (top - competing_bounds_margin < pixel_y + 1.0)
+                & (bottom + competing_bounds_margin > pixel_y)
+            )
+
+        pixel_is_competing_stroke = np.zeros(eligible.shape, dtype=np.bool_)
+        for stroke_start, stroke_end, other_stroke_width in competing_strokes_px:
+            other_dx = stroke_end[0] - stroke_start[0]
+            other_dy = stroke_end[1] - stroke_start[1]
+            other_length_sq = other_dx * other_dx + other_dy * other_dy
+            if not math.isfinite(other_length_sq) or other_length_sq <= 1e-12:
+                pixel_is_competing_stroke[:] = True
+                break
+            projection = (
+                (pixel_center_x - stroke_start[0]) * other_dx
+                + (pixel_center_y - stroke_start[1]) * other_dy
+            ) / other_length_sq
+            projection = np.clip(projection, 0.0, 1.0)
+            nearest_x = stroke_start[0] + projection * other_dx
+            nearest_y = stroke_start[1] + projection * other_dy
+            distance = np.hypot(
+                pixel_center_x - nearest_x, pixel_center_y - nearest_y
+            )
+            threshold = other_stroke_width / 2.0 + math.sqrt(0.5)
+            competing = distance <= threshold
+            for row, column in zip(*np.nonzero(np.abs(distance - threshold) <= 1e-12)):
+                pixel_x_center = int(pixel_x[row, column]) + 0.5
+                pixel_y_center = int(pixel_y[row, column]) + 0.5
+                exact_projection = (
+                    (pixel_x_center - stroke_start[0]) * other_dx
+                    + (pixel_y_center - stroke_start[1]) * other_dy
+                ) / other_length_sq
+                exact_projection = max(0.0, min(1.0, exact_projection))
+                exact_x = stroke_start[0] + exact_projection * other_dx
+                exact_y = stroke_start[1] + exact_projection * other_dy
+                competing[row, column] = math.hypot(
+                    pixel_x_center - exact_x, pixel_y_center - exact_y
+                ) <= threshold
+            pixel_is_competing_stroke |= competing
+        eligible &= ~pixel_is_competing_stroke
+        if not np.all(np.any(eligible, axis=1)):
+            vector_rejected = True
+            break
+    if not vector_rejected:
+        return True
+
+    # Preserve the former scalar oracle for candidates the vectorized pass
+    # rejects. This exact fallback prevents numerical or broadcasting
+    # differences from dropping source-supported strokes.
     for sample_index in range(sample_count + 1):
         fraction = (sample_index + 0.5) / (sample_count + 1)
         x = start_px[0] + dx * fraction
@@ -2846,6 +3077,28 @@ def _line_has_full_pixel_difference_support(
                     for left, top, right, bottom in competing_bounds_px
                 ):
                     continue
+                pixel_is_competing_stroke = False
+                for stroke_start, stroke_end, other_stroke_width in competing_strokes_px:
+                    other_dx = stroke_end[0] - stroke_start[0]
+                    other_dy = stroke_end[1] - stroke_start[1]
+                    other_length_sq = other_dx * other_dx + other_dy * other_dy
+                    if not math.isfinite(other_length_sq) or other_length_sq <= 1e-12:
+                        pixel_is_competing_stroke = True
+                        break
+                    projection = (
+                        (pixel_center_x - stroke_start[0]) * other_dx
+                        + (pixel_center_y - stroke_start[1]) * other_dy
+                    ) / other_length_sq
+                    projection = max(0.0, min(1.0, projection))
+                    nearest_x = stroke_start[0] + projection * other_dx
+                    nearest_y = stroke_start[1] + projection * other_dy
+                    if math.hypot(pixel_center_x - nearest_x, pixel_center_y - nearest_y) <= (
+                        other_stroke_width / 2.0 + math.sqrt(0.5)
+                    ):
+                        pixel_is_competing_stroke = True
+                        break
+                if pixel_is_competing_stroke:
+                    continue
                 if differences[pixel_y, pixel_x]:
                     supported = True
                     break
@@ -2856,10 +3109,50 @@ def _line_has_full_pixel_difference_support(
     return True
 
 
+def _source_path_pixel_supported_items(
+    endpoints_px: list[tuple[tuple[float, float], tuple[float, float]]],
+    supported_item_indexes: set[int],
+) -> set[int]:
+    """Return only source items with their own rendered-pixel support."""
+    if not endpoints_px or not supported_item_indexes:
+        return set()
+    if any(index < 0 or index >= len(endpoints_px) for index in supported_item_indexes):
+        return set()
+    for first, second in endpoints_px:
+        if not all(math.isfinite(value) for point in (first, second) for value in point):
+            return set()
+        length = math.dist(first, second)
+        if not math.isfinite(length) or length <= 1e-6:
+            return set()
+    return set(supported_item_indexes)
+
+
+def _source_layer_active_ancestors(
+    drawings: list[dict], candidate_index: int
+) -> Optional[tuple[tuple[int, dict], ...]]:
+    """Resolve clip/group ancestry once for a drawing in PyMuPDF's ordered scope list."""
+    if not (0 <= candidate_index < len(drawings)):
+        return None
+    scopes: list[tuple[int, int, dict]] = []
+    for index, drawing in enumerate(drawings[: candidate_index + 1]):
+        current_level = drawing.get("level")
+        if isinstance(current_level, bool) or not isinstance(current_level, int) or current_level < 0:
+            return None
+        while scopes and scopes[-1][0] >= current_level:
+            scopes.pop()
+        if index == candidate_index:
+            return tuple((scope_index, scope) for _, scope_index, scope in scopes)
+        if drawing.get("type") in {"group", "clip"}:
+            scopes.append((current_level, index, drawing))
+    return None
+
+
 def _source_layer_line_has_safe_ancestry(
     drawings: list[dict],
     candidate_index: int,
     full_page_group_index: Optional[int],
+    item_index: int = 0,
+    active_ancestors: Optional[tuple[tuple[int, dict], ...]] = None,
 ) -> bool:
     """Reject scoped source strokes unless their clip/compositing context is proven safe."""
     if not (0 <= candidate_index < len(drawings)):
@@ -2873,14 +3166,16 @@ def _source_layer_line_has_safe_ancestry(
         or not isinstance(level, int)
         or level < 0
         or not isinstance(items, (tuple, list))
-        or len(items) != 1
+        or isinstance(item_index, bool)
+        or not isinstance(item_index, int)
+        or not (0 <= item_index < len(items))
         or not isinstance(width, (int, float))
         or isinstance(width, bool)
         or not math.isfinite(float(width))
         or width <= 0
     ):
         return False
-    item = items[0]
+    item = items[item_index]
     if len(item) != 3 or item[0] != "l":
         return False
     try:
@@ -2900,19 +3195,10 @@ def _source_layer_line_has_safe_ancestry(
 
     # Extended drawing levels form a scope stack. A later sibling at the same
     # level closes the prior clip/group; only active ancestors affect a path.
-    scopes: list[tuple[int, int, dict]] = []
-    active_ancestors: list[tuple[int, dict]] = []
-    for index, drawing in enumerate(drawings[: candidate_index + 1]):
-        current_level = drawing.get("level")
-        if isinstance(current_level, bool) or not isinstance(current_level, int) or current_level < 0:
-            return False
-        while scopes and scopes[-1][0] >= current_level:
-            scopes.pop()
-        if index == candidate_index:
-            active_ancestors = [(scope_index, scope) for _, scope_index, scope in scopes]
-            break
-        if drawing.get("type") in {"group", "clip"}:
-            scopes.append((current_level, index, drawing))
+    if active_ancestors is None:
+        active_ancestors = _source_layer_active_ancestors(drawings, candidate_index)
+    if active_ancestors is None:
+        return False
 
     for scope_index, scope in active_ancestors:
         if scope.get("type") == "group":
@@ -2970,7 +3256,13 @@ def _page_pdf_source_layer_line_witnesses(
     baseline_pixmap: fitz.Pixmap,
     pixel_scale: float,
     pixmap_origin: tuple[int, int],
-) -> list[tuple[RawLine, str]]:
+    *,
+    include_pdf_vector_lines: bool = False,
+    source_pdf_sha256: Optional[str] = None,
+    source_page_index: Optional[int] = None,
+    render_dpi: Optional[int] = None,
+    _candidate_seqnos: Optional[set[int]] = None,
+) -> list[tuple[RawLine, str]] | tuple[list[tuple[RawLine, str]], list[RawPdfLine]]:
     """Return only uniquely addressable ISO layer strokes visible in the page render."""
     if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
         return []
@@ -2990,7 +3282,33 @@ def _page_pdf_source_layer_line_witnesses(
     except Exception:
         return []
     config_by_name: dict[str, dict] = {}
-    for source_name in ("Oculto (ISO)", "Linha de centro (ISO)"):
+    if _candidate_seqnos is not None and (
+        not isinstance(_candidate_seqnos, set)
+        or any(
+            isinstance(seqno, bool) or not isinstance(seqno, int) or seqno < 0
+            for seqno in _candidate_seqnos
+        )
+    ):
+        return ([], []) if include_pdf_vector_lines else []
+    selected_candidate_layers = {
+        drawing.get("layer")
+        for drawing in drawings
+        if _candidate_seqnos is not None
+        and drawing.get("seqno") in _candidate_seqnos
+        and isinstance(drawing.get("layer"), str)
+    }
+    source_names = (
+        selected_candidate_layers
+        if include_pdf_vector_lines and _candidate_seqnos is not None
+        else {
+            drawing.get("layer")
+            for drawing in drawings
+            if isinstance(drawing.get("layer"), str) and drawing.get("layer")
+        }
+        if include_pdf_vector_lines
+        else {"Oculto (ISO)", "Linha de centro (ISO)"}
+    )
+    for source_name in source_names:
         matches = [config for config in ui_configs if config.get("text") == source_name]
         if len(matches) == 1 and matches[0].get("on") == 1:
             config_by_name[source_name] = matches[0]
@@ -3003,6 +3321,10 @@ def _page_pdf_source_layer_line_witnesses(
     baseline = _pixmap_rgb_array(baseline_pixmap)
     if baseline is None:
         return []
+    if include_pdf_vector_lines:
+        import cv2
+
+        baseline = cv2.cvtColor(baseline, cv2.COLOR_RGB2GRAY)
     origin_x, origin_y = pixmap_origin
     transform = page.rotation_matrix
     source_layers = {drawing.get("layer") for drawing in drawings}
@@ -3029,6 +3351,8 @@ def _page_pdf_source_layer_line_witnesses(
         if restore_failed:
             raise RuntimeError("Failed to restore PDF optional-content layer state")
         off = _pixmap_rgb_array(off_pixmap) if off_pixmap is not None else None
+        if include_pdf_vector_lines and off is not None:
+            off = cv2.cvtColor(off, cv2.COLOR_RGB2GRAY)
         if (
             off is None
             or off.shape != baseline.shape
@@ -3206,6 +3530,206 @@ def _page_pdf_source_layer_line_witnesses(
         except (KeyError, TypeError, ValueError, OverflowError):
             invalid_competitor_layers.update(difference_by_name)
 
+    competing_bounds_by_layer_precise: dict[
+        str, list[tuple[int, tuple[float, float, float, float]]]
+    ] = {name: [] for name in difference_by_name}
+    competing_strokes_by_layer_precise: dict[
+        str, list[
+            tuple[
+                int,
+                tuple[float, float, float, float],
+                tuple[tuple[float, float], tuple[float, float], float],
+            ]
+        ]
+    ] = {name: [] for name in difference_by_name}
+    line_path_seqnos_by_layer: dict[str, set[int]] = {}
+    for drawing in drawings:
+        source_name = drawing.get("layer")
+        seqno = drawing.get("seqno")
+        items = drawing.get("items")
+        width_pt = drawing.get("width")
+        if (
+            source_name not in difference_by_name
+            or isinstance(seqno, bool)
+            or not isinstance(seqno, int)
+            or not isinstance(items, (tuple, list))
+            or not items
+            or drawing.get("type") != "s"
+            or any(
+                not isinstance(item, (tuple, list))
+                or len(item) != 3
+                or item[0] != "l"
+                for item in items
+            )
+            or isinstance(width_pt, bool)
+            or not isinstance(width_pt, (int, float))
+            or not math.isfinite(float(width_pt))
+            or width_pt <= 0
+        ):
+            continue
+        line_path_seqnos_by_layer.setdefault(source_name, set()).add(seqno)
+        stroke_width_px = float(width_pt) * pixel_scale
+        margin = stroke_width_px / 2.0 + 1.0
+        for item in items:
+            try:
+                first = fitz.Point(item[1]) * transform
+                second = fitz.Point(item[2]) * transform
+                first_px = (
+                    first.x * pixel_scale - origin_x,
+                    first.y * pixel_scale - origin_y,
+                )
+                second_px = (
+                    second.x * pixel_scale - origin_x,
+                    second.y * pixel_scale - origin_y,
+                )
+                bounds = (
+                    min(first_px[0], second_px[0]) - margin,
+                    min(first_px[1], second_px[1]) - margin,
+                    max(first_px[0], second_px[0]) + margin,
+                    max(first_px[1], second_px[1]) + margin,
+                )
+                if not all(math.isfinite(value) for value in (*bounds, *first_px, *second_px)):
+                    raise ValueError("non-finite line-item bounds")
+                competing_strokes_by_layer_precise[source_name].append(
+                    (seqno, bounds, (first_px, second_px, stroke_width_px))
+                )
+            except (IndexError, TypeError, ValueError, OverflowError):
+                invalid_competitor_layers.add(source_name)
+                competing_bounds_by_layer_precise[source_name] = []
+                line_path_seqnos_by_layer[source_name].clear()
+                break
+    for source_name, bounds_by_seqno in competing_bounds_by_layer.items():
+        precise = competing_bounds_by_layer_precise.setdefault(source_name, [])
+        line_path_seqnos = line_path_seqnos_by_layer.get(source_name, set())
+        precise.extend(
+            (seqno, bounds)
+            for seqno, bounds in bounds_by_seqno.items()
+            if seqno not in line_path_seqnos
+        )
+
+    competing_cell_size = 8.0
+
+    def stroke_cells(
+        first: tuple[float, float], second: tuple[float, float], width_px: float
+    ) -> Optional[set[tuple[int, int]]]:
+        dx = second[0] - first[0]
+        dy = second[1] - first[1]
+        length = math.hypot(dx, dy)
+        if not math.isfinite(length) or length <= 1e-6:
+            return None
+        steps = max(1, int(math.ceil(length / (competing_cell_size / 2.0))))
+        if steps > 10000:
+            return None
+        radius = 1 + int(math.ceil((width_px / 2.0 + math.sqrt(0.5)) / competing_cell_size))
+        cells: set[tuple[int, int]] = set()
+        for step in range(steps + 1):
+            fraction = step / steps
+            cell_x = math.floor((first[0] + dx * fraction) / competing_cell_size)
+            cell_y = math.floor((first[1] + dy * fraction) / competing_cell_size)
+            for offset_x in range(-radius, radius + 1):
+                for offset_y in range(-radius, radius + 1):
+                    cells.add((cell_x + offset_x, cell_y + offset_y))
+        return cells
+
+    competing_bounds_index: dict[
+        str, tuple[dict[tuple[int, int], list[tuple[int, tuple[float, float, float, float]]]],
+                   list[tuple[int, tuple[float, float, float, float]]]]
+    ] = {}
+    for source_name, bounds_entries in competing_bounds_by_layer_precise.items():
+        buckets: dict[
+            tuple[int, int], list[tuple[int, tuple[float, float, float, float]]]
+        ] = {}
+        broad: list[tuple[int, tuple[float, float, float, float]]] = []
+        for seqno, bounds in bounds_entries:
+            x0 = math.floor(bounds[0] / competing_cell_size)
+            y0 = math.floor(bounds[1] / competing_cell_size)
+            x1 = math.floor(bounds[2] / competing_cell_size)
+            y1 = math.floor(bounds[3] / competing_cell_size)
+            if (x1 - x0 + 1) * (y1 - y0 + 1) > 256:
+                broad.append((seqno, bounds))
+                continue
+            entry = (seqno, bounds)
+            for cell_x in range(x0, x1 + 1):
+                for cell_y in range(y0, y1 + 1):
+                    buckets.setdefault((cell_x, cell_y), []).append(entry)
+        competing_bounds_index[source_name] = (buckets, broad)
+
+    competing_strokes_index: dict[
+        str, tuple[
+            dict[
+                tuple[int, int],
+                list[tuple[int, tuple[float, float, float, float], tuple[tuple[float, float], tuple[float, float], float]]],
+            ],
+            list[tuple[int, tuple[float, float, float, float], tuple[tuple[float, float], tuple[float, float], float]]],
+        ]
+    ] = {}
+    for source_name, entries in competing_strokes_by_layer_precise.items():
+        buckets = {}
+        broad = []
+        for entry in entries:
+            seqno, bounds, _ = entry
+            _, _, stroke = entry
+            cells = stroke_cells(stroke[0], stroke[1], stroke[2])
+            if cells is None:
+                broad.append(entry)
+                continue
+            for cell in cells:
+                buckets.setdefault(cell, []).append(entry)
+        competing_strokes_index[source_name] = (buckets, broad)
+
+    def nearby_competing_bounds(
+        source_name: str,
+        candidate_seqno: int,
+        query: tuple[float, float, float, float],
+    ) -> tuple[tuple[float, float, float, float], ...]:
+        indexed = competing_bounds_index.get(source_name)
+        if indexed is None:
+            return ()
+        buckets, broad = indexed
+        x0 = math.floor(query[0] / competing_cell_size)
+        y0 = math.floor(query[1] / competing_cell_size)
+        x1 = math.floor(query[2] / competing_cell_size)
+        y1 = math.floor(query[3] / competing_cell_size)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 256:
+            candidates = competing_bounds_by_layer_precise[source_name]
+        else:
+            candidate_entries = set(broad)
+            for cell_x in range(x0, x1 + 1):
+                for cell_y in range(y0, y1 + 1):
+                    candidate_entries.update(buckets.get((cell_x, cell_y), ()))
+            candidates = list(candidate_entries)
+        return tuple(
+            bounds
+            for seqno, bounds in candidates
+            if seqno != candidate_seqno
+            and bounds[0] <= query[2]
+            and bounds[2] >= query[0]
+            and bounds[1] <= query[3]
+            and bounds[3] >= query[1]
+        )
+
+    def nearby_competing_strokes(
+        source_name: str,
+        candidate_seqno: int,
+        query: tuple[float, float, float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+        width_px: float,
+    ) -> tuple[tuple[tuple[float, float], tuple[float, float], float], ...]:
+        indexed = competing_strokes_index.get(source_name)
+        if indexed is None:
+            return ()
+        buckets, broad = indexed
+        query_cells = stroke_cells(start, end, width_px)
+        return _collect_nearby_competing_strokes(
+            buckets,
+            broad,
+            query_cells,
+            candidate_seqno,
+            query,
+            competing_strokes_by_layer_precise[source_name],
+        )
+
     results: list[tuple[RawLine, str]] = []
     seen_seqnos: set[int] = set()
     full_page_group_index = _full_page_transparency_group_index(page, drawings)
@@ -3287,7 +3811,333 @@ def _page_pdf_source_layer_line_witnesses(
                 classification,
             )
         )
-    return results
+    if not include_pdf_vector_lines:
+        return results
+    if (
+        not isinstance(source_pdf_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", source_pdf_sha256) is None
+        or isinstance(source_page_index, bool)
+        or not isinstance(source_page_index, int)
+        or source_page_index < 0
+        or isinstance(render_dpi, bool)
+        or not isinstance(render_dpi, int)
+        or render_dpi <= 0
+    ):
+        return results, []
+
+    pdf_vector_lines: list[RawPdfLine] = []
+    difference_mask_by_name = {
+        name: np.not_equal(baseline, layer_off)
+        for name, layer_off in difference_by_name.items()
+    }
+    full_page_group_index = _full_page_transparency_group_index(page, drawings)
+    transform_values = (
+        transform.a * pixel_scale,
+        transform.b * pixel_scale,
+        transform.c * pixel_scale,
+        transform.d * pixel_scale,
+        transform.e * pixel_scale - origin_x,
+        transform.f * pixel_scale - origin_y,
+    )
+    render_sha256 = hashlib.sha256(baseline_pixmap.tobytes("png")).hexdigest()
+    if all(math.isfinite(float(value)) for value in transform_values):
+        for drawing_index, drawing in enumerate(drawings):
+            source_layer = drawing.get("layer")
+            seqno = drawing.get("seqno")
+            items = drawing.get("items")
+            color = drawing.get("color")
+            width_pt = drawing.get("width")
+            line_cap = drawing.get("lineCap")
+            if _candidate_seqnos is not None and seqno not in _candidate_seqnos:
+                continue
+            if (
+                not isinstance(source_layer, str)
+                or not source_layer
+                or source_layer not in difference_by_name
+                or source_layer in invalid_competitor_layers
+                or isinstance(seqno, bool)
+                or not isinstance(seqno, int)
+                or not (0 <= seqno < len(bboxlog))
+                or not isinstance(items, (tuple, list))
+                or not items
+                or any(
+                    not isinstance(item, (tuple, list))
+                    or len(item) != 3
+                    or item[0] != "l"
+                    for item in items
+                )
+                or drawing.get("type") != "s"
+                or drawing.get("fill") is not None
+                or drawing.get("stroke_opacity") != 1.0
+                or drawing.get("blendmode") not in {None, "Normal"}
+                or drawing.get("dashes") != "[] 0"
+                or not isinstance(color, (tuple, list))
+                or len(color) != 3
+                or any(
+                    isinstance(channel, bool)
+                    or not isinstance(channel, (int, float))
+                    or not math.isfinite(float(channel))
+                    or not 0.0 <= float(channel) <= 1.0
+                    for channel in color
+                )
+                or isinstance(width_pt, bool)
+                or not isinstance(width_pt, (int, float))
+                or not math.isfinite(float(width_pt))
+                or width_pt <= 0
+                or not isinstance(line_cap, (tuple, list))
+                or len(line_cap) != 3
+                or any(cap not in {0, 1, 2} for cap in line_cap)
+            ):
+                continue
+            active_ancestors = _source_layer_active_ancestors(drawings, drawing_index)
+            if active_ancestors is None:
+                continue
+            try:
+                source_kind, source_bounds_value = bboxlog[seqno]
+                source_bounds = fitz.Rect(source_bounds_value)
+            except (IndexError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                source_kind != "stroke-path"
+                or not source_bounds.is_valid
+                or source_bounds.is_empty
+                or not all(math.isfinite(value) for value in source_bounds)
+            ):
+                continue
+
+            endpoints: list[tuple[fitz.Point, fitz.Point]] = []
+            segment_keys: set[tuple] = set()
+            path_valid = True
+            for item in items:
+                try:
+                    first = fitz.Point(item[1])
+                    second = fitz.Point(item[2])
+                    coordinates = (first.x, first.y, second.x, second.y)
+                    if not all(math.isfinite(float(value)) for value in coordinates):
+                        path_valid = False
+                        break
+                    if first.distance_to(second) <= 1e-6:
+                        path_valid = False
+                        break
+                    key = tuple(
+                        sorted(
+                            (
+                                (round(first.x, 6), round(first.y, 6)),
+                                (round(second.x, 6), round(second.y, 6)),
+                            )
+                        )
+                    )
+                    if key in segment_keys:
+                        path_valid = False
+                        break
+                    segment_keys.add(key)
+                    endpoints.append((first, second))
+                except (IndexError, TypeError, ValueError, OverflowError):
+                    path_valid = False
+                    break
+            if not path_valid or len(endpoints) != len(items):
+                continue
+
+            stroke_width_px = float(width_pt) * pixel_scale
+            if not math.isfinite(stroke_width_px) or stroke_width_px <= 0:
+                continue
+            transformed_endpoints: list[tuple[tuple[float, float], tuple[float, float]]]=[]
+            for first, second in endpoints:
+                first_transformed = first * transform
+                second_transformed = second * transform
+                first_px = (
+                    first_transformed.x * pixel_scale - origin_x,
+                    first_transformed.y * pixel_scale - origin_y,
+                )
+                second_px = (
+                    second_transformed.x * pixel_scale - origin_x,
+                    second_transformed.y * pixel_scale - origin_y,
+                )
+                if not all(math.isfinite(value) for point in (first_px, second_px) for value in point):
+                    path_valid = False
+                    break
+                transformed_endpoints.append((first_px, second_px))
+            if not path_valid:
+                continue
+
+            source_path_strokes = {
+                (first_px, second_px, stroke_width_px)
+                for first_px, second_px in transformed_endpoints
+            }
+
+            supported_item_indexes: set[int] = set()
+            for sibling_index, (first_px, second_px) in enumerate(transformed_endpoints):
+                if not _source_layer_line_has_safe_ancestry(
+                    drawings,
+                    drawing_index,
+                    full_page_group_index,
+                    sibling_index,
+                    active_ancestors,
+                ):
+                    path_valid = False
+                    break
+                margin = stroke_width_px / 2.0 + 2.0
+                query_bounds = (
+                    min(first_px[0], second_px[0]) - margin,
+                    min(first_px[1], second_px[1]) - margin,
+                    max(first_px[0], second_px[0]) + margin,
+                    max(first_px[1], second_px[1]) + margin,
+                )
+                competing_bounds = nearby_competing_bounds(
+                    source_layer, seqno, query_bounds
+                )
+                competing_strokes = nearby_competing_strokes(
+                    source_layer, seqno, query_bounds, first_px, second_px,
+                    stroke_width_px,
+                )
+                indexed_strokes = competing_strokes_index.get(source_layer)
+                nearby_source_strokes = (
+                    _collect_nearby_competing_strokes(
+                        indexed_strokes[0],
+                        indexed_strokes[1],
+                        stroke_cells(first_px, second_px, stroke_width_px),
+                        -1,
+                        query_bounds,
+                        competing_strokes_by_layer_precise[source_layer],
+                    )
+                    if indexed_strokes is not None
+                    else ()
+                )
+                def sibling_can_compete(
+                    other_start: tuple[float, float],
+                    other_end: tuple[float, float],
+                    other_stroke_width: float,
+                ) -> bool:
+                    """Whether another item can explain this item's pixels.
+
+                    The pixel-footprint check below limits competition to
+                    pixels the sibling can actually explain. Include a
+                    shared-endpoint sibling only when their raster footprints
+                    overlap beyond the local join.
+                    """
+                    shared = {
+                        point
+                        for point in (first_px, second_px)
+                        if point in {other_start, other_end}
+                    }
+                    if len(shared) != 1:
+                        return True
+                    # A subpixel-scale source item may have no independently
+                    # resolvable pixels beyond its join, so keep its sibling
+                    # as a competing witness even when endpoints connect.
+                    candidate_length = math.dist(first_px, second_px)
+                    other_length = math.dist(other_start, other_end)
+                    if candidate_length <= 1.0:
+                        return True
+                    join_x, join_y = next(iter(shared))
+                    other_tip = other_end if other_start == (join_x, join_y) else other_start
+                    candidate_tip = second_px if first_px == (join_x, join_y) else first_px
+                    candidate_dx = candidate_tip[0] - join_x
+                    candidate_dy = candidate_tip[1] - join_y
+                    other_dx = other_tip[0] - join_x
+                    other_dy = other_tip[1] - join_y
+                    dot = candidate_dx * other_dx + candidate_dy * other_dy
+                    if dot <= 0:
+                        return False
+                    sine = abs(candidate_dx * other_dy - candidate_dy * other_dx) / (
+                        candidate_length * other_length
+                    )
+                    competing_radius = other_stroke_width / 2.0 + math.sqrt(0.5)
+                    projected_overlap = min(
+                        candidate_length,
+                        dot / candidate_length,
+                    )
+                    if sine > 1e-12:
+                        projected_overlap = min(
+                            projected_overlap, competing_radius / sine
+                        )
+                    if other_length <= 1.0:
+                        # A short sibling can explain a short candidate's
+                        # entire sampled extent even when it is too short to
+                        # explain a longer line. Match the last sample used by
+                        # _line_has_full_pixel_difference_support and include
+                        # the sibling's raster footprint when deciding.
+                        sample_count = max(2, math.ceil(candidate_length * 2.0))
+                        last_sample_fraction = (sample_count + 0.5) / (
+                            sample_count + 1.0
+                        )
+                        last_sample_distance = candidate_length * last_sample_fraction
+                        sample_half_span = candidate_length / sample_count / 2.0
+                        candidate_tangent_x = candidate_dx / candidate_length
+                        candidate_tangent_y = candidate_dy / candidate_length
+                        tangent_pixel_extent = 0.5 * (
+                            abs(candidate_tangent_x) + abs(candidate_tangent_y)
+                        )
+                        return (
+                            projected_overlap
+                            + competing_radius
+                            + sample_half_span
+                            + tangent_pixel_extent
+                            >= last_sample_distance
+                        )
+                    # Ignore a one-pixel-scale contact at an ordinary join.
+                    raster_footprint_diameter = (
+                        other_stroke_width + 2.0 * math.sqrt(0.5)
+                    )
+                    return projected_overlap > raster_footprint_diameter
+
+                competing_strokes += tuple(
+                    other_stroke for other_stroke in nearby_source_strokes
+                    if other_stroke in source_path_strokes
+                    and other_stroke != (first_px, second_px, stroke_width_px)
+                    and sibling_can_compete(
+                        other_stroke[0], other_stroke[1], other_stroke[2]
+                    )
+                )
+                has_pixel_support = _line_has_full_pixel_difference_support(
+                    baseline,
+                    difference_by_name[source_layer],
+                    first_px,
+                    second_px,
+                    stroke_width_px,
+                    competing_bounds,
+                    difference_mask_by_name.get(source_layer),
+                    competing_strokes,
+                )
+                if has_pixel_support:
+                    supported_item_indexes.add(sibling_index)
+            if not path_valid:
+                continue
+            admitted_item_indexes = _source_path_pixel_supported_items(
+                transformed_endpoints, supported_item_indexes
+            )
+            if not admitted_item_indexes:
+                continue
+
+            encoded_layer = quote(source_layer, safe="")
+            for item_index, (first_px, second_px) in enumerate(transformed_endpoints):
+                if item_index not in admitted_item_indexes:
+                    continue
+                pdf_vector_lines.append(RawPdfLine(
+                    id=(
+                        f"pdf-vector-line-{source_pdf_sha256[:16]}-p{source_page_index}"
+                        f"-s{seqno}-i{item_index}-layer-{encoded_layer}"
+                    ),
+                    p1_px=first_px,
+                    p2_px=second_px,
+                    confidence=1.0,
+                    bbox_px=(
+                        min(first_px[0], second_px[0]),
+                        min(first_px[1], second_px[1]),
+                        max(first_px[0], second_px[0]),
+                        max(first_px[1], second_px[1]),
+                    ),
+                    source_pdf_sha256=source_pdf_sha256,
+                    source_page_index=source_page_index,
+                    source_transform=tuple(float(value) for value in transform_values),
+                    render_sha256=render_sha256,
+                    render_dpi=render_dpi,
+                    render_origin_px=pixmap_origin,
+                    source_layer=source_layer,
+                    source_seqno=seqno,
+                    source_item_index=item_index,
+                ))
+    return results, pdf_vector_lines
 
 def _opaque_stroke_fully_covers_line(
     drawing: dict,
@@ -3629,9 +4479,20 @@ def run_pdf(
                 manifest["source_pdf_sha256"],
                 index - 1,
             )
-            pdf_layer_line_witnesses = _page_pdf_source_layer_line_witnesses(
-                page, pixmap, scale, (pixmap.x, pixmap.y)
+            source_line_result = _page_pdf_source_layer_line_witnesses(
+                page,
+                pixmap,
+                scale,
+                (pixmap.x, pixmap.y),
+                include_pdf_vector_lines=True,
+                source_pdf_sha256=manifest["source_pdf_sha256"],
+                source_page_index=index - 1,
+                render_dpi=dpi,
             )
+            if isinstance(source_line_result, tuple):
+                pdf_layer_line_witnesses, pdf_vector_lines = source_line_result
+            else:
+                pdf_layer_line_witnesses, pdf_vector_lines = source_line_result, []
             pdf_vector_line_witnesses = (
                 _page_vector_line_witnesses(page, scale, (pixmap.x, pixmap.y))
                 if pdf_vector_arcs
@@ -3674,6 +4535,8 @@ def run_pdf(
                 vector_kwargs["pdf_vector_line_witnesses"] = pdf_vector_line_witnesses
             if pdf_layer_line_witnesses:
                 vector_kwargs["pdf_layer_line_witnesses"] = pdf_layer_line_witnesses
+            if pdf_vector_lines:
+                vector_kwargs["pdf_vector_lines"] = pdf_vector_lines
 
             def process_page_ir(path: Path) -> None:
                 (
