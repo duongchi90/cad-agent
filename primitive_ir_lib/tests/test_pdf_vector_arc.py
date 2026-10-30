@@ -1163,6 +1163,54 @@ def test_pdf_vector_path_does_not_borrow_pixels_from_long_same_path_sibling():
     assert admitted_indexes("visible_contiguous", dpi=144) == {0, 1}
 
 
+def test_pdf_vector_path_rejects_raster_indistinguishable_shared_endpoint_siblings():
+    document = fitz.open()
+    page = document.new_page(width=100, height=60)
+    layer_xref = document.add_ocg("Source linework")
+    shape = page.new_shape()
+    shape.draw_line(fitz.Point(10.0, 30.0), fitz.Point(90.0, 30.0))
+    shape.draw_line(fitz.Point(10.0, 30.0), fitz.Point(90.0, 30.5))
+    shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+    shape.commit()
+    # A later opaque white stroke covers the second source line. At this
+    # resolution, the layer-toggle pixels cannot independently identify which
+    # of these near-parallel same-layer siblings supplied the remaining ink.
+    page.draw_line(
+        fitz.Point(10.0, 30.0),
+        fitz.Point(90.0, 30.5),
+        color=(1, 1, 1),
+        width=0.4,
+        overlay=True,
+    )
+    source_bytes = document.tobytes()
+    document.close()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+    with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+        page = source_pdf[0]
+        path = next(
+            drawing
+            for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Source linework"
+        )
+        assert [item[0] for item in path["items"]] == ["l", "l"]
+        scale = 1.0
+        baseline = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            baseline,
+            scale,
+            (baseline.x, baseline.y),
+            include_pdf_vector_lines=True,
+            source_pdf_sha256=source_sha256,
+            source_page_index=0,
+            render_dpi=72,
+            _candidate_seqnos={path["seqno"]},
+        )
+
+    assert source_lines == []
+
+
 def test_source_layer_witness_fails_closed_when_image_ocg_readback_fails():
     def pixmap(image: np.ndarray) -> fitz.Pixmap:
         return fitz.Pixmap(

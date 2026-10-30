@@ -4006,14 +4006,14 @@ def _page_pdf_source_layer_line_witnesses(
                 def sibling_can_compete(
                     other_start: tuple[float, float],
                     other_end: tuple[float, float],
+                    other_stroke_width: float,
                 ) -> bool:
                     """Whether another item can explain this item's pixels.
 
-                    A single shared endpoint is an ordinary path join. It
-                    must not erase support along either segment. Collinear
-                    same-ray items overlap beyond the join and remain
-                    competing witnesses; duplicate/reversed segments share
-                    both endpoints and also remain competing.
+                    The pixel-footprint check below limits competition to
+                    pixels the sibling can actually explain. Include a
+                    shared-endpoint sibling only when their raster footprints
+                    overlap beyond the local join.
                     """
                     shared = {
                         point
@@ -4041,19 +4041,33 @@ def _page_pdf_source_layer_line_witnesses(
                     candidate_dy = candidate_tip[1] - join_y
                     other_dx = other_tip[0] - join_x
                     other_dy = other_tip[1] - join_y
-                    cross = candidate_dx * other_dy - candidate_dy * other_dx
-                    same_ray_collinear = (
-                        abs(cross) <= 1e-9
-                        and candidate_dx * other_dx + candidate_dy * other_dy > 0
+                    dot = candidate_dx * other_dx + candidate_dy * other_dy
+                    if dot <= 0:
+                        return False
+                    sine = abs(candidate_dx * other_dy - candidate_dy * other_dx) / (
+                        candidate_length * other_length
                     )
-                    return same_ray_collinear
+                    projected_overlap = min(
+                        candidate_length,
+                        dot / candidate_length,
+                    )
+                    if sine > 1e-12:
+                        competing_radius = other_stroke_width / 2.0 + math.sqrt(0.5)
+                        projected_overlap = min(
+                            projected_overlap, competing_radius / sine
+                        )
+                    # Ignore a one-pixel-scale contact at an ordinary join.
+                    raster_footprint_diameter = (
+                        other_stroke_width + 2.0 * math.sqrt(0.5)
+                    )
+                    return projected_overlap > raster_footprint_diameter
 
                 competing_strokes += tuple(
                     other_stroke for other_stroke in nearby_source_strokes
                     if other_stroke in source_path_strokes
                     and other_stroke != (first_px, second_px, stroke_width_px)
                     and sibling_can_compete(
-                        other_stroke[0], other_stroke[1]
+                        other_stroke[0], other_stroke[1], other_stroke[2]
                     )
                 )
                 has_pixel_support = _line_has_full_pixel_difference_support(
