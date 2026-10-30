@@ -8,6 +8,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class GuidanceContractTests(unittest.TestCase):
+    def test_po_model_guard_is_required_without_creating_authority(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        self.assertIn("scripts/po_model_guard.py --repair", agents)
+        self.assertIn("verify the exact fresh runtime turn", agents)
+        for term in (
+            "`gpt-6-luna` / `medium`", "`gpt-6.1-sol` / `high`",
+            "no other active PO", "explicit call settings and runtime checks",
+            "without descendants or review", "hold only the hard decision",
+            "NOT_VERIFIED until merge", "old session changed model",
+        ):
+            self.assertIn(term.lower(), model.lower())
+
     def test_agents_is_concise_and_routes_to_canonical_sources(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(agents.splitlines()), 160)
