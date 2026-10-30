@@ -17,7 +17,13 @@ import numpy as np
 import pytest
 
 import primitive_ir_lib.run_pdf as run_pdf_module
-from primitive_ir_lib.run_pdf import _page_vector_arcs, _page_vector_line_witnesses, run_pdf
+from primitive_ir_lib.run_pdf import (
+    _axis_aligned_clip_rect,
+    _page_vector_arcs,
+    _page_vector_line_witnesses,
+    _source_path_pixel_supported_items,
+    run_pdf,
+)
 from primitive_ir_lib.geometry_extraction import RawArc, RawGeometry, RawLine
 import primitive_ir_lib.run_image as run_image_module
 from primitive_ir_lib.run_image import _line_is_explained_by_pdf_arc
@@ -25,6 +31,120 @@ from primitive_ir_lib.validator import validate_document
 from dxf_builder_lib.builder import build_dxf
 from dxf_builder_lib.reviewer import review_dxf
 from semantic_ir_lib.io_utils import load_primitive_ir_document
+
+
+def test_axis_aligned_quad_clip_is_proven_as_rectangle() -> None:
+    quad = fitz.Quad(
+        fitz.Point(10.0, 20.0),
+        fitz.Point(10.0, 0.0),
+        fitz.Point(40.0, 20.0),
+        fitz.Point(40.0, 0.0),
+    )
+    clip = {
+        "type": "clip",
+        "items": [("qu", quad)],
+        "scissor": fitz.Rect(10.0, 0.0, 40.0, 20.0),
+    }
+
+    assert _axis_aligned_clip_rect(clip) == fitz.Rect(10.0, 0.0, 40.0, 20.0)
+
+
+def test_skewed_quad_clip_is_not_treated_as_axis_aligned_rectangle() -> None:
+    quad = fitz.Quad(
+        fitz.Point(10.0, 20.0),
+        fitz.Point(12.0, 0.0),
+        fitz.Point(40.0, 20.0),
+        fitz.Point(38.0, 0.0),
+    )
+    clip = {
+        "type": "clip",
+        "items": [("qu", quad)],
+        "scissor": fitz.Rect(10.0, 0.0, 40.0, 20.0),
+    }
+
+    assert _axis_aligned_clip_rect(clip) is None
+
+
+def test_source_path_subpixel_item_requires_its_own_visible_support() -> None:
+    connected = [((0.0, 0.0), (0.4, 0.0)), ((0.4, 0.0), (2.4, 0.0))]
+    disconnected = [((0.0, 0.0), (0.4, 0.0)), ((3.0, 0.0), (5.0, 0.0))]
+
+    assert _source_path_pixel_supported_items(connected, {1}) == {1}
+    assert _source_path_pixel_supported_items(disconnected, {1}) == {1}
+    assert _source_path_pixel_supported_items(connected, set()) == set()
+
+
+def test_source_path_does_not_allow_unwitnessed_long_item() -> None:
+    endpoints = [((0.0, 0.0), (0.4, 0.0)), ((0.4, 0.0), (10.4, 0.0))]
+
+    assert _source_path_pixel_supported_items(endpoints, {0}) == {0}
+
+
+def test_competing_stroke_index_filters_bounds_before_deduplicating() -> None:
+    kept_stroke = ((0.0, 0.0), (1.0, 0.0), 1.0)
+    same_seqno_stroke = ((0.0, 0.2), (1.0, 0.2), 1.0)
+    outside_stroke = ((5.0, 5.0), (6.0, 5.0), 1.0)
+    kept = (2, (0.0, -0.5, 1.0, 0.5), kept_stroke)
+    same_seqno = (1, (0.0, -0.5, 1.0, 0.5), same_seqno_stroke)
+    outside = (3, (5.0, 4.5, 6.0, 5.5), outside_stroke)
+    buckets = {
+        (0, 0): [kept, same_seqno, outside],
+        (1, 0): [kept],
+    }
+    broad = [(4, (0.5, -0.5, 1.5, 0.5), ((0.5, 0.0), (1.5, 0.0), 1.0))]
+
+    actual = run_pdf_module._collect_nearby_competing_strokes(
+        buckets,
+        broad,
+        {(0, 0), (1, 0)},
+        1,
+        (0.0, -0.25, 1.0, 0.25),
+        (),
+    )
+
+    assert set(actual) == {
+        kept_stroke,
+        ((0.5, 0.0), (1.5, 0.0), 1.0),
+    }
+    assert len(actual) == 2
+
+
+def test_competing_stroke_fallback_preserves_source_list_multiplicity() -> None:
+    stroke = ((0.0, 0.0), (1.0, 0.0), 1.0)
+    entry = (2, (0.0, -0.5, 1.0, 0.5), stroke)
+
+    actual = run_pdf_module._collect_nearby_competing_strokes(
+        {}, (), None, 1, (0.0, -0.25, 1.0, 0.25), (entry, entry)
+    )
+
+    assert actual == (stroke, stroke)
+
+
+def test_competing_stroke_index_checks_repeated_bucket_entry_once() -> None:
+    class CountingBounds:
+        def __init__(self, values: tuple[float, float, float, float]) -> None:
+            self.values = values
+            self.reads = 0
+
+        def __getitem__(self, index: int) -> float:
+            self.reads += 1
+            return self.values[index]
+
+    stroke = ((5.0, 5.0), (6.0, 5.0), 1.0)
+    bounds = CountingBounds((-1.0, 2.0, 2.0, 3.0))
+    entry = (2, bounds, stroke)
+
+    actual = run_pdf_module._collect_nearby_competing_strokes(
+        {(0, 0): [entry], (1, 0): [entry]},
+        (),
+        {(0, 0), (1, 0)},
+        1,
+        (0.0, -0.25, 1.0, 0.25),
+        (),
+    )
+
+    assert actual == ()
+    assert bounds.reads == 3
 
 
 def _write_quarter_arc_pdf(
@@ -309,6 +429,60 @@ def test_source_layer_witness_requires_full_rendered_pixel_support():
     assert not visible(adjacent_ocg_paint, layer_off, (10, 30), (90, 30), 1.0)
 
 
+def test_source_layer_fast_witness_matches_scalar_endpoint_samples():
+    visible = run_pdf_module._line_has_full_pixel_difference_support
+    baseline = np.full((32, 32, 3), 255, dtype=np.uint8)
+    layer_off = baseline.copy()
+    baseline[20, 10] = 0
+
+    def scalar_oracle_has_full_pixel_support() -> bool:
+        start_px = (10.3, 20.5)
+        end_px = (11.4, 20.5)
+        stroke_width_px = 0.1
+        dx = end_px[0] - start_px[0]
+        dy = end_px[1] - start_px[1]
+        length = math.hypot(dx, dy)
+        tangent_x, tangent_y = dx / length, dy / length
+        normal_x, normal_y = -tangent_y, tangent_x
+        sample_count = max(2, math.ceil(length * 2.0))
+        tangent_pixel_extent = 0.5 * (abs(tangent_x) + abs(tangent_y))
+        normal_pixel_extent = 0.5 * (abs(normal_x) + abs(normal_y))
+        sample_half_span = length / sample_count / 2.0
+        normal_support = stroke_width_px / 2.0 + normal_pixel_extent
+        differences = np.any(baseline[:, :, :3] != layer_off[:, :, :3], axis=2)
+
+        for sample_index in range(sample_count + 1):
+            fraction = (sample_index + 0.5) / (sample_count + 1)
+            x = start_px[0] + dx * fraction
+            y = start_px[1] + dy * fraction
+            supported = any(
+                differences[pixel_y, pixel_x]
+                and abs(
+                    (pixel_x + 0.5 - x) * normal_x
+                    + (pixel_y + 0.5 - y) * normal_y
+                ) < normal_support
+                and abs(
+                    (pixel_x + 0.5 - x) * tangent_x
+                    + (pixel_y + 0.5 - y) * tangent_y
+                ) < sample_half_span + tangent_pixel_extent
+                for pixel_y in range(max(0, math.floor(y) - 3), min(32, math.floor(y) + 5))
+                for pixel_x in range(max(0, math.floor(x) - 3), min(32, math.floor(x) + 5))
+            )
+            if not supported:
+                return False
+        return True
+
+    # The one changed pixel covers the fast grid's old final sample but misses
+    # the scalar oracle's final sample.
+    assert not scalar_oracle_has_full_pixel_support()
+    assert not visible(baseline, layer_off, (10.3, 20.5), (11.4, 20.5), 0.1)
+
+    # A second changed pixel covers the scalar endpoint sample as well.
+    baseline[20, 11] = 0
+    assert scalar_oracle_has_full_pixel_support()
+    assert visible(baseline, layer_off, (10.3, 20.5), (11.4, 20.5), 0.1)
+
+
 def _write_ocg_group_false_pixel_witness_pdf(path: Path) -> None:
     """Build a real PDF whose adjacent OCG raster ink can impersonate a hidden vector line."""
     document = fitz.open()
@@ -423,7 +597,9 @@ def _write_ocg_fractional_inline_image_false_pixel_witness_pdf(path: Path) -> No
     document.close()
 
 
-def _write_ocg_text_false_pixel_witness_pdf(path: Path) -> None:
+def _write_ocg_text_false_pixel_witness_pdf(
+    path: Path, *, outline_text: bool = False
+) -> None:
     """Build a PDF where OCG text paints over a covered ISO source line."""
     document = fitz.open()
     page = document.new_page(width=600, height=600)
@@ -439,6 +615,7 @@ def _write_ocg_text_false_pixel_witness_pdf(path: Path) -> None:
     page.insert_text(
         (50, 300), "_" * 167, fontname="cour", fontsize=5,
         color=(0, 0, 0), oc=ocg, overlay=True,
+        render_mode=1 if outline_text else 0,
     )
     # Independent visible source geometry is a positive control outside text.
     page.draw_line(
@@ -626,6 +803,90 @@ def test_ocg_text_paint_cannot_witness_covered_source_layer_line(tmp_path: Path)
     assert review.passed is True
 
 
+def test_pdf_vector_line_candidate_rejects_later_text_cover_but_keeps_visible_line(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ocg-text-false-pdf-vector-line.pdf"
+    _write_ocg_text_false_pixel_witness_pdf(source)
+
+    with fitz.open(source) as document:
+        page = document[0]
+        drawings = page.get_drawings(extended=True)
+        hidden_candidate = next(
+            drawing for drawing in drawings
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(300.0)
+        )
+        visible_candidate = next(
+            drawing for drawing in drawings
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(400.0)
+        )
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        common = {
+            "include_pdf_vector_lines": True,
+            "source_pdf_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "source_page_index": 0,
+            "render_dpi": 72,
+        }
+        hidden = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            pixmap,
+            1.0,
+            (pixmap.x, pixmap.y),
+            _candidate_seqnos={hidden_candidate["seqno"]},
+            **common,
+        )
+        visible = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            pixmap,
+            1.0,
+            (pixmap.x, pixmap.y),
+            _candidate_seqnos={visible_candidate["seqno"]},
+            **common,
+        )
+
+    assert isinstance(hidden, tuple) and hidden[1] == []
+    assert isinstance(visible, tuple) and len(visible[1]) == 1
+    assert visible[1][0].p1_px == pytest.approx((50.0, 400.0))
+    assert visible[1][0].p2_px == pytest.approx((549.0, 400.0))
+
+
+def test_pdf_vector_line_candidate_rejects_stroked_text_outline_conflict(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ocg-stroke-text-false-pdf-vector-line.pdf"
+    _write_ocg_text_false_pixel_witness_pdf(source, outline_text=True)
+
+    with fitz.open(source) as document:
+        page = document[0]
+        candidate = next(
+            drawing for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Oculto (ISO)"
+            and drawing["items"][0][1].y == pytest.approx(300.0)
+        )
+        stroke_text = next(
+            span for span in page.get_texttrace()
+            if span.get("layer") == "Oculto (ISO)"
+        )
+        assert page.get_bboxlog()[stroke_text["seqno"]][0] == "stroke-text"
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+        result = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            pixmap,
+            1.0,
+            (pixmap.x, pixmap.y),
+            include_pdf_vector_lines=True,
+            source_pdf_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            source_page_index=0,
+            render_dpi=72,
+            _candidate_seqnos={candidate["seqno"]},
+        )
+
+    assert isinstance(result, tuple)
+    assert result[1] == []
+
+
 def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
     tmp_path: Path,
 ):
@@ -662,6 +923,20 @@ def test_real_pdf_group_ocg_neighbor_pixels_do_not_witness_hidden_source_line(
     changed = np.any(baseline != layer_off, axis=2)
     assert not changed[300, 50:551].any(), "the hidden vector stroke changed its own pixel row"
     assert changed[301, 50:551].all(), "the OCG neighbor-pixel control did not render"
+
+    source_result = run_pdf_module._page_pdf_source_layer_line_witnesses(
+        page,
+        baseline_pixmap,
+        1.0,
+        (baseline_pixmap.x, baseline_pixmap.y),
+        include_pdf_vector_lines=True,
+        source_pdf_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_page_index=0,
+        render_dpi=72,
+        _candidate_seqnos={candidate["seqno"]},
+    )
+    assert isinstance(source_result, tuple)
+    assert source_result[1] == []  # Incomplete group/clip ancestry fails closed.
 
     output = tmp_path / "pipeline"
     run_pdf(source, output, scale_mm_per_px=1.0, dpi=72)
@@ -810,6 +1085,282 @@ def test_source_layer_line_witness_does_not_borrow_adjacent_ocg_path_pixels():
     )
     assert len(witnesses) == 1
     assert witnesses[0][1] == "HIDDEN"
+
+
+def test_pdf_vector_path_does_not_admit_covered_subpixel_item_from_visible_sibling():
+    def admitted_indexes(*, covered: bool, dpi: int) -> set[int]:
+        document = fitz.open()
+        page = document.new_page(width=100, height=100)
+        layer_xref = document.add_ocg("Source linework")
+        page.draw_polyline(
+            [fitz.Point(10.0, 30.0), fitz.Point(10.3, 30.0), fitz.Point(12.3, 30.0)],
+            color=(0, 0, 0),
+            width=0.4,
+            oc=layer_xref,
+        )
+        if covered:
+            page.draw_rect(
+                fitz.Rect(9.0, 29.0, 10.3, 31.0),
+                color=None,
+                fill=(1, 1, 1),
+                overlay=True,
+            )
+        source_bytes = document.tobytes()
+        document.close()
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+        with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+            page = source_pdf[0]
+            path = next(
+                drawing
+                for drawing in page.get_drawings(extended=True)
+                if drawing.get("layer") == "Source linework"
+            )
+            assert [item[0] for item in path["items"]] == ["l", "l"]
+            scale = dpi / 72.0
+            baseline_pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(scale, scale), alpha=False
+            )
+            _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+                page,
+                baseline_pixmap,
+                scale,
+                (baseline_pixmap.x, baseline_pixmap.y),
+                include_pdf_vector_lines=True,
+                source_pdf_sha256=source_sha256,
+                source_page_index=0,
+                render_dpi=dpi,
+                _candidate_seqnos={path["seqno"]},
+            )
+        return {line.source_item_index for line in source_lines}
+
+    # At 72 DPI, the short visible item is unresolved because its only changed
+    # pixel is also explained by its sibling, so it fails closed.
+    assert admitted_indexes(covered=True, dpi=72) == {1}
+    assert admitted_indexes(covered=False, dpi=72) == {1}
+    # At 288 DPI, the existing pipeline's own render distinguishes the item.
+    assert admitted_indexes(covered=True, dpi=288) == {1}
+    assert admitted_indexes(covered=False, dpi=288) == {0, 1}
+
+
+def test_pdf_vector_path_does_not_borrow_pixels_from_long_same_path_sibling():
+    def admitted_indexes(case: str, dpi: int) -> set[int]:
+        document = fitz.open()
+        page = document.new_page(width=100, height=60)
+        layer_xref = document.add_ocg("Oculto (ISO)")
+        shape = page.new_shape()
+        if case == "visible_contiguous":
+            shape.draw_polyline(
+                [
+                    fitz.Point(10.0, 30.25),
+                    fitz.Point(50.0, 30.25),
+                    fitz.Point(90.0, 30.25),
+                ]
+            )
+        else:
+            shape.draw_line(fitz.Point(10.0, 30.25), fitz.Point(90.0, 30.25))
+            shape.draw_line(fitz.Point(10.0, 30.75), fitz.Point(90.0, 30.75))
+        shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+        shape.commit()
+        covers = {
+            "cover_first": (30.25,),
+            "cover_second": (30.75,),
+            "cover_both": (30.25, 30.75),
+        }.get(case, ())
+        for y in covers:
+            page.draw_rect(
+                fitz.Rect(9.0, y - 0.25, 91.0, y + 0.25),
+                color=None,
+                fill=(1, 1, 1),
+                overlay=True,
+            )
+        source_bytes = document.tobytes()
+        document.close()
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+        with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+            page = source_pdf[0]
+            paths = [
+                drawing
+                for drawing in page.get_drawings(extended=True)
+                if drawing.get("layer") == "Oculto (ISO)"
+            ]
+            assert len(paths) == 1
+            path = paths[0]
+            assert len(path["items"]) == 2
+            assert [item[0] for item in path["items"]] == ["l", "l"]
+            scale = dpi / 72.0
+            baseline = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+                page,
+                baseline,
+                scale,
+                (baseline.x, baseline.y),
+                include_pdf_vector_lines=True,
+                source_pdf_sha256=source_sha256,
+                source_page_index=0,
+                render_dpi=dpi,
+                _candidate_seqnos={path["seqno"]},
+            )
+        return {line.source_item_index for line in source_lines}
+
+    # At 72 DPI, the two long sibling strokes collapse into shared raster
+    # support. The safe result is to refuse both ambiguous source items.
+    assert admitted_indexes("cover_second", dpi=72) == set()
+    # At distinguishable resolution, only the later-covered item is refused.
+    assert admitted_indexes("visible_parallel", dpi=144) == {0, 1}
+    assert admitted_indexes("cover_second", dpi=144) == {0}
+    assert admitted_indexes("cover_first", dpi=144) == {1}
+    assert admitted_indexes("cover_both", dpi=144) == set()
+    # A genuinely connected, visible path retains both independently
+    # witnessed source segments.
+    assert admitted_indexes("visible_contiguous", dpi=144) == {0, 1}
+
+
+def test_pdf_vector_path_rejects_raster_indistinguishable_shared_endpoint_siblings():
+    document = fitz.open()
+    page = document.new_page(width=100, height=60)
+    layer_xref = document.add_ocg("Source linework")
+    shape = page.new_shape()
+    shape.draw_line(fitz.Point(10.0, 30.0), fitz.Point(90.0, 30.0))
+    shape.draw_line(fitz.Point(10.0, 30.0), fitz.Point(90.0, 30.5))
+    shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+    shape.commit()
+    # A later opaque white stroke covers the second source line. At this
+    # resolution, the layer-toggle pixels cannot independently identify which
+    # of these near-parallel same-layer siblings supplied the remaining ink.
+    page.draw_line(
+        fitz.Point(10.0, 30.0),
+        fitz.Point(90.0, 30.5),
+        color=(1, 1, 1),
+        width=0.4,
+        overlay=True,
+    )
+    source_bytes = document.tobytes()
+    document.close()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+    with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+        page = source_pdf[0]
+        path = next(
+            drawing
+            for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Source linework"
+        )
+        assert [item[0] for item in path["items"]] == ["l", "l"]
+        scale = 1.0
+        baseline = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            baseline,
+            scale,
+            (baseline.x, baseline.y),
+            include_pdf_vector_lines=True,
+            source_pdf_sha256=source_sha256,
+            source_page_index=0,
+            render_dpi=72,
+            _candidate_seqnos={path["seqno"]},
+        )
+
+    assert source_lines == []
+
+
+def test_pdf_vector_path_does_not_borrow_from_short_shared_endpoint_sibling():
+    def admitted_indexes(candidate_end: float, cover_tail: bool) -> set[int]:
+        document = fitz.open()
+        page = document.new_page(width=40, height=40)
+        layer_xref = document.add_ocg("Short sibling source linework")
+        shape = page.new_shape()
+        shape.draw_line(fitz.Point(10.0, 20.5), fitz.Point(candidate_end, 20.5))
+        shape.draw_line(fitz.Point(10.0, 20.5), fitz.Point(10.8, 20.5))
+        shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+        shape.commit()
+        if cover_tail:
+            # Cover only the candidate's final 0.3 px. At this scale, the
+            # remaining changed pixel is shared by both source items and lies
+            # within every candidate witness neighborhood.
+            page.draw_line(
+                fitz.Point(10.8, 20.5),
+                fitz.Point(candidate_end, 20.5),
+                color=(1, 1, 1),
+                width=0.1,
+                overlay=True,
+            )
+        source_bytes = document.tobytes()
+        document.close()
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+        with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+            page = source_pdf[0]
+            path = next(
+                drawing
+                for drawing in page.get_drawings(extended=True)
+                if drawing.get("layer") == "Short sibling source linework"
+            )
+            assert [item[0] for item in path["items"]] == ["l", "l"]
+            baseline = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
+            _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+                page,
+                baseline,
+                1.0,
+                (baseline.x, baseline.y),
+                include_pdf_vector_lines=True,
+                source_pdf_sha256=source_sha256,
+                source_page_index=0,
+                render_dpi=72,
+                _candidate_seqnos={path["seqno"]},
+            )
+        return {line.source_item_index for line in source_lines}
+
+    # At 1.1 px, the shared pixel cannot witness both a candidate whose tip is
+    # painted over and its 0.8 px sibling.
+    assert 0 not in admitted_indexes(11.1, cover_tail=True)
+    # A longer visible candidate still has source pixels beyond the short
+    # sibling's raster footprint and remains admitted.
+    assert admitted_indexes(14.0, cover_tail=False) == {0}
+
+
+def test_pdf_vector_path_does_not_borrow_from_short_sibling_for_midlength_candidate():
+    document = fitz.open()
+    page = document.new_page(width=40, height=40)
+    layer_xref = document.add_ocg("Midlength short sibling source linework")
+    shape = page.new_shape()
+    shape.draw_line(fitz.Point(10.0, 20.5), fitz.Point(12.2, 20.5))
+    shape.draw_line(fitz.Point(10.0, 20.5), fitz.Point(10.8, 20.5))
+    shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+    shape.commit()
+    page.draw_line(
+        fitz.Point(10.8, 20.5),
+        fitz.Point(12.2, 20.5),
+        color=(1, 1, 1),
+        width=0.1,
+        overlay=True,
+    )
+    source_bytes = document.tobytes()
+    document.close()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+    with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+        page = source_pdf[0]
+        path = next(
+            drawing
+            for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Midlength short sibling source linework"
+        )
+        baseline = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
+        _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            baseline,
+            1.0,
+            (baseline.x, baseline.y),
+            include_pdf_vector_lines=True,
+            source_pdf_sha256=source_sha256,
+            source_page_index=0,
+            render_dpi=72,
+            _candidate_seqnos={path["seqno"]},
+        )
+
+    assert 0 not in {line.source_item_index for line in source_lines}
 
 
 def test_source_layer_witness_fails_closed_when_image_ocg_readback_fails():

@@ -306,7 +306,7 @@ public sealed class ContractTests
     }
 
     [Fact]
-    public void AcceptsDrawingSetupAuditOnlyWithEmptyParameters()
+    public void DrawingSetupAuditAllowsOnlyTheInventoryOptInParameter()
     {
         var valid = ValidRequest("drawing_setup_audit");
         var invalid = valid with
@@ -323,7 +323,66 @@ public sealed class ContractTests
         Assert.Contains(
             validation.Errors,
             error => error.Contains("drawing_setup_audit", StringComparison.OrdinalIgnoreCase)
-                && error.Contains("empty", StringComparison.OrdinalIgnoreCase));
+                && error.Contains("boolean include_model_space_inventory", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void AcceptsExplicitModelSpaceInventoryOptIn()
+    {
+        var request = ValidRequest("drawing_setup_audit") with
+        {
+            DrawingSha256 = new string('a', 64),
+            Parameters = new Dictionary<string, JsonElement>
+            {
+                ["include_model_space_inventory"] = JsonSerializer.SerializeToElement(true)
+            }
+        };
+
+        var validation = ContractValidator.ValidateRequest(request);
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
+    [Fact]
+    public void AcceptsCompleteEmptyModelSpaceInventoryReadback()
+    {
+        var sha256 = new string('a', 64);
+        var result = new IpcResult
+        {
+            RequestId = "setup-inventory-result",
+            Success = true,
+            Operation = "drawing_setup_audit",
+            DrawingFullPath = @"C:\drawings\source.dwg",
+            Changed = false,
+            EntityHandles = new List<string>(),
+            Warnings = new List<string>(),
+            Errors = new List<string>(),
+            StartedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = new Dictionary<string, JsonElement>
+            {
+                ["model_space_inventory"] = JsonSerializer.SerializeToElement(new
+                {
+                    drawing_full_path = @"C:\drawings\source.dwg",
+                    drawing_sha256_before = sha256,
+                    drawing_sha256_after = sha256,
+                    dbmod_before = 0,
+                    dbmod_after = 0,
+                    process_id = 10,
+                    plugin_version = "test",
+                    plugin_binary_path = @"C:\plugin.dll",
+                    plugin_binary_sha256 = sha256,
+                    entity_count = 0,
+                    enumeration_complete = true,
+                    bounds_complete = true,
+                    entities = Array.Empty<object>()
+                })
+            }
+        };
+
+        var validation = ContractValidator.ValidateResult(result);
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
     }
 
     [Fact]
@@ -472,7 +531,10 @@ public sealed class ContractTests
         using var operationSchema = JsonDocument.Parse(File.ReadAllText(
             RepositoryFile("contracts/autocad-ipc/operations/drawing-setup-audit.schema.json")));
         Assert.False(operationSchema.RootElement.GetProperty("additionalProperties").GetBoolean());
-        Assert.Equal(0, operationSchema.RootElement.GetProperty("maxProperties").GetInt32());
+        Assert.Equal(
+            "boolean",
+            operationSchema.RootElement.GetProperty("properties")
+                .GetProperty("include_model_space_inventory").GetProperty("type").GetString());
     }
 
     [Fact]

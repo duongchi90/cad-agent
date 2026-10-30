@@ -64,6 +64,21 @@ class RawLine:
 
 
 @dataclass
+class RawPdfLine(RawLine):
+    """One directly observed PDF line item with exact source/render identity."""
+
+    source_pdf_sha256: str
+    source_page_index: int
+    source_transform: Tuple[float, float, float, float, float, float]
+    render_sha256: str
+    render_dpi: int
+    render_origin_px: Tuple[int, int]
+    source_layer: str
+    source_seqno: int
+    source_item_index: int
+
+
+@dataclass
 class RawCircle:
     id: str
     center_px: Tuple[float, float]

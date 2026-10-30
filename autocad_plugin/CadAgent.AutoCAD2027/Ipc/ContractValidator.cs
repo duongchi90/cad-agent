@@ -110,9 +110,9 @@ public static class ContractValidator
             errors.Add("mechanical_bom parameters must be an empty object");
         }
         else if (string.Equals(request.Operation, "drawing_setup_audit", StringComparison.Ordinal)
-            && request.Parameters.Count != 0)
+            && !ValidateDrawingSetupParameters(request, errors))
         {
-            errors.Add("drawing_setup_audit parameters must be an empty object");
+            // The helper records the precise contract error.
         }
         else if (string.Equals(request.Operation, "close_disposable", StringComparison.Ordinal))
         {
@@ -174,6 +174,13 @@ public static class ContractValidator
             && (result.Changed || (result.EntityHandles?.Count ?? 0) != 0))
         {
             errors.Add("drawing_setup_audit results must be read-only and contain no entity handles");
+        }
+        if (string.Equals(result.Operation, "drawing_setup_audit", StringComparison.Ordinal)
+            && result.Success
+            && result.Payload is not null
+            && result.Payload.TryGetValue("model_space_inventory", out var inventory))
+        {
+            ValidateModelSpaceInventoryPayload(inventory, errors);
         }
         if (string.Equals(result.Operation, "visual_evidence_export", StringComparison.Ordinal))
         {
@@ -243,6 +250,178 @@ public static class ContractValidator
 
         return new ContractValidationResult(errors);
     }
+
+    private static bool ValidateDrawingSetupParameters(IpcRequest request, ICollection<string> errors)
+    {
+        var parameters = request.Parameters;
+        if (parameters is null || parameters.Count == 0)
+        {
+            return true;
+        }
+
+        if (parameters.Count != 1
+            || !parameters.TryGetValue("include_model_space_inventory", out var includeInventory)
+            || includeInventory.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            errors.Add(
+                "drawing_setup_audit parameters must be empty or contain only boolean include_model_space_inventory");
+            return false;
+        }
+
+        if (includeInventory.ValueKind == JsonValueKind.True
+            && string.IsNullOrWhiteSpace(request.DrawingSha256))
+        {
+            errors.Add("drawing_setup_audit ModelSpace inventory requires drawing_sha256");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ValidateModelSpaceInventoryPayload(
+        JsonElement inventory,
+        ICollection<string> errors)
+    {
+        if (inventory.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add("drawing_setup_audit model_space_inventory must be an object");
+            return;
+        }
+
+        var required = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "drawing_full_path", "drawing_sha256_before", "drawing_sha256_after",
+            "dbmod_before", "dbmod_after", "process_id", "plugin_version",
+            "plugin_binary_path", "plugin_binary_sha256", "entity_count",
+            "enumeration_complete", "bounds_complete", "entities"
+        };
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in inventory.EnumerateObject())
+        {
+            if (!required.Contains(property.Name))
+            {
+                errors.Add($"drawing_setup_audit model_space_inventory has unexpected field '{property.Name}'");
+                return;
+            }
+            seen.Add(property.Name);
+        }
+        if (!seen.SetEquals(required))
+        {
+            errors.Add("drawing_setup_audit model_space_inventory is missing required fields");
+            return;
+        }
+
+        var beforeHash = TryReadString(inventory, "drawing_sha256_before");
+        var afterHash = TryReadString(inventory, "drawing_sha256_after");
+        var binaryHash = TryReadString(inventory, "plugin_binary_sha256");
+        var dbmodBefore = inventory.GetProperty("dbmod_before");
+        var dbmodAfter = inventory.GetProperty("dbmod_after");
+        var processId = inventory.GetProperty("process_id");
+        var count = inventory.GetProperty("entity_count");
+        var entities = inventory.GetProperty("entities");
+        if (!IsSha256(beforeHash)
+            || !IsSha256(afterHash)
+            || !string.Equals(beforeHash, afterHash, StringComparison.OrdinalIgnoreCase)
+            || !IsSha256(binaryHash)
+            || dbmodBefore.ValueKind != JsonValueKind.Number
+            || !dbmodBefore.TryGetInt32(out var before)
+            || before != 0
+            || dbmodAfter.ValueKind != JsonValueKind.Number
+            || !dbmodAfter.TryGetInt32(out var after)
+            || after != 0
+            || processId.ValueKind != JsonValueKind.Number
+            || !processId.TryGetInt32(out var pid)
+            || pid <= 0
+            || count.ValueKind != JsonValueKind.Number
+            || !count.TryGetInt32(out var entityCount)
+            || entityCount < 0
+            || entityCount > ContractConstants.ModelSpaceInventoryMaxEntityCount
+            || entities.ValueKind != JsonValueKind.Array
+            || inventory.GetProperty("enumeration_complete").ValueKind != JsonValueKind.True
+            || string.IsNullOrWhiteSpace(TryReadString(inventory, "drawing_full_path"))
+            || string.IsNullOrWhiteSpace(TryReadString(inventory, "plugin_version"))
+            || string.IsNullOrWhiteSpace(TryReadString(inventory, "plugin_binary_path")))
+        {
+            errors.Add("drawing_setup_audit model_space_inventory identity or completeness is invalid");
+            return;
+        }
+
+        if (entities.GetArrayLength() != entityCount)
+        {
+            errors.Add("drawing_setup_audit model_space_inventory entity_count does not match entities");
+            return;
+        }
+
+        var handles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allBoundsComplete = true;
+        foreach (var entity in entities.EnumerateArray())
+        {
+            if (entity.ValueKind != JsonValueKind.Object)
+            {
+                errors.Add("drawing_setup_audit model_space_inventory entities must be objects");
+                return;
+            }
+            var handle = TryReadString(entity, "handle");
+            var type = TryReadString(entity, "type");
+            var boundsStatus = TryReadString(entity, "bounds_status");
+            if (string.IsNullOrWhiteSpace(handle)
+                || string.IsNullOrWhiteSpace(type)
+                || !Regex.IsMatch(handle, "^[0-9A-Fa-f]+$", RegexOptions.CultureInvariant)
+                || !handles.Add(handle)
+                || boundsStatus is not ("BOUNDS_READ" or "UNSUPPORTED" or "UNREADABLE" or "NONFINITE"))
+            {
+                errors.Add("drawing_setup_audit model_space_inventory entity identity is invalid");
+                return;
+            }
+
+            var bounds = entity.TryGetProperty("bounds", out var boundsValue)
+                ? boundsValue
+                : default;
+            if (boundsStatus == "BOUNDS_READ")
+            {
+                if (bounds.ValueKind != JsonValueKind.Array
+                    || bounds.GetArrayLength() != 6
+                    || bounds.EnumerateArray().Any(value =>
+                        value.ValueKind != JsonValueKind.Number
+                        || !value.TryGetDouble(out var number)
+                        || !double.IsFinite(number)))
+                {
+                    errors.Add("drawing_setup_audit model_space_inventory bounds must contain six finite numbers");
+                    return;
+                }
+                var values = bounds.EnumerateArray().Select(value => value.GetDouble()).ToArray();
+                if (values[0] > values[3] || values[1] > values[4] || values[2] > values[5])
+                {
+                    errors.Add("drawing_setup_audit model_space_inventory bounds minimum exceeds maximum");
+                    return;
+                }
+            }
+            else
+            {
+                allBoundsComplete = false;
+                if (bounds.ValueKind != JsonValueKind.Null)
+                {
+                    errors.Add("drawing_setup_audit model_space_inventory non-readable bounds must be null");
+                    return;
+                }
+            }
+        }
+
+        if (inventory.GetProperty("bounds_complete").ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+            || inventory.GetProperty("bounds_complete").GetBoolean() != allBoundsComplete)
+        {
+            errors.Add("drawing_setup_audit model_space_inventory bounds_complete is inconsistent");
+        }
+    }
+
+    private static string? TryReadString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property)
+        && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
     public static IpcRequest NormalizeRequest(IpcRequest request)
     {
