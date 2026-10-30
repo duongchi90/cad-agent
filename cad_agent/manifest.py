@@ -6,6 +6,7 @@ import ctypes
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -544,7 +545,19 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_valid_image_scale(value: object) -> bool:
+    """Return whether a manual image scale is a finite positive numeric value."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
 def new_manifest(source: Path, scale_mm_per_px: float, approval: str) -> dict[str, Any]:
+    if not is_valid_image_scale(scale_mm_per_px):
+        raise ManifestError("Image scale must be a finite positive number.")
     return classify_draft_reference({
         "schema_version": "1.0",
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "image"},
