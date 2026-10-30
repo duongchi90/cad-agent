@@ -7,6 +7,8 @@ public static class ContractConstants
 {
     public const string SchemaVersion = "1.0";
     public const long DefaultMaxReadBytes = 1024 * 1024;
+    public const long ModelSpaceInventoryMaxResponseBytes = 16 * 1024 * 1024;
+    public const int ModelSpaceInventoryMaxEntityCount = 50_000;
     public const int MaxRequestIdLength = 128;
 
     public static readonly IReadOnlySet<string> SupportedOperations =

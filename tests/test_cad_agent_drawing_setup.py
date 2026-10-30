@@ -27,7 +27,12 @@ from drawing_setup_fixtures import (
     matching_setup_ipc_result,
     write_approved_setup_inputs,
 )
-from mcp_integration_lib.dotnet_ipc import DotNetIPCClient, DotNetIPCResultError
+from mcp_integration_lib.dotnet_ipc import (
+    DotNetIPCClient,
+    DotNetIPCResultError,
+    atomic_write_json,
+    result_path,
+)
 
 
 def _approved_mappings(root: Path) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object], Path]:
@@ -997,6 +1002,81 @@ def test_create_setup_audit_output_round_trips_with_empty_text_style(
     assert read_contract(output, contract="drawing_setup_audit") == audit
 
 
+def test_create_setup_audit_preserves_hash_bound_model_space_inventory(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": digest,
+        "drawing_sha256_after": digest,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "process_id": 123,
+        "plugin_version": "test",
+        "plugin_binary_path": r"C:\\plugin.dll",
+        "plugin_binary_sha256": "a" * 64,
+        "entity_count": 0,
+        "enumeration_complete": True,
+        "bounds_complete": True,
+        "entities": [],
+    }
+
+    audit = create_setup_audit(drawing, digest, result)
+
+    assert audit["model_space_inventory"]["drawing_sha256_before"] == digest
+    output = tmp_path / "audit-with-model-space-inventory.json"
+    output.write_text(json.dumps(audit), encoding="utf-8")
+    assert read_contract(output, contract="drawing_setup_audit") == audit
+
+
+def test_create_setup_audit_rejects_cross_bound_inventory_dbmod(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["dbmod_before"] = 1
+    result["payload"]["dbmod_after"] = 1
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": digest,
+        "drawing_sha256_after": digest,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "process_id": 123,
+        "plugin_version": "test",
+        "plugin_binary_path": r"C:\\plugin.dll",
+        "plugin_binary_sha256": "a" * 64,
+        "entity_count": 0,
+        "enumeration_complete": True,
+        "bounds_complete": True,
+        "entities": [],
+    }
+
+    with pytest.raises(DrawingContractError, match="DBMOD"):
+        create_setup_audit(drawing, digest, result)
+
+
+def test_create_setup_audit_rejects_model_space_hash_mismatch(tmp_path: Path) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": "b" * 64,
+        "drawing_sha256_after": "b" * 64,
+    }
+
+    with pytest.raises(DrawingSetupError, match="path/hash"):
+        create_setup_audit(drawing, digest, result)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -1042,10 +1122,12 @@ def test_drawing_setup_audit_cli_writes_a_hash_bound_contract(
         drawing_full_path: str | Path,
         *,
         drawing_sha256: str,
+        include_model_space_inventory: bool = False,
         request_id: str | None = None,
     ) -> dict[str, object]:
         observed["path"] = Path(drawing_full_path)
         observed["sha256"] = drawing_sha256
+        observed["include_model_space_inventory"] = include_model_space_inventory
         return matching_setup_ipc_result(
             approved_setup_plan(), str(Path(drawing_full_path).resolve())
         )
@@ -1061,7 +1143,11 @@ def test_drawing_setup_audit_cli_writes_a_hash_bound_contract(
     ]) == 0
 
     artifact = read_contract(output, contract="drawing_setup_audit")
-    assert observed == {"path": drawing.resolve(), "sha256": sha256_file(drawing)}
+    assert observed == {
+        "path": drawing.resolve(),
+        "sha256": sha256_file(drawing),
+        "include_model_space_inventory": False,
+    }
     assert artifact["drawing_sha256"] == sha256_file(drawing)
     assert artifact["drawing_full_path"] == str(drawing.resolve())
 
@@ -1110,6 +1196,149 @@ def test_drawing_setup_audit_cli_reports_ipc_failure_without_output(
         "--output", str(output),
     ]) == 2
     assert "active drawing mismatch" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_drawing_setup_audit_cli_rejects_missing_opt_in_inventory_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_legacy_success() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            atomic_write_json(
+                result_path(ipc_dir, request["request_id"]),
+                response,
+            )
+
+        return respond_with_legacy_success
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "model_space_inventory" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_drawing_setup_audit_cli_rejects_partial_opt_in_inventory_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_partial_inventory() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            response["payload"]["model_space_inventory"] = {
+                "drawing_full_path": request["drawing_full_path"],
+                "drawing_sha256_before": request["drawing_sha256"],
+                "drawing_sha256_after": request["drawing_sha256"],
+            }
+            atomic_write_json(
+                result_path(ipc_dir, request["request_id"]),
+                response,
+            )
+
+        return respond_with_partial_inventory
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "missing required properties" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("dbmod_field", ["dbmod_before", "dbmod_after"])
+def test_drawing_setup_audit_cli_rejects_boolean_inventory_dbmod_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    dbmod_field: str,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_boolean_dbmod() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            response["payload"]["model_space_inventory"] = {
+                "drawing_full_path": request["drawing_full_path"],
+                "drawing_sha256_before": digest,
+                "drawing_sha256_after": digest,
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "process_id": 123,
+                "plugin_version": "test",
+                "plugin_binary_path": r"C:\\plugin.dll",
+                "plugin_binary_sha256": "a" * 64,
+                "entity_count": 0,
+                "enumeration_complete": True,
+                "bounds_complete": True,
+                "entities": [],
+            }
+            response["payload"]["model_space_inventory"][dbmod_field] = False
+            atomic_write_json(result_path(ipc_dir, request["request_id"]), response)
+
+        return respond_with_boolean_dbmod
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "DBMOD values must be integers" in capsys.readouterr().err
     assert not output.exists()
 
 
