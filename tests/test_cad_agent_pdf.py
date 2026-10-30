@@ -87,6 +87,24 @@ def test_pdf_run_image_consumes_the_rendered_source_bytes_when_shared_png_is_rep
     assert not (output / "primitive_ir" / "page_01.json").exists()
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_pdf_workflows_request_installed_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the existing explicit OCR-language option for English fixtures."""
+    import importlib
+
+    image_runner = importlib.import_module("primitive_ir_lib.run_image")
+    original = image_runner.extract_text_tesseract
+
+    def extract_english(image: object, *args: object, **kwargs: object):
+        if kwargs.get("lang", "vie+eng") == "vie+eng":
+            kwargs["lang"] = "eng"
+        return original(image, *args, **kwargs)
+
+    monkeypatch.setattr(image_runner, "extract_text_tesseract", extract_english)
+
+
 def _pdf(path: Path, label: str = "A") -> None:
     document = fitz.open()
     for index in range(2):

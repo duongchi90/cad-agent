@@ -105,6 +105,19 @@ def extract_text_tesseract(
             "kết quả rác. Nên khoanh ROI (vd vùng khung tên) trước khi gọi.",
             stacklevel=2,
         )
+    requested_languages = {
+        language.strip()
+        for language in lang.split("+")
+        if language.strip() and not language.strip().startswith("!")
+    }
+    if requested_languages:
+        available_languages = set(pytesseract.get_languages())
+        missing_languages = sorted(requested_languages - available_languages)
+        if missing_languages:
+            missing = ", ".join(missing_languages)
+            raise ValueError(
+                f"Requested Tesseract language(s) are unavailable: {missing}"
+            )
     regions = roi_boxes if roi_boxes else [(0, 0, image_bgr.shape[1], image_bgr.shape[0])]
     results: List[RawText] = []
 
