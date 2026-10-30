@@ -1266,6 +1266,49 @@ def test_pdf_vector_path_does_not_borrow_from_short_shared_endpoint_sibling():
     assert admitted_indexes(14.0, cover_tail=False) == {0}
 
 
+def test_pdf_vector_path_does_not_borrow_from_short_sibling_for_midlength_candidate():
+    document = fitz.open()
+    page = document.new_page(width=40, height=40)
+    layer_xref = document.add_ocg("Midlength short sibling source linework")
+    shape = page.new_shape()
+    shape.draw_line(fitz.Point(10.0, 20.5), fitz.Point(12.2, 20.5))
+    shape.draw_line(fitz.Point(10.0, 20.5), fitz.Point(10.8, 20.5))
+    shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+    shape.commit()
+    page.draw_line(
+        fitz.Point(10.8, 20.5),
+        fitz.Point(12.2, 20.5),
+        color=(1, 1, 1),
+        width=0.1,
+        overlay=True,
+    )
+    source_bytes = document.tobytes()
+    document.close()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+    with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+        page = source_pdf[0]
+        path = next(
+            drawing
+            for drawing in page.get_drawings(extended=True)
+            if drawing.get("layer") == "Midlength short sibling source linework"
+        )
+        baseline = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
+        _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+            page,
+            baseline,
+            1.0,
+            (baseline.x, baseline.y),
+            include_pdf_vector_lines=True,
+            source_pdf_sha256=source_sha256,
+            source_page_index=0,
+            render_dpi=72,
+            _candidate_seqnos={path["seqno"]},
+        )
+
+    assert 0 not in {line.source_item_index for line in source_lines}
+
+
 def test_source_layer_witness_fails_closed_when_image_ocg_readback_fails():
     def pixmap(image: np.ndarray) -> fitz.Pixmap:
         return fitz.Pixmap(

@@ -4062,7 +4062,19 @@ def _page_pdf_source_layer_line_witnesses(
                             sample_count + 2.0
                         )
                         last_sample_distance = candidate_length * last_sample_fraction
-                        return projected_overlap + competing_radius >= last_sample_distance
+                        sample_half_span = candidate_length / sample_count / 2.0
+                        candidate_tangent_x = candidate_dx / candidate_length
+                        candidate_tangent_y = candidate_dy / candidate_length
+                        tangent_pixel_extent = 0.5 * (
+                            abs(candidate_tangent_x) + abs(candidate_tangent_y)
+                        )
+                        return (
+                            projected_overlap
+                            + competing_radius
+                            + sample_half_span
+                            + tangent_pixel_extent
+                            >= last_sample_distance
+                        )
                     # Ignore a one-pixel-scale contact at an ordinary join.
                     raster_footprint_diameter = (
                         other_stroke_width + 2.0 * math.sqrt(0.5)
