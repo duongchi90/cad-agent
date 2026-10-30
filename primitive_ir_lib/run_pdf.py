@@ -3960,6 +3960,11 @@ def _page_pdf_source_layer_line_witnesses(
             if not path_valid:
                 continue
 
+            source_path_strokes = {
+                (first_px, second_px, stroke_width_px)
+                for first_px, second_px in transformed_endpoints
+            }
+
             supported_item_indexes: set[int] = set()
             for sibling_index, (first_px, second_px) in enumerate(transformed_endpoints):
                 if not _source_layer_line_has_safe_ancestry(
@@ -3985,20 +3990,72 @@ def _page_pdf_source_layer_line_witnesses(
                     source_layer, seqno, query_bounds, first_px, second_px,
                     stroke_width_px,
                 )
-                if math.dist(first_px, second_px) <= 1.0:
-                    # A subpixel item in a compound path can otherwise borrow
-                    # its only changed pixel from a visible sibling item.
-                    competing_strokes += tuple(
-                        (other_start, other_end, stroke_width_px)
-                        for other_index, (other_start, other_end) in enumerate(
-                            transformed_endpoints
-                        )
-                        if other_index != sibling_index
-                        and min(other_start[0], other_end[0]) <= query_bounds[2]
-                        and max(other_start[0], other_end[0]) >= query_bounds[0]
-                        and min(other_start[1], other_end[1]) <= query_bounds[3]
-                        and max(other_start[1], other_end[1]) >= query_bounds[1]
+                indexed_strokes = competing_strokes_index.get(source_layer)
+                nearby_source_strokes = (
+                    _collect_nearby_competing_strokes(
+                        indexed_strokes[0],
+                        indexed_strokes[1],
+                        stroke_cells(first_px, second_px, stroke_width_px),
+                        -1,
+                        query_bounds,
+                        competing_strokes_by_layer_precise[source_layer],
                     )
+                    if indexed_strokes is not None
+                    else ()
+                )
+                def sibling_can_compete(
+                    other_start: tuple[float, float],
+                    other_end: tuple[float, float],
+                ) -> bool:
+                    """Whether another item can explain this item's pixels.
+
+                    A single shared endpoint is an ordinary path join. It
+                    must not erase support along either segment. Collinear
+                    same-ray items overlap beyond the join and remain
+                    competing witnesses; duplicate/reversed segments share
+                    both endpoints and also remain competing.
+                    """
+                    shared = {
+                        point
+                        for point in (first_px, second_px)
+                        if point in {other_start, other_end}
+                    }
+                    if len(shared) != 1:
+                        return True
+                    # A subpixel-scale source item may have no independently
+                    # resolvable pixels beyond its join, so keep its sibling
+                    # as a competing witness even when endpoints connect.
+                    candidate_length = math.dist(first_px, second_px)
+                    other_length = math.dist(other_start, other_end)
+                    if candidate_length <= 1.0:
+                        return True
+                    # A short adjacent item cannot explain a long candidate's
+                    # rendered extent. Keeping it as a competitor can erase
+                    # real, independently supported vertices in dense curves.
+                    if other_length <= 1.0:
+                        return False
+                    join_x, join_y = next(iter(shared))
+                    other_tip = other_end if other_start == (join_x, join_y) else other_start
+                    candidate_tip = second_px if first_px == (join_x, join_y) else first_px
+                    candidate_dx = candidate_tip[0] - join_x
+                    candidate_dy = candidate_tip[1] - join_y
+                    other_dx = other_tip[0] - join_x
+                    other_dy = other_tip[1] - join_y
+                    cross = candidate_dx * other_dy - candidate_dy * other_dx
+                    same_ray_collinear = (
+                        abs(cross) <= 1e-9
+                        and candidate_dx * other_dx + candidate_dy * other_dy > 0
+                    )
+                    return same_ray_collinear
+
+                competing_strokes += tuple(
+                    other_stroke for other_stroke in nearby_source_strokes
+                    if other_stroke in source_path_strokes
+                    and other_stroke != (first_px, second_px, stroke_width_px)
+                    and sibling_can_compete(
+                        other_stroke[0], other_stroke[1]
+                    )
+                )
                 has_pixel_support = _line_has_full_pixel_difference_support(
                     baseline,
                     difference_by_name[source_layer],

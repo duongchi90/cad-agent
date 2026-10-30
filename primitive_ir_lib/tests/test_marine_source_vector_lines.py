@@ -83,7 +83,12 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         render_origin = (pixmap.x, pixmap.y)
         render_bytes = pixmap.tobytes("png")
 
-    assert len(source_lines) == 577
+    # The stricter per-item witness excludes item 493: its ~1 px rendered
+    # extent is inseparable from nearby same-path waterline items at this DPI.
+    # Keep the ambiguity fail-closed instead of counting shared pixels as an
+    # independent witness.
+    assert len(source_lines) == 576
+    assert 493 not in {line.source_item_index for line in source_lines}
     assert any("-i183-layer-03_Lines_Waterlines" in line.id for line in source_lines)
     assert len({line.id for line in source_lines}) == len(source_lines)
     actual: Counter[tuple] = Counter()
@@ -144,7 +149,7 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
         line.source_item_index for line in source_lines
         if line.id in expected_ir_line_ids
     })
-    assert len(expected_ir_line_ids) == 566
+    assert len(expected_ir_line_ids) == 565
     assert [line["id"] for line in ir_lines] == expected_ir_line_ids
     assert all(p["type"] == "line" for p in ir_lines)
     raster_ir_lines = [
@@ -168,7 +173,7 @@ def test_gunnerus_visible_source_path_reaches_primitive_ir_and_dxf(
     retained_source_lines = [
         line for line in source_lines if line.id in build_result.handle_by_primitive_id
     ]
-    assert len(retained_source_lines) == 566
+    assert len(retained_source_lines) == 565
     assert len(source_lines) - len(retained_source_lines) == 11
     assert all(
         build_result.written_geometry_by_primitive_id[line.id]["type"] == "line"

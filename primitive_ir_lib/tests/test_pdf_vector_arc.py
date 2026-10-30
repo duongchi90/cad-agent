@@ -1089,6 +1089,80 @@ def test_pdf_vector_path_does_not_admit_covered_subpixel_item_from_visible_sibli
     assert admitted_indexes(covered=False, dpi=288) == {0, 1}
 
 
+def test_pdf_vector_path_does_not_borrow_pixels_from_long_same_path_sibling():
+    def admitted_indexes(case: str, dpi: int) -> set[int]:
+        document = fitz.open()
+        page = document.new_page(width=100, height=60)
+        layer_xref = document.add_ocg("Oculto (ISO)")
+        shape = page.new_shape()
+        if case == "visible_contiguous":
+            shape.draw_polyline(
+                [
+                    fitz.Point(10.0, 30.25),
+                    fitz.Point(50.0, 30.25),
+                    fitz.Point(90.0, 30.25),
+                ]
+            )
+        else:
+            shape.draw_line(fitz.Point(10.0, 30.25), fitz.Point(90.0, 30.25))
+            shape.draw_line(fitz.Point(10.0, 30.75), fitz.Point(90.0, 30.75))
+        shape.finish(color=(0, 0, 0), width=0.1, closePath=False, oc=layer_xref)
+        shape.commit()
+        covers = {
+            "cover_first": (30.25,),
+            "cover_second": (30.75,),
+            "cover_both": (30.25, 30.75),
+        }.get(case, ())
+        for y in covers:
+            page.draw_rect(
+                fitz.Rect(9.0, y - 0.25, 91.0, y + 0.25),
+                color=None,
+                fill=(1, 1, 1),
+                overlay=True,
+            )
+        source_bytes = document.tobytes()
+        document.close()
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+
+        with fitz.open(stream=source_bytes, filetype="pdf") as source_pdf:
+            page = source_pdf[0]
+            paths = [
+                drawing
+                for drawing in page.get_drawings(extended=True)
+                if drawing.get("layer") == "Oculto (ISO)"
+            ]
+            assert len(paths) == 1
+            path = paths[0]
+            assert len(path["items"]) == 2
+            assert [item[0] for item in path["items"]] == ["l", "l"]
+            scale = dpi / 72.0
+            baseline = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            _, source_lines = run_pdf_module._page_pdf_source_layer_line_witnesses(
+                page,
+                baseline,
+                scale,
+                (baseline.x, baseline.y),
+                include_pdf_vector_lines=True,
+                source_pdf_sha256=source_sha256,
+                source_page_index=0,
+                render_dpi=dpi,
+                _candidate_seqnos={path["seqno"]},
+            )
+        return {line.source_item_index for line in source_lines}
+
+    # At 72 DPI, the two long sibling strokes collapse into shared raster
+    # support. The safe result is to refuse both ambiguous source items.
+    assert admitted_indexes("cover_second", dpi=72) == set()
+    # At distinguishable resolution, only the later-covered item is refused.
+    assert admitted_indexes("visible_parallel", dpi=144) == {0, 1}
+    assert admitted_indexes("cover_second", dpi=144) == {0}
+    assert admitted_indexes("cover_first", dpi=144) == {1}
+    assert admitted_indexes("cover_both", dpi=144) == set()
+    # A genuinely connected, visible path retains both independently
+    # witnessed source segments.
+    assert admitted_indexes("visible_contiguous", dpi=144) == {0, 1}
+
+
 def test_source_layer_witness_fails_closed_when_image_ocg_readback_fails():
     def pixmap(image: np.ndarray) -> fitz.Pixmap:
         return fitz.Pixmap(
