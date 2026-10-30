@@ -6,6 +6,52 @@ using Microsoft.Win32.SafeHandles;
 
 namespace CadAgent.AutoCAD2027.Ipc;
 
+internal sealed class JsonWriteLimitExceededException : IOException { }
+
+internal sealed class ByteLimitWriteStream(Stream inner, long maxBytes) : Stream
+{
+    private long _written;
+
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length => _written;
+    public override long Position { get => _written; set => throw new NotSupportedException(); }
+    public override void Flush() => inner.Flush();
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        EnsureWithinLimit(count);
+        inner.Write(buffer, offset, count);
+        _written += count;
+    }
+
+    public override void Write(ReadOnlySpan<byte> buffer)
+    {
+        EnsureWithinLimit(buffer.Length);
+        inner.Write(buffer);
+        _written += buffer.Length;
+    }
+
+    public override void WriteByte(byte value)
+    {
+        EnsureWithinLimit(1);
+        inner.WriteByte(value);
+        _written++;
+    }
+
+    private void EnsureWithinLimit(int count)
+    {
+        if (count < 0 || _written > maxBytes - count)
+        {
+            throw new JsonWriteLimitExceededException();
+        }
+    }
+}
+
 public sealed class JsonFileStore
 {
     private readonly bool _ipcDirectoryIsCanonical;
@@ -66,9 +112,120 @@ public sealed class JsonFileStore
     }
 
     public void WriteResult(IpcResult result)
+        => WriteResult(result, originatingRequest: null);
+
+    public void WriteResult(IpcResult result, IpcRequest? originatingRequest)
     {
         var normalized = ContractValidator.NormalizeResult(result);
-        AtomicWrite(GetResultPath(normalized.RequestId!), ContractJson.Serialize(normalized));
+        var destinationPath = GetResultPath(normalized.RequestId!);
+        var containsInventory = normalized.Success
+            && normalized.Payload is not null
+            && normalized.Payload.ContainsKey("model_space_inventory");
+        if (containsInventory && !AllowsExpandedModelSpaceResponse(originatingRequest, normalized))
+        {
+            throw new InvalidDataException(
+                "ModelSpace inventory results require a matching explicit opt-in request.");
+        }
+        if (!AllowsExpandedModelSpaceResponse(originatingRequest, normalized))
+        {
+            AtomicWrite(destinationPath, ContractJson.Serialize(normalized));
+            return;
+        }
+
+        try
+        {
+            AtomicWriteSerialized(
+                destinationPath,
+                normalized,
+                ContractConstants.ModelSpaceInventoryMaxResponseBytes);
+        }
+        catch (JsonWriteLimitExceededException)
+        {
+            var boundedFailure = normalized with
+            {
+                Success = false,
+                Changed = false,
+                EntityHandles = new List<string>(),
+                Errors = new List<string> { "INVENTORY_RESPONSE_LIMIT_EXCEEDED" },
+                Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            };
+            AtomicWrite(destinationPath, ContractJson.Serialize(boundedFailure));
+        }
+    }
+
+    private static bool AllowsExpandedModelSpaceResponse(IpcRequest? request, IpcResult result)
+    {
+        if (request is null
+            || !result.Success
+            || result.Payload is null
+            || !result.Payload.ContainsKey("model_space_inventory")
+            || !string.Equals(request.Operation, "drawing_setup_audit", StringComparison.Ordinal)
+            || !string.Equals(result.Operation, "drawing_setup_audit", StringComparison.Ordinal)
+            || !string.Equals(request.RequestId, result.RequestId, StringComparison.Ordinal)
+            || request.Parameters is null
+            || !request.Parameters.TryGetValue("include_model_space_inventory", out var includeInventory)
+            || includeInventory.ValueKind != JsonValueKind.True
+            || !ContractValidator.ValidateRequest(request).IsValid)
+        {
+            return false;
+        }
+
+        return string.Equals(
+            NormalizePath(request.DrawingFullPath),
+            NormalizePath(result.DrawingFullPath),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? NormalizePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(value);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private void AtomicWriteSerialized(string destinationPath, IpcResult result, long maxBytes)
+    {
+        var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var stream = new FileStream(
+                       temporaryPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: 4096,
+                       options: FileOptions.WriteThrough))
+            {
+                using (var bounded = new ByteLimitWriteStream(stream, maxBytes))
+                {
+                    JsonSerializer.Serialize(bounded, result, ContractJson.Options);
+                }
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (File.Exists(destinationPath))
+            {
+                File.Replace(temporaryPath, destinationPath, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(temporaryPath, destinationPath);
+            }
+        }
+        finally
+        {
+            DeleteIfExists(temporaryPath);
+        }
     }
 
     public IpcRequest ReadRequest(string requestId)
