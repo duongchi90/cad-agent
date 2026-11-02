@@ -36,6 +36,7 @@ from cad_agent.visual_evidence import (
     snapshot_visual_run_manifest,
     validate_visual_evidence_freshness,
 )
+from cad_agent.drawing_contracts import DrawingContractError, validate_contract_payload
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_IPC_DIR = Path(r"C:\temp")
@@ -43,6 +44,7 @@ IPC_DIR_ENV_VAR = "CAD_AGENT_DOTNET_IPC_DIR"
 DEFAULT_DISPOSABLE_WORKSPACE_DIR = "disposable-workspaces"
 MAX_REQUEST_ID_LENGTH = 128
 DEFAULT_MAX_READ_BYTES = 1024 * 1024
+MODEL_SPACE_INVENTORY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 REQUEST_PREFIX = "cadagent_dotnet_request_"
 RESULT_PREFIX = "cadagent_dotnet_result_"
@@ -800,7 +802,70 @@ class DotNetIPCClient:
             if self.trigger is None:
                 raise DotNetIPCError("File IPC requires an AutoCAD dispatcher trigger")
             self.trigger()
-            result = self._poll_result(result_file, actual_request_id, normalized_operation)
+            result = self._poll_result(
+                result_file,
+                actual_request_id,
+                normalized_operation,
+                max_bytes=(
+                    MODEL_SPACE_INVENTORY_MAX_RESPONSE_BYTES
+                    if normalized_operation == "drawing_setup_audit"
+                    and normalized_parameters.get("include_model_space_inventory") is True
+                    else self.max_read_bytes
+                ),
+            )
+            if (
+                normalized_operation == "drawing_setup_audit"
+                and normalized_parameters.get("include_model_space_inventory") is True
+                and result["success"] is True
+            ):
+                result_drawing_path = result.get("drawing_full_path")
+                if (
+                    normalized_path is None
+                    or not isinstance(result_drawing_path, str)
+                    or normalize_windows_absolute_path(result_drawing_path).casefold()
+                    != normalized_path.casefold()
+                ):
+                    raise DotNetIPCProtocolError(
+                        "drawing_setup_audit result drawing_full_path does not match the requested drawing"
+                    )
+                payload = result.get("payload")
+                if not isinstance(payload, dict) or not isinstance(
+                    payload.get("model_space_inventory"), dict
+                ):
+                    raise DotNetIPCProtocolError(
+                        "drawing_setup_audit result is missing requested model_space_inventory"
+                    )
+                try:
+                    audit_payload = {
+                        **payload,
+                        "schema_version": "drawing-setup-audit-1.0",
+                        "drawing_full_path": normalized_path,
+                        "drawing_sha256": normalized_sha256,
+                    }
+                    validate_contract_payload(audit_payload, contract="drawing_setup_audit")
+                except DrawingContractError as exc:
+                    raise DotNetIPCProtocolError(
+                        f"drawing_setup_audit result has invalid ModelSpace inventory: {exc}"
+                    ) from exc
+                inventory = payload["model_space_inventory"]
+                try:
+                    inventory_path = normalize_windows_absolute_path(
+                        inventory["drawing_full_path"]
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise DotNetIPCProtocolError(
+                        "ModelSpace inventory identity does not match the requested drawing"
+                    ) from exc
+                if (
+                    inventory_path.casefold() != normalized_path.casefold()
+                    or inventory["drawing_sha256_before"].casefold()
+                    != normalized_sha256.casefold()
+                    or inventory["drawing_sha256_after"].casefold()
+                    != normalized_sha256.casefold()
+                ):
+                    raise DotNetIPCProtocolError(
+                        "ModelSpace inventory identity does not match the requested drawing"
+                    )
             if result["success"] is not True:
                 errors = result.get("errors", [])
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"
@@ -1290,13 +1355,18 @@ class DotNetIPCClient:
         drawing_full_path: str | Path,
         *,
         drawing_sha256: str,
+        include_model_space_inventory: bool = False,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        if type(include_model_space_inventory) is not bool:
+            raise ValueError("include_model_space_inventory must be a boolean")
         return self.request(
             "drawing_setup_audit",
             drawing_full_path,
             drawing_sha256=drawing_sha256,
-            parameters={},
+            parameters={"include_model_space_inventory": True}
+            if include_model_space_inventory
+            else {},
             approval=None,
             request_id=request_id,
         )
@@ -1740,11 +1810,16 @@ class DotNetIPCClient:
         result_file: Path,
         request_id: str,
         operation: str,
+        *,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self.timeout_s
         while True:
             if result_file.is_file():
-                result = read_json_bounded(result_file, max_bytes=self.max_read_bytes)
+                result = read_json_bounded(
+                    result_file,
+                    max_bytes=self.max_read_bytes if max_bytes is None else max_bytes,
+                )
                 self._validate_result(result, request_id, operation)
                 return result
 
@@ -1796,8 +1871,12 @@ class DotNetIPCClient:
             if values:
                 raise ValueError("mechanical_bom parameters must be an empty object")
         elif operation == "drawing_setup_audit":
-            if values:
-                raise ValueError("drawing_setup_audit parameters must be an empty object")
+            if set(values) - {"include_model_space_inventory"}:
+                raise ValueError("drawing_setup_audit parameters contain unsupported fields")
+            if "include_model_space_inventory" in values and type(
+                values["include_model_space_inventory"]
+            ) is not bool:
+                raise ValueError("parameters.include_model_space_inventory must be a boolean")
         elif operation == "review":
             handles = values.get("handles")
             if not isinstance(handles, list) or not handles:

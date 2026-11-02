@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 import pytesseract
 
-from .models import new_id, SemanticRole
+from .models import new_id, SemanticRole, SourceType
 
 Bbox = Tuple[int, int, int, int]  # (x_min, y_min, x_max, y_max) pixel
 
@@ -42,7 +42,7 @@ class RawText:
     bbox_px: Bbox
     rotation_deg: float
     confidence: float
-    source: str  # "text_tesseract" | "text_vision"
+    source: SourceType  # text_tesseract | text_vision | text_pdfvector
     parsed_value: Optional[float] = None
     semantic_role: SemanticRole = "unknown"
 

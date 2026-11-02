@@ -42,6 +42,7 @@ def test_current_contract_keeps_all_legacy_and_existing_fidelity_commands() -> N
         "drawing-setup-plan",
         "drawing-setup-audit",
         "drawing-setup-verify",
+        "layer-standard-check",
         "dimension-pilot-run",
         "mechanical-review",
         "mechanical-repair",

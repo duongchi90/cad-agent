@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/layer-standard-check-1.0",
+  "title": "Layer Standard Check",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "classification_scope", "audit_origin_authentication", "layer_inventory_completeness", "classification_basis", "engineering_compliance", "audit_full_path", "audit_sha256", "drawing_full_path", "drawing_sha256", "rules", "layer_count", "standard_count", "nonstandard_count", "standard_percentage", "layers"],
+  "properties": {
+    "schema_version": {"const": "layer-standard-check-1.0"},
+    "status": {"enum": ["CLASSIFIED", "EMPTY_TABLE"]},
+    "classification_scope": {"const": "LAYER_NAME_RULES_ONLY"},
+    "audit_origin_authentication": {"const": "NOT_AUTHENTICATED"},
+    "layer_inventory_completeness": {"const": "NOT_VERIFIED"},
+    "classification_basis": {"const": "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"},
+    "engineering_compliance": {"const": "NOT_EVALUATED"},
+    "audit_full_path": {"type": "string", "minLength": 1},
+    "audit_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "drawing_full_path": {"type": "string", "minLength": 1},
+    "drawing_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["allowed_exact_names", "allowed_prefixes", "case_sensitive"],
+      "properties": {
+        "allowed_exact_names": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "allowed_prefixes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "case_sensitive": {"type": "boolean"}
+      }
+    },
+    "layer_count": {"type": "integer", "minimum": 0},
+    "standard_count": {"type": "integer", "minimum": 0},
+    "nonstandard_count": {"type": "integer", "minimum": 0},
+    "standard_percentage": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "classification", "matching_rules"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "classification": {"enum": ["STANDARD", "NONSTANDARD"]},
+          "matching_rules": {
+            "type": "array",
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": {"enum": ["EXACT_NAME", "PREFIX"]},
+                "value": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "EMPTY_TABLE"}}, "required": ["status"]}, "then": {"properties": {"layer_count": {"const": 0}, "standard_count": {"const": 0}, "nonstandard_count": {"const": 0}, "standard_percentage": {"const": null}, "layers": {"maxItems": 0}}}, "else": {"properties": {"layer_count": {"minimum": 1}, "standard_percentage": {"type": "number"}}}}
+  ]
+}

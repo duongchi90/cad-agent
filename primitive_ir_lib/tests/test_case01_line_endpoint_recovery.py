@@ -1,0 +1,380 @@
+"""Hash-bound CASE01 regression for dimension-arrow endpoint detection."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+import os
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from primitive_ir_lib.geometry_extraction import (
+    _extend_line_endpoints_along_ink,
+    extract_lines,
+)
+
+
+_FTC11_IMAGE_ENV = "CAD_AGENT_FTC11_IMAGE"
+_FTC11_RENDER_SHA256 = "675f1a991dca7a133f0923bef6aa431f68e719f29780946f358904ace4a2ca00"
+_FTC11_AXIS_START = (622.8, 467.88)
+_FTC11_AXIS_END = (1120.56, 180.6)
+_FTC11_GAP_PROJECTION = (191.174, 383.539)
+
+
+def test_ray_march_does_not_follow_an_adjacent_connected_glyph_stroke() -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    cv2.line(gray, (20, 50), (80, 50), 0, 2)
+    cv2.line(gray, (82, 50), (82, 52), 0, 1)
+    cv2.line(gray, (82, 52), (115, 52), 0, 1)
+
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 50.0), (80.0, 50.0), gray)
+
+    assert extended_end[0] <= 84.0, f"adjacent one-pixel glyph stem caused a long extension: {extended_end}"
+
+
+def test_ray_march_does_not_borrow_support_from_a_parallel_two_pixel_stroke() -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:51, 20:81] = 0
+    gray[51:53, 81:116] = 0
+
+    assert np.all(gray[50, 81:116] == 255), "the candidate centerline must stay white past x=80"
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 50.0), (80.0, 50.0), gray)
+
+    assert extended_end == (80.0, 50.0), (
+        "a separate two-pixel parallel stroke must not sponsor endpoint extension: "
+        f"{extended_end}"
+    )
+
+
+def test_extract_lines_does_not_extend_along_a_parallel_two_pixel_stroke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:51, 20:81] = 0
+    gray[51:53, 81:116] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 50, 80, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 50.0)
+    assert lines[0].bbox_px[2] == 80.0
+
+
+def test_extract_lines_splits_source_gap_and_extends_each_supported_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 140), 220, dtype=np.uint8)
+    cv2.line(gray, (20, 50), (60, 50), 0, 3)
+    cv2.line(gray, (68, 50), (100, 50), 0, 3)
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[25, 50, 95, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    spans = sorted(
+        (min(line.p1_px[0], line.p2_px[0]), max(line.p1_px[0], line.p2_px[0]))
+        for line in lines
+    )
+    assert len(spans) == 2, f"the raster gap must split the Hough candidate: {spans}"
+    assert 18.0 <= spans[0][0] <= 22.0 and 59.0 <= spans[0][1] <= 62.0
+    assert 66.0 <= spans[1][0] <= 70.0 and 98.0 <= spans[1][1] <= 102.0
+    assert spans[0][1] < spans[1][0], (
+        "endpoint recovery must extend each source-supported run without reconnecting "
+        f"the seven-pixel gray-background gap: {spans}"
+    )
+
+
+def test_extract_lines_does_not_reconnect_source_gap_on_gray_background_170(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 140), 170, dtype=np.uint8)
+    gray[1, 20:61] = 0
+    gray[1, 68:101] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 2, 100, 2]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    spans = sorted(
+        (min(line.p1_px[0], line.p2_px[0]), max(line.p1_px[0], line.p2_px[0]))
+        for line in lines
+    )
+    assert len(spans) == 2, f"the two source-supported runs must remain separate: {spans}"
+    assert spans[0][1] < spans[1][0], (
+        "endpoint recovery must not treat gray-170 background as source ink and bridge "
+        f"the unsupported gap: {spans}"
+    )
+
+
+def test_extract_lines_keeps_faint_thin_source_stroke_on_gray_background_170(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 140), 170, dtype=np.uint8)
+    gray[50, 20:101] = 150
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 50, 60, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p1_px == (20.0, 50.0)
+    assert 60.0 < lines[0].p2_px[0] <= 90.0, (
+        "the continuous faint one-pixel source stroke with local contrast must "
+        f"support bounded endpoint recovery: {lines[0].p2_px}"
+    )
+
+
+def test_ray_march_does_not_follow_a_perpendicular_stem_past_the_line_endpoint() -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:52, 20:81] = 0
+    gray[30:71, 81:96] = 0
+
+    assert np.all(gray[50, 81:96] == 0), "the unrelated stem crosses the candidate centerline"
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 50.0), (80.0, 50.0), gray)
+
+    assert extended_end == (80.0, 50.0), (
+        "a perpendicular stem without horizontal continuation must not extend the line: "
+        f"{extended_end}"
+    )
+
+
+def test_ray_march_rejects_thick_perpendicular_junction_for_thick_candidate() -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[30:101, 81:116] = 0
+
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 60.0), (80.0, 60.0), gray)
+
+    assert extended_end == (80.0, 60.0), (
+        "a thick perpendicular junction must not sponsor extension of a thick candidate: "
+        f"{extended_end}"
+    )
+
+
+def test_extract_lines_rejects_thick_perpendicular_junction_for_thick_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[30:101, 81:116] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 60, 80, 60]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 60.0), (
+        "extract_lines must not extend a thick candidate into a thick perpendicular junction: "
+        f"{lines[0].p2_px}"
+    )
+
+
+def test_ray_march_rejects_nearly_saturated_perpendicular_junction() -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[53:69, 81:116] = 0
+
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 60.0), (80.0, 60.0), gray)
+
+    assert extended_end == (80.0, 60.0), (
+        "a perpendicular junction occupying 16 of 17 profile samples must not extend the line: "
+        f"{extended_end}"
+    )
+
+
+def test_extract_lines_rejects_nearly_saturated_perpendicular_junction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((140, 180), 255, dtype=np.uint8)
+    gray[58:63, 20:81] = 0
+    gray[53:69, 81:116] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 60, 80, 60]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 60.0), (
+        "extract_lines must stop before a junction occupying 16 of 17 profile samples: "
+        f"{lines[0].p2_px}"
+    )
+
+
+def test_extract_lines_does_not_extend_through_a_perpendicular_stem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:52, 20:81] = 0
+    gray[30:71, 81:96] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 50, 80, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (80.0, 50.0)
+    assert lines[0].bbox_px[2] == 80.0
+
+
+def test_ray_march_does_not_learn_a_perpendicular_stem_from_the_endpoint_profile() -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:52, 20:81] = 0
+    gray[30:71, 81:96] = 0
+
+    _, extended_end = _extend_line_endpoints_along_ink((20.0, 50.0), (85.0, 50.0), gray)
+
+    assert extended_end == (85.0, 50.0), (
+        "the interior candidate profile, not a junction at its endpoint, must set the "
+        f"continuation width: {extended_end}"
+    )
+
+
+def test_extract_lines_does_not_extend_when_hough_endpoint_enters_a_perpendicular_stem(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gray = np.full((100, 150), 255, dtype=np.uint8)
+    gray[49:52, 20:81] = 0
+    gray[30:71, 81:96] = 0
+    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    monkeypatch.setattr(
+        "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
+        lambda *args, **kwargs: np.array([[[20, 50, 85, 50]]], dtype=np.int32),
+    )
+
+    lines = extract_lines(image)
+
+    assert len(lines) == 1
+    assert lines[0].p2_px == (85.0, 50.0)
+    assert lines[0].bbox_px[2] == 85.0
+
+
+def test_ray_march_preserves_white_paper_between_separated_collinear_segments() -> None:
+    image = np.full((120, 220, 3), 255, dtype=np.uint8)
+    cv2.line(image, (20, 60), (80, 60), (0, 0, 0), 2)
+    cv2.line(image, (120, 60), (180, 60), (0, 0, 0), 2)
+
+    lines = extract_lines(image, hough_threshold=20, min_line_length=20, max_line_gap=5)
+
+    assert not any(
+        min(line.p1_px[0], line.p2_px[0]) <= 80
+        and max(line.p1_px[0], line.p2_px[0]) >= 120
+        and abs(line.p1_px[1] - line.p2_px[1]) <= 3
+        for line in lines
+    ), f"white-paper gap was bridged: {[(line.p1_px, line.p2_px) for line in lines]}"
+
+
+@pytest.mark.parametrize(("gap_pixels", "second_start_x"), [(1, 72), (2, 73)])
+def test_ray_march_does_not_reconnect_short_unsupported_white_gaps(
+    gap_pixels: int, second_start_x: int
+) -> None:
+    gray = np.full((80, 140), 255, dtype=np.uint8)
+    cv2.line(gray, (20, 40), (70, 40), 0, 2)
+    cv2.line(gray, (second_start_x, 40), (110, 40), 0, 2)
+
+    _, first_end = _extend_line_endpoints_along_ink((20.0, 40.0), (70.0, 40.0), gray)
+    second_start, _ = _extend_line_endpoints_along_ink(
+        (float(second_start_x), 40.0), (110.0, 40.0), gray
+    )
+
+    # Collinearity and gap width alone are not an independent geometric witness.
+    assert first_end == (70.0, 40.0)
+    assert second_start == (float(second_start_x), 40.0)
+
+
+def test_ray_march_does_not_solidify_a_dashed_line() -> None:
+    image = np.full((100, 240, 3), 255, dtype=np.uint8)
+    for x_start in (20, 50, 80, 110, 140):
+        cv2.line(image, (x_start, 50), (x_start + 20, 50), (0, 0, 0), 2)
+
+    lines = extract_lines(image, hough_threshold=10, min_line_length=10, max_line_gap=5)
+
+    assert not any(
+        min(line.p1_px[0], line.p2_px[0]) <= 80
+        and max(line.p1_px[0], line.p2_px[0]) >= 110
+        and abs(line.p1_px[1] - line.p2_px[1]) <= 3
+        for line in lines
+    ), f"dashes were solidified: {[(line.p1_px, line.p2_px) for line in lines]}"
+
+
+def test_ray_march_degenerate_and_out_of_image_inputs_are_safe() -> None:
+    gray = np.full((40, 40), 255, dtype=np.uint8)
+    same = (12.0, 12.0)
+    assert _extend_line_endpoints_along_ink(same, same, gray) == (same, same)
+
+    nan_point = (math.nan, 12.0)
+    returned = _extend_line_endpoints_along_ink(nan_point, same, gray)
+    assert math.isnan(returned[0][0]) and returned[1] == same
+    assert _extend_line_endpoints_along_ink((-10.0, -10.0), (-5.0, -5.0), gray) == (
+        (-10.0, -10.0), (-5.0, -5.0),
+    )
+
+
+@pytest.mark.real_data
+def test_ftc11_interrupted_dimension_is_not_joined_across_its_frozen_text_gap() -> None:
+    image_value = os.environ.get(_FTC11_IMAGE_ENV)
+    if not image_value:
+        pytest.skip(f"set {_FTC11_IMAGE_ENV} to run the frozen FTC-11 interruption control")
+
+    image_path = Path(image_value)
+    assert image_path.is_file(), f"{_FTC11_IMAGE_ENV} does not point to a file: {image_path}"
+    image_bytes = image_path.read_bytes()
+    assert hashlib.sha256(image_bytes).hexdigest() == _FTC11_RENDER_SHA256
+    image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert image is not None
+    assert image.shape[:2] == (1224, 1584)
+
+    axis_dx = _FTC11_AXIS_END[0] - _FTC11_AXIS_START[0]
+    axis_dy = _FTC11_AXIS_END[1] - _FTC11_AXIS_START[1]
+    axis_length = math.hypot(axis_dx, axis_dy)
+    ux, uy = axis_dx / axis_length, axis_dy / axis_length
+    nx, ny = -uy, ux
+    lines = extract_lines(image, hough_threshold=90, min_line_length=50, max_line_gap=5)
+    for line in lines:
+        dx = line.p2_px[0] - line.p1_px[0]
+        dy = line.p2_px[1] - line.p1_px[1]
+        length = math.hypot(dx, dy)
+        if not length:
+            continue
+        alignment = abs((dx * ux + dy * uy) / length)
+        if alignment < math.cos(math.radians(3)):
+            continue
+        perpendicular = max(
+            abs((point[0] - _FTC11_AXIS_START[0]) * nx + (point[1] - _FTC11_AXIS_START[1]) * ny)
+            for point in (line.p1_px, line.p2_px)
+        )
+        if perpendicular > 6.0:
+            continue
+        projections = [
+            (point[0] - _FTC11_AXIS_START[0]) * ux + (point[1] - _FTC11_AXIS_START[1]) * uy
+            for point in (line.p1_px, line.p2_px)
+        ]
+        assert not (
+            min(projections) <= _FTC11_GAP_PROJECTION[0]
+            and max(projections) >= _FTC11_GAP_PROJECTION[1]
+        ), f"one extracted segment bridged FTC-11's 192 px text gap: {line.p1_px} -> {line.p2_px}"

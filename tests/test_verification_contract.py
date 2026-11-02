@@ -74,12 +74,6 @@ class VerificationContractTests(unittest.TestCase):
         self.assertIn("ls-files", script)
         self.assertIn('Write-Host "Tesseract: $tesseractPath ($tesseractVersion)"', script)
 
-    def test_unavailable_real_data_probe_clears_case01_and_ftc11_images(self) -> None:
-        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
-        specialized_variables = script.split("$specializedVariables = @(", 1)[1].split(")", 1)[0]
-        self.assertIn('"CAD_AGENT_CASE01_DIMENSION_WITNESS_IMAGE"', specialized_variables)
-        self.assertIn('"CAD_AGENT_FTC11_TEXT_GAP_IMAGE"', specialized_variables)
-
     def test_causal_red_is_an_independent_expected_failure_gate(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
         self.assertIn("Invoke-CausalRedGate", script)
@@ -90,6 +84,15 @@ class VerificationContractTests(unittest.TestCase):
             '"not real_data and not autocad_mechanical and not causal_red"',
             script,
         )
+
+    def test_verify_clears_every_endpoint_fixture_before_unavailable_probe(self) -> None:
+        script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
+        match = re.search(r"\$specializedVariables\s*=\s*@\((.*?)\)", script, re.S)
+        self.assertIsNotNone(match, "verify.ps1 must declare its isolated fixture environment")
+        assert match is not None
+        for name in ("CAD_AGENT_CASE01_LINE_IMAGE", "CAD_AGENT_FTC11_IMAGE"):
+            with self.subTest(name=name):
+                self.assertIn(f'"{name}"', match.group(1))
 
     def test_verify_owns_release_x64_dotnet_solution_gates(self) -> None:
         script = (ROOT / "scripts/verify.ps1").read_text(encoding="utf-8")
