@@ -24,6 +24,7 @@ import numpy as np
 from pathlib import Path
 
 from primitive_ir_lib.geometry_extraction import RawLine, extract_raw_geometry
+import primitive_ir_lib.line_merging as line_merging_module
 from primitive_ir_lib.line_merging import merge_collinear_lines
 from primitive_ir_lib.line_merging import _source_dash_gap_intervals
 from primitive_ir_lib.run_image import run as run_image
@@ -281,6 +282,73 @@ def test_does_not_merge_parallel_lines_offset_perpendicular():
     l2 = _line((105, 20), (200, 20), "bottom")  # cùng phương ngang nhưng lệch trục 20px
     merged = merge_collinear_lines([l1, l2], blocking_texts=[], perp_tol_px=6.0)
     assert len(merged) == 2
+
+
+def test_transitive_parallel_cluster_keeps_outer_stroke_within_tolerance():
+    # Each adjacent pair is within 6 px, but the first and last source strokes
+    # are 10 px apart. Single-link union must not collapse the outer stroke.
+    source_lines = [
+        _line((0, 0), (100, 0), "stroke-0"),
+        _line((0, 5), (100, 5), "stroke-5"),
+        _line((0, 10), (100, 10), "stroke-10"),
+    ]
+
+    merged = merge_collinear_lines(
+        source_lines, blocking_texts=[], perp_tol_px=6.0,
+    )
+
+    output_y = [
+        (line.p1_px[1] + line.p2_px[1]) / 2.0
+        for line in merged
+    ]
+    for source in source_lines:
+        source_y = (source.p1_px[1] + source.p2_px[1]) / 2.0
+        assert min(abs(source_y - candidate_y) for candidate_y in output_y) <= 6.0
+
+
+def test_transitive_cluster_rejections_do_not_rescan_growing_components(monkeypatch):
+    """A bridge stroke must not make rejected complete-link joins cubic."""
+    group_size = 80
+    source_lines = [
+        _line((index, 5), (index + 1000, 5), f"upper-{index}")
+        for index in range(group_size)
+    ]
+    source_lines.append(_line((group_size, 0), (group_size + 1000, 0), "bridge"))
+    source_lines.extend(
+        _line((index, 10), (index + 1000, 10), f"lower-{index}")
+        for index in range(group_size)
+    )
+
+    perpendicular_checks = 0
+    original_distance = line_merging_module._perp_distance_point_to_line
+
+    def count_perpendicular_checks(*args):
+        nonlocal perpendicular_checks
+        perpendicular_checks += 1
+        return original_distance(*args)
+
+    monkeypatch.setattr(
+        "primitive_ir_lib.line_merging._perp_distance_point_to_line",
+        count_perpendicular_checks,
+    )
+    merged = merge_collinear_lines(
+        source_lines,
+        blocking_texts=[],
+        perp_tol_px=6.0,
+        split_internal_witness_lines=False,
+        use_tick_mark_detection=False,
+    )
+
+    output_y = sorted(
+        round((line.p1_px[1] + line.p2_px[1]) / 2.0, 3)
+        for line in merged
+    )
+    assert output_y == [5.0, 10.0]
+    line_count = len(source_lines)
+    assert perpendicular_checks <= 6 * line_count * (line_count - 1), (
+        f"component rejection repeated pair checks: {perpendicular_checks} "
+        f"for {line_count} lines"
+    )
 
 
 def _canvas_with_two_witness_lines_and_tick_marks(gap_start=276, gap_end=298, y=140):

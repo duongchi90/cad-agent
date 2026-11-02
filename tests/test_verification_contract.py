@@ -90,7 +90,11 @@ class VerificationContractTests(unittest.TestCase):
         match = re.search(r"\$specializedVariables\s*=\s*@\((.*?)\)", script, re.S)
         self.assertIsNotNone(match, "verify.ps1 must declare its isolated fixture environment")
         assert match is not None
-        for name in ("CAD_AGENT_CASE01_LINE_IMAGE", "CAD_AGENT_FTC11_IMAGE"):
+        for name in (
+            "CAD_AGENT_CASE01_LINE_IMAGE",
+            "CAD_AGENT_FTC11_IMAGE",
+            "CAD_AGENT_ALMA_HAER_PROFILE_ROI",
+        ):
             with self.subTest(name=name):
                 self.assertIn(f'"{name}"', match.group(1))
 
