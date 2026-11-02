@@ -110,9 +110,13 @@ def test_run_image_skips_rounded_zero_candidate_before_registry_admission(tmp_pa
             return_value=RawGeometry(lines=[tiny_line, valid_line], circles=[]),
         ),
         patch(
+            "primitive_ir_lib.text_extraction.pytesseract.get_languages",
+            return_value=["vie", "eng"],
+        ) as mock_get_languages,
+        patch(
             "primitive_ir_lib.text_extraction.pytesseract.image_to_data",
             return_value=ocr_data,
-        ),
+        ) as mock_image_to_data,
     ):
         run(
             image_path=str(image_path),
@@ -122,6 +126,10 @@ def test_run_image_skips_rounded_zero_candidate_before_registry_admission(tmp_pa
             calibration_id="rounded-zero",
             ocr_rois=[(0, 0, 400, 120)],
         )
+
+    mock_get_languages.assert_called_once_with()
+    mock_image_to_data.assert_called_once()
+    assert mock_image_to_data.call_args.kwargs["lang"] == "vie+eng"
 
     primitive = json.loads(output_path.read_text(encoding="utf-8"))
     registry = json.loads(registry_path.read_text(encoding="utf-8"))

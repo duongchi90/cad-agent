@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from primitive_ir_lib.models import (
     Calibration,
     CircleGeometry,
@@ -16,6 +15,24 @@ from primitive_ir_lib.models import (
     SourceDocument,
     Trace,
 )
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_pdf_workflows_request_installed_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the existing explicit OCR-language option for English fixtures."""
+    import importlib
+
+    image_runner = importlib.import_module("primitive_ir_lib.run_image")
+    original = image_runner.extract_text_tesseract
+
+    def extract_english(image: object, *args: object, **kwargs: object):
+        if kwargs.get("lang", "vie+eng") == "vie+eng":
+            kwargs["lang"] = "eng"
+        return original(image, *args, **kwargs)
+
+    monkeypatch.setattr(image_runner, "extract_text_tesseract", extract_english)
 
 
 def _primitive_doc() -> PrimitiveIRDocument:

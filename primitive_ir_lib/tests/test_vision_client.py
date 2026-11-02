@@ -7,6 +7,8 @@ thật (việc đó cần key thật, xem docstring vision_client.py).
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -31,6 +33,20 @@ def _blank_crop(w: int = 60, h: int = 60) -> np.ndarray:
     return np.full((h, w, 3), 255, dtype=np.uint8)
 
 
+def _ocr_data(text: str, confidence: str = "90") -> dict:
+    return {
+        "text": [text], "conf": [confidence], "block_num": [1], "par_num": [1],
+        "line_num": [1], "left": [2], "top": [3], "width": [20], "height": [10],
+    }
+
+
+def _empty_ocr_data() -> dict:
+    return {
+        "text": [], "conf": [], "block_num": [], "par_num": [], "line_num": [],
+        "left": [], "top": [], "width": [], "height": [],
+    }
+
+
 def test_hybrid_reader_uses_tesseract_when_confident():
     calls = []
 
@@ -40,7 +56,14 @@ def test_hybrid_reader_uses_tesseract_when_confident():
 
     reader = make_hybrid_cell_reader(vision_reader=fake_vision_reader, tesseract_min_confidence=1)
     image = _make_text_crop("4200")
-    content = reader(image, (0, 0, image.shape[1], image.shape[0]))
+    with patch(
+        "primitive_ir_lib.text_extraction.pytesseract.get_languages",
+        return_value=["eng", "vie", "osd"],
+    ), patch(
+        "primitive_ir_lib.text_extraction.pytesseract.image_to_data",
+        return_value=_ocr_data("4200"),
+    ):
+        content = reader(image, (0, 0, image.shape[1], image.shape[0]))
 
     assert "4200" in content, f"Tesseract lẽ ra đọc được '4200', got: {content!r}"
     assert len(calls) == 0, "Không nên fallback sang Vision khi Tesseract đủ confidence"
@@ -56,7 +79,14 @@ def test_hybrid_reader_falls_back_to_vision_when_tesseract_empty():
 
     reader = make_hybrid_cell_reader(vision_reader=fake_vision_reader, tesseract_min_confidence=60)
     image = _blank_crop()
-    content = reader(image, (0, 0, image.shape[1], image.shape[0]))
+    with patch(
+        "primitive_ir_lib.text_extraction.pytesseract.get_languages",
+        return_value=["eng", "vie", "osd"],
+    ), patch(
+        "primitive_ir_lib.text_extraction.pytesseract.image_to_data",
+        return_value=_empty_ocr_data(),
+    ):
+        content = reader(image, (0, 0, image.shape[1], image.shape[0]))
 
     assert content == "VISION_RESULT"
     assert len(calls) == 1, "Phải fallback sang Vision khi Tesseract không đọc được gì"
@@ -73,7 +103,14 @@ def test_hybrid_reader_falls_back_when_confidence_below_threshold():
     # threshold cực cao (999) ép mọi kết quả Tesseract bị coi là "confidence thấp"
     reader = make_hybrid_cell_reader(vision_reader=fake_vision_reader, tesseract_min_confidence=999)
     image = _make_text_crop("1900")
-    content = reader(image, (0, 0, image.shape[1], image.shape[0]))
+    with patch(
+        "primitive_ir_lib.text_extraction.pytesseract.get_languages",
+        return_value=["eng", "vie", "osd"],
+    ), patch(
+        "primitive_ir_lib.text_extraction.pytesseract.image_to_data",
+        return_value=_ocr_data("1900"),
+    ):
+        content = reader(image, (0, 0, image.shape[1], image.shape[0]))
 
     assert content == "VISION_RESULT"
     assert len(calls) == 1
