@@ -122,6 +122,51 @@ def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
     return blurred
 
 
+def _supported_source_profile_samples(
+    gray: np.ndarray,
+    point: Tuple[float, float],
+    normal: Tuple[float, float],
+    *,
+    corridor_only: bool = False,
+) -> List[Tuple[int, int]]:
+    """Return source-supported ink samples across a line-normal profile."""
+    height, width = gray.shape
+    nx, ny = normal
+    samples_by_position = {}
+    for offset in range(
+        -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
+        _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX + 1,
+    ):
+        px = int(round(point[0] + nx * offset))
+        py = int(round(point[1] + ny * offset))
+        if 0 <= px < width and 0 <= py < height:
+            position = (px, py)
+            previous = samples_by_position.get(position)
+            if previous is None or abs(offset) < abs(previous[0]):
+                samples_by_position[position] = (offset, int(gray[py, px]))
+    samples = list(samples_by_position.values())
+    outer = _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX - 1
+    left = [
+        value for offset, value in samples
+        if -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX <= offset <= -outer
+    ]
+    right = [
+        value for offset, value in samples
+        if outer <= offset <= _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX
+    ]
+    backgrounds = [max(side) for side in (left, right) if side]
+    if not backgrounds:
+        return []
+    background = min(backgrounds)
+    return [
+        (offset, value)
+        for offset, value in samples
+        if (not corridor_only or abs(offset) <= _LINE_ENDPOINT_PERP_HALF_WIDTH_PX)
+        and value <= _LINE_ENDPOINT_DARK_THRESHOLD
+        and background - value >= 10
+    ]
+
+
 def _extend_line_endpoints_along_ink(
     p1: Tuple[float, float],
     p2: Tuple[float, float],
@@ -165,45 +210,12 @@ def _extend_line_endpoints_along_ink(
             return right_near[1] - center >= 10 and right_far[1] - center >= 10
         return False
 
-    def profile_samples(point: Tuple[float, float]) -> List[Tuple[int, int]]:
-        samples_by_position = {}
-        for offset in range(
-            -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
-            _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX + 1,
-        ):
-            px = int(round(point[0] + nx * offset))
-            py = int(round(point[1] + ny * offset))
-            if 0 <= px < width and 0 <= py < height:
-                position = (px, py)
-                previous = samples_by_position.get(position)
-                if previous is None or abs(offset) < abs(previous[0]):
-                    samples_by_position[position] = (offset, int(gray[py, px]))
-        return list(samples_by_position.values())
-
     def supported_profile_samples(
         point: Tuple[float, float], *, corridor_only: bool = False
     ) -> List[Tuple[int, int]]:
-        samples = profile_samples(point)
-        outer = _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX - 1
-        left = [
-            value for offset, value in samples
-            if -_LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX <= offset <= -outer
-        ]
-        right = [
-            value for offset, value in samples
-            if outer <= offset <= _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX
-        ]
-        backgrounds = [max(side) for side in (left, right) if side]
-        if not backgrounds:
-            return []
-        background = min(backgrounds)
-        return [
-            (offset, value)
-            for offset, value in samples
-            if (not corridor_only or abs(offset) <= _LINE_ENDPOINT_PERP_HALF_WIDTH_PX)
-            and value <= _LINE_ENDPOINT_DARK_THRESHOLD
-            and background - value >= 10
-        ]
+        return _supported_source_profile_samples(
+            gray, point, (nx, ny), corridor_only=corridor_only
+        )
 
     def profile_ink_count(point: Tuple[float, float]) -> int:
         return len(supported_profile_samples(point))
@@ -394,6 +406,18 @@ def _extend_hough_seed_with_connected_canny_support(
 
     ux, uy = dx / seed_length, dy / seed_length
     nx, ny = -uy, ux
+    baseline_points = [
+        (x1 + dx * fraction, y1 + dy * fraction)
+        for fraction in (0.2, 0.35, 0.5, 0.65, 0.8)
+    ]
+    baseline_profile_counts = [
+        len(_supported_source_profile_samples(source_gray, point, (nx, ny)))
+        for point in baseline_points
+    ]
+    profile_limit = min(
+        max(baseline_profile_counts, default=0) + 1,
+        2 * _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX,
+    )
     relative_x = edge_x.astype(np.float32) - x1
     relative_y = edge_y.astype(np.float32) - y1
     along = relative_x * ux + relative_y * uy
@@ -451,25 +475,47 @@ def _extend_hough_seed_with_connected_canny_support(
             return False
         return int(source_gray[point_y, point_x]) <= _LINE_ENDPOINT_DARK_THRESHOLD
 
+    def source_profile_count(station: float) -> int:
+        point = (x1 + station * ux, y1 + station * uy)
+        return len(_supported_source_profile_samples(source_gray, point, (nx, ny)))
+
     # Canny connectivity can join a touching parallel stroke at a corner. The
     # proposed added stations must retain continuous source ink on the seed's
     # exact axis; this prevents borrowing an offset adjacent stroke.
     if start_station < 0:
         validated_start = 0
+        start_profile_counts = []
         for station in range(-1, int(np.floor(start_station)) - 1, -1):
             if not has_centered_source_ink(float(station)):
                 break
+            profile_count = source_profile_count(float(station))
+            # A fully dark profile has no visible flank and cannot distinguish
+            # line continuation from a perpendicular stem.
+            if profile_count == 0:
+                break
             validated_start = station
+            start_profile_counts.append(profile_count)
+        # Permit a connected arrowhead or similar taper only when the source
+        # profile narrows back to the Hough seed's observed width.
+        if start_profile_counts and start_profile_counts[-1] > profile_limit:
+            validated_start = 0
         start_station = validated_start
 
     if end_station > seed_length:
         validated_end = seed_length
+        end_profile_counts = []
         last_extension = int(np.ceil(end_station - seed_length))
         for extension in range(1, last_extension + 1):
             station = seed_length + extension
             if not has_centered_source_ink(station):
                 break
+            profile_count = source_profile_count(station)
+            if profile_count == 0:
+                break
             validated_end = station
+            end_profile_counts.append(profile_count)
+        if end_profile_counts and end_profile_counts[-1] > profile_limit:
+            validated_end = seed_length
         end_station = validated_end
 
     return (

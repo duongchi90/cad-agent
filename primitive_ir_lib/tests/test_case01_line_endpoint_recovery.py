@@ -269,12 +269,30 @@ def test_extract_lines_rejects_nearly_saturated_perpendicular_junction(
     )
 
 
+@pytest.mark.parametrize(
+    ("stem_width", "stem_height", "line_thickness"),
+    [
+        (15, 41, 3),
+        (8, 41, 1), (8, 41, 3),
+        (9, 41, 1), (9, 41, 3),
+        (10, 41, 1), (10, 41, 3),
+        (8, 15, 1), (8, 15, 3), (10, 15, 1),
+    ],
+)
 def test_extract_lines_does_not_extend_through_a_perpendicular_stem(
     monkeypatch: pytest.MonkeyPatch,
+    stem_width: int,
+    stem_height: int,
+    line_thickness: int,
 ) -> None:
     gray = np.full((100, 150), 255, dtype=np.uint8)
-    gray[49:52, 20:81] = 0
-    gray[30:71, 81:96] = 0
+    if line_thickness == 1:
+        gray[50, 20:81] = 0
+    else:
+        start_y = 50 - line_thickness // 2
+        gray[start_y : start_y + line_thickness, 20:81] = 0
+    stem_start_y = 50 - stem_height // 2
+    gray[stem_start_y : stem_start_y + stem_height, 81 : 81 + stem_width] = 0
     image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     monkeypatch.setattr(
         "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
