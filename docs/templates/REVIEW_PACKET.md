@@ -2,6 +2,8 @@
 
 - **Task ID:** required identifier
 - **Reviewer role:** `SECURITY_REDTEAM` or `INTEGRATION_CI` for mandatory Codex reviews
+- **Required model / effort:** `gpt-6.1-sol/high`
+- **Runtime and usage evidence:** actual invocation model/effort, elapsed time, and input/output/cached/reasoning token fields when exposed; mark unavailable fields `UNAVAILABLE`, never estimate
 - **Request ID / controlling attempt ID:** unique to this role and packet
 - **Current main SHA:** required current commit
 - **Base SHA:** required 40-character commit

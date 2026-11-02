@@ -205,7 +205,7 @@ class GuidanceContractTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, model)
 
-    def test_dual_codex_review_cutover_preserves_exact_head_independence_and_gates(self) -> None:
+    def test_dual_codex_review_is_permanent_and_preserves_exact_head_independence_and_gates(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
         packet = (ROOT / "docs/templates/REVIEW_PACKET.md").read_text(encoding="utf-8")
@@ -215,13 +215,13 @@ class GuidanceContractTests(unittest.TestCase):
             agents,
         )
         for term in (
-            "CODEX_REVIEW_CUTOVER=ACTIVE",
+            "CODEX_REVIEW_POLICY=PERMANENT_UNTIL_HUMAN_CHANGES_IT",
             "SECURITY_REDTEAM",
             "INTEGRATION_CI",
             "gpt-6.1-sol/high",
             "MAX_ACTIVE_SUBAGENTS=2",
             "including PO_SOL",
-            "optional and never a merge dependency",
+            "Web review is optional and never a merge dependency",
             "Preserve #392 V7",
             "No nested agents",
             "mismatch means `NOT_VERIFIED`",
@@ -234,7 +234,8 @@ class GuidanceContractTests(unittest.TestCase):
             "PO_SOL=gpt-6.1-sol/high",
             "MAX_ACTIVE_SUBAGENTS=2, INCLUDING PO_SOL",
             "NO_NESTED_AGENTS=YES",
-            "WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY AFTER CUTOVER",
+            "CODEX_REVIEW_POLICY=PERMANENT_UNTIL_HUMAN_CHANGES_IT",
+            "WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY",
             "separate fresh contexts",
             "freezes its initial role-specific verdict",
             "before either reviewer receives the other's conclusions",
@@ -248,6 +249,9 @@ class GuidanceContractTests(unittest.TestCase):
                 self.assertIn(term, model)
         for term in (
             "Request ID / controlling attempt ID",
+            "gpt-6.1-sol/high",
+            "input/output/cached/reasoning token fields",
+            "`UNAVAILABLE`, never estimate",
             "Tree SHA",
             "one immutable evidence manifest per exact HEAD",
             "a mismatch or missing record is `NOT_VERIFIED`",
@@ -272,6 +276,13 @@ class GuidanceContractTests(unittest.TestCase):
             "unauthorized merge": ("REVIEWER_CANNOT_MERGE=YES", "Luna alone acts"),
         }
         policy = f"{agents}\n{model}\n{packet}".lower()
+        for obsolete in (
+            "after `codex_review_cutover=active`",
+            "until activation, codex reviews remain advisory",
+            "web-only security/integration route remains in force",
+        ):
+            with self.subTest(obsolete_policy=obsolete):
+                self.assertNotIn(obsolete, policy)
         for case, markers in negative_cases.items():
             with self.subTest(negative_case=case):
                 for marker in markers:

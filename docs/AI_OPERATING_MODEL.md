@@ -4,14 +4,13 @@ Status: durable principles with actor-specific history.
 
 Fresh latest #305/#429 governs execution. The later applicable #429/AGENTS rules
 already permit one bounded PO consultation, superseding the older general
-zero-subagent assumption in comment 5903652026. Comment 6188621435's Web-only
-Security/Integration route remains in force for other PRs until the dual-Codex
-cutover is merged, fresh-session readback succeeds, and #429 records
-`CODEX_REVIEW_CUTOVER=ACTIVE`. Human authorizes the two-Codex route for the
-governance PR itself. After activation, at most two subagents may be active per
-session, including PO_SOL. The two reviewers may run concurrently; no reviewer
-may create descendants. Luna remains the sole production executor, PO_SOL stays
-Sol/high, and the five scheduled Web SOL watchdogs remain unchanged.
+zero-subagent assumption in comment 5903652026. For every applicable material PR,
+the permanent mandatory review route is two independent Codex reviewers;
+ChatGPT Web reviews are optional and never a merge dependency. This policy remains
+in force until Human changes it. At most two subagents may be active per session,
+including PO_SOL. The two reviewers may run concurrently; no reviewer may create
+descendants. Luna remains the sole production executor, PO_SOL stays Sol/high,
+and the five scheduled Web SOL watchdogs remain unchanged.
 The accepted BVTL product run is #461, not an active historical control sequence.
 
 ```text
@@ -20,7 +19,8 @@ INTEGRATION_CI=gpt-6.1-sol/high
 PO_SOL=gpt-6.1-sol/high
 MAX_ACTIVE_SUBAGENTS=2, INCLUDING PO_SOL
 NO_NESTED_AGENTS=YES
-WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY AFTER CUTOVER
+CODEX_REVIEW_POLICY=PERMANENT_UNTIL_HUMAN_CHANGES_IT
+WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY
 ```
 
 This document defines durable operating rules. It intentionally does **not** cache mutable branch heads, PR state, CI state, runtime PID/HWND, or the current numbered control sequence. Read GitHub fresh for those facts.
@@ -118,7 +118,7 @@ The standard five SOL sentry roles are:
 
 These roles are advisory/lookahead, not a second execution control plane.
 
-### Chat-mode recovery and review result observability
+### Optional ChatGPT Web recovery and review result observability
 
 - If ChatGPT Web offers `Stay in chat` while inviting a switch to Work mode, select it at most once to remain in the current reviewer conversation, then verify the UI is back in that same conversation and inspect its state. This choice is only UI recovery; it does not prove submission, delivery, or receipt of a verdict.
 - After sending a review packet, verify it appears in the intended same-role conversation. Distinguish `SUBMITTED`, `GENERATING`, `COMPLETED`, `ERROR`, and `UNOBSERVABLE`; a thread ID or opaque `content-reference` placeholder alone is not inspectable reviewer output.
@@ -126,13 +126,13 @@ These roles are advisory/lookahead, not a second execution control plane.
 - Do not repeatedly click, poll, wake, or resend the same attempt. Do not bypass CAPTCHA, identity verification, or anti-automation/security challenges; stop and classify the required user interaction as a UI/Human Gate.
 - Preserve the same role and controlling request/attempt through permitted same-role failover. Retire the old channel for that packet before transfer; a late response is non-controlling. On a HEAD change, treat old results as historical and follow current #429 for new exact-head review identity.
 
-### Independent Codex Security and Integration reviews
+### Mandatory independent Codex Security and Integration reviews
 
-After #429 records `CODEX_REVIEW_CUTOVER=ACTIVE`, every applicable material PR uses two Codex reviewer invocations: `SECURITY_REDTEAM` and `INTEGRATION_CI`, each explicitly requested as `gpt-6.1-sol` with reasoning `high`. They use separate fresh contexts, independently read the current main and exact BASE/HEAD/TREE, relevant changed owners/tests, and the same compact immutable evidence manifest. Each freezes its initial role-specific verdict before either reviewer receives the other's conclusions. Neither may edit production files, operate AutoCAD/native CAD, approve its own work, or merge.
+Every applicable material PR uses two Codex reviewer invocations: `SECURITY_REDTEAM` and `INTEGRATION_CI`, each explicitly requested as `gpt-6.1-sol` with reasoning `high`. They use separate fresh contexts, independently read the current main and exact BASE/HEAD/TREE, relevant changed owners/tests, and the same compact immutable evidence manifest. Each freezes its initial role-specific verdict before either reviewer receives the other's conclusions. Neither may edit production files, operate AutoCAD/native CAD, approve its own work, or merge. This route remains mandatory until Human changes this policy; Web reviews are optional and never a merge dependency.
 
 Use no more than two active subagents per session, including PO_SOL. The two reviewers may run simultaneously. A PO call consumes one of those same slots; do not start it while both reviewers are active. No nested agents or reviewer-created workers. Routine work does not call PO. PO remains `gpt-6.1-sol/high` and advisory to execution; Luna remains the sole executor.
 
-Verify the effective model and effort from each fresh invocation's runtime record, not its role label or self-report. A mismatch, missing runtime record, or stale identity is `NOT_VERIFIED`; do not silently fall back. Bind each result and GitHub receipt to role, request ID, controlling attempt ID, current main, BASE, HEAD, and TREE. Any identity change makes the affected review stale. Reuse one shared immutable evidence manifest and objective test/CI receipts; reviewers independently inspect their scoped source and do not rerun full suites or native CAD tests without a distinct needed oracle. Web reviews are optional and never a merge dependency after activation; do not add redundant Web review rounds.
+Verify the effective model and effort from each fresh invocation's runtime record, not its role label or self-report. A mismatch, missing runtime record, or stale identity is `NOT_VERIFIED`; do not silently fall back. Bind each result and GitHub receipt to role, request ID, controlling attempt ID, current main, BASE, HEAD, and TREE. Any identity change makes the affected review stale. Reuse one shared immutable evidence manifest and objective test/CI receipts; reviewers independently inspect their scoped source and do not rerun full suites or native CAD tests without a distinct needed oracle. Web reviews remain optional and never a merge dependency; do not add redundant Web review rounds.
 
 `HEAD_CHANGE=TERMINAL_STALE` for the affected verdict. `REVIEWER_CANNOT_MERGE=YES`. Do not self-approve, let a reviewer mutate production/native state, or merge automatically. Reviewers publish decision-grade exact-head receipts; Luna alone acts on them after a fresh GitHub read.
 
