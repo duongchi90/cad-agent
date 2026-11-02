@@ -471,6 +471,9 @@ def merge_collinear_lines(
     # --- 1. Gom cụm các line cùng phương, cùng 1 đường thẳng (union-find) ---
     parent = list(range(n))
     cluster_members = {idx: {idx} for idx in range(n)}
+    cluster_sizes = [1] * n
+    conflict_node_for_root = list(range(n))
+    incompatible_clusters = {idx: set() for idx in range(n)}
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -483,6 +486,11 @@ def merge_collinear_lines(
         if ri == rj:
             return
 
+        conflict_i = conflict_node_for_root[ri]
+        conflict_j = conflict_node_for_root[rj]
+        if conflict_j in incompatible_clusters[conflict_i]:
+            return
+
         # Pairwise compatibility is not transitive: a chain of nearby
         # parallel detections can otherwise collapse distinct source strokes.
         # Require every cross-component pair to satisfy the same line test
@@ -493,14 +501,39 @@ def merge_collinear_lines(
                 first_angle, first_x, first_y = angles[first]
                 second_angle, second_x, second_y = angles[second]
                 if _angle_diff_mod_pi(first_angle, second_angle) > angle_tol:
+                    incompatible_clusters[conflict_i].add(conflict_j)
+                    incompatible_clusters[conflict_j].add(conflict_i)
                     return
                 if _perp_distance_point_to_line(
                     second_x, second_y, first_x, first_y, first_angle
                 ) > perp_tol_px:
+                    incompatible_clusters[conflict_i].add(conflict_j)
+                    incompatible_clusters[conflict_j].add(conflict_i)
                     return
 
-        parent[ri] = rj
-        cluster_members[rj].update(cluster_members.pop(ri))
+        # Rejected joins are monotonic: once two components contain an
+        # incompatible line pair, adding members cannot make them compatible.
+        # Carry that fact forward when either component grows, so later
+        # candidate edges do not rescan the same incompatible cross product.
+        if cluster_sizes[ri] < cluster_sizes[rj]:
+            ri, rj = rj, ri
+        parent[rj] = ri
+        cluster_sizes[ri] += cluster_sizes[rj]
+        cluster_members[ri].update(cluster_members.pop(rj))
+        conflict_i = conflict_node_for_root[ri]
+        conflict_j = conflict_node_for_root[rj]
+        if len(incompatible_clusters[conflict_i]) < len(incompatible_clusters[conflict_j]):
+            conflict_i, conflict_j = conflict_j, conflict_i
+        smaller_neighbors = incompatible_clusters[conflict_j]
+        larger_neighbors = incompatible_clusters[conflict_i]
+        for neighbor in smaller_neighbors:
+            incompatible_clusters[neighbor].discard(conflict_j)
+            incompatible_clusters[neighbor].add(conflict_i)
+        larger_neighbors.update(smaller_neighbors)
+        larger_neighbors.discard(conflict_i)
+        larger_neighbors.discard(conflict_j)
+        del incompatible_clusters[conflict_j]
+        conflict_node_for_root[ri] = conflict_i
 
     angles = []
     for line in raw_lines:
