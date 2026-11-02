@@ -205,6 +205,78 @@ class GuidanceContractTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, model)
 
+    def test_dual_codex_review_cutover_preserves_exact_head_independence_and_gates(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        packet = (ROOT / "docs/templates/REVIEW_PACKET.md").read_text(encoding="utf-8")
+
+        self.assertNotIn(
+            "Material Security and Integration reviews are independent ChatGPT Web reviews",
+            agents,
+        )
+        for term in (
+            "CODEX_REVIEW_CUTOVER=ACTIVE",
+            "SECURITY_REDTEAM",
+            "INTEGRATION_CI",
+            "gpt-6.1-sol/high",
+            "MAX_ACTIVE_SUBAGENTS=2",
+            "including PO_SOL",
+            "optional and never a merge dependency",
+            "Preserve #392 V7",
+            "No nested agents",
+            "mismatch means `NOT_VERIFIED`",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, agents)
+        for term in (
+            "SECURITY_REDTEAM=gpt-6.1-sol/high",
+            "INTEGRATION_CI=gpt-6.1-sol/high",
+            "PO_SOL=gpt-6.1-sol/high",
+            "MAX_ACTIVE_SUBAGENTS=2, INCLUDING PO_SOL",
+            "NO_NESTED_AGENTS=YES",
+            "WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY AFTER CUTOVER",
+            "separate fresh contexts",
+            "freezes its initial role-specific verdict",
+            "before either reviewer receives the other's conclusions",
+            "Do not self-approve, let a reviewer mutate production/native state, or merge automatically",
+            "is its single designated owner",
+            "Pass A and Pass B",
+            "does not use Pass A or the separate Security review as evidence for Pass B",
+            "Web reviews are optional and never a merge dependency",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+        for term in (
+            "Request ID / controlling attempt ID",
+            "Tree SHA",
+            "one immutable evidence manifest per exact HEAD",
+            "a mismatch or missing record is `NOT_VERIFIED`",
+            "mark the affected verdict stale",
+            "No self-approval",
+            "INTEGRATION_CI` owns its independent Pass A/Pass B double pass",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, packet)
+        for term in (
+            "aggregate root + reviewer + PO token usage and elapsed time",
+            "cached, and reasoning token fields only when runtime evidence exposes them",
+            "UNAVAILABLE",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+
+        negative_cases = {
+            "stale HEAD": ("HEAD_CHANGE", "stale"),
+            "cross-review contamination": ("other's conclusions", "does not use Pass A"),
+            "wrong model": ("effective model and effort", "NOT_VERIFIED"),
+            "unauthorized merge": ("REVIEWER_CANNOT_MERGE=YES", "Luna alone acts"),
+        }
+        policy = f"{agents}\n{model}\n{packet}".lower()
+        for case, markers in negative_cases.items():
+            with self.subTest(negative_case=case):
+                for marker in markers:
+                    self.assertIn(marker.lower(), policy)
+
 
     def test_disk_policy_checks_capacity_and_preserves_closed_evidence(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")

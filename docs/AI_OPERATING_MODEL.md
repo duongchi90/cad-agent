@@ -2,11 +2,26 @@
 
 Status: durable principles with actor-specific history.
 
-Fresh latest #305/#429 governs execution. #429 comment 5903652026 establishes
-SOLO_CODEX, SUBAGENTS_DISABLED=YES, MAX_ACTIVE_SUBAGENTS=0. The five scheduled
-Web SOLs remain independent radar/review only. Historical Luna/SOL actor names
-below explain prior delegation; they do not override this overlay. The accepted
-BVTL product run is #461, not an active historical control sequence.
+Fresh latest #305/#429 governs execution. The later applicable #429/AGENTS rules
+already permit one bounded PO consultation, superseding the older general
+zero-subagent assumption in comment 5903652026. Comment 6188621435's Web-only
+Security/Integration route remains in force for other PRs until the dual-Codex
+cutover is merged, fresh-session readback succeeds, and #429 records
+`CODEX_REVIEW_CUTOVER=ACTIVE`. Human authorizes the two-Codex route for the
+governance PR itself. After activation, at most two subagents may be active per
+session, including PO_SOL. The two reviewers may run concurrently; no reviewer
+may create descendants. Luna remains the sole production executor, PO_SOL stays
+Sol/high, and the five scheduled Web SOL watchdogs remain unchanged.
+The accepted BVTL product run is #461, not an active historical control sequence.
+
+```text
+SECURITY_REDTEAM=gpt-6.1-sol/high
+INTEGRATION_CI=gpt-6.1-sol/high
+PO_SOL=gpt-6.1-sol/high
+MAX_ACTIVE_SUBAGENTS=2, INCLUDING PO_SOL
+NO_NESTED_AGENTS=YES
+WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY AFTER CUTOVER
+```
 
 This document defines durable operating rules. It intentionally does **not** cache mutable branch heads, PR state, CI state, runtime PID/HWND, or the current numbered control sequence. Read GitHub fresh for those facts.
 
@@ -110,6 +125,22 @@ These roles are advisory/lookahead, not a second execution control plane.
 - A completed response is a terminal review only when the complete verdict is readable and bound to `ROLE`, `REQUEST_ID`, `CONTROLLING_ATTEMPT_ID`, `BASE`, `HEAD`, and `TREE`. If output is only an opaque reference, try one safe existing read path or inspect the canonical GitHub review receipt. If neither exposes the verdict, keep the review `PENDING` and classify observability as `UNKNOWN`; do not infer PASS from CI, thread state, or delivery metadata.
 - Do not repeatedly click, poll, wake, or resend the same attempt. Do not bypass CAPTCHA, identity verification, or anti-automation/security challenges; stop and classify the required user interaction as a UI/Human Gate.
 - Preserve the same role and controlling request/attempt through permitted same-role failover. Retire the old channel for that packet before transfer; a late response is non-controlling. On a HEAD change, treat old results as historical and follow current #429 for new exact-head review identity.
+
+### Independent Codex Security and Integration reviews
+
+After #429 records `CODEX_REVIEW_CUTOVER=ACTIVE`, every applicable material PR uses two Codex reviewer invocations: `SECURITY_REDTEAM` and `INTEGRATION_CI`, each explicitly requested as `gpt-6.1-sol` with reasoning `high`. They use separate fresh contexts, independently read the current main and exact BASE/HEAD/TREE, relevant changed owners/tests, and the same compact immutable evidence manifest. Each freezes its initial role-specific verdict before either reviewer receives the other's conclusions. Neither may edit production files, operate AutoCAD/native CAD, approve its own work, or merge.
+
+Use no more than two active subagents per session, including PO_SOL. The two reviewers may run simultaneously. A PO call consumes one of those same slots; do not start it while both reviewers are active. No nested agents or reviewer-created workers. Routine work does not call PO. PO remains `gpt-6.1-sol/high` and advisory to execution; Luna remains the sole executor.
+
+Verify the effective model and effort from each fresh invocation's runtime record, not its role label or self-report. A mismatch, missing runtime record, or stale identity is `NOT_VERIFIED`; do not silently fall back. Bind each result and GitHub receipt to role, request ID, controlling attempt ID, current main, BASE, HEAD, and TREE. Any identity change makes the affected review stale. Reuse one shared immutable evidence manifest and objective test/CI receipts; reviewers independently inspect their scoped source and do not rerun full suites or native CAD tests without a distinct needed oracle. Web reviews are optional and never a merge dependency after activation; do not add redundant Web review rounds.
+
+`HEAD_CHANGE=TERMINAL_STALE` for the affected verdict. `REVIEWER_CANNOT_MERGE=YES`. Do not self-approve, let a reviewer mutate production/native state, or merge automatically. Reviewers publish decision-grade exact-head receipts; Luna alone acts on them after a fresh GitHub read.
+
+When #392 V7 applies, the `INTEGRATION_CI` Codex context is its single designated owner: it completes V7 Pass A and Pass B on the same exact identity, independently deriving both Security and Integration sections in each pass, freezes Pass A before Pass B, and does not use Pass A or the separate Security review as evidence for Pass B. The separate `SECURITY_REDTEAM` verdict remains required and independent. Converge only after both role verdicts and V7 Pass A/B are frozen. This preserves V7's double-pass gate without adding a third reviewer.
+
+Mandatory review is only one part of acceptance. Keep hosted required checks terminal PASS, applicable canonical verification, current package/V7/native evidence, Human Gates, and exact-head currentness.
+
+At batch closure, record aggregate root + reviewer + PO token usage and elapsed time. Report input, output, cached, and reasoning token fields only when runtime evidence exposes them; label unavailable components `UNAVAILABLE` rather than estimating. Minimize cost by sharing the same immutable evidence manifest, restricting each context to its own invariant, reusing test/CI receipts, and avoiding redundant full-suite/native runs or unchanged-head reviews.
 
 ## 5. Reuse-first implementation law
 
