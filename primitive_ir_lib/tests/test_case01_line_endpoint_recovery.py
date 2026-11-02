@@ -14,6 +14,7 @@ import pytest
 from primitive_ir_lib.geometry_extraction import (
     _extend_line_endpoints_along_ink,
     extract_lines,
+    extract_raw_geometry,
 )
 
 
@@ -22,6 +23,51 @@ _FTC11_RENDER_SHA256 = "675f1a991dca7a133f0923bef6aa431f68e719f29780946f358904ac
 _FTC11_AXIS_START = (622.8, 467.88)
 _FTC11_AXIS_END = (1120.56, 180.6)
 _FTC11_GAP_PROJECTION = (191.174, 383.539)
+_FTC11_FROZEN_BASELINE_GAP_FRACTION = 0.6001101000130548
+_FTC11_GAP_ARITHMETIC_TOLERANCE = 1e-9
+_CASE01_IMAGE_ENV = "CAD_AGENT_CASE01_LINE_IMAGE"
+_CASE01_RENDER_SHA256 = "5732b6014ec1c1d3b05e14c598b43ebec84a4d6198951264215a69fb7b0a0bc8"
+_CASE01_UPPER_ENDPOINT = (153, 198, 168, 219)
+_CASE01_LOWER_ENDPOINT = (153, 369, 168, 390)
+_CASE01_CORRIDOR = (157, 219, 164, 369)
+
+
+def _line_intersects_rect(line, rect: tuple[int, int, int, int]) -> bool:
+    x0, y0, x1, y1 = rect
+    lx0, ly0, lx1, ly1 = line.bbox_px
+    return lx1 >= x0 and lx0 < x1 and ly1 >= y0 and ly0 < y1
+
+
+@pytest.mark.real_data
+def test_case01_tuned_hough_recovers_frozen_dimension_witness_endpoints() -> None:
+    image_value = os.environ.get(_CASE01_IMAGE_ENV)
+    if not image_value:
+        pytest.skip(f"set {_CASE01_IMAGE_ENV} to run the frozen CASE01 real-data regression")
+
+    image_path = Path(image_value)
+    assert image_path.is_file(), f"{_CASE01_IMAGE_ENV} does not point to a file: {image_path}"
+    image_bytes = image_path.read_bytes()
+    assert hashlib.sha256(image_bytes).hexdigest() == _CASE01_RENDER_SHA256
+    image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert image is not None
+    assert image.shape == (1684, 2382, 3)
+
+    cv2.setRNGSeed(0)
+    geometry = extract_raw_geometry(image, preset="real_scan_tuned_v1")
+    witnesses = []
+    for line in geometry.lines:
+        dx = abs(line.p2_px[0] - line.p1_px[0])
+        dy = abs(line.p2_px[1] - line.p1_px[1])
+        angle_from_vertical = math.degrees(math.atan2(dx, dy))
+        if (
+            angle_from_vertical <= 5.0
+            and _line_intersects_rect(line, _CASE01_CORRIDOR)
+            and _line_intersects_rect(line, _CASE01_UPPER_ENDPOINT)
+            and _line_intersects_rect(line, _CASE01_LOWER_ENDPOINT)
+        ):
+            witnesses.append(line)
+
+    assert witnesses, "the tuned Hough output omits the frozen CASE01 dimension endpoints"
 
 
 def test_ray_march_does_not_follow_an_adjacent_connected_glyph_stroke() -> None:
@@ -223,12 +269,30 @@ def test_extract_lines_rejects_nearly_saturated_perpendicular_junction(
     )
 
 
+@pytest.mark.parametrize(
+    ("stem_width", "stem_height", "line_thickness"),
+    [
+        (15, 41, 3),
+        (8, 41, 1), (8, 41, 3),
+        (9, 41, 1), (9, 41, 3),
+        (10, 41, 1), (10, 41, 3),
+        (8, 15, 1), (8, 15, 3), (10, 15, 1),
+    ],
+)
 def test_extract_lines_does_not_extend_through_a_perpendicular_stem(
     monkeypatch: pytest.MonkeyPatch,
+    stem_width: int,
+    stem_height: int,
+    line_thickness: int,
 ) -> None:
     gray = np.full((100, 150), 255, dtype=np.uint8)
-    gray[49:52, 20:81] = 0
-    gray[30:71, 81:96] = 0
+    if line_thickness == 1:
+        gray[50, 20:81] = 0
+    else:
+        start_y = 50 - line_thickness // 2
+        gray[start_y : start_y + line_thickness, 20:81] = 0
+    stem_start_y = 50 - stem_height // 2
+    gray[stem_start_y : stem_start_y + stem_height, 81 : 81 + stem_width] = 0
     image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     monkeypatch.setattr(
         "primitive_ir_lib.geometry_extraction.cv2.HoughLinesP",
@@ -354,6 +418,8 @@ def test_ftc11_interrupted_dimension_is_not_joined_across_its_frozen_text_gap() 
     axis_length = math.hypot(axis_dx, axis_dy)
     ux, uy = axis_dx / axis_length, axis_dy / axis_length
     nx, ny = -uy, ux
+    gap_start, gap_end = _FTC11_GAP_PROJECTION
+    intervals = []
     lines = extract_lines(image, hough_threshold=90, min_line_length=50, max_line_gap=5)
     for line in lines:
         dx = line.p2_px[0] - line.p1_px[0]
@@ -374,7 +440,28 @@ def test_ftc11_interrupted_dimension_is_not_joined_across_its_frozen_text_gap() 
             (point[0] - _FTC11_AXIS_START[0]) * ux + (point[1] - _FTC11_AXIS_START[1]) * uy
             for point in (line.p1_px, line.p2_px)
         ]
+        start, end = min(projections), max(projections)
         assert not (
-            min(projections) <= _FTC11_GAP_PROJECTION[0]
-            and max(projections) >= _FTC11_GAP_PROJECTION[1]
+            start <= gap_start
+            and end >= gap_end
         ), f"one extracted segment bridged FTC-11's 192 px text gap: {line.p1_px} -> {line.p2_px}"
+        intervals.append((start, end))
+
+    unions = []
+    for start, end in sorted(intervals):
+        if not unions or start > unions[-1][1]:
+            unions.append([start, end])
+        else:
+            unions[-1][1] = max(unions[-1][1], end)
+    gap_coverage = sum(
+        max(0.0, min(gap_end, end) - max(gap_start, start))
+        for start, end in unions
+    )
+    gap_fraction = gap_coverage / (gap_end - gap_start)
+    assert gap_fraction <= (
+        _FTC11_FROZEN_BASELINE_GAP_FRACTION + _FTC11_GAP_ARITHMETIC_TOLERANCE
+    ), (
+        f"detected lines cover {gap_fraction:.16f} of the FTC-11 text-only gap; "
+        f"frozen baseline is {_FTC11_FROZEN_BASELINE_GAP_FRACTION:.16f} "
+        f"with tolerance {_FTC11_GAP_ARITHMETIC_TOLERANCE:.1e}"
+    )
