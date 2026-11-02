@@ -138,8 +138,10 @@ class GuidanceContractTests(unittest.TestCase):
             "`DELIVERY_CONFIRMED`",
             "`RESPONSE_OBSERVED`",
             "`TERMINAL_CURRENT`",
+            "For mandatory Codex reviews, Luna records each frozen result as a GitHub exact-head receipt",
+            "For optional ChatGPT Web reviews only",
             "A GitHub request comment proves only `REQUEST_RECORDED`",
-            "required canonical review receipt must be present on GitHub",
+            "All following UI/liveness rules apply only to an optional ChatGPT Web channel",
             "about 5 minutes",
             "about 15 minutes",
             "at 30 minutes",
@@ -189,6 +191,15 @@ class GuidanceContractTests(unittest.TestCase):
     def test_chat_mode_recovery_does_not_inflate_delivery_or_verdict(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "docs/AI_OPERATING_MODEL.md#optional-chatgpt-web-recovery-and-review-result-observability",
+            agents,
+        )
+        self.assertIn(
+            "For mandatory Codex reviews, Luna records each frozen result as a GitHub exact-head receipt",
+            model,
+        )
+        self.assertIn("For optional ChatGPT Web reviews only", model)
         self.assertIn("one-time `Stay in chat`", agents)
         self.assertIn("opaque thread/content-reference are not delivery or a verdict", agents)
         for term in (
