@@ -46,6 +46,9 @@ _HOUGH_CIRCLE_TILE_MAX_SIDE_PX = 2_000
 # CASE01 render has dark line ink (grayscale <= 31) against paper (>= 220);
 # focused interruption and adjacency controls guard this operating range.
 _LINE_ENDPOINT_MAX_EXTENSION_PX = 30
+# Keep connected-edge extension bounded to the source-supported CASE01 endpoint gap;
+# longer near-tangent arc support can otherwise become a false raster line.
+_CONNECTED_CANNY_MAX_EXTENSION_PX = 12
 _LINE_ENDPOINT_DARK_THRESHOLD = 180
 _LINE_ENDPOINT_PERP_HALF_WIDTH_PX = 2
 _LINE_ENDPOINT_PROFILE_HALF_WIDTH_PX = 8
@@ -414,7 +417,7 @@ def _extend_hough_seed_with_connected_canny_support(
     if start_anchors.size:
         previous = int(start_anchors[0])
         outside = stations[
-            (stations < 0) & (stations >= -_LINE_ENDPOINT_MAX_EXTENSION_PX)
+            (stations < 0) & (stations >= -_CONNECTED_CANNY_MAX_EXTENSION_PX)
         ][::-1]
         for station_value in outside:
             station = int(station_value)
@@ -431,7 +434,7 @@ def _extend_hough_seed_with_connected_canny_support(
         previous = int(end_anchors[-1])
         outside = stations[
             (stations > seed_length)
-            & (stations <= seed_length + _LINE_ENDPOINT_MAX_EXTENSION_PX)
+            & (stations <= seed_length + _CONNECTED_CANNY_MAX_EXTENSION_PX)
         ]
         for station_value in outside:
             station = int(station_value)
