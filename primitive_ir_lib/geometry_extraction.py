@@ -374,6 +374,109 @@ def _split_line_at_source_gaps(
     ]
 
 
+def _extend_hough_seed_with_connected_canny_support(
+    segment: np.ndarray,
+    edge_x: np.ndarray,
+    edge_y: np.ndarray,
+    component_labels: np.ndarray,
+    source_gray: np.ndarray,
+    max_line_gap: int,
+) -> Tuple[float, float, float, float]:
+    """Extend a Hough seed only along its uniquely anchored Canny component."""
+    x1, y1, x2, y2 = (float(value) for value in segment)
+    dx, dy = x2 - x1, y2 - y1
+    seed_length = float(np.hypot(dx, dy))
+    if seed_length == 0.0 or edge_x.size == 0:
+        return x1, y1, x2, y2
+
+    ux, uy = dx / seed_length, dy / seed_length
+    nx, ny = -uy, ux
+    relative_x = edge_x.astype(np.float32) - x1
+    relative_y = edge_y.astype(np.float32) - y1
+    along = relative_x * ux + relative_y * uy
+    perpendicular = np.abs(relative_x * nx + relative_y * ny)
+    labels = component_labels[edge_y, edge_x]
+    on_seed = (
+        (perpendicular <= 1.0)
+        & (along >= 0.0)
+        & (along <= seed_length)
+    )
+    anchored_components = np.unique(labels[on_seed & (labels > 0)])
+    if anchored_components.size != 1:
+        return x1, y1, x2, y2
+
+    connected = (labels == anchored_components[0]) & (perpendicular <= 1.0)
+    stations = np.unique(np.rint(along[connected]).astype(np.int32))
+    max_step = max_line_gap + 1
+
+    start_station = 0
+    start_anchors = stations[(stations >= 0) & (stations <= max_step)]
+    if start_anchors.size:
+        previous = int(start_anchors[0])
+        outside = stations[
+            (stations < 0) & (stations >= -_LINE_ENDPOINT_MAX_EXTENSION_PX)
+        ][::-1]
+        for station_value in outside:
+            station = int(station_value)
+            if previous - station > max_step:
+                break
+            start_station = station
+            previous = station
+
+    end_station = seed_length
+    end_anchors = stations[
+        (stations <= seed_length) & (stations >= seed_length - max_step)
+    ]
+    if end_anchors.size:
+        previous = int(end_anchors[-1])
+        outside = stations[
+            (stations > seed_length)
+            & (stations <= seed_length + _LINE_ENDPOINT_MAX_EXTENSION_PX)
+        ]
+        for station_value in outside:
+            station = int(station_value)
+            if station - previous > max_step:
+                break
+            end_station = station
+            previous = station
+
+    def has_centered_source_ink(station: float) -> bool:
+        point_x = int(round(x1 + station * ux))
+        point_y = int(round(y1 + station * uy))
+        height, width = source_gray.shape
+        if not (0 <= point_x < width and 0 <= point_y < height):
+            return False
+        return int(source_gray[point_y, point_x]) <= _LINE_ENDPOINT_DARK_THRESHOLD
+
+    # Canny connectivity can join a touching parallel stroke at a corner. The
+    # proposed added stations must retain continuous source ink on the seed's
+    # exact axis; this prevents borrowing an offset adjacent stroke.
+    if start_station < 0:
+        validated_start = 0
+        for station in range(-1, int(np.floor(start_station)) - 1, -1):
+            if not has_centered_source_ink(float(station)):
+                break
+            validated_start = station
+        start_station = validated_start
+
+    if end_station > seed_length:
+        validated_end = seed_length
+        last_extension = int(np.ceil(end_station - seed_length))
+        for extension in range(1, last_extension + 1):
+            station = seed_length + extension
+            if not has_centered_source_ink(station):
+                break
+            validated_end = station
+        end_station = validated_end
+
+    return (
+        x1 + start_station * ux,
+        y1 + start_station * uy,
+        x1 + end_station * ux,
+        y1 + end_station * uy,
+    )
+
+
 def extract_lines(
     image_bgr: np.ndarray,
     canny_low: int = 50,
@@ -405,14 +508,21 @@ def extract_lines(
         for x1, y1, x2, y2 in seg
     ]
     max_hough_len = max(hough_lengths) if hough_lengths else 1.0
-    source_intervals = [
-        (interval, hough_length)
-        for (x1, y1, x2, y2), hough_length in zip(seg, hough_lengths)
-        for interval in _split_line_at_source_gaps(
-            source_gray, int(x1), int(y1), int(x2), int(y2)
+    edge_y, edge_x = np.nonzero(edges)
+    _, component_labels = cv2.connectedComponents(edges, connectivity=8)
+    source_intervals = []
+    for segment, hough_length in zip(seg, hough_lengths):
+        refined = _extend_hough_seed_with_connected_canny_support(
+            segment, edge_x, edge_y, component_labels, source_gray, max_line_gap,
         )
-        if interval[:2] != interval[2:]
-    ]
+        x1, y1, x2, y2 = (int(round(value)) for value in refined)
+        source_intervals.extend(
+            (interval, hough_length)
+            for interval in _split_line_at_source_gaps(
+                source_gray, x1, y1, x2, y2
+            )
+            if interval[:2] != interval[2:]
+        )
 
     # Confidence describes the Hough candidate, so splitting its geometry at
     # source gaps must not change its score or renormalize unrelated lines.
