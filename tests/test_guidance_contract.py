@@ -138,8 +138,10 @@ class GuidanceContractTests(unittest.TestCase):
             "`DELIVERY_CONFIRMED`",
             "`RESPONSE_OBSERVED`",
             "`TERMINAL_CURRENT`",
+            "For mandatory Codex reviews, Luna records each frozen result as a GitHub exact-head receipt",
+            "For optional ChatGPT Web reviews only",
             "A GitHub request comment proves only `REQUEST_RECORDED`",
-            "required canonical review receipt must be present on GitHub",
+            "All following UI/liveness rules apply only to an optional ChatGPT Web channel",
             "about 5 minutes",
             "about 15 minutes",
             "at 30 minutes",
@@ -189,6 +191,15 @@ class GuidanceContractTests(unittest.TestCase):
     def test_chat_mode_recovery_does_not_inflate_delivery_or_verdict(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "docs/AI_OPERATING_MODEL.md#optional-chatgpt-web-recovery-and-review-result-observability",
+            agents,
+        )
+        self.assertIn(
+            "For mandatory Codex reviews, Luna records each frozen result as a GitHub exact-head receipt",
+            model,
+        )
+        self.assertIn("For optional ChatGPT Web reviews only", model)
         self.assertIn("one-time `Stay in chat`", agents)
         self.assertIn("opaque thread/content-reference are not delivery or a verdict", agents)
         for term in (
@@ -204,6 +215,89 @@ class GuidanceContractTests(unittest.TestCase):
         ):
             with self.subTest(term=term):
                 self.assertIn(term, model)
+
+    def test_dual_codex_review_is_permanent_and_preserves_exact_head_independence_and_gates(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        packet = (ROOT / "docs/templates/REVIEW_PACKET.md").read_text(encoding="utf-8")
+
+        self.assertNotIn(
+            "Material Security and Integration reviews are independent ChatGPT Web reviews",
+            agents,
+        )
+        for term in (
+            "CODEX_REVIEW_POLICY=PERMANENT_UNTIL_HUMAN_CHANGES_IT",
+            "SECURITY_REDTEAM",
+            "INTEGRATION_CI",
+            "gpt-6.1-sol/high",
+            "MAX_ACTIVE_SUBAGENTS=2",
+            "including PO_SOL",
+            "Web review is optional and never a merge dependency",
+            "Preserve #392 V7",
+            "No nested agents",
+            "mismatch means `NOT_VERIFIED`",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, agents)
+        for term in (
+            "SECURITY_REDTEAM=gpt-6.1-sol/high",
+            "INTEGRATION_CI=gpt-6.1-sol/high",
+            "PO_SOL=gpt-6.1-sol/high",
+            "MAX_ACTIVE_SUBAGENTS=2, INCLUDING PO_SOL",
+            "NO_NESTED_AGENTS=YES",
+            "CODEX_REVIEW_POLICY=PERMANENT_UNTIL_HUMAN_CHANGES_IT",
+            "WEB_REVIEW=OPTIONAL; NEVER A MERGE DEPENDENCY",
+            "separate fresh contexts",
+            "freezes its initial role-specific verdict",
+            "before either reviewer receives the other's conclusions",
+            "Do not self-approve, let a reviewer mutate production/native state, or merge automatically",
+            "is its single designated owner",
+            "Pass A and Pass B",
+            "does not use Pass A or the separate Security review as evidence for Pass B",
+            "Web reviews are optional and never a merge dependency",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+        for term in (
+            "Request ID / controlling attempt ID",
+            "gpt-6.1-sol/high",
+            "input/output/cached/reasoning token fields",
+            "`UNAVAILABLE`, never estimate",
+            "Tree SHA",
+            "one immutable evidence manifest per exact HEAD",
+            "a mismatch or missing record is `NOT_VERIFIED`",
+            "mark the affected verdict stale",
+            "No self-approval",
+            "INTEGRATION_CI` owns its independent Pass A/Pass B double pass",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, packet)
+        for term in (
+            "aggregate root + reviewer + PO token usage and elapsed time",
+            "cached, and reasoning token fields only when runtime evidence exposes them",
+            "UNAVAILABLE",
+        ):
+            with self.subTest(term=term):
+                self.assertIn(term, model)
+
+        negative_cases = {
+            "stale HEAD": ("HEAD_CHANGE", "stale"),
+            "cross-review contamination": ("other's conclusions", "does not use Pass A"),
+            "wrong model": ("effective model and effort", "NOT_VERIFIED"),
+            "unauthorized merge": ("REVIEWER_CANNOT_MERGE=YES", "Luna alone acts"),
+        }
+        policy = f"{agents}\n{model}\n{packet}".lower()
+        for obsolete in (
+            "after `codex_review_cutover=active`",
+            "until activation, codex reviews remain advisory",
+            "web-only security/integration route remains in force",
+        ):
+            with self.subTest(obsolete_policy=obsolete):
+                self.assertNotIn(obsolete, policy)
+        for case, markers in negative_cases.items():
+            with self.subTest(negative_case=case):
+                for marker in markers:
+                    self.assertIn(marker.lower(), policy)
 
 
     def test_disk_policy_checks_capacity_and_preserves_closed_evidence(self) -> None:
