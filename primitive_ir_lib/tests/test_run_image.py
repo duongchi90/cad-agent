@@ -21,6 +21,41 @@ from primitive_ir_lib.validator import validate_document
 import primitive_ir_lib.run_image as run_image_module
 
 
+def test_default_run_deduplicates_exact_lines_before_dimension_association(tmp_path):
+    image_path = tmp_path / "page.png"
+    output_path = tmp_path / "ir.json"
+    assert cv2.imwrite(str(image_path), np.full((100, 140, 3), 255, dtype=np.uint8))
+    lines = [
+        RawLine("low", (10., 50.), (110., 50.), .5, (10., 50., 110., 50.)),
+        RawLine("high", (110., 50.), (10., 50.), .9, (10., 50., 110., 50.)),
+        RawLine("tie", (10., 50.), (110., 50.), .9, (10., 50., 110., 50.)),
+        RawLine("near", (10., 50.01), (110., 50.01), .8, (10., 50.01, 110., 50.01)),
+        RawLine("other-bbox", (10., 50.), (110., 50.), .8, (9., 49., 111., 51.)),
+    ]
+    text = RawText("dimension", "100", (50., 40., 70., 48.), 0., .95,
+                   "text_tesseract", parsed_value=100., semantic_role="dimension_value")
+    with patch("primitive_ir_lib.run_image.extract_raw_geometry", return_value=RawGeometry(lines=lines)), patch(
+        "primitive_ir_lib.run_image.extract_text_tesseract", return_value=[text]
+    ), patch("primitive_ir_lib.run_image._configure_tesseract"), patch(
+        "primitive_ir_lib.run_image.merge_collinear_lines", side_effect=AssertionError("merging is opt-in")
+    ):
+        run(str(image_path), str(output_path), scale_mm_per_px=1.,
+            ocr_rois=[(40, 30, 80, 49)], calibration_status="needs_verification")
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    ids = {p["id"] for p in payload["primitives"]}
+    assert {"high", "near", "other-bbox"} <= ids
+    assert not {"low", "tie"} & ids
+    assert len([p for p in payload["primitives"] if p["type"] == "line"]) == 3
+    assert payload["calibration"]["status"] == "needs_verification"
+    assert len(payload["cross_validations"]) == 1
+    association = payload["cross_validations"][0]
+    assert association["geometry_primitive_id"] == "high"
+    assert association["geometry_primitive_id"] in ids
+    assert association["geometry_measured_length"] == 100.
+    assert association["status"] == "confirmed"
+    assert validate_document(payload) == []
+
+
 def test_title_block_roi_includes_scale_label_above_lower_third():
     # Observed scale-label bounds in the frozen 6740x4768 Gunnerus render.
     x0, y0, x1, y1 = _title_block_roi(6740, 4768)
