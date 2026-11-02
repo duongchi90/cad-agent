@@ -283,6 +283,28 @@ def test_does_not_merge_parallel_lines_offset_perpendicular():
     assert len(merged) == 2
 
 
+def test_transitive_parallel_cluster_keeps_outer_stroke_within_tolerance():
+    # Each adjacent pair is within 6 px, but the first and last source strokes
+    # are 10 px apart. Single-link union must not collapse the outer stroke.
+    source_lines = [
+        _line((0, 0), (100, 0), "stroke-0"),
+        _line((0, 5), (100, 5), "stroke-5"),
+        _line((0, 10), (100, 10), "stroke-10"),
+    ]
+
+    merged = merge_collinear_lines(
+        source_lines, blocking_texts=[], perp_tol_px=6.0,
+    )
+
+    output_y = [
+        (line.p1_px[1] + line.p2_px[1]) / 2.0
+        for line in merged
+    ]
+    for source in source_lines:
+        source_y = (source.p1_px[1] + source.p2_px[1]) / 2.0
+        assert min(abs(source_y - candidate_y) for candidate_y in output_y) <= 6.0
+
+
 def _canvas_with_two_witness_lines_and_tick_marks(gap_start=276, gap_end=298, y=140):
     """Ảnh tổng hợp: 2 witness-line ngang với tick-mark chéo ở 2 đầu đối
     diện quanh khoảng trống ranh giới — KHÔNG có text nào (mô phỏng OCR thất

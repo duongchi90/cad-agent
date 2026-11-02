@@ -470,6 +470,7 @@ def merge_collinear_lines(
 
     # --- 1. Gom cụm các line cùng phương, cùng 1 đường thẳng (union-find) ---
     parent = list(range(n))
+    cluster_members = {idx: {idx} for idx in range(n)}
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -479,8 +480,27 @@ def merge_collinear_lines(
 
     def union(i: int, j: int) -> None:
         ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
+        if ri == rj:
+            return
+
+        # Pairwise compatibility is not transitive: a chain of nearby
+        # parallel detections can otherwise collapse distinct source strokes.
+        # Require every cross-component pair to satisfy the same line test
+        # before combining their projected intervals onto one reference axis.
+        for left in cluster_members[ri]:
+            for right in cluster_members[rj]:
+                first, second = sorted((left, right))
+                first_angle, first_x, first_y = angles[first]
+                second_angle, second_x, second_y = angles[second]
+                if _angle_diff_mod_pi(first_angle, second_angle) > angle_tol:
+                    return
+                if _perp_distance_point_to_line(
+                    second_x, second_y, first_x, first_y, first_angle
+                ) > perp_tol_px:
+                    return
+
+        parent[ri] = rj
+        cluster_members[rj].update(cluster_members.pop(ri))
 
     angles = []
     for line in raw_lines:
