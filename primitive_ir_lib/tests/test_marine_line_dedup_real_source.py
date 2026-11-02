@@ -13,7 +13,6 @@ from primitive_ir_lib.run_pdf import run_pdf
 from primitive_ir_lib.run_image import run
 from primitive_ir_lib.validator import validate_document
 
-pytestmark = pytest.mark.real_data
 _SOURCE_ENV = "CAD_AGENT_GUNNERUS_MARINE_PDF"
 _SOURCE_SHA256 = "c4ec405ff866bbec40cdc15a86a1165f255d583af4e0c592767d5f6d65cd7ae3"
 
@@ -56,6 +55,7 @@ def test_line_signature_ignores_extraction_timestamp():
     assert _line_signature(first) != _line_signature(different_source)
 
 
+@pytest.mark.real_data
 def test_gunnerus_pdf_merge_has_no_exact_duplicate_line_geometry(tmp_path: Path) -> None:
     source_value = os.environ.get(_SOURCE_ENV)
     if not source_value:
