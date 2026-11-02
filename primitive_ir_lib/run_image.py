@@ -31,7 +31,7 @@ from .calibration_registry import add_record, get_verified_scale
 from .cross_validation import cross_validate
 from .geometry_extraction import RawArc, RawLine, RawPdfLine, extract_raw_geometry
 from .io_utils import save_document
-from .line_merging import merge_collinear_lines
+from .line_merging import _deduplicate_exact_raw_lines, merge_collinear_lines
 from .text_extraction import RawText, detect_text_candidate_rois, extract_text_tesseract
 from .view_calibration import detect_view_candidates, parse_scale_label
 
@@ -697,6 +697,8 @@ def run(
                 break
     if merge_lines:
         raw_lines = merge_collinear_lines(raw_lines, blocking_texts=ocr_texts, image_bgr=image)
+    else:
+        raw_lines = _deduplicate_exact_raw_lines(raw_lines)
     pdf_layer_classifications = _classify_pdf_layer_line_witnesses(
         raw_lines, pdf_layer_line_witnesses or []
     )
