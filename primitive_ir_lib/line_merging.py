@@ -116,6 +116,98 @@ def _angle_mod_pi(dx: float, dy: float) -> float:
     return a
 
 
+def _freeze_metadata(value, _active_ids=None):
+    """Return a type-preserving key for metadata supported by the deduplicator.
+
+    Unknown objects use identity keys: preserving an extra line is safer than
+    treating custom equality or repr output as proof of metadata equivalence.
+    """
+    value_type = type(value)
+    # Keep actual runtime type identity, not user-controlled module/name labels.
+    type_tag = id(value_type)
+    if _active_ids is None:
+        _active_ids = set()
+
+    is_container = isinstance(value, (dict, list, tuple, set, frozenset))
+    tolist = getattr(value, "tolist", None)
+    is_array_like = callable(tolist)
+    if value_type is float and not math.isfinite(value):
+        # Non-finite values do not establish reliable metadata equivalence.
+        return ("ambiguous", object())
+    if is_container or is_array_like:
+        value_id = id(value)
+        if value_id in _active_ids:
+            # Preserve the records rather than failing or treating cycles as equal.
+            return ("ambiguous", object())
+        _active_ids.add(value_id)
+        try:
+            if isinstance(value, dict):
+                entries = tuple(
+                    sorted(
+                        ((_freeze_metadata(key, _active_ids), _freeze_metadata(item, _active_ids))
+                         for key, item in value.items()),
+                        key=repr,
+                    )
+                )
+                return ("dict", type_tag, entries)
+            if isinstance(value, list):
+                return ("list", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, tuple):
+                return ("tuple", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, set):
+                return ("set", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, frozenset):
+                return ("frozenset", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            dtype = getattr(value, "dtype", None)
+            shape = getattr(value, "shape", None)
+            return (
+                "array-like",
+                type_tag,
+                str(dtype) if dtype is not None else None,
+                tuple(shape) if shape is not None else None,
+                _freeze_metadata(tolist(), _active_ids),
+            )
+        finally:
+            _active_ids.remove(value_id)
+    if value is None or value_type in (bool, int, str, bytes):
+        return ("scalar", type_tag, value)
+    if value_type is float:
+        return ("scalar", type_tag, value.hex())
+    return ("identity", type_tag, id(value))
+
+
+def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
+    """Remove only exact undirected geometry duplicates with matching metadata.
+
+    Coordinates are never quantized or tolerance-matched. IDs and confidence
+    are excluded from the identity key; the highest-confidence record wins,
+    with original input order breaking confidence ties. Other present fields
+    are preserved as identity so provenance or semantic differences survive.
+    """
+    unique = {}
+    excluded = {"id", "p1_px", "p2_px", "confidence"}
+    for line in lines:
+        try:
+            confidence = float(line.confidence)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("RawLine confidence must be finite") from None
+        if not math.isfinite(confidence):
+            raise ValueError("RawLine confidence must be finite")
+        p1 = tuple(line.p1_px)
+        p2 = tuple(line.p2_px)
+        geometry = (p1, p2) if p1 <= p2 else (p2, p1)
+        metadata = tuple(sorted(
+            (name, _freeze_metadata(value))
+            for name, value in vars(line).items()
+            if name not in excluded
+        ))
+        key = (geometry, metadata)
+        current = unique.get(key)
+        if current is None or confidence > current[1]:
+            unique[key] = (line, confidence)
+    return [line for line, _ in unique.values()]
+
+
 def _angle_diff_mod_pi(a: float, b: float) -> float:
     d = abs(a - b) % math.pi
     return min(d, math.pi - d)
@@ -378,6 +470,10 @@ def merge_collinear_lines(
 
     # --- 1. Gom cụm các line cùng phương, cùng 1 đường thẳng (union-find) ---
     parent = list(range(n))
+    cluster_members = {idx: {idx} for idx in range(n)}
+    cluster_sizes = [1] * n
+    conflict_node_for_root = list(range(n))
+    incompatible_clusters = {idx: set() for idx in range(n)}
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -387,8 +483,57 @@ def merge_collinear_lines(
 
     def union(i: int, j: int) -> None:
         ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
+        if ri == rj:
+            return
+
+        conflict_i = conflict_node_for_root[ri]
+        conflict_j = conflict_node_for_root[rj]
+        if conflict_j in incompatible_clusters[conflict_i]:
+            return
+
+        # Pairwise compatibility is not transitive: a chain of nearby
+        # parallel detections can otherwise collapse distinct source strokes.
+        # Require every cross-component pair to satisfy the same line test
+        # before combining their projected intervals onto one reference axis.
+        for left in cluster_members[ri]:
+            for right in cluster_members[rj]:
+                first, second = sorted((left, right))
+                first_angle, first_x, first_y = angles[first]
+                second_angle, second_x, second_y = angles[second]
+                if _angle_diff_mod_pi(first_angle, second_angle) > angle_tol:
+                    incompatible_clusters[conflict_i].add(conflict_j)
+                    incompatible_clusters[conflict_j].add(conflict_i)
+                    return
+                if _perp_distance_point_to_line(
+                    second_x, second_y, first_x, first_y, first_angle
+                ) > perp_tol_px:
+                    incompatible_clusters[conflict_i].add(conflict_j)
+                    incompatible_clusters[conflict_j].add(conflict_i)
+                    return
+
+        # Rejected joins are monotonic: once two components contain an
+        # incompatible line pair, adding members cannot make them compatible.
+        # Carry that fact forward when either component grows, so later
+        # candidate edges do not rescan the same incompatible cross product.
+        if cluster_sizes[ri] < cluster_sizes[rj]:
+            ri, rj = rj, ri
+        parent[rj] = ri
+        cluster_sizes[ri] += cluster_sizes[rj]
+        cluster_members[ri].update(cluster_members.pop(rj))
+        conflict_i = conflict_node_for_root[ri]
+        conflict_j = conflict_node_for_root[rj]
+        if len(incompatible_clusters[conflict_i]) < len(incompatible_clusters[conflict_j]):
+            conflict_i, conflict_j = conflict_j, conflict_i
+        smaller_neighbors = incompatible_clusters[conflict_j]
+        larger_neighbors = incompatible_clusters[conflict_i]
+        for neighbor in smaller_neighbors:
+            incompatible_clusters[neighbor].discard(conflict_j)
+            incompatible_clusters[neighbor].add(conflict_i)
+        larger_neighbors.update(smaller_neighbors)
+        larger_neighbors.discard(conflict_i)
+        larger_neighbors.discard(conflict_j)
+        del incompatible_clusters[conflict_j]
+        conflict_node_for_root[ri] = conflict_i
 
     angles = []
     for line in raw_lines:
@@ -461,15 +606,27 @@ def merge_collinear_lines(
 
         if barrier_ts:
             clipped_segs = []
-            for t_min, t_max, line, _, _ in segs:
+            for t_min, t_max, line, p_at_min, p_at_max in segs:
                 cuts = [t_min] + [
                     barrier for barrier in barrier_ts
                     if t_min + 1e-6 < barrier < t_max - 1e-6
                 ] + [t_max]
-                dx, dy = math.cos(ref_angle), math.sin(ref_angle)
+                source_span = t_max - t_min
+                if source_span <= 1e-12:
+                    continue
+                source_dx = p_at_max[0] - p_at_min[0]
+                source_dy = p_at_max[1] - p_at_min[1]
                 for start, end in zip(cuts[:-1], cuts[1:]):
-                    p_start = (ref_x0 + dx * start, ref_y0 + dy * start)
-                    p_end = (ref_x0 + dx * end, ref_y0 + dy * end)
+                    start_fraction = (start - t_min) / source_span
+                    end_fraction = (end - t_min) / source_span
+                    p_start = (
+                        p_at_min[0] + source_dx * start_fraction,
+                        p_at_min[1] + source_dy * start_fraction,
+                    )
+                    p_end = (
+                        p_at_min[0] + source_dx * end_fraction,
+                        p_at_min[1] + source_dy * end_fraction,
+                    )
                     clipped_segs.append((start, end, line, p_start, p_end))
             segs = sorted(clipped_segs, key=lambda s: s[0])
 
@@ -541,7 +698,29 @@ def merge_collinear_lines(
 
         for group in merged_groups:
             if len(group) == 1:
-                result.append(group[0][2])
+                t_min, t_max, line, p_start, p_end = group[0]
+                source_ts = sorted((
+                    _project_point(*line.p1_px, ref_x0, ref_y0, ref_angle),
+                    _project_point(*line.p2_px, ref_x0, ref_y0, ref_angle),
+                ))
+                if (
+                    abs(t_min - source_ts[0]) <= 1e-6
+                    and abs(t_max - source_ts[1]) <= 1e-6
+                ):
+                    result.append(line)
+                else:
+                    result.append(RawLine(
+                        id=new_id("rawline-clipped"),
+                        p1_px=p_start,
+                        p2_px=p_end,
+                        confidence=line.confidence,
+                        bbox_px=(
+                            min(p_start[0], p_end[0]),
+                            min(p_start[1], p_end[1]),
+                            max(p_start[0], p_end[0]),
+                            max(p_start[1], p_end[1]),
+                        ),
+                    ))
                 continue
             t_min = min(s[0] for s in group)
             t_max = max(s[1] for s in group)
@@ -561,4 +740,4 @@ def merge_collinear_lines(
                 bbox_px=bbox,
             ))
 
-    return result
+    return _deduplicate_exact_raw_lines(result)

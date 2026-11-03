@@ -233,7 +233,12 @@ public sealed class OperationDispatcher
             return Failure(request, new[] { error }, startedAt);
         }
 
-        var snapshot = _context.DrawingGateway.ReadDrawingSetup();
+        var includeInventory = request.Parameters is not null
+            && request.Parameters.TryGetValue("include_model_space_inventory", out var includeInventoryValue)
+            && includeInventoryValue.ValueKind == JsonValueKind.True;
+        var snapshot = includeInventory
+            ? _context.DrawingGateway.ReadDrawingSetupWithModelSpaceInventory(request.DrawingSha256!)
+            : _context.DrawingGateway.ReadDrawingSetup();
         return CreateResult(
             request.RequestId!,
             "drawing_setup_audit",

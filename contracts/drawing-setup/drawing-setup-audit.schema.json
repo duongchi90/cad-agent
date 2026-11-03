@@ -177,6 +177,48 @@
           }
         }
       }
+    },
+    "model_space_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drawing_full_path", "drawing_sha256_before", "drawing_sha256_after",
+        "dbmod_before", "dbmod_after", "process_id", "plugin_version",
+        "plugin_binary_path", "plugin_binary_sha256", "entity_count",
+        "enumeration_complete", "bounds_complete", "entities"
+      ],
+      "properties": {
+        "drawing_full_path": { "type": "string", "minLength": 1 },
+        "drawing_sha256_before": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "drawing_sha256_after": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "dbmod_before": { "const": 0 },
+        "dbmod_after": { "const": 0 },
+        "process_id": { "type": "integer", "minimum": 1 },
+        "plugin_version": { "type": "string", "minLength": 1 },
+        "plugin_binary_path": { "type": "string", "minLength": 1 },
+        "plugin_binary_sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "entity_count": { "type": "integer", "minimum": 0, "maximum": 50000 },
+        "enumeration_complete": { "const": true },
+        "bounds_complete": { "type": "boolean" },
+        "entities": {
+          "type": "array", "maxItems": 50000,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["handle", "type", "bounds_status", "bounds"],
+            "properties": {
+              "handle": { "type": "string", "pattern": "^[0-9A-Fa-f]+$" },
+              "type": { "type": "string", "minLength": 1 },
+              "bounds_status": { "enum": ["BOUNDS_READ", "UNSUPPORTED", "UNREADABLE", "NONFINITE"] },
+              "bounds": {
+                "anyOf": [
+                  { "type": "array", "minItems": 6, "maxItems": 6, "items": { "type": "number" } },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
