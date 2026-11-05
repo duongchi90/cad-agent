@@ -392,6 +392,35 @@ def test_review_insert_passes_on_correctly_built_component():
     print("OK   test_review_insert_passes_on_correctly_built_component")
 
 
+def test_review_rejects_builder_component_moved_to_paperspace(tmp_path):
+    if not _HAS_EZDXF:
+        print("SKIP test_review_rejects_builder_component_moved_to_paperspace — chưa cài ezdxf")
+        return
+
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    document = ezdxf.readfile(out_path)
+    handle = build_result.component_handle_by_part_id[part_id]
+    entity = document.entitydb[handle]
+    paperspace = document.layouts.new("ReviewOverflow")
+    entity.move_to_layout(paperspace)
+    document.saveas(out_path)
+
+    reopened = ezdxf.readfile(out_path)
+    moved = reopened.entitydb[handle]
+    assert moved.dxf.owner != reopened.modelspace().block_record_handle
+
+    result = review_dxf(build_result)
+
+    assert not result.passed, result.format_report()
+    assert any(
+        mismatch.part_id == part_id
+        and mismatch.field == "layout"
+        and mismatch.expected == reopened.modelspace().block_record_handle
+        and mismatch.actual == moved.dxf.owner
+        for mismatch in result.component_mismatches
+    )
+
+
 def test_review_flags_insert_handle_not_found_after_tamper():
     if not _HAS_EZDXF:
         print("SKIP test_review_flags_insert_handle_not_found_after_tamper — chưa cài ezdxf")
