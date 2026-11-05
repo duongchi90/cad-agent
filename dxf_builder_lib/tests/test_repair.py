@@ -245,6 +245,45 @@ def test_repair_insert_skips_missing_block_definition():
         assert "không tồn tại" in result.details[0]
 
 
+def test_repair_insert_skips_component_outside_modelspace():
+    """A layout mismatch is reported safely; repair must not delete it through ModelSpace."""
+    if not _HAS_EZDXF:
+        print("SKIP test_repair_insert_skips_component_outside_modelspace — chưa cài ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        document = ezdxf.readfile(out_path)
+        handle = build_result.component_handle_by_part_id[part_id]
+        paperspace = document.layouts.new("ReviewOverflow")
+        document.entitydb[handle].move_to_layout(paperspace)
+        document.saveas(out_path)
+
+        review_before = review_dxf(build_result)
+        assert not review_before.passed
+        assert any(
+            mismatch.part_id == part_id and mismatch.field == "layout"
+            for mismatch in review_before.component_mismatches
+        )
+
+        repair_result = repair_insert_components(
+            build_result, review_before.component_mismatches,
+        )
+
+        assert repair_result.repaired_count == 0
+        assert repair_result.skipped_count == 1
+        assert repair_result.skipped_part_ids == [part_id]
+        assert "không thuộc ModelSpace" in repair_result.details[0]
+        reopened = ezdxf.readfile(out_path)
+        moved = reopened.entitydb[handle]
+        assert moved.dxf.owner != reopened.modelspace().block_record_handle
+        review_after = review_dxf(build_result)
+        assert not review_after.passed
+        assert any(
+            mismatch.part_id == part_id and mismatch.field == "layout"
+            for mismatch in review_after.component_mismatches
+        )
+
+
 def test_repair_insert_empty_mismatches_does_nothing():
     """Không có component_mismatch -> repair không làm gì, file giữ nguyên
     (tương tự test_repair_empty_mismatches_does_nothing nhưng cho INSERT)."""
