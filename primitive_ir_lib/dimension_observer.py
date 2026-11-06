@@ -230,6 +230,49 @@ def _read_cluster_text(
     return shifted_texts, shifted_evidence
 
 
+def _same_crop_witness(first_box, first, second_box, second):
+    if (first.dimension_line is None or first.dimension_line != second.dimension_line
+            or first.kind_hint != second.kind_hint or first.arrow_points != second.arrow_points
+            or first.leader_lines != second.leader_lines
+            or len(first.extension_lines) != 2 or len(second.extension_lines) != 2):
+        return False
+    def track(segment):
+        (x0, y0), (x1, y1) = segment
+        if x0 == x1 and y0 != y1:
+            return ("v", x0, min(y0, y1), max(y0, y1))
+        if y0 == y1 and x0 != x1:
+            return ("h", y0, min(x0, x1), max(x0, x1))
+        return None
+    left = sorted((track(line) for line in first.extension_lines), key=str)
+    right = sorted((track(line) for line in second.extension_lines), key=str)
+    if None in left or None in right or left[0][:2] == left[1][:2]:
+        return False
+    for a, b in zip(left, right):
+        if a[:2] != b[:2] or not ((a[2] <= b[2] and a[3] >= b[3]) or
+                                   (b[2] <= a[2] and b[3] >= a[3])):
+            return False
+        low_a, high_a = (first_box[1], first_box[3] - 1) if a[0] == "v" else (first_box[0], first_box[2] - 1)
+        low_b, high_b = (second_box[1], second_box[3] - 1) if b[0] == "v" else (second_box[0], second_box[2] - 1)
+        if a[2] != b[2] and not ((a[2] > b[2] and a[2] == low_a) or (b[2] > a[2] and b[2] == low_b)):
+            return False
+        if a[3] != b[3] and not ((a[3] < b[3] and a[3] == high_a) or (b[3] < a[3] and b[3] == high_b)):
+            return False
+    return True
+
+
+def _page_witness(image, box):
+    left, top, right, bottom = box
+    evidence = detect_dimension_geometry(image[top:bottom, left:right])
+    def shift(segment):
+        return tuple((x + left, y + top) for x, y in segment)
+    return DimensionGeometryEvidence(
+        dimension_line=shift(evidence.dimension_line) if evidence.dimension_line else None,
+        extension_lines=tuple(shift(line) for line in evidence.extension_lines),
+        arrow_points=tuple((x + left, y + top) for x, y in evidence.arrow_points),
+        leader_lines=tuple(shift(line) for line in evidence.leader_lines),
+        kind_hint=evidence.kind_hint, confidence=evidence.confidence)
+
+
 def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
     """Return stable reading-order candidate clusters without running OCR."""
     if not isinstance(image_bgr, np.ndarray) or image_bgr.ndim not in {2, 3}:
@@ -237,15 +280,54 @@ def detect_dimension_clusters(image_bgr: np.ndarray) -> list[DimensionCluster]:
     if image_bgr.size == 0:
         return []
     text_boxes = detect_text_candidate_rois(image_bgr)
-    candidate_boxes = [*text_boxes, *detect_dimension_geometry_regions(image_bgr)]
-    boxes = _merge_boxes(candidate_boxes)
+    geometry_boxes = detect_dimension_geometry_regions(image_bgr)
+    # Associate only original proposals: an enclosing rectangle created by a
+    # previous union is not evidence that another proposal actually overlaps.
+    proposals = []
+    attached = set()
+    for geometry in sorted(geometry_boxes):
+        gx0, gy0, gx1, gy1 = geometry
+        members = [geometry]
+        for text in text_boxes:
+            x0, y0, x1, y1 = text
+            if not (x1 < gx0 - 8 or x0 > gx1 + 8 or y1 < gy0 - 8 or y0 > gy1 + 8):
+                members.append(text)
+                attached.add(text)
+        proposals.append(tuple(members))
+    # Coalesce only pairwise identical witness evidence whose differing
+    # extension endpoints are demonstrably clipped by the crop boundary.
+    groups = []
+    for proposal in proposals:
+        box = proposal[0]
+        witness = _page_witness(image_bgr, box)
+        for group in groups:
+            if (proposal[1:] == group[0][0][1:] and
+                    all(_same_crop_witness(box, witness, prior[0][0], prior[1]) for prior in group)):
+                group.append((proposal, witness))
+                break
+        else:
+            groups.append([(proposal, witness)])
+    proposals = []
+    for group in groups:
+        geometries = [item[0][0] for item in group]
+        union = (min(b[0] for b in geometries), min(b[1] for b in geometries),
+                 max(b[2] for b in geometries), max(b[3] for b in geometries))
+        if len(group) > 1:
+            merged = _page_witness(image_bgr, union)
+            if not all(_same_crop_witness(union, merged, item[0][0], item[1]) for item in group):
+                proposals.extend(item[0] for item in group)
+                continue
+        proposals.append(tuple(geometries) + group[0][0][1:])
+    proposals.extend((text,) for text in text_boxes if text not in attached)
+    proposals.sort(key=lambda members: (min(b[1] for b in members), min(b[0] for b in members), members))
     return [
         DimensionCluster(
             cluster_id=f"DIMCLUSTER-{index:03d}",
-            bbox_px=box,
-            member_boxes=(box,),
+            bbox_px=(min(b[0] for b in members), min(b[1] for b in members),
+                     max(b[2] for b in members), max(b[3] for b in members)),
+            member_boxes=members,
         )
-        for index, box in enumerate(boxes, start=1)
+        for index, members in enumerate(proposals, start=1)
     ]
 
 

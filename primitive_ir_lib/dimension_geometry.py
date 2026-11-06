@@ -11,6 +11,8 @@ import numpy as np
 Point = tuple[float, float]
 Segment = tuple[Point, Point]
 
+_MIN_EXTENSION_LENGTH_PX = 28
+
 
 @dataclass(frozen=True)
 class DimensionGeometryEvidence:
@@ -194,7 +196,7 @@ def _detect_extension_lines(segments: list[Segment], dimension_line: Segment) ->
         candidates: list[Segment] = []
         for endpoint in endpoints:
             vertical = _merge_axis_segments(segments, axis="vertical", coordinate=endpoint, tolerance=28.0)
-            if vertical is None or _length(vertical) < 28.0:
+            if vertical is None or _length(vertical) < _MIN_EXTENSION_LENGTH_PX:
                 continue
             if min(vertical[0][1], vertical[1][1]) <= y + 8.0 and max(vertical[0][1], vertical[1][1]) >= y + 24.0:
                 candidates.append(vertical)
@@ -205,7 +207,7 @@ def _detect_extension_lines(segments: list[Segment], dimension_line: Segment) ->
     candidates = []
     for endpoint in endpoints:
         horizontal = _merge_axis_segments(segments, axis="horizontal", coordinate=endpoint, tolerance=28.0)
-        if horizontal is None or _length(horizontal) < 28.0:
+        if horizontal is None or _length(horizontal) < _MIN_EXTENSION_LENGTH_PX:
             continue
         if min(horizontal[0][0], horizontal[1][0]) <= x - 24.0 and max(horizontal[0][0], horizontal[1][0]) >= x - 8.0:
             candidates.append(horizontal)
@@ -499,6 +501,11 @@ def detect_dimension_geometry_regions(image_bgr: np.ndarray) -> tuple[tuple[int,
     # all page segments first can create a near-page ROI from unrelated lines.
     for segment in structural_segments:
         left, top, right, bottom = _segment_bbox(segment)
+        expanded = _segment_bbox(segment, padding=_MIN_EXTENSION_LENGTH_PX)
+        if _is_horizontal(segment):
+            top, bottom = expanded[1], expanded[3]
+        else:
+            left, right = expanded[0], expanded[2]
         clipped = (
             max(0, left),
             max(0, top),

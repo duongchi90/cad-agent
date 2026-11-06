@@ -114,10 +114,14 @@ def _write_snapshot_inputs(tmp_path: Path) -> tuple[Path, Path]:
     anchors.write_text(json.dumps({"anchors": matching_horizontal_anchors()}), encoding="utf-8")
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({
-        "schema_version": "dimension-observer-profile-1.0",
+        "schema_version": "dimension-observer-profile-1.1",
+        "source_sha256": sha256_file(tmp_path / "source.png"),
+        "page_id": "PAGE-001",
+        "view_id": "SIDE",
         "default_unit": "mm",
         "clusters": {
             "DIMCLUSTER-001": {
+                "bbox_px": list(horizontal_dimension_cluster().bbox_px),
                 "role": "REFERENCE",
                 "critical": False,
                 "blocker_scope": [],
@@ -125,6 +129,94 @@ def _write_snapshot_inputs(tmp_path: Path) -> tuple[Path, Path]:
         },
     }), encoding="utf-8")
     return anchors, profile
+
+
+def test_runner_refuses_ordinal_profile_when_cluster_correspondence_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from primitive_ir_lib.dimension_observer import DimensionCluster
+    source = write_synthetic_dimension_page(tmp_path / "source.png")
+    _, profile = _write_snapshot_inputs(tmp_path)
+    legacy = json.loads(profile.read_text(encoding="utf-8"))
+    legacy["schema_version"] = "dimension-observer-profile-1.0"
+    for key in ("source_sha256", "page_id", "view_id"):
+        legacy.pop(key)
+    legacy["clusters"]["DIMCLUSTER-001"].pop("bbox_px")
+    profile.write_text(json.dumps(legacy), encoding="utf-8")
+    old_cluster = horizontal_dimension_cluster()
+    replacement = DimensionCluster(cluster_id=old_cluster.cluster_id,
+                                   bbox_px=(0, 0, 60, 60),
+                                   member_boxes=((0, 0, 60, 60),))
+    assert replacement.bbox_px != old_cluster.bbox_px
+    monkeypatch.setattr(dimension_observer_run, "detect_dimension_clusters", lambda _: [replacement])
+    output = tmp_path / "run"
+    with pytest.raises(DimensionObserverRunError, match="profile|correspondence"):
+        run_dimension_observer(run_id="RUN-STALE-PROFILE", source_image=source,
+                               page_id="PAGE-001", view_id="SIDE", output_dir=output,
+                               profile_path=profile, ocr_reader=fake_ocr_4500)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("fault", ["none", "bbox", "source", "page", "view", "missing"])
+def test_bound_profile_validates_correspondence_before_applying_roles(tmp_path, monkeypatch, fault):
+    source = write_synthetic_dimension_page(tmp_path / "source.png")
+    cluster = horizontal_dimension_cluster()
+    monkeypatch.setattr(dimension_observer_run, "detect_dimension_clusters", lambda _: [cluster])
+    profile = {"schema_version": "dimension-observer-profile-1.1", "source_sha256": sha256_file(source),
+               "page_id": "PAGE-001", "view_id": "SIDE", "default_unit": "mm",
+               "clusters": {cluster.cluster_id: {"bbox_px": list(cluster.bbox_px), "role": "REFERENCE",
+                             "critical": False, "blocker_scope": ["SIDE-CABIN"]}}}
+    if fault == "bbox": profile["clusters"][cluster.cluster_id]["bbox_px"][2] -= 1
+    if fault == "source": profile["source_sha256"] = "0" * 64
+    if fault == "page": profile["page_id"] = "PAGE-OTHER"
+    if fault == "view": profile["view_id"] = "OTHER"
+    if fault == "missing": profile["clusters"]["DIMCLUSTER-999"] = profile["clusters"].pop(cluster.cluster_id)
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    kwargs = dict(run_id="RUN-BOUND-PROFILE", source_image=source, page_id="PAGE-001", view_id="SIDE",
+                  output_dir=tmp_path / "out", profile_path=profile_path, ocr_reader=fake_ocr_4500)
+    if fault != "none":
+        with pytest.raises(DimensionObserverRunError):
+            run_dimension_observer(**kwargs)
+        assert not kwargs["output_dir"].exists()
+    else:
+        register = read_visual_contract(run_dimension_observer(**kwargs), contract="dimension_register")
+        assert register["dimensions"][0]["role"] == "REFERENCE"
+        assert register["dimensions"][0]["critical"] is False
+        assert register["dimensions"][0]["blocker_scope"] == ["SIDE-CABIN"]
+
+
+@pytest.mark.parametrize("fault", ["duplicate_id", "duplicate_region", "swapped", "bool_bbox", "out_of_bounds"])
+def test_profile_binding_rejects_ambiguous_or_invalid_targets(fault):
+    from primitive_ir_lib.dimension_observer import DimensionCluster
+    first = DimensionCluster("DIMCLUSTER-001", (10, 10, 30, 30), ())
+    second = DimensionCluster("DIMCLUSTER-002", (50, 10, 70, 30), ())
+    entry = lambda box: {"bbox_px": list(box), "role": "REFERENCE", "critical": False, "blocker_scope": []}
+    profile = {"schema_version": "dimension-observer-profile-1.1", "source_sha256": "a" * 64,
+               "page_id": "PAGE-001", "view_id": "SIDE", "default_unit": "mm",
+               "clusters": {first.cluster_id: entry(first.bbox_px), second.cluster_id: entry(second.bbox_px)}}
+    clusters = [first, second]
+    if fault == "duplicate_id": clusters = [first, DimensionCluster(first.cluster_id, second.bbox_px, ())]
+    if fault == "duplicate_region": clusters = [first, DimensionCluster(second.cluster_id, first.bbox_px, ())]
+    if fault == "swapped":
+        profile["clusters"][first.cluster_id]["bbox_px"], profile["clusters"][second.cluster_id]["bbox_px"] = (
+            profile["clusters"][second.cluster_id]["bbox_px"], profile["clusters"][first.cluster_id]["bbox_px"])
+    if fault == "bool_bbox": profile["clusters"][first.cluster_id]["bbox_px"][0] = True
+    if fault == "out_of_bounds": profile["clusters"][first.cluster_id]["bbox_px"][2] = 101
+    with pytest.raises(DimensionObserverRunError):
+        dimension_observer_run._validate_profile_bindings(profile, clusters, source_sha256="a" * 64,
+                                                          page_id="PAGE-001", view_id="SIDE", width=100, height=100)
+
+
+def test_empty_legacy_profile_keeps_unit_default():
+    payload = {"schema_version": "dimension-observer-profile-1.0", "default_unit": "mm", "clusters": {}}
+    assert dimension_observer_run._read_profile(json.dumps(payload).encode())["default_unit"] == "mm"
+
+
+def test_profile_rejects_duplicate_json_fields():
+    payload = b'{"schema_version":"dimension-observer-profile-1.0","default_unit":"mm","clusters":{},"clusters":{}}'
+    with pytest.raises(DimensionObserverRunError, match="duplicate"):
+        dimension_observer_run._read_profile(payload)
 
 
 def test_runner_records_exact_anchor_and_profile_snapshot_hashes(
@@ -237,10 +329,14 @@ def test_runner_passes_profile_critical_flag_independently_of_scope(
     profile = tmp_path / "profile.json"
     profile.write_text(
         json.dumps({
-            "schema_version": "dimension-observer-profile-1.0",
+            "schema_version": "dimension-observer-profile-1.1",
+            "source_sha256": sha256_file(source),
+            "page_id": "PAGE-001",
+            "view_id": "SIDE",
             "default_unit": "mm",
             "clusters": {
                 "DIMCLUSTER-001": {
+                    "bbox_px": list(horizontal_dimension_cluster().bbox_px),
                     "role": "REFERENCE",
                     "critical": False,
                     "blocker_scope": ["SIDE-CABIN"],
