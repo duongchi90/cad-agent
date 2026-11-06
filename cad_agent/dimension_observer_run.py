@@ -75,22 +75,42 @@ def _read_anchors(snapshot: bytes | None) -> list[Mapping[str, object]]:
 def _read_profile(snapshot: bytes | None) -> dict[str, Any]:
     if snapshot is None:
         return {"default_unit": None, "clusters": {}}
-    payload = _read_json_snapshot(snapshot, label="observer profile")
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise DimensionObserverRunError(f"duplicate observer profile field: {key}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(snapshot.decode("utf-8"), object_pairs_hook=unique_fields)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DimensionObserverRunError("Cannot parse JSON snapshot: observer profile") from exc
     if not isinstance(payload, dict):
         raise DimensionObserverRunError("observer profile must be an object")
-    if set(payload) != {"schema_version", "default_unit", "clusters"}:
+    version = payload.get("schema_version")
+    expected = {"schema_version", "default_unit", "clusters"}
+    if version == "dimension-observer-profile-1.1":
+        expected |= {"source_sha256", "page_id", "view_id"}
+    if set(payload) != expected:
         raise DimensionObserverRunError("observer profile has unexpected properties")
-    if payload["schema_version"] != "dimension-observer-profile-1.0":
+    if version not in {"dimension-observer-profile-1.0", "dimension-observer-profile-1.1"}:
         raise DimensionObserverRunError("unsupported observer profile schema")
     if not isinstance(payload["default_unit"], str) or not payload["default_unit"].strip():
         raise DimensionObserverRunError("observer profile default_unit must be non-empty")
     clusters = payload["clusters"]
     if not isinstance(clusters, dict):
         raise DimensionObserverRunError("observer profile clusters must be an object")
+    if version == "dimension-observer-profile-1.0" and clusters:
+        raise DimensionObserverRunError("unbound profile 1.0 requires reviewed migration to 1.1")
     for cluster_id, entry in clusters.items():
         if not isinstance(cluster_id, str) or not isinstance(entry, dict):
             raise DimensionObserverRunError("observer profile cluster entries are malformed")
-        if set(entry) != {"role", "critical", "blocker_scope"}:
+        entry_keys = {"role", "critical", "blocker_scope"}
+        if version == "dimension-observer-profile-1.1":
+            entry_keys.add("bbox_px")
+        if set(entry) != entry_keys:
             raise DimensionObserverRunError(f"observer profile entry {cluster_id} is not closed")
         if entry["role"] not in {"DRIVING", "REFERENCE", "DERIVED"}:
             raise DimensionObserverRunError(f"observer profile entry {cluster_id} has invalid role")
@@ -100,7 +120,37 @@ def _read_profile(snapshot: bytes | None) -> dict[str, Any]:
             isinstance(item, str) and item for item in entry["blocker_scope"]
         ):
             raise DimensionObserverRunError(f"observer profile entry {cluster_id} blocker_scope is malformed")
-    return {"default_unit": payload["default_unit"], "clusters": clusters}
+    return payload
+
+
+def _validate_profile_bindings(profile, clusters, *, source_sha256, page_id, view_id, width, height):
+    if profile.get("schema_version") != "dimension-observer-profile-1.1":
+        return
+    if (profile.get("source_sha256"), profile.get("page_id"), profile.get("view_id")) != (
+        source_sha256, page_id, view_id
+    ):
+        raise DimensionObserverRunError("profile source/page/view correspondence mismatch")
+    by_id = {cluster.cluster_id: cluster for cluster in clusters}
+    if len(by_id) != len(clusters):
+        raise DimensionObserverRunError("profile correspondence has duplicate detected IDs")
+    region_counts = {}
+    for cluster in clusters:
+        region = tuple(cluster.bbox_px)
+        region_counts[region] = region_counts.get(region, 0) + 1
+    seen = set()
+    for cluster_id, entry in profile["clusters"].items():
+        bbox = entry["bbox_px"]
+        if (not isinstance(bbox, list) or len(bbox) != 4
+                or any(type(value) is not int for value in bbox)):
+            raise DimensionObserverRunError("profile bbox must contain four integers")
+        x0, y0, x1, y1 = bbox
+        if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+            raise DimensionObserverRunError("profile bbox is outside source image")
+        key = tuple(bbox)
+        if (key in seen or region_counts.get(key) != 1 or cluster_id not in by_id
+                or tuple(by_id[cluster_id].bbox_px) != key):
+            raise DimensionObserverRunError("profile cluster correspondence mismatch or duplicate")
+        seen.add(key)
 
 
 def _default_ocr_reader(*, lang: str, tesseract_cmd: str | None) -> OcrReader:
@@ -180,6 +230,8 @@ def run_dimension_observer(
     profile_snapshot, profile_sha256 = _snapshot_input(profile_input_path, label="profile")
     anchors = _read_anchors(anchors_snapshot)
     profile = _read_profile(profile_snapshot)
+    _validate_profile_bindings(profile, clusters, source_sha256=source_sha256,
+                               page_id=page_id, view_id=view_id, width=width, height=height)
     reader = ocr_reader or _default_ocr_reader(lang=ocr_lang, tesseract_cmd=tesseract_cmd)
 
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=str(output.parent)))
