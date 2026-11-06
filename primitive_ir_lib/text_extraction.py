@@ -256,7 +256,7 @@ def detect_text_candidate_rois(
 
 
 def _short_ink_bridge(
-    image_bgr: np.ndarray, left: Bbox, right: Bbox
+    labels: np.ndarray, stats: np.ndarray, left: Bbox, right: Bbox
 ) -> bool:
     """Require a small visible ink component, such as a hyphen, between ROIs."""
     x0, y0, x1, y1 = left
@@ -272,15 +272,19 @@ def _short_ink_bridge(
     if gap_width <= 0 or band_height <= 0:
         return False
 
-    gray = cv2.cvtColor(image_bgr[gy0:gy1, gx0:gx1], cv2.COLOR_BGR2GRAY)
-    component_count, _, stats, _ = cv2.connectedComponentsWithStats(
-        (gray < 220).astype(np.uint8), connectivity=8
-    )
     min_area = max(2, math.ceil(0.002 * gap_width * band_height))
-    for component_index in range(1, component_count):
-        _, _, width, height, area = stats[component_index]
+    for component_index in np.unique(labels[gy0:gy1, gx0:gx1]):
+        if component_index == 0:
+            continue
+        component_x, component_y, width, height, area = stats[component_index]
         if (
-            area >= min_area
+            # Measure the whole component: clipping a long drafting line to
+            # the gap must not manufacture a short punctuation witness.
+            gx0 <= component_x
+            and component_x + width <= gx1
+            and gy0 <= component_y
+            and component_y + height <= gy1
+            and area >= min_area
             and width >= max(2, 0.05 * band_height)
             and width <= 0.5 * band_height
             and height >= 0.06 * band_height
@@ -299,6 +303,12 @@ def _merge_punctuation_joined_rois(
 ) -> List[Bbox]:
     """Join same-line OCR ROIs only when short visible ink bridges their gap."""
     pending = sorted(rois, key=lambda roi: (roi[1], roi[0]))
+    if len(pending) < 2:
+        return pending
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (gray < 220).astype(np.uint8), connectivity=8
+    )
     merged_rois: List[Bbox] = []
     while pending:
         current = pending.pop(0)
@@ -317,7 +327,7 @@ def _merge_punctuation_joined_rois(
                     overlap < min_vertical_overlap
                     or gap <= 0
                     or gap > max_gap_ratio * smaller_height
-                    or not _short_ink_bridge(image_bgr, current, other)
+                    or not _short_ink_bridge(labels, stats, current, other)
                 ):
                     continue
                 context_px = max(2, math.ceil(context_height_ratio * smaller_height))
