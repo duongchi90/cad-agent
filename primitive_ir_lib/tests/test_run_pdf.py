@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+import cv2
+import numpy as np
 import pytest
 
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
@@ -105,6 +107,38 @@ def test_white_text_on_filled_background_keeps_outline_support():
         assert boxes
         assert all(box[0] > 40 and box[2] < 440 and box[1] > 40 and box[3] < 240
                    for box in boxes)
+
+
+def test_clipped_rectangle_paint_cannot_delete_real_geometry_inside_glyph():
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    from primitive_ir_lib.run_image import _exclude_text_ink_candidates
+    from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+    renders, results = [], []
+    streams = (b"q 0 g 42 65 32 1 re f Q",
+               b"q 42 65 32 1 re W n 0 g 10 10 220 130 re f Q")
+    for stream in streams:
+        with fitz.open() as document:
+            page = document.new_page(width=250, height=150)
+            page.insert_text((40, 80), "W", fontsize=39)
+            xref = document.get_new_xref()
+            document.update_object(xref, "<<>>")
+            document.update_stream(xref, stream)
+            contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+            document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            renders.append(pixmap.samples)
+            image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), dtype=np.uint8),
+                                 cv2.IMREAD_COLOR)
+            geometry = extract_raw_geometry(image)
+            assert len(geometry.lines) == 2
+            expected = [(line.p1_px, line.p2_px) for line in geometry.lines]
+            boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+            _exclude_text_ink_candidates(geometry, boxes, image.shape)
+            observed = [(line.p1_px, line.p2_px) for line in geometry.lines]
+            assert observed == expected
+            results.append(observed)
+    assert renders[0] == renders[1]
+    assert results[0] == results[1]
 
 
 def test_visible_pdf_text_paint_does_not_become_raster_geometry(tmp_path):

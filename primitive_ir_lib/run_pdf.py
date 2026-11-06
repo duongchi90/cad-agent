@@ -200,7 +200,18 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
         protected_rects = list(images)
         segments = []
         for drawing in drawings:
-            if drawing.get("type") in {"clip", "group"}:
+            if drawing.get("type") == "clip":
+                # Clipping can turn a uniform rectangle interior into real
+                # edges. Protect every clip boundary even if the clipped
+                # paint's own path is far outside the glyph box.
+                items = drawing.get("items", ())
+                if not items or any(item[0] not in {"l", "re", "qu"} for item in items):
+                    protected_rects.append(fitz.Rect(drawing["scissor"]))
+                else:
+                    segments.extend((a, b, 1.0 / pixel_scale)
+                                    for a, b in _drawing_segments([drawing]))
+                continue
+            if drawing.get("type") == "group":
                 continue
             if drawing.get("type") not in {"s", "f", "fs"}:
                 return [], "unsupported_graphics_paint"
