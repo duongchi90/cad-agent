@@ -562,6 +562,73 @@ def _pdf_line_overlaps_raster(
     return False
 
 
+
+def _text_ink_mask(image_shape, boxes):
+    height, width = image_shape[:2]
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for x0, y0, x1, y1 in boxes:
+        left, top = max(0, math.floor(x0)), max(0, math.floor(y0))
+        right, bottom = min(width, math.ceil(x1)), min(height, math.ceil(y1))
+        if left < right and top < bottom:
+            mask[top:bottom, left:right] = 1
+    return mask
+
+
+def _candidate_points_covered(points, mask):
+    if points.size == 0 or not np.isfinite(points).all():
+        return False
+    height, width = mask.shape
+    rounded = np.rint(points).astype(np.int64)
+    if (
+        (rounded[:, 0] < 0).any()
+        or (rounded[:, 0] >= width).any()
+        or (rounded[:, 1] < 0).any()
+        or (rounded[:, 1] >= height).any()
+    ):
+        return False
+    return bool(mask[rounded[:, 1], rounded[:, 0]].all())
+
+
+def _line_candidate_samples(line, step_px=1.5):
+    x0, y0 = line.p1_px
+    x1, y1 = line.p2_px
+    count = max(1, math.ceil(math.hypot(x1 - x0, y1 - y0) / step_px))
+    t = np.linspace(0.0, 1.0, count + 1)
+    return np.column_stack((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+
+
+def _circle_candidate_samples(circle, count=16):
+    angles = np.linspace(0.0, 2.0 * math.pi, count, endpoint=False)
+    perimeter = np.column_stack(
+        (
+            circle.center_px[0] + circle.radius_px * np.cos(angles),
+            circle.center_px[1] + circle.radius_px * np.sin(angles),
+        )
+    )
+    return np.vstack((np.asarray(circle.center_px, dtype=np.float64), perimeter))
+
+
+def _exclude_text_ink_candidates(geometry, boxes, image_shape):
+    if not boxes:
+        return 0, 0
+    mask = _text_ink_mask(image_shape, boxes)
+    lines = [
+        line
+        for line in geometry.lines
+        if not _candidate_points_covered(_line_candidate_samples(line), mask)
+    ]
+    circles = [
+        circle
+        for circle in geometry.circles
+        if not _candidate_points_covered(_circle_candidate_samples(circle), mask)
+    ]
+    removed_lines = len(geometry.lines) - len(lines)
+    removed_circles = len(geometry.circles) - len(circles)
+    geometry.lines = lines
+    geometry.circles = circles
+    return removed_lines, removed_circles
+
+
 def run(
     image_path: str,
     output_path: str,
@@ -591,6 +658,7 @@ def run(
     pdf_vector_lines: Optional[List[RawPdfLine]] = None,
     source_page_index: int = 0,
     image_bytes: Optional[bytes] = None,
+    pdf_text_ink_boxes: Optional[List[Tuple[float, float, float, float]]] = None,
 ) -> str:
     """Extract a validated Primitive IR JSON from one PNG/JPG drawing image.
 
@@ -642,6 +710,12 @@ def run(
         )
     else:
         raw_geometry = extract_raw_geometry(image, preset=preset)
+    removed_text_lines, removed_text_circles = _exclude_text_ink_candidates(
+        raw_geometry, pdf_text_ink_boxes, image.shape
+    )
+    if text_conflict_report is not None:
+        text_conflict_report["text_ink_excluded_line_count"] = removed_text_lines
+        text_conflict_report["text_ink_excluded_circle_count"] = removed_text_circles
     effective_rois = list(ocr_rois) if ocr_rois else []
     if auto_ocr_roi or (auto_calibrate and not effective_rois):
         detected = detect_text_candidate_rois(image)
