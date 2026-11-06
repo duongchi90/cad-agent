@@ -289,18 +289,41 @@ def test_missing_or_invalid_stroke_paint_bounds_disable_exclusions(bounds):
 
 
 @pytest.mark.real_data
-@pytest.mark.parametrize("variable,source_hash,render_hash,scale,merge,max_lines,circles", [
-    ("CAD_AGENT_CASE01_TEXT_INK_PDF",
-     "1970e92e81d888437f55369c4605d0a5f71127177898fb6d5012084ae22fe162",
-     "8d3953028aca1570e18b951c1e6c9b53b9dee72f8215465087c46c6dca1b8252",
-     0.176388888889, True, 915, 0),
-    ("CAD_AGENT_FASTENING_BAR_PDF",
-     "bf374d514e47f25bf82b9227145e9c057ef398cb76226b2fd4be662b0596b1cd",
-     "e4fc9c6478a66962ae9756c0c2e860e52f0ac87d9195fec305b48c592e531d26",
-     1.0, False, 365, 2),
-])
+@pytest.mark.parametrize(
+    "variable,source_hash,render_hash,scale,merge,max_lines,circles,expected_geometry_sha256",
+    [
+        (
+            "CAD_AGENT_CASE01_TEXT_INK_PDF",
+            "1970e92e81d888437f55369c4605d0a5f71127177898fb6d5012084ae22fe162",
+            "8d3953028aca1570e18b951c1e6c9b53b9dee72f8215465087c46c6dca1b8252",
+            0.176388888889,
+            True,
+            915,
+            0,
+            None,
+        ),
+        (
+            "CAD_AGENT_FASTENING_BAR_PDF",
+            "bf374d514e47f25bf82b9227145e9c057ef398cb76226b2fd4be662b0596b1cd",
+            "e4fc9c6478a66962ae9756c0c2e860e52f0ac87d9195fec305b48c592e531d26",
+            1.0,
+            False,
+            365,
+            2,
+            "e009aba65514170f0b42d468facf3da094d53765f019b0a1f4ffd73f07ca51e3",
+        ),
+    ],
+)
 def test_real_pdf_text_ink_reduction_preserves_text_and_source_circles(
-    tmp_path, variable, source_hash, render_hash, scale, merge, max_lines, circles
+    tmp_path,
+    variable,
+    source_hash,
+    render_hash,
+    scale,
+    merge,
+    max_lines,
+    circles,
+    expected_geometry_sha256,
 ):
     source = os.environ.get(variable)
     if not source:
@@ -316,9 +339,33 @@ def test_real_pdf_text_ink_reduction_preserves_text_and_source_circles(
     assert entry["rendered_png_sha256"] == render_hash
     payload = json.loads((output / "primitive_ir/page_01.json").read_text())
     primitives = payload["primitives"]
-    assert sum(p["type"] == "line" for p in primitives) < max_lines
+    line_count = sum(p["type"] == "line" for p in primitives)
+    if expected_geometry_sha256 is None:
+        assert line_count < max_lines
+        assert entry["text_ink_excluded_line_count"] > 0
+    else:
+        # Fastening Bar is a no-loss control: this source has no admitted
+        # exclusion boxes, so geometry must remain exactly equal to current
+        # main's source/render-bound baseline rather than being forced to show
+        # an improvement that the paint evidence does not support. The digest
+        # is frozen from current main 07c80c0 on the same source/render.
+        assert line_count == max_lines
+        geometry = sorted(
+            (
+                primitive["type"],
+                json.dumps(primitive["geometry"], sort_keys=True, separators=(",", ":")),
+            )
+            for primitive in primitives
+            if primitive["type"] in {"line", "circle"}
+        )
+        geometry_sha256 = hashlib.sha256(
+            json.dumps(geometry, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        assert geometry_sha256 == expected_geometry_sha256
+        assert entry["pdf_text_ink_exclusion_box_count"] == 0
+        assert entry["text_ink_excluded_line_count"] == 0
+        assert entry["text_ink_excluded_circle_count"] == 0
     assert sum(p["type"] == "circle" for p in primitives) == circles
-    assert entry["text_ink_excluded_line_count"] > 0
     assert not any(p["type"] == "dimension" for p in primitives)
     assert sum(p["type"] == "text" for p in primitives) == (114 if merge else 14)
 
