@@ -212,6 +212,82 @@ def test_visible_pdf_text_paint_does_not_become_raster_geometry(tmp_path):
     assert payload["cross_validations"] == []
 
 
+@pytest.mark.parametrize("kind", ["closed_cubic_miter", "nonuniform_ctm"])
+@pytest.mark.parametrize("cropped_rotated", [False, True])
+def test_actual_stroke_paint_is_never_glyph_only(kind, cropped_rotated):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    from primitive_ir_lib.run_image import _exclude_text_ink_candidates, _text_ink_mask
+    from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+    if kind == "closed_cubic_miter":
+        size, position, fontsize = (220, 160), (65, 90), 30
+        stream = b"q 2 w 30 M 0 j 100 80 m 140 78 140 82 100 80 c h S Q"
+    else:
+        size, position, fontsize = (250, 150), (40, 80), 39
+        stream = b"q 40 0 0 1 0 0 cm 1 w 0 G 2.225 70 m 2.225 95 l S Q"
+    images = []
+    for text in (True, False):
+        with fitz.open() as document:
+            page = document.new_page(width=size[0], height=size[1])
+            if text:
+                page.insert_text(position, "W", fontsize=fontsize)
+            xref = document.get_new_xref()
+            document.update_object(xref, "<<>>")
+            document.update_stream(xref, stream)
+            contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+            document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+            scale, clip = 2, None
+            if cropped_rotated:
+                page.set_cropbox(fitz.Rect(10.25, 5.5, size[0] - 5, size[1] - 5))
+                page.set_rotation(90)
+                scale = 1.25
+                clip = fitz.Rect(5, 5, page.rect.width - 5, page.rect.height - 5)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+            image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), np.uint8), 1)
+            images.append(image)
+            if text:
+                geometry = extract_raw_geometry(image)
+                before = [(line.p1_px, line.p2_px) for line in geometry.lines]
+                assert before or cropped_rotated
+                boxes, _ = _page_text_ink_exclusion_boxes(
+                    page, scale, (pixmap.x, pixmap.y), pixmap
+                )
+                mask = _text_ink_mask(image.shape, boxes)
+                _exclude_text_ink_candidates(geometry, boxes, image.shape)
+                after = [(line.p1_px, line.p2_px) for line in geometry.lines]
+    # An independent graphic-only render is the oracle, not drawing metadata.
+    graphic_pixels = np.min(images[1], axis=2) < 220
+    assert np.count_nonzero(graphic_pixels & mask.astype(bool)) == 0
+    assert after == before
+    if kind == "nonuniform_ctm":
+        with fitz.open() as control:
+            page = control.new_page(width=size[0], height=size[1])
+            page.insert_text(position, "W", fontsize=fontsize)
+            xref = control.get_new_xref()
+            control.update_object(xref, "<<>>")
+            control.update_stream(xref, b"q 40 w 0 G 89 70 m 89 95 l S Q")
+            contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+            control.xref_set_key(page.xref, "Contents", f"[{contents}]")
+            if cropped_rotated:
+                page.set_cropbox(fitz.Rect(10.25, 5.5, size[0] - 5, size[1] - 5))
+                page.set_rotation(90)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+            equivalent = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), np.uint8), 1)
+            assert np.array_equal(equivalent, images[0])
+
+
+@pytest.mark.parametrize("bounds", [None, (0, 0, float("nan"), 20), (50, 50, 10, 10)])
+def test_missing_or_invalid_stroke_paint_bounds_disable_exclusions(bounds):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "8", fontsize=14)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        records = page.get_bboxlog() + [("stroke-path", bounds)]
+        with patch.object(page, "get_bboxlog", return_value=records):
+            boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        assert boxes == []
+
+
 @pytest.mark.real_data
 @pytest.mark.parametrize("variable,source_hash,render_hash,scale,merge,max_lines,circles", [
     ("CAD_AGENT_CASE01_TEXT_INK_PDF",

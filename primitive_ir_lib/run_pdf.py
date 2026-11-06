@@ -184,6 +184,19 @@ def _text_char_has_visible_ink(pixels, box, color):
     return bool(np.count_nonzero(visible) >= max(1, int(char.size * 0.002)))
 
 
+def _text_ink_render_bounds(rect, page, pixel_scale, pixmap_origin):
+    # Finite zero-area envelopes can represent degenerate paths. Preserve
+    # them with the same outward pixel allowance rather than dropping them.
+    if not rect.is_valid or not all(math.isfinite(v) for v in rect):
+        raise ValueError("PDF paint bounds are missing or invalid")
+    transformed = rect * page.rotation_matrix
+    ox, oy = pixmap_origin
+    return (math.floor(transformed.x0 * pixel_scale - ox),
+            math.floor(transformed.y0 * pixel_scale - oy),
+            math.ceil(transformed.x1 * pixel_scale - ox),
+            math.ceil(transformed.y1 * pixel_scale - oy))
+
+
 def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
     """Visible source-text boxes without overlapping path or image support."""
     if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
@@ -199,9 +212,11 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
         traces = page.get_texttrace()
         drawings = page.get_drawings(extended=True)
         bboxlog = page.get_bboxlog()
+        if not bboxlog:
+            return [], "missing_paint_bounds"
+        _matrix_values(page.rotation_matrix)
         images = [fitz.Rect(record["bbox"]) for record in page.get_image_info()]
-        # Protect the footprint of graphics, not merely their centerlines.
-        # Cubic control hulls bound the entire curve without sampling gaps;
+        # Protect actual paint envelopes, not inferred centerlines/widths.
         # Fills protect their complete interiors: text clipping and group
         # masks can create edges absent from the expanded drawing records.
         protected_rects = list(images)
@@ -222,39 +237,8 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
                 continue
             if drawing.get("type") not in {"s", "f", "fs"}:
                 return [], "unsupported_graphics_paint"
-            width = float(drawing.get("width") or 0.0)
-            if not math.isfinite(width) or width < 0:
-                return [], "invalid_graphics_width"
-            # Conservative join/cap allowance; this can retain glyph ink but
-            # must never turn a broad/mitered real stroke into text-only ink.
-            margin = width + 1.0 / pixel_scale
-            items = drawing.get("items", ())
-            # Arbitrary joins can use a custom miter limit that texttrace does
-            # not expose. Protect their full actual paint bounds, rather than
-            # assuming the PDF default join footprint.
-            if (len(items) > 1 or any(item[0] == "qu" for item in items)) and drawing.get(
-                "lineJoin"
-            ) not in {1, 2}:
-                sequence = drawing.get("seqno")
-                if not isinstance(sequence, int) or not 0 <= sequence < len(bboxlog):
-                    return [], "unavailable_join_bounds"
-                protected_rects.append(fitz.Rect(bboxlog[sequence][1]))
-            for a, b in _drawing_segments([drawing]):
-                segments.append((a, b, margin))
             if "f" in drawing["type"]:
                 protected_rects.append(fitz.Rect(drawing["rect"]))
-            for item in drawing.get("items", ()):
-                if item[0] == "c":
-                    points = item[1:5]
-                    rect = fitz.Rect(
-                        min(p.x for p in points),
-                        min(p.y for p in points),
-                        max(p.x for p in points),
-                        max(p.y for p in points),
-                    )
-                    protected_rects.append(rect + (-margin, -margin, margin, margin))
-                elif item[0] not in {"l", "re", "qu"}:
-                    return [], "unsupported_graphics_path"
         protected_rects.extend(annotation.rect for annotation in page.annots() or ())
         protected_rects.extend(widget.rect for widget in page.widgets() or ())
         known_paints = {
@@ -265,12 +249,23 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
             "stroke-path",
             "fill-image",
         }
-        if any(record[0] not in known_paints for record in bboxlog):
-            return [], "unsupported_paint"
-        if not all(
-            rect.is_valid and all(math.isfinite(v) for v in rect) for rect in protected_rects
-        ):
-            return [], "invalid_graphics_bounds"
+        for record in bboxlog:
+            if not isinstance(record, (tuple, list)) or len(record) != 2:
+                return [], "invalid_paint_record"
+            kind, bounds = record
+            if kind not in known_paints:
+                return [], "unsupported_paint"
+            if kind in {"stroke-path", "fill-path", "fill-image"}:
+                if not isinstance(bounds, (tuple, list, fitz.Rect)) or len(bounds) != 4:
+                    return [], "missing_paint_bounds"
+                # Enumerate every paint entry directly. Scalar stroke width,
+                # item count and closePath do not bound CTMs or miter joins.
+                protected_rects.append(fitz.Rect(bounds))
+        protected_render_rects = [
+            fitz.Rect(_text_ink_render_bounds(rect, page, pixel_scale, pixmap_origin))
+            + (-1, -1, 1, 1)
+            for rect in protected_rects
+        ]
         samples = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
             pixmap.height, pixmap.width, pixmap.n
         )
@@ -283,7 +278,6 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
     except Exception as exc:
         return [], f"unavailable:{type(exc).__name__}"
     result = []
-    ox, oy = pixmap_origin
     for span in traces:
         if span.get("type") not in (0, 1):
             continue
@@ -307,43 +301,19 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
                 ):
                     continue
                 padded = source + (-1.0, -1.0, 1.0, 1.0)
-                if any(padded.intersects(rect) for rect in protected_rects):
+                pixel_bounds = _text_ink_render_bounds(padded, page, pixel_scale, pixmap_origin)
+                if any(fitz.Rect(pixel_bounds).intersects(rect) for rect in protected_render_rects):
                     continue
                 if any(
                     _segment_intersects_rect(a, b, padded + (-m, -m, m, m)) for a, b, m in segments
                 ):
                     continue
-                source_corners = [
-                    fitz.Point(x, y) * page.rotation_matrix
-                    for x, y in (
-                        (source.x0, source.y0),
-                        (source.x0, source.y1),
-                        (source.x1, source.y0),
-                        (source.x1, source.y1),
-                    )
-                ]
-                char_box = (
-                    math.floor(min(p.x for p in source_corners) * pixel_scale - ox),
-                    math.floor(min(p.y for p in source_corners) * pixel_scale - oy),
-                    math.ceil(max(p.x for p in source_corners) * pixel_scale - ox),
-                    math.ceil(max(p.y for p in source_corners) * pixel_scale - oy),
-                )
+                char_box = _text_ink_render_bounds(source, page, pixel_scale, pixmap_origin)
                 if not _text_char_has_visible_ink(pixels, char_box, color):
                     continue
-                corners = [
-                    fitz.Point(x, y) * page.rotation_matrix
-                    for x, y in (
-                        (padded.x0, padded.y0),
-                        (padded.x0, padded.y1),
-                        (padded.x1, padded.y0),
-                        (padded.x1, padded.y1),
-                    )
-                ]
                 box = (
-                    max(0, math.floor(min(p.x for p in corners) * pixel_scale - ox)),
-                    max(0, math.floor(min(p.y for p in corners) * pixel_scale - oy)),
-                    min(pixmap.width, math.ceil(max(p.x for p in corners) * pixel_scale - ox)),
-                    min(pixmap.height, math.ceil(max(p.y for p in corners) * pixel_scale - oy)),
+                    max(0, pixel_bounds[0]), max(0, pixel_bounds[1]),
+                    min(pixmap.width, pixel_bounds[2]), min(pixmap.height, pixel_bounds[3]),
                 )
                 if box[0] < box[2] and box[1] < box[3]:
                     result.append(tuple(float(v) for v in box))
