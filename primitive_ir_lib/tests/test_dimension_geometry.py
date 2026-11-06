@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import os
+import warnings
 from pathlib import Path
 
 import cv2
+import fitz
 import numpy as np
 import pytest
+import pytesseract
+from unittest.mock import patch
 
 from primitive_ir_lib.dimension_geometry import (
     _endpoint_flank_witnesses,
@@ -24,6 +28,72 @@ _CASE01_IMAGE_ENV = "CAD_AGENT_CASE01_LINE_IMAGE"
 _CASE01_RENDER_SHA256 = "5732b6014ec1c1d3b05e14c598b43ebec84a4d6198951264215a69fb7b0a0bc8"
 _CASE01_UPPER_WITNESS = (153, 198, 168, 219)
 _CASE01_LOWER_WITNESS = (153, 369, 168, 390)
+
+
+def _approved_fastening_bar_page():
+    source = os.environ.get("CAD_AGENT_FASTENING_BAR_PDF")
+    if not source:
+        pytest.skip("set CAD_AGENT_FASTENING_BAR_PDF to the approved private source")
+    pdf = Path(source)
+    assert hashlib.sha256(pdf.read_bytes()).hexdigest() == (
+        "bf374d514e47f25bf82b9227145e9c057ef398cb76226b2fd4be662b0596b1cd"
+    )
+    with fitz.open(pdf) as document:
+        png = document[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).tobytes("png")
+    assert hashlib.sha256(png).hexdigest() == (
+        "e4fc9c6478a66962ae9756c0c2e860e52f0ac87d9195fec305b48c592e531d26"
+    )
+    image = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return image, hashlib.sha256(pdf.read_bytes()).hexdigest()
+
+
+@pytest.mark.real_data
+def test_fastening_region_retains_source_dimension_shaft_and_both_extensions():
+    image, _ = _approved_fastening_bar_page()
+    matches = []
+    for left, top, right, bottom in detect_dimension_geometry_regions(image):
+        evidence = detect_dimension_geometry(image[top:bottom, left:right])
+        if evidence.dimension_line is None or len(evidence.extension_lines) < 2:
+            continue
+        ends = sorted((x + left, y + top) for x, y in evidence.dimension_line)
+        # These source intersections are assertion-only; production sees the
+        # complete page, with no nominal value, role, anchor or scale supplied.
+        if np.allclose(ends, ((634, 223), (1161, 223)), atol=2):
+            matches.append(evidence)
+    assert matches, "automatic regions omitted the complete source dimension witness"
+
+
+@pytest.mark.real_data
+def test_fastening_automatic_cluster_keeps_an_isolated_usable_source_observation():
+    from primitive_ir_lib.dimension_observer import detect_dimension_clusters, observe_dimension_cluster
+    from primitive_ir_lib.text_extraction import extract_text_tesseract
+    image, source_hash = _approved_fastening_bar_page()
+    matches = []
+    for cluster in detect_dimension_clusters(image):
+        left, top, right, bottom = cluster.bbox_px
+        geometry = detect_dimension_geometry(image[top:bottom, left:right])
+        if geometry.dimension_line is None or len(geometry.extension_lines) < 2:
+            continue
+        ends = sorted((x + left, y + top) for x, y in geometry.dimension_line)
+        if not np.allclose(ends, ((634, 223), (1161, 223)), atol=2):
+            continue
+        command = os.environ.get("CAD_AGENT_TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+        if not Path(command).is_file():
+            pytest.skip("approved Tesseract executable unavailable")
+        with patch.object(pytesseract.pytesseract, "tesseract_cmd", command):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r"extract_text_tesseract\(\).*", category=UserWarning)
+                result = observe_dimension_cluster(
+                    image, cluster, page_id="PAGE-001", view_id="VIEW-001",
+                    source_sha256=source_hash, ocr_reader=extract_text_tesseract,
+                )
+        observation = result.observation or {}
+        assert result.disposition == "UNRESOLVED"
+        assert observation["value"] == 93.0
+        assert observation["role"] == "AMBIGUOUS"
+        assert observation["attachment_candidates"] == []
+        matches.append(result)
+    assert len(matches) == 1, "source witness must not create duplicate observations"
 
 
 def _source_supported_arrow_page(*, lower_x: int = 70, include_upper: bool = True) -> np.ndarray:

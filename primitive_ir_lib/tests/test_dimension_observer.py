@@ -35,6 +35,138 @@ from primitive_ir_lib.tests.dimension_test_helpers import (
 from primitive_ir_lib.text_extraction import RawText, extract_text_tesseract
 
 
+@pytest.mark.parametrize("truncated", [True, False])
+def test_crop_boundary_equivalence_rejects_uncensored_extension_difference(truncated):
+    from primitive_ir_lib.dimension_observer import _same_crop_witness
+    def evidence(end):
+        return DimensionGeometryEvidence(dimension_line=((10., 20.), (90., 20.)),
+            extension_lines=(((10., 5.), (10., end)), ((90., 5.), (90., end))),
+            arrow_points=((10., 20.), (90., 20.)), leader_lines=(),
+            kind_hint="HORIZONTAL_DISTANCE", confidence=0.8)
+    shorter = 49. if truncated else 45.
+    assert _same_crop_witness((0, 0, 100, 50), evidence(shorter),
+                              (0, 0, 100, 60), evidence(59.)) is truncated
+
+
+@pytest.mark.parametrize("quarter_turn", [False, True])
+@pytest.mark.parametrize("offset", [(0, 0), (31, 17)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_crop_equivalence_survives_translation_rotation_and_order(quarter_turn, offset, reverse):
+    from primitive_ir_lib.dimension_observer import _same_crop_witness
+    dx, dy = offset
+    def point(p):
+        x, y = p
+        return (100-y+dx, x+dy) if quarter_turn else (x+dx, y+dy)
+    def box(bounds):
+        x0,y0,x1,y1=bounds
+        # Half-open bounds retain the final pixel after a quarter-turn.
+        return ((100-y1+dx,x0+dy,100-y0+dx,x1+dy) if quarter_turn
+                else (x0+dx,y0+dy,x1+dx,y1+dy))
+    def evidence(end):
+        return DimensionGeometryEvidence(dimension_line=tuple(map(point,((10.,20.),(90.,20.)))),
+            extension_lines=tuple(tuple(map(point,line)) for line in
+                                  (((10.,5.),(10.,end)),((90.,5.),(90.,end)))),
+            arrow_points=tuple(map(point,((10.,20.),(90.,20.)))), leader_lines=(),
+            kind_hint="HORIZONTAL_DISTANCE",confidence=0.8)
+    a,b=(box((0,0,100,50)),evidence(49.)),(box((0,0,100,60)),evidence(59.))
+    if quarter_turn:
+        # Pixel-center rotation uses H-1-y, while box edges use H-y.
+        def fix(e):
+            shift=lambda p:(p[0]-1,p[1])
+            return DimensionGeometryEvidence(dimension_line=tuple(map(shift,e.dimension_line)),
+                extension_lines=tuple(tuple(map(shift,s)) for s in e.extension_lines),
+                arrow_points=tuple(map(shift,e.arrow_points)),leader_lines=(),
+                kind_hint=e.kind_hint,confidence=e.confidence)
+        a,b=(a[0],fix(a[1])),(b[0],fix(b[1]))
+    if reverse:a,b=b,a
+    assert _same_crop_witness(a[0],a[1],b[0],b[1])
+
+
+@pytest.mark.parametrize("difference", ["baseline", "arrows", "leaders", "support", "kind"])
+def test_crop_equivalence_rejects_different_evidence(difference):
+    from dataclasses import replace
+    from primitive_ir_lib.dimension_observer import _same_crop_witness
+    original=DimensionGeometryEvidence(dimension_line=((10.,20.),(90.,20.)),
+        extension_lines=(((10.,5.),(10.,49.)),((90.,5.),(90.,49.))),
+        arrow_points=((10.,20.),(90.,20.)),leader_lines=(),kind_hint="HORIZONTAL_DISTANCE",confidence=0.8)
+    changes={"baseline":{"dimension_line":((10.,21.),(90.,21.))},
+             "arrows":{"arrow_points":((10.,20.),)},
+             "leaders":{"leader_lines":(((10.,20.),(20.,30.)),)},
+             "support":{"extension_lines":(((11.,5.),(11.,49.)),((90.,5.),(90.,49.)))},
+             "kind":{"kind_hint":"VERTICAL_DISTANCE"}}
+    assert not _same_crop_witness((0,0,100,50),original,(0,0,100,50),replace(original,**changes[difference]))
+
+
+@pytest.mark.parametrize("offset", [(0, 0), (35, 21)])
+@pytest.mark.parametrize("quarter_turn", [False, True])
+def test_geometry_border_overlap_cannot_absorb_text_from_unobserved_interior(
+    monkeypatch, offset, quarter_turn
+):
+    image = np.full((320, 440, 3), 255, dtype=np.uint8)
+    text = [(100, 100, 130, 120), (220, 170, 250, 190)]
+    geometry = [(20, 20, 360, 50), (330, 20, 360, 280)]
+    def transform(box):
+        x0, y0, x1, y1 = box
+        dx, dy = offset
+        x0, y0, x1, y1 = x0 + dx, y0 + dy, x1 + dx, y1 + dy
+        return (320-y1, x0, 320-y0, x1) if quarter_turn else (x0, y0, x1, y1)
+    text, geometry = list(map(transform, text)), list(map(transform, geometry))
+    if quarter_turn:
+        image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_text_candidate_rois", lambda _: text)
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_dimension_geometry_regions", lambda _: geometry)
+    clusters = detect_dimension_clusters(image)
+    def contains(outer, inner):
+        return outer[0] <= inner[0] and outer[1] <= inner[1] and outer[2] >= inner[2] and outer[3] >= inner[3]
+    assert all(not all(contains(c.bbox_px, t) for t in text) for c in clusters)
+    assert all(any(contains(c.bbox_px, t) for c in clusters) for t in text)
+    assert all(box in [*text, *geometry] for c in clusters for box in c.member_boxes)
+
+
+def test_text_group_union_interior_cannot_attach_unobserved_geometry(monkeypatch):
+    image = np.full((100, 100, 3), 255, dtype=np.uint8)
+    text = [(20, 20, 60, 40), (50, 35, 70, 70)]
+    geometry = [(20, 52, 38, 65)]
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_text_candidate_rois", lambda _: text)
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_dimension_geometry_regions", lambda _: geometry)
+    clusters = detect_dimension_clusters(image)
+    assert any(c.member_boxes == tuple(geometry) for c in clusters)
+    assert all(not (geometry[0] in c.member_boxes and any(t in c.member_boxes for t in text))
+               for c in clusters)
+
+
+def test_competing_geometry_proposals_remain_separate_without_ranking(monkeypatch):
+    image = np.full((180, 300, 3), 255, dtype=np.uint8)
+    text = [(100, 65, 145, 90)]
+    geometry = [(40, 40, 220, 75), (40, 85, 220, 120)]
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_text_candidate_rois", lambda _: text)
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_dimension_geometry_regions", lambda _: geometry)
+    clusters = detect_dimension_clusters(image)
+    for proposal in geometry:
+        assert any(proposal in c.member_boxes and text[0] in c.member_boxes for c in clusters)
+    assert all(not all(g in c.member_boxes for g in geometry) for c in clusters)
+
+
+def test_coalescing_is_pairwise_and_stable_when_proposals_reverse(monkeypatch):
+    image = np.full((200, 300, 3), 255, dtype=np.uint8)
+    text = (100, 45, 130, 60)
+    boxes = [(40, 40, 220, 80), (40, 41, 220, 81), (40, 42, 220, 82)]
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_text_candidate_rois", lambda _: [text])
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer._page_witness", lambda _, box: box)
+    def equivalent(a, _ae, b, _be):
+        if a not in boxes or b not in boxes:
+            return True  # union re-detection is independently accepted here
+        return abs(boxes.index(a) - boxes.index(b)) <= 1
+    monkeypatch.setattr("primitive_ir_lib.dimension_observer._same_crop_witness", equivalent)
+    results = []
+    for source in (boxes, list(reversed(boxes))):
+        monkeypatch.setattr("primitive_ir_lib.dimension_observer.detect_dimension_geometry_regions", lambda _: source)
+        clusters = detect_dimension_clusters(image)
+        results.append([cluster.member_boxes for cluster in clusters])
+        assert not any(all(box in cluster.member_boxes for box in boxes) for cluster in clusters)
+    assert results[0] == results[1]
+
+
 def test_number_without_attachment_is_unresolved_and_ambiguous() -> None:
     image = synthetic_isolated_number_crop()
     cluster = DimensionCluster(
@@ -472,8 +604,26 @@ def test_nakuja_unique_rotated_text_roi_recovers_value_without_resolving_associa
     assert image is not None
     cluster = next(
         cluster for cluster in detect_dimension_clusters(image)
-        if cluster.cluster_id == "DIMCLUSTER-001"
+        if any(box[0] <= 122 and box[1] <= 255 and box[2] >= 160 and box[3] >= 331
+               for box in cluster.member_boxes)
     )
+    # A reviewed migration binds the actual source crop. Reusing the old
+    # ordinal with this crop must not transfer its role to another proposal.
+    from cad_agent.dimension_observer_run import DimensionObserverRunError, _validate_profile_bindings
+    profile = {"schema_version": "dimension-observer-profile-1.1",
+               "source_sha256": hashlib.sha256(image_bytes).hexdigest(),
+               "page_id": "PAGE-NAKUJA-P01", "view_id": "SIDE", "default_unit": "mm",
+               "clusters": {cluster.cluster_id: {"bbox_px": list(cluster.bbox_px),
+                            "role": "REFERENCE", "critical": False, "blocker_scope": []}}}
+    clusters = detect_dimension_clusters(image)
+    kwargs = dict(source_sha256=hashlib.sha256(image_bytes).hexdigest(),
+                  page_id="PAGE-NAKUJA-P01", view_id="SIDE",
+                  width=image.shape[1], height=image.shape[0])
+    _validate_profile_bindings(profile, clusters, **kwargs)
+    assert cluster.cluster_id != "DIMCLUSTER-001"
+    profile["clusters"]["DIMCLUSTER-001"] = profile["clusters"].pop(cluster.cluster_id)
+    with pytest.raises(DimensionObserverRunError, match="correspondence"):
+        _validate_profile_bindings(profile, clusters, **kwargs)
 
     def read_english_psm11(crop: np.ndarray) -> list[RawText]:
         height, width = crop.shape[:2]
@@ -502,15 +652,13 @@ def test_nakuja_unique_rotated_text_roi_recovers_value_without_resolving_associa
     assert "10,00" in disposition.observation["raw_text_candidates"]
     assert disposition.observation["role"] == "AMBIGUOUS"
     assert disposition.observation["attachment_candidates"] == []
-    assert disposition.observation["source_evidence"]["bbox"] == [
-        122.0,
-        206.0,
-        178.0,
-        381.0,
-    ]
-    assert disposition.observation["source_evidence"]["crop_sha256"] == (
-        "3c573e3b1543c62718da457fe8025a5005b3d277cacf31209573360fd7321f00"
-    )
+    assert disposition.observation["source_evidence"]["bbox"] == list(map(float, cluster.bbox_px))
+    x0, y0, x1, y1 = cluster.bbox_px
+    assert x0 <= 122 and y0 <= 206 and x1 >= 178 and y1 >= 381
+    assert x1 - x0 <= 80 and y1 - y0 <= 200
+    ok, encoded = cv2.imencode(".png", image[y0:y1, x0:x1])
+    assert ok
+    assert disposition.observation["source_evidence"]["crop_sha256"] == hashlib.sha256(encoded.tobytes()).hexdigest()
     assert disposition.observation["extension_geometry"]["dimension_line"] == [
         [38.0, 18.0],
         [38.0, 157.0],
