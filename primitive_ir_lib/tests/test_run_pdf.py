@@ -104,7 +104,9 @@ def test_white_text_on_filled_background_keeps_outline_support():
         page.insert_text((40, 80), "8", fontsize=14, color=(1, 1, 1))
         pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
-        assert boxes
+        # Retaining ambiguous text ink is safe; filled paint can carry an
+        # unreported text clip/mask, so its interior must stay protected.
+        assert boxes == []
         assert all(box[0] > 40 and box[2] < 440 and box[1] > 40 and box[3] < 240
                    for box in boxes)
 
@@ -139,6 +141,58 @@ def test_clipped_rectangle_paint_cannot_delete_real_geometry_inside_glyph():
             results.append(observed)
     assert renders[0] == renders[1]
     assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("paint", ["text_clip", "tiling_pattern"])
+def test_unexpanded_pdf_paint_keeps_source_strokes_inside_text_bounds(paint):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    from primitive_ir_lib.run_image import _exclude_text_ink_candidates
+    from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "W", fontsize=39)
+        if paint == "text_clip":
+            stream = (b"q BT /helv 50 Tf 1 0 0 1 42 70 Tm 7 Tr (_) Tj ET "
+                      b"0 g 0 0 250 150 re f Q")
+        else:
+            tile = document.get_new_xref()
+            document.update_object(tile, "<< /Type /Pattern /PatternType 1 /PaintType 1 "
+                                   "/TilingType 1 /BBox [0 0 40 20] /XStep 40 /YStep 20 "
+                                   "/Resources <<>> >>")
+            document.update_stream(tile, b"0 g 2 4 32 1 re f")
+            resources = int(document.xref_get_key(page.xref, "Resources")[1].split()[0])
+            document.xref_set_key(resources, "Pattern", f"<< /P1 {tile} 0 R >>")
+            stream = b"q /Pattern cs /P1 scn 10 10 220 130 re f Q"
+        xref = document.get_new_xref()
+        document.update_object(xref, "<<>>")
+        document.update_stream(xref, stream)
+        contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+        document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), dtype=np.uint8),
+                             cv2.IMREAD_COLOR)
+        geometry = extract_raw_geometry(
+            image, preset="default" if paint == "text_clip" else "real_scan_tuned_v1"
+        )
+        expected = [(line.p1_px, line.p2_px) for line in geometry.lines]
+        assert expected
+        boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        _exclude_text_ink_candidates(geometry, boxes, image.shape)
+        assert [(line.p1_px, line.p2_px) for line in geometry.lines] == expected
+        if paint == "tiling_pattern":
+            with fitz.open() as control:
+                direct = control.new_page(width=250, height=150)
+                direct.insert_text((40, 80), "W", fontsize=39)
+                explicit = ("q 10 10 220 130 re W n 0 g " + " ".join(
+                    f"{2 + 40*i} {4 + 20*j} 32 1 re f"
+                    for i in range(7) for j in range(8)) + " Q").encode()
+                xref = control.get_new_xref()
+                control.update_object(xref, "<<>>")
+                control.update_stream(xref, explicit)
+                contents = " ".join(f"{n} 0 R" for n in direct.get_contents() + [xref])
+                control.xref_set_key(direct.xref, "Contents", f"[{contents}]")
+                equivalent = direct.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                assert pixmap.samples == equivalent.samples
 
 
 def test_visible_pdf_text_paint_does_not_become_raster_geometry(tmp_path):

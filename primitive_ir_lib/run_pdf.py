@@ -189,14 +189,21 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
     if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
         return [], "unsupported_page_rotation_or_scale"
     try:
+        # MuPDF may expose only a base tile, not repeated pattern paint.
+        # Inspect parsed PDF object metadata, including nested resources;
+        # do not interpret content streams or guess the repeated footprint.
+        for xref in range(1, page.parent.xref_length()):
+            if any(page.parent.xref_get_key(xref, key)[0] != "null"
+                   for key in ("PatternType", "Pattern", "Resources/Pattern")):
+                return [], "unsupported_pattern_paint"
         traces = page.get_texttrace()
         drawings = page.get_drawings(extended=True)
         bboxlog = page.get_bboxlog()
         images = [fitz.Rect(record["bbox"]) for record in page.get_image_info()]
         # Protect the footprint of graphics, not merely their centerlines.
         # Cubic control hulls bound the entire curve without sampling gaps;
-        # Complex fills protect their interior. A plain solid rectangle only
-        # needs edge protection: its uniform interior cannot create geometry.
+        # Fills protect their complete interiors: text clipping and group
+        # masks can create edges absent from the expanded drawing records.
         protected_rects = list(images)
         segments = []
         for drawing in drawings:
@@ -234,7 +241,7 @@ def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
                 protected_rects.append(fitz.Rect(bboxlog[sequence][1]))
             for a, b in _drawing_segments([drawing]):
                 segments.append((a, b, margin))
-            if "f" in drawing["type"] and not (len(items) == 1 and items[0][0] == "re"):
+            if "f" in drawing["type"]:
                 protected_rects.append(fitz.Rect(drawing["rect"]))
             for item in drawing.get("items", ()):
                 if item[0] == "c":
