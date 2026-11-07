@@ -378,7 +378,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertFalse(listing_path.exists())
 
     def test_document_census_requires_complete_matching_response(self):
-        for mode in ("empty", "partial", "foreign", "blank_path", "truncated_end"):
+        for mode in ("empty", "partial", "foreign", "truncated_end"):
             with self.subTest(mode=mode):
                 def raw(command):
                     marker = '(setq mcp-doc-file (open "'
@@ -388,7 +388,6 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                         "empty": "",
                         "partial": f"BEGIN:{token}\nC:/work/other.dxf\n",
                         "foreign": "BEGIN:old\nEND:old\n",
-                        "blank_path": f"BEGIN:{token}\n\nEND:{token}\n",
                         "truncated_end": f"BEGIN:{token}\nEND:{token}",
                     }
                     path.write_text(responses[mode], encoding="utf-8")
@@ -402,7 +401,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
 
     def test_document_census_accepts_only_completed_empty_or_populated_list(self):
-        for paths in ([], ["C:/work/a.dxf", "C:/work/b.dwg"]):
+        for paths in ([], ["C:/work/a.dxf", "C:/work/b.dwg"], ["", "C:/work/a.dxf"]):
             with self.subTest(paths=paths):
                 commands = []
 
@@ -416,7 +415,7 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 client = FileIPCLiveMCPClient(
                     ipc_dir=self._ipc_dir, raw_lisp_trigger=raw, timeout_s=0.02,
                 )
-                self.assertEqual(paths, client.drawing_list_open_paths())
+                self.assertEqual([path for path in paths if path], client.drawing_list_open_paths())
                 self.assertIn('(write-line "BEGIN:', commands[0])
                 self.assertIn('(write-line "END:', commands[0])
 

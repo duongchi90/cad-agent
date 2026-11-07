@@ -671,9 +671,11 @@ class FileIPCLiveMCPClient:
                     lines = text.splitlines()
                     if (text.endswith("\n") and len(lines) >= 2
                             and lines[0] == begin and lines[-1] == end
-                            and all(line.strip() and not line.startswith(("BEGIN:", "END:"))
+                            and all(not line.startswith(("BEGIN:", "END:"))
                                     for line in lines[1:-1])):
-                        return [line.strip() for line in lines[1:-1]]
+                        # Unsaved native documents have no FullName. As before,
+                        # omit those entries from this saved-path inventory.
+                        return [line.strip() for line in lines[1:-1] if line.strip()]
                 time.sleep(self._poll)
             raise MCPTimeoutError("Timeout waiting for AutoCAD open-document list")
         finally:
