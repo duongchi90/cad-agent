@@ -807,90 +807,31 @@
   (mcp-object nil)
 )
 
-(defun mcp-deferred-drawing-close (reactor event-data / pending reaction root request-id claim nonce doc save envelope close-result result)
-  (vl-load-com)
+(defun mcp-deferred-drawing-close (reactor event-data / pending root request-id nonce envelope claim result)
+  ; Retire any pending old callback safely on reload. Never close a document
+  ; from its own Lisp event handler (Autodesk ActiveX Close contract).
   (setq pending (vlr-data reactor)
-        reaction (vlr-current-reaction-name)
         root (nth 0 pending)
         request-id (nth 1 pending)
         nonce (nth 2 pending)
-        doc (nth 3 pending)
-        save (nth 4 pending)
         envelope (nth 5 pending)
         claim (mcp-json-get envelope "claim"))
   (vlr-remove reactor)
-  (if
-    (not (mcp-result-owner-matches-p root request-id nonce))
-    (princ (strcat "\n" *mcp-error-result-conflict*))
-    (if
-      (not (mcp-result-slot-free-p root request-id nonce))
-      (princ (strcat "\n" *mcp-error-result-conflict*))
-      (progn
-        (cond
-          ((eq reaction ':vlr-lispEnded)
-            (setq close-result
-              (vl-catch-all-apply
-                'vla-Close
-                (list doc (if (eq save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
-              )
-              result
-              (if (vl-catch-all-error-p close-result)
-                (mcp-failure request-id claim *mcp-error-failed*)
-                envelope
-              )
-            )
-          )
-          ((eq reaction ':vlr-lispCancelled)
-            (setq result (mcp-failure request-id claim *mcp-error-failed*))
-          )
-          (T
-            (setq result nil)
-          )
-        )
-        (if result
-          (if (mcp-write-result root request-id result nonce)
-            (mcp-result-owner-release root request-id nonce)
-            (princ (strcat "\n" *mcp-error-result-conflict*))
-          )
-          (princ (strcat "\n" *mcp-error-result-conflict*))
-        )
+  (if (and (mcp-result-owner-matches-p root request-id nonce)
+           (mcp-result-slot-free-p root request-id nonce))
+    (progn
+      (setq result (mcp-failure request-id claim *mcp-error-failed*))
+      (if (mcp-write-result root request-id result nonce)
+        (mcp-result-owner-release root request-id nonce)
       )
     )
   )
 )
 
-(defun mcp-defer-drawing-close (root request-id params envelope / save doc nonce reactor)
-  (setq save (mcp-param params "save_changes")
-        doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (setq nonce (mcp-result-owner-reserve root request-id))
-  (if (not nonce)
-    nil
-    (progn
-      (setq reactor
-        (vl-catch-all-apply
-          'vlr-lisp-reactor
-          (list
-            (list root request-id nonce doc save envelope)
-            '(
-              (:vlr-lispEnded . mcp-deferred-drawing-close)
-              (:vlr-lispCancelled . mcp-deferred-drawing-close)
-            )
-          )
-        )
-      )
-      (if
-        (or
-          (vl-catch-all-error-p reactor)
-          (not reactor)
-        )
-        (progn
-          (mcp-result-owner-release root request-id nonce)
-          nil
-        )
-        reactor
-      )
-    )
-  )
+(defun mcp-defer-drawing-close (root request-id params envelope)
+  ; No safe Lisp event context can close its own drawing. Returning nil makes
+  ; the existing dispatcher publish a claim-bound failure, with no reactor.
+  nil
 )
 
 (defun mcp-op-drawing-list-open-paths (params / docs paths)
