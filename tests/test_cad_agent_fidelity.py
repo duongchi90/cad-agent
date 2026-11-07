@@ -974,6 +974,178 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "414 MM", fontsize=18)
+    page.insert_text((190, 80), "ANNOTATION", fontsize=18)
+    traces = page.get_texttrace()
+    assert len(traces) == 2
+
+    merged = dict(traces[0])
+    merged_chars = [*traces[0]["chars"], *traces[1]["chars"]]
+    merged["chars"] = merged_chars
+    merged["seqno"] = 0
+    merged["bbox"] = (
+        min(trace["bbox"][0] for trace in traces),
+        min(trace["bbox"][1] for trace in traces),
+        max(trace["bbox"][2] for trace in traces),
+        max(trace["bbox"][3] for trace in traces),
+    )
+
+    class AggregatedPaintTracePage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            return [merged]
+
+        def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+            return [("fill-text", merged["bbox"])]
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            AggregatedPaintTracePage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == ["414 MM", "ANNOTATION"]
+    assert all(record["visibility"] == "unverified" for record in records)
+    assert all(record["semantic_role"] is None for record in records)
+    assert all(record["evidence_kind"] == "native_pdf" for record in records)
+    assert all(record["source_paint_evidence"]["bbox_pt"] != merged["bbox"] for record in records)
+    assert [record["source_paint_evidence"]["member_traces"][0]["text"] for record in records] == [
+        "414 MM", "ANNOTATION",
+    ]
+    assert all(
+        record["source_paint_evidence"]["member_traces"][0]["character_range"]
+        for record in records
+    )
+    assert records[0]["bbox_px"][0] == pytest.approx(80, abs=1.0)
+    assert records[0]["bbox_px"][2] > records[0]["bbox_px"][0]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_contents"),
+    [
+        ("source_mismatch", []),
+        ("origin_mismatch", []),
+        ("duplicate_trace", []),
+        ("later_paint", ["ANNOTATION"]),
+    ],
+)
+def test_native_pdf_aggregated_trace_mapping_fails_closed(
+    case: str, expected_contents: list[str],
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "414 MM", fontsize=18)
+    page.insert_text((190, 80), "ANNOTATION", fontsize=18)
+    traces = page.get_texttrace()
+    merged = dict(traces[0])
+    merged["chars"] = [*traces[0]["chars"], *traces[1]["chars"]]
+    merged["seqno"] = 0
+    merged["bbox"] = (
+        min(trace["bbox"][0] for trace in traces),
+        min(trace["bbox"][1] for trace in traces),
+        max(trace["bbox"][2] for trace in traces),
+        max(trace["bbox"][3] for trace in traces),
+    )
+    spans = [
+        span
+        for block in page.get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+    ]
+    target_bbox = next(span["bbox"] for span in spans if span["text"] == "414 MM")
+
+    class ControlledAggregatedTracePage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict" and case in {"source_mismatch", "origin_mismatch"}:
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            if span.get("text") == "414 MM":
+                                if case == "source_mismatch":
+                                    span["text"] = "415 MM"
+                                else:
+                                    span["origin"] = (span["origin"][0] + 10, span["origin"][1])
+            return result
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            if case == "duplicate_trace":
+                duplicate = dict(merged, seqno=1)
+                return [merged, duplicate]
+            return [merged]
+
+        def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+            result = [("fill-text", merged["bbox"])]
+            if case == "duplicate_trace":
+                result.append(("fill-text", merged["bbox"]))
+            elif case == "later_paint":
+                result.append(("fill-path", target_bbox))
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            ControlledAggregatedTracePage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == expected_contents
+    assert all(record["visibility"] == "unverified" for record in records)
+    assert all(record["semantic_role"] is None for record in records)
+
+
+def test_native_pdf_aggregated_trace_preserves_rotated_text_direction() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((190, 250), "ROTATED NOTE", fontsize=18, rotate=90)
+    page.insert_text((240, 250), "ROTATED CALL", fontsize=18, rotate=90)
+    traces = page.get_texttrace()
+    assert len(traces) == 2
+    merged = dict(traces[0])
+    merged["chars"] = [*traces[0]["chars"], *traces[1]["chars"]]
+    merged["seqno"] = 0
+    merged["bbox"] = (
+        min(trace["bbox"][0] for trace in traces),
+        min(trace["bbox"][1] for trace in traces),
+        max(trace["bbox"][2] for trace in traces),
+        max(trace["bbox"][3] for trace in traces),
+    )
+
+    class RotatedAggregatedTracePage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            return [merged]
+
+        def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+            return [("fill-text", merged["bbox"])]
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            RotatedAggregatedTracePage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == ["ROTATED NOTE", "ROTATED CALL"]
+    assert all(abs(abs(record["rotation_deg"]) - 90) < 0.01 for record in records)
+    assert all(record["visibility"] == "unverified" for record in records)
+    assert all(record["semantic_role"] is None for record in records)
+
+
 def test_native_pdf_observation_keeps_named_layer_and_trace_recovers_replacement_glyph() -> None:
     from cad_agent import fidelity as fidelity_module
 
@@ -1191,7 +1363,10 @@ def test_native_pdf_observation_excludes_text_used_only_as_a_clipping_path(tmp_p
     assert observation["native_pdf_spans"] == []
 
 
-def test_native_pdf_observation_excludes_partially_clipped_text(tmp_path: Path) -> None:
+@pytest.mark.parametrize("character_spacing", [0, 1, 2])
+def test_native_pdf_observation_excludes_partially_clipped_text(
+    tmp_path: Path, character_spacing: int,
+) -> None:
     source = tmp_path / "partially-clipped-native-text.pdf"
     output = tmp_path / "private-staging"
     document = fitz.open()
@@ -1200,6 +1375,8 @@ def test_native_pdf_observation_excludes_partially_clipped_text(tmp_path: Path) 
     content_xrefs = page.get_contents()
     assert len(content_xrefs) == 1
     stream = document.xref_stream(content_xrefs[0])
+    if character_spacing:
+        stream = stream.replace(b"BT", f"BT\n{character_spacing} Tc".encode(), 1)
     document.update_stream(content_xrefs[0], b"q 40 210 45 30 re W n\n" + stream + b"\nQ\n")
     document.save(source)
     document.close()
