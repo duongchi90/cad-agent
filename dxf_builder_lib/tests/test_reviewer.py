@@ -711,6 +711,96 @@ def test_component_mismatch_is_structured_not_free_text():
     print("OK   test_component_mismatch_is_structured_not_free_text")
 
 
+@pytest.mark.parametrize("target_layout", ["paperspace", "owned-block"])
+def test_default_review_rejects_tracked_line_moved_out_of_modelspace(
+    tmp_path, target_layout,
+):
+    built = build_dxf(_doc(_line("tracked-line", 0, 0, 20, 0)), str(tmp_path / "candidate.dxf"))
+    handle = built.handle_by_primitive_id["tracked-line"]
+
+    document = ezdxf.readfile(built.output_path)
+    modelspace = document.modelspace()
+    entity = document.entitydb[handle]
+    original_layer = entity.dxf.layer
+    original_start = tuple(entity.dxf.start)
+    original_end = tuple(entity.dxf.end)
+    destination = (
+        document.layouts.get("Layout1")
+        if target_layout == "paperspace"
+        else document.blocks.new("TRACKED_LINE_OWNER_TEST")
+    )
+    modelspace.move_to_layout(entity, destination)
+    document.saveas(built.output_path)
+
+    reopened = ezdxf.readfile(built.output_path)
+    reopened_entity = reopened.entitydb[handle]
+    assert reopened_entity.dxf.layer == original_layer
+    assert tuple(reopened_entity.dxf.start) == original_start
+    assert tuple(reopened_entity.dxf.end) == original_end
+    assert reopened_entity.dxf.owner == destination.block_record_handle
+    assert reopened_entity not in reopened.modelspace()
+
+    candidate_before_review = Path(built.output_path).read_bytes()
+    result = review_dxf(built)
+
+    assert not result.passed
+    mismatch = next(message for message in result.mismatches if "tracked-line" in message)
+    assert handle in mismatch
+    assert "ModelSpace" in mismatch
+    assert destination.block_record_handle in mismatch
+    assert Path(built.output_path).read_bytes() == candidate_before_review
+
+
+@pytest.mark.parametrize("owner", [None, "DEADBEEF"], ids=["absent", "unresolved"])
+def test_default_review_fails_closed_for_absent_or_unresolved_tracked_line_owner(
+    tmp_path, monkeypatch, owner,
+):
+    built = build_dxf(_doc(_line("tracked-line", 0, 0, 20, 0)), str(tmp_path / "candidate.dxf"))
+    handle = built.handle_by_primitive_id["tracked-line"]
+    original_readfile = ezdxf.readfile
+
+    def read_with_controlled_owner_state(path):
+        document = original_readfile(path)
+        entity = document.entitydb[handle]
+        if owner is None:
+            entity.dxf.discard("owner")
+        else:
+            entity.dxf.owner = owner
+        return document
+
+    # DXF parsing normalizes malformed owner references, so this seam tests
+    # fail-closed handling after a real saved-file read without claiming the
+    # malformed owner survives serialization.
+    monkeypatch.setattr(ezdxf, "readfile", read_with_controlled_owner_state)
+    candidate_before_review = Path(built.output_path).read_bytes()
+
+    result = review_dxf(built)
+
+    assert not result.passed
+    mismatch = next(message for message in result.mismatches if "tracked-line" in message)
+    assert handle in mismatch
+    assert "ModelSpace" in mismatch
+    assert Path(built.output_path).read_bytes() == candidate_before_review
+
+
+def test_default_review_allows_untracked_modelspace_entity_but_strict_inventory_rejects_it(
+    tmp_path,
+):
+    built = build_dxf(_doc(_line("tracked-line", 0, 0, 20, 0)), str(tmp_path / "candidate.dxf"))
+    document = ezdxf.readfile(built.output_path)
+    document.modelspace().add_line((0, 10), (20, 10))
+    document.saveas(built.output_path)
+    candidate_before_review = Path(built.output_path).read_bytes()
+
+    default_result = review_dxf(built)
+    strict_result = review_dxf(built, strict_primitive_inventory=True)
+
+    assert default_result.passed
+    assert not strict_result.passed
+    assert any("extra untracked handles" in message for message in strict_result.mismatches)
+    assert Path(built.output_path).read_bytes() == candidate_before_review
+
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_review_passes_on_correctly_built_dxf,
