@@ -237,6 +237,68 @@ def _valid_payload() -> dict[str, object]:
     }
 
 
+def _responses_identity_payload() -> dict[str, object]:
+    payload = _valid_payload()
+    for phase, response_id in (("pre", "resp_pre"), ("post", "resp_post")):
+        record = payload[f"{phase}_r5"]
+        canonical = record["canonical_result"]
+        for item in (record, canonical):
+            item.pop("task6_thread_id")
+            item.pop("task6_turn_id")
+            item["task6_epoch_id"] = f"epoch-{phase}"
+            item["task6_response_id"] = response_id
+        canonical_payload = {
+            key: value
+            for key, value in canonical.items()
+            if key not in {"verdict_id", "verdict_sha256"}
+        }
+        digest = canonical_json_sha256(canonical_payload)
+        canonical["verdict_id"] = digest
+        canonical["verdict_sha256"] = digest
+        record["verdict_sha256"] = digest
+    provider = payload["transport"]["task6_provider"]
+    provider.pop("turn_ids")
+    provider["response_ids"] = ["resp_pre", "resp_post"]
+    repair = payload["repair"]
+    pre = payload["pre_r5"]
+    repair["r5_failure_id"] = pre["canonical_result"]["verdict_id"]
+    repair["r5_failure_sha256"] = pre["verdict_sha256"]
+    canonical_repair = repair["canonical_result"]
+    canonical_repair["r5_failure_id"] = repair["r5_failure_id"]
+    canonical_repair["r5_failure_sha256"] = repair["r5_failure_sha256"]
+    canonical_repair["closure"]["source_identity"] = repair["r5_failure_id"]
+    canonical_repair["closure"]["source_fingerprint"] = repair["r5_failure_sha256"]
+    repair_payload = {
+        key: value for key, value in canonical_repair.items() if key != "result_sha256"
+    }
+    repair_digest = canonical_json_sha256(repair_payload)
+    canonical_repair["result_sha256"] = repair_digest
+    repair["r6_result_sha256"] = repair_digest
+    return payload
+
+
+def test_responses_provider_pair_is_truthful_and_requires_distinct_response_ids() -> None:
+    payload = _responses_identity_payload()
+    assert validate_m3_live_record(payload)["pre_r5"]["task6_response_id"] == "resp_pre"
+
+    duplicate = copy.deepcopy(payload)
+    for item in (duplicate["post_r5"], duplicate["post_r5"]["canonical_result"]):
+        item["task6_response_id"] = "resp_pre"
+    canonical = duplicate["post_r5"]["canonical_result"]
+    canonical_payload = {
+        key: value
+        for key, value in canonical.items()
+        if key not in {"verdict_id", "verdict_sha256"}
+    }
+    digest = canonical_json_sha256(canonical_payload)
+    canonical["verdict_id"] = digest
+    canonical["verdict_sha256"] = digest
+    duplicate["post_r5"]["verdict_sha256"] = digest
+    duplicate["transport"]["task6_provider"]["response_ids"] = ["resp_pre", "resp_pre"]
+    with pytest.raises(M3LiveRecordError, match="distinct|duplicate|response|identity"):
+        validate_m3_live_record(duplicate)
+
+
 def test_seal_and_validate_provider_backed_live_record() -> None:
     sealed = seal_m3_live_record(_valid_payload())
 
