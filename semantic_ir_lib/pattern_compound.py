@@ -43,7 +43,6 @@ NGUYÊN TẮC THIẾT KẾ (bám sát dự án, mục 10.1/7):
 from __future__ import annotations
 
 import math
-from itertools import combinations
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from primitive_ir_lib.models import CircleGeometry, LineGeometry, Primitive, Point2D
@@ -94,6 +93,23 @@ def _pair_neighbors(pairs: Iterable[Tuple[str, str]]) -> Dict[str, Set[str]]:
         neighbors.setdefault(a, set()).add(b)
         neighbors.setdefault(b, set()).add(a)
     return neighbors
+
+
+def _iter_parallel_neighbor_pairs(
+    crossing: Iterable[str],
+    parallel_neighbors: Dict[str, Set[str]],
+) -> Iterable[Tuple[str, str]]:
+    """Yield the lexically ordered parallel pairs contained in ``crossing``.
+
+    This is the same ordered subset as filtering ``combinations(crossing, 2)``
+    against the parallel-pair relation, without scanning non-parallel pairs.
+    """
+    crossing_ids = sorted(set(crossing))
+    crossing_set = set(crossing_ids)
+    for first in crossing_ids:
+        for second in sorted(parallel_neighbors.get(first, set()) & crossing_set):
+            if first < second:
+                yield first, second
 
 
 def _circle_near_point(
@@ -159,15 +175,24 @@ def _find_khung_chu_nhat(
     """
     parts: List[SemanticPart] = []
     used: Set[Tuple[str, str, str, str]] = set()  # tránh khung trùng (cùng 4 line khác thứ tự)
+    parallel_neighbors = _pair_neighbors(parallel_pairs)
 
     # gom tất cả cặp parallel thành list, index nhanh
     for a, b in sorted(parallel_pairs):
         crossing = sorted((coincident_neighbors.get(a, set()) | coincident_neighbors.get(b, set())) - {a, b})
-        for c, d in combinations(crossing, 2):
-            if (c, d) not in parallel_pairs:
-                continue
+        crossing_masks = {
+            c: (1 if c in coincident_neighbors.get(a, set()) else 0)
+            | (2 if c in coincident_neighbors.get(b, set()) else 0)
+            for c in crossing
+        }
+        for c, d in _iter_parallel_neighbor_pairs(crossing, parallel_neighbors):
             if len({a, b, c, d}) != 4:
                 continue  # có primitive trùng giữa 2 cặp parallel -> không phải khung 4 line
+
+            # Each bit records one witnessed corner edge (a-c/b-c, a-d/b-d).
+            # Three bits exactly matches the existing 3-of-4 corner rule.
+            if crossing_masks[c].bit_count() + crossing_masks[d].bit_count() < 3:
+                continue
 
             # 4 góc khép kín: mỗi line phải coincident_endpoint với 2 line thuộc cặp kia
             coincs = [

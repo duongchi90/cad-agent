@@ -262,6 +262,7 @@ try {
 
     $specializedVariables = @(
         "CAD_AGENT_REAL_IMAGE",
+        "CAD_AGENT_CASE01_SEMANTIC_IR",
         "CAD_AGENT_CASE01_LINE_IMAGE",
         "CAD_AGENT_CASE01_TEXT_INK_PDF",
         "CAD_AGENT_FASTENING_BAR_PDF",
