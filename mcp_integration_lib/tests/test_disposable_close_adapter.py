@@ -118,3 +118,33 @@ def test_idle_close_requires_completed_target_absence_before_releasing_binding(t
     client.drawing_close()
     assert closer.calls == [(BOUND_TARGET, True, False)]
     assert client._active_drawing_path is None
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"paths": None}, {"paths": {}}, {"paths": ""},
+    {"paths": [None]}, {"paths": [42]}, {"paths": [{}]},
+])
+def test_nonraw_malformed_census_cannot_confirm_close(tmp_path, payload):
+    client, closer = make_client(tmp_path)
+
+    def dispatch(command, *_):
+        if command == "drawing-list-open-paths":
+            return payload
+        return {"DWGPREFIX": "C:/disposable/", "DWGNAME": "candidate.dxf"}
+
+    client._dispatch = dispatch
+    with pytest.raises(MCPToolError, match="DRAWING_CLOSE_NOT_CONFIRMED"):
+        client.drawing_close()
+    assert len(closer.calls) == 1
+    assert client._active_drawing_path == BOUND_TARGET
+
+
+def test_nonraw_explicit_empty_census_confirms_close(tmp_path):
+    client, closer = make_client(tmp_path)
+    client._dispatch = lambda command, *_: (
+        {"paths": []} if command == "drawing-list-open-paths"
+        else {"DWGPREFIX": "C:/disposable/", "DWGNAME": "candidate.dxf"}
+    )
+    client.drawing_close()
+    assert len(closer.calls) == 1
+    assert client._active_drawing_path is None

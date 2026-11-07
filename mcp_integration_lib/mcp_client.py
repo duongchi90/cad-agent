@@ -634,7 +634,10 @@ class FileIPCLiveMCPClient:
 
     def drawing_list_open_paths(self) -> List[str]:
         if self._raw_lisp_trigger is None:
-            return self._dispatch("drawing-list-open-paths", {}).get("paths", [])
+            paths = self._dispatch("drawing-list-open-paths", {}).get("paths")
+            if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+                raise MCPToolError("DRAWING_CENSUS_INVALID")
+            return paths
         token = uuid.uuid4().hex[:12]
         result = self._dir / f"autocad_mcp_open_documents_{token}.txt"
         begin = f"BEGIN:{token}"
