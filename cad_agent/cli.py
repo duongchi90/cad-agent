@@ -19,6 +19,7 @@ from .manifest import (
     STAGE_NAMES,
     ManifestError,
     completed_artifact,
+    is_valid_image_scale,
     new_manifest,
     read_manifest,
     sha256_file,
@@ -330,8 +331,8 @@ def run_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: di
     verify_source(manifest, source)
     scale = manifest["configuration"].get("scale_mm_per_px")
     approval = manifest.get("approvals", {}).get("calibration", {})
-    if not isinstance(scale, (int, float)) or scale <= 0:
-        raise ManifestError("Run manifest has no valid positive manual scale.")
+    if not is_valid_image_scale(scale):
+        raise ManifestError("Run manifest has no valid finite positive manual scale.")
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("Run manifest has no recorded calibration approval.")
 
@@ -385,8 +386,8 @@ def _run_command(args: argparse.Namespace) -> int:
         raise CommandError(f"Input image does not exist: {source}")
     if source.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
         raise CommandError("This slice accepts PNG/JPG input. Use primitive_ir_lib.run_pdf for PDF rendering.")
-    if args.scale_mm_per_px <= 0:
-        raise CommandError("--scale-mm-per-px must be positive.")
+    if not is_valid_image_scale(args.scale_mm_per_px):
+        raise CommandError("--scale-mm-per-px must be finite and positive.")
     if not args.calibration_approval.strip():
         raise CommandError("--calibration-approval must be a non-empty approval reference.")
     output_dir = args.output_dir.resolve()
