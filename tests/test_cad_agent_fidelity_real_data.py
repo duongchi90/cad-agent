@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from cad_agent.fidelity import read_fidelity_manifest
+from cad_agent.fidelity import (
+    new_fidelity_manifest,
+    read_fidelity_manifest,
+    run_fidelity_pdf,
+    run_fidelity_text_observations,
+)
 from cad_agent.manifest import sha256_file
 
 pytestmark = pytest.mark.real_data
@@ -71,3 +76,55 @@ def test_private_fidelity_pdf_has_nine_hash_bound_layout_pages() -> None:
             assert mechanical["state"] == "passed"
             assert mechanical["save_performed"] is False
             assert mechanical["repair_performed"] is False
+
+
+def test_case01_asteriti_aggregate_trace_text_remains_review_only(tmp_path: Path) -> None:
+    source_value = os.environ.get("CAD_AGENT_CASE01_ASTERITI_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_CASE01_ASTERITI_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert sha256_file(source) == "1970e92e81d888437f55369c4605d0a5f71127177898fb6d5012084ae22fe162"
+
+    output = tmp_path / "case01-fidelity"
+    manifest = new_fidelity_manifest(
+        source,
+        output,
+        144,
+        "Approved private source-only evaluation per #491 CASE01 checkpoint 6613335500; reference DWG remains sealed",
+        workspace_root=Path.cwd(),
+    )
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_spans"]
+
+    assert len(native) == 71
+    assert all(item["source_sha256"] == manifest["source"]["sha256"] for item in native)
+    assert all(item["visibility"] == "unverified" for item in native)
+    assert all(item["semantic_role"] is None for item in native)
+    assert all(item["evidence_kind"] == "native_pdf" for item in native)
+    assert all(
+        "".join(trace["text"] for trace in item["source_paint_evidence"]["member_traces"]) == item["content"]
+        for item in native
+    )
+    assert all(
+        item["source_paint_evidence"].get("character_range")
+        or item["source_paint_evidence"]["member_traces"][0]["text"] == item["content"]
+        for item in native
+    )
+    target_counts = {
+        text: sum(item["content"] == text for item in native)
+        for text in ("414 MM", "71.5 MM", "34 MM", "21.3 MM", "36 MM", "21 MM")
+    }
+    assert target_counts == {
+        "414 MM": 2,
+        "71.5 MM": 2,
+        "34 MM": 3,
+        "21.3 MM": 3,
+        "36 MM": 1,
+        "21 MM": 1,
+    }
+    assert "DIMENSION" not in observation and "TEXT" not in observation
