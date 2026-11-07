@@ -1743,6 +1743,89 @@ def _native_pdf_text_span_records(
         smaller_area = min(left.get_area(), right.get_area())
         return intersection.get_area() / smaller_area if smaller_area > 0 else 0.0
 
+    def exact_source_span_trace_range(
+        span: dict[str, Any], span_rect: fitz.Rect, line_direction: Any,
+        trace: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Narrow an aggregate paint trace only when source text and glyph geometry bind uniquely."""
+        content = span.get("text")
+        origin = span.get("origin")
+        span_font = span.get("font")
+        span_size = span.get("size")
+        chars = trace.get("chars")
+        trace_font = trace.get("font")
+        trace_size = trace.get("size")
+        trace_direction = trace.get("dir")
+        trace_bbox = trace.get("bbox")
+        sequence_number = trace.get("seqno")
+        if (
+            not isinstance(content, str) or not content or "\ufffd" in content
+            or not isinstance(origin, (tuple, list)) or len(origin) != 2
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in origin)
+            or not isinstance(span_font, str) or trace_font != span_font
+            or not isinstance(span_size, (int, float)) or not math.isfinite(float(span_size)) or span_size <= 0
+            or not isinstance(trace_size, (int, float)) or not math.isfinite(float(trace_size))
+            or not math.isclose(float(span_size), float(trace_size), rel_tol=0.0, abs_tol=0.01)
+            or not isinstance(line_direction, (tuple, list)) or len(line_direction) != 2
+            or not isinstance(trace_direction, (tuple, list)) or len(trace_direction) != 2
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in line_direction)
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in trace_direction)
+            or math.dist(tuple(float(value) for value in line_direction), tuple(float(value) for value in trace_direction)) > 0.001
+            or not isinstance(chars, (tuple, list)) or not chars
+            or type(sequence_number) is not int
+            or not isinstance(trace_bbox, (tuple, list)) or len(trace_bbox) != 4
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in trace_bbox)
+        ):
+            return None
+
+        trace_codepoints: list[int] = []
+        for char in chars:
+            if (
+                not isinstance(char, (tuple, list)) or len(char) < 4
+                or type(char[0]) is not int or not 0 <= char[0] <= 0x10FFFF
+                or not isinstance(char[2], (tuple, list)) or len(char[2]) != 2
+                or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in char[2])
+                or not isinstance(char[3], (tuple, list)) or len(char[3]) != 4
+                or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in char[3])
+            ):
+                return None
+            trace_codepoints.append(char[0])
+
+        source_codepoints = [ord(character) for character in content]
+        if not source_codepoints or len(source_codepoints) > len(trace_codepoints):
+            return None
+        matches: list[tuple[int, fitz.Rect]] = []
+        for start in range(len(trace_codepoints) - len(source_codepoints) + 1):
+            end = start + len(source_codepoints)
+            if trace_codepoints[start:end] != source_codepoints:
+                continue
+            first_origin = chars[start][2]
+            if math.dist(tuple(float(value) for value in origin), tuple(float(value) for value in first_origin)) > 0.35:
+                continue
+            selected_chars = chars[start:end]
+            selected_bbox = fitz.Rect(
+                min(float(char[3][0]) for char in selected_chars),
+                min(float(char[3][1]) for char in selected_chars),
+                max(float(char[3][2]) for char in selected_chars),
+                max(float(char[3][3]) for char in selected_chars),
+            )
+            if (
+                selected_bbox.is_empty or not selected_bbox.is_valid
+                or overlap_ratio(span_rect, selected_bbox) < 0.99
+            ):
+                continue
+            matches.append((start, selected_bbox))
+        if len(matches) != 1:
+            return None
+
+        start, selected_bbox = matches[0]
+        narrowed = dict(trace)
+        narrowed["chars"] = list(chars[start:start + len(source_codepoints)])
+        narrowed["bbox"] = tuple(float(value) for value in selected_bbox)
+        narrowed["_source_character_range"] = (start, start + len(source_codepoints))
+        narrowed["_aggregate_trace_bbox"] = tuple(float(value) for value in trace_bbox)
+        return narrowed
+
     traces_by_sequence: dict[int, list[dict[str, Any]]] = {}
     for trace in paint_traces:
         if isinstance(trace, dict) and type(trace.get("seqno")) is int:
@@ -1870,10 +1953,50 @@ def _native_pdf_text_span_records(
             return True
         return False
 
+    source_text_blocks = source_page.get_text("dict").get("blocks", [])
+    span_trace_ranges: dict[tuple[int, int, int], tuple[int, dict[str, Any]]] = {}
+    trace_range_coverage: dict[int, list[tuple[int, int]]] = {}
+    for block_index, block in enumerate(source_text_blocks):
+        for line_index, line in enumerate(block.get("lines", [])):
+            if line.get("wmode") != 0:
+                continue
+            line_direction = line.get("dir", (1.0, 0.0))
+            for span_index, span in enumerate(line.get("spans", [])):
+                bbox = span.get("bbox")
+                if not isinstance(bbox, (tuple, list)) or len(bbox) != 4:
+                    continue
+                span_rect = fitz.Rect(bbox)
+                if span_rect.is_empty or not span_rect.is_valid:
+                    continue
+                candidates = [
+                    (trace_index, mapped)
+                    for trace_index, trace in enumerate(paint_traces)
+                    if (mapped := exact_source_span_trace_range(span, span_rect, line_direction, trace)) is not None
+                ]
+                if len(candidates) != 1:
+                    continue
+                trace_index, mapped = candidates[0]
+                span_trace_ranges[(block_index, line_index, span_index)] = (trace_index, mapped)
+                trace_range_coverage.setdefault(trace_index, []).append(mapped["_source_character_range"])
+
+    complete_trace_partitions: set[int] = set()
+    for trace_index, trace in enumerate(paint_traces):
+        ranges = sorted(trace_range_coverage.get(trace_index, []))
+        cursor = 0
+        if not ranges:
+            continue
+        for start, end in ranges:
+            if start != cursor or end <= start:
+                break
+            cursor = end
+        else:
+            if cursor == len(trace.get("chars", [])):
+                complete_trace_partitions.add(trace_index)
+
     scale_x = render_width / displayed.width
     scale_y = render_height / displayed.height
     records: list[dict[str, Any]] = []
-    for block_index, block in enumerate(source_page.get_text("dict").get("blocks", [])):
+    for block_index, block in enumerate(source_text_blocks):
         for line_index, line in enumerate(block.get("lines", [])):
             direction = line.get("dir", (1.0, 0.0))
             writing_mode = line.get("wmode")
@@ -1905,41 +2028,51 @@ def _native_pdf_text_span_records(
                         and overlap_ratio(rect, fitz.Rect(trace_bbox)) >= 0.9
                     ):
                         matching_traces.append((trace, trace_text, agreement or ""))
-                if len(matching_traces) == 1:
-                    if not matching_traces[0][2]:
-                        continue
+                if len(matching_traces) == 1 and matching_traces[0][2]:
                     member_traces = [matching_traces[0][0]]
                     trace_text = matching_traces[0][1]
                     text_agreement = matching_traces[0][2]
                 else:
-                    if source_sha256 != "c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c":
-                        continue
-                    # A single original PDF span may be painted as several glyph
-                    # traces. Aggregate only a unique, complete, ordered partition
-                    # whose trace text exactly reconstructs that span.
-                    ordered_matches = sorted(
-                        matching_traces,
-                        key=lambda item: item[0].get("seqno", -1),
-                    )
-                    member_traces = [item[0] for item in ordered_matches]
-                    sequence_numbers = [trace.get("seqno") for trace in member_traces]
-                    trace_text = "".join(item[1] for item in ordered_matches)
-                    common_fields = ("type", "font", "layer", "colorspace", "color", "opacity", "wmode", "dir", "size")
-                    first_trace = member_traces[0] if member_traces else {}
-                    common_style = all(
-                        all(trace.get(field) == first_trace.get(field) for field in common_fields)
-                        for trace in member_traces
-                    )
-                    if (
-                        len(member_traces) < 2
-                        or any(type(sequence) is not int for sequence in sequence_numbers)
-                        or len(set(sequence_numbers)) != len(sequence_numbers)
-                        or not common_style
-                        or trace_text != content
-                        or not compact_content
-                    ):
-                        continue
-                    text_agreement = "exact"
+                    complete_b041_partition: list[dict[str, Any]] | None = None
+                    if source_sha256 == "c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c":
+                        # Preserve the existing exact B041 multi-trace recovery before
+                        # attempting a uniquely anchored subrange of one aggregate trace.
+                        ordered_matches = sorted(
+                            matching_traces,
+                            key=lambda item: item[0].get("seqno", -1),
+                        )
+                        candidate_traces = [item[0] for item in ordered_matches]
+                        sequence_numbers = [trace.get("seqno") for trace in candidate_traces]
+                        candidate_text = "".join(item[1] for item in ordered_matches)
+                        common_fields = ("type", "font", "layer", "colorspace", "color", "opacity", "wmode", "dir", "size")
+                        first_trace = candidate_traces[0] if candidate_traces else {}
+                        common_style = all(
+                            all(trace.get(field) == first_trace.get(field) for field in common_fields)
+                            for trace in candidate_traces
+                        )
+                        if (
+                            len(candidate_traces) >= 2
+                            and all(type(sequence) is int for sequence in sequence_numbers)
+                            and len(set(sequence_numbers)) == len(sequence_numbers)
+                            and common_style
+                            and candidate_text == content
+                            and compact_content
+                        ):
+                            complete_b041_partition = candidate_traces
+                            trace_text = candidate_text
+                    if complete_b041_partition is not None:
+                        member_traces = complete_b041_partition
+                        text_agreement = "exact"
+                    else:
+                        range_candidate = span_trace_ranges.get((block_index, line_index, span_index))
+                        if (
+                            range_candidate is None
+                            or range_candidate[0] not in complete_trace_partitions
+                        ):
+                            continue
+                        member_traces = [range_candidate[1]]
+                        trace_text = content
+                        text_agreement = "exact"
                 member_sequences = {trace["seqno"] for trace in member_traces}
                 member_paint_evidence = []
                 for trace in member_traces:
@@ -1947,7 +2080,7 @@ def _native_pdf_text_span_records(
                     if not isinstance(trace_chars, (tuple, list)) or not trace_chars:
                         member_paint_evidence = []
                         break
-                    member_paint_evidence.append({
+                    member_evidence = {
                         "sequence_number": trace["seqno"],
                         "text": "".join(
                             chr(char[0]) for char in trace_chars
@@ -1962,7 +2095,11 @@ def _native_pdf_text_span_records(
                         "opacity": trace.get("opacity"),
                         "wmode": trace.get("wmode"),
                         "layer": trace.get("layer") or None,
-                    })
+                    }
+                    if isinstance(trace.get("_source_character_range"), (tuple, list)):
+                        member_evidence["character_range"] = list(trace["_source_character_range"])
+                        member_evidence["aggregate_trace_bbox_pt"] = list(trace["_aggregate_trace_bbox"])
+                    member_paint_evidence.append(member_evidence)
                 if len(member_paint_evidence) != len(member_traces):
                     continue
                 paint_trace = member_traces[0]
@@ -2000,6 +2137,18 @@ def _native_pdf_text_span_records(
                 font_size = span.get("size")
                 source_font_size = float(font_size) if isinstance(font_size, (int, float)) and math.isfinite(font_size) and font_size > 0 else None
                 font_name = span.get("font")
+                source_paint_evidence = {
+                    "type": paint_type,
+                    "opacity": float(paint_opacity),
+                    "wmode": paint_wmode,
+                    "layer": paint_layer or None,
+                    "sequence_number": paint_trace.get("seqno"),
+                    "member_sequence_numbers": sorted(member_sequences),
+                    "member_traces": member_paint_evidence,
+                    "bbox_pt": [float(value) for value in paint_trace["bbox"]],
+                }
+                if isinstance(paint_trace.get("_source_character_range"), (tuple, list)):
+                    source_paint_evidence["aggregate_trace_bbox_pt"] = list(paint_trace["_aggregate_trace_bbox"])
                 records.append({
                     "id": f"native-pdf-p{page_number:02d}-b{block_index:03d}-l{line_index:03d}-s{span_index:03d}",
                     "content": trace_text if text_agreement == "trace_recovered_replacement_characters" else content,
@@ -2010,16 +2159,7 @@ def _native_pdf_text_span_records(
                     "evidence_kind": "native_pdf",
                     "visibility": "unverified",
                     "source_span_bbox_pt": [float(value) for value in bbox],
-                    "source_paint_evidence": {
-                        "type": paint_type,
-                        "opacity": float(paint_opacity),
-                        "wmode": paint_wmode,
-                        "layer": paint_layer or None,
-                        "sequence_number": paint_trace.get("seqno"),
-                        "member_sequence_numbers": sorted(member_sequences),
-                        "member_traces": member_paint_evidence,
-                        "bbox_pt": [float(value) for value in paint_trace["bbox"]],
-                    },
+                    "source_paint_evidence": source_paint_evidence,
                     "source_origin_pt": source_origin,
                     "source_font_name": str(font_name) if isinstance(font_name, str) else None,
                     "source_font_size_pt": source_font_size,
