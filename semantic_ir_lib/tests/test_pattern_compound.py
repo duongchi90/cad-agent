@@ -373,7 +373,7 @@ def test_case01_semantic_output_is_unchanged_within_performance_budget():
     primitive_doc = load_primitive_ir_document_bytes(raw_ir)
     started = time.process_time()
     semantic_doc = build_semantic_document(
-        primitive_doc, primitive_ir_file_name=ir_file.name
+        primitive_doc, primitive_ir_file_name="page_01.json"
     )
     elapsed = time.process_time() - started
 
