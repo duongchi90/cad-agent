@@ -111,6 +111,217 @@ def _matrix_values(matrix: fitz.Matrix) -> list[float]:
     return [round(value, 8) for value in values]
 
 
+
+def _segment_intersects_rect(start, end, rect):
+    x0, y0 = start
+    dx, dy = end[0] - x0, end[1] - y0
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, x0 - rect.x0), (dx, rect.x1 - x0), (-dy, y0 - rect.y0), (dy, rect.y1 - y0)):
+        if abs(p) <= 1e-12:
+            if q < 0:
+                return False
+            continue
+        t = q / p
+        if p < 0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+        if t0 > t1:
+            return False
+    return True
+
+
+def _drawing_segments(drawings):
+    segments = []
+    for drawing in drawings:
+        for item in drawing.get("items", ()):
+            kind = item[0]
+            if kind == "l" and len(item) >= 3:
+                segments.append(((item[1].x, item[1].y), (item[2].x, item[2].y)))
+            elif kind == "re" and len(item) >= 2:
+                rect = fitz.Rect(item[1])
+                corners = (
+                    (rect.x0, rect.y0),
+                    (rect.x1, rect.y0),
+                    (rect.x1, rect.y1),
+                    (rect.x0, rect.y1),
+                )
+                segments.extend((corners[i], corners[(i + 1) % 4]) for i in range(4))
+            elif kind == "qu" and len(item) >= 2:
+                quad = item[1]
+                corners = (
+                    (quad.ul.x, quad.ul.y),
+                    (quad.ur.x, quad.ur.y),
+                    (quad.lr.x, quad.lr.y),
+                    (quad.ll.x, quad.ll.y),
+                )
+                segments.extend((corners[i], corners[(i + 1) % 4]) for i in range(4))
+    return segments
+
+
+def _text_char_has_visible_ink(pixels, box, color):
+    x0, y0, x1, y1 = box
+    height, width = pixels.shape
+    x0, y0, x1, y1 = max(0, x0), max(0, y0), min(width, x1), min(height, y1)
+    if x0 >= x1 or y0 >= y1:
+        return False
+    outer = pixels[max(0, y0 - 3) : min(height, y1 + 3), max(0, x0 - 3) : min(width, x1 + 3)]
+    border = np.ones(outer.shape, dtype=bool)
+    border[y0 - max(0, y0 - 3) : y1 - max(0, y0 - 3), x0 - max(0, x0 - 3) : x1 - max(0, x0 - 3)] = (
+        False
+    )
+    background = outer[border]
+    if background.size == 0:
+        return False
+    bg = float(np.median(background))
+    foreground = (
+        float(0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2])
+        if len(color) >= 3
+        else float(color[0])
+    )
+    char = pixels[y0:y1, x0:x1].astype(np.float32)
+    visible = (char < bg - 4.0) if foreground < 0.5 else (char > bg + 4.0)
+    return bool(np.count_nonzero(visible) >= max(1, int(char.size * 0.002)))
+
+
+def _text_ink_render_bounds(rect, page, pixel_scale, pixmap_origin):
+    # Finite zero-area envelopes can represent degenerate paths. Preserve
+    # them with the same outward pixel allowance rather than dropping them.
+    if not rect.is_valid or not all(math.isfinite(v) for v in rect):
+        raise ValueError("PDF paint bounds are missing or invalid")
+    transformed = rect * page.rotation_matrix
+    ox, oy = pixmap_origin
+    return (math.floor(transformed.x0 * pixel_scale - ox),
+            math.floor(transformed.y0 * pixel_scale - oy),
+            math.ceil(transformed.x1 * pixel_scale - ox),
+            math.ceil(transformed.y1 * pixel_scale - oy))
+
+
+def _page_text_ink_exclusion_boxes(page, pixel_scale, pixmap_origin, pixmap):
+    """Visible source-text boxes without overlapping path or image support."""
+    if page.rotation not in {0, 90, 180, 270} or not math.isfinite(pixel_scale) or pixel_scale <= 0:
+        return [], "unsupported_page_rotation_or_scale"
+    try:
+        # MuPDF may expose only a base tile, not repeated pattern paint.
+        # Inspect parsed PDF object metadata, including nested resources;
+        # do not interpret content streams or guess the repeated footprint.
+        for xref in range(1, page.parent.xref_length()):
+            if any(page.parent.xref_get_key(xref, key)[0] != "null"
+                   for key in ("PatternType", "Pattern", "Resources/Pattern")):
+                return [], "unsupported_pattern_paint"
+        traces = page.get_texttrace()
+        drawings = page.get_drawings(extended=True)
+        bboxlog = page.get_bboxlog()
+        if not bboxlog:
+            return [], "missing_paint_bounds"
+        _matrix_values(page.rotation_matrix)
+        images = [fitz.Rect(record["bbox"]) for record in page.get_image_info()]
+        # Protect actual paint envelopes, not inferred centerlines/widths.
+        # Fills protect their complete interiors: text clipping and group
+        # masks can create edges absent from the expanded drawing records.
+        protected_rects = list(images)
+        segments = []
+        for drawing in drawings:
+            if drawing.get("type") == "clip":
+                # Clipping can turn a uniform rectangle interior into real
+                # edges. Protect every clip boundary even if the clipped
+                # paint's own path is far outside the glyph box.
+                items = drawing.get("items", ())
+                if not items or any(item[0] not in {"l", "re", "qu"} for item in items):
+                    protected_rects.append(fitz.Rect(drawing["scissor"]))
+                else:
+                    segments.extend((a, b, 1.0 / pixel_scale)
+                                    for a, b in _drawing_segments([drawing]))
+                continue
+            if drawing.get("type") == "group":
+                continue
+            if drawing.get("type") not in {"s", "f", "fs"}:
+                return [], "unsupported_graphics_paint"
+            if "f" in drawing["type"]:
+                protected_rects.append(fitz.Rect(drawing["rect"]))
+        protected_rects.extend(annotation.rect for annotation in page.annots() or ())
+        protected_rects.extend(widget.rect for widget in page.widgets() or ())
+        known_paints = {
+            "fill-text",
+            "stroke-text",
+            "ignore-text",
+            "fill-path",
+            "stroke-path",
+            "fill-image",
+        }
+        for record in bboxlog:
+            if not isinstance(record, (tuple, list)) or len(record) != 2:
+                return [], "invalid_paint_record"
+            kind, bounds = record
+            if kind not in known_paints:
+                return [], "unsupported_paint"
+            if kind in {"stroke-path", "fill-path", "fill-image"}:
+                if not isinstance(bounds, (tuple, list, fitz.Rect)) or len(bounds) != 4:
+                    return [], "missing_paint_bounds"
+                # Enumerate every paint entry directly. Scalar stroke width,
+                # item count and closePath do not bound CTMs or miter joins.
+                protected_rects.append(fitz.Rect(bounds))
+        protected_render_rects = [
+            fitz.Rect(_text_ink_render_bounds(rect, page, pixel_scale, pixmap_origin))
+            + (-1, -1, 1, 1)
+            for rect in protected_rects
+        ]
+        samples = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+            pixmap.height, pixmap.width, pixmap.n
+        )
+        if pixmap.n >= 3:
+            pixels = np.rint(samples[:, :, :3] @ np.asarray([0.2126, 0.7152, 0.0722])).astype(
+                np.uint8
+            )
+        else:
+            pixels = samples[:, :, 0]
+    except Exception as exc:
+        return [], f"unavailable:{type(exc).__name__}"
+    result = []
+    for span in traces:
+        if span.get("type") not in (0, 1):
+            continue
+        try:
+            opacity = float(span.get("opacity", 1.0))
+            color = tuple(float(v) for v in span.get("color", (0.0,)))
+            if (
+                not math.isfinite(opacity)
+                or opacity <= 0
+                or not color
+                or not all(math.isfinite(v) for v in color)
+            ):
+                continue
+            for char in span.get("chars", ()):
+                source = fitz.Rect(char[3])
+                if (
+                    not source.is_valid
+                    or source.is_empty
+                    or source.width > 40.0
+                    or source.height > 40.0
+                ):
+                    continue
+                padded = source + (-1.0, -1.0, 1.0, 1.0)
+                pixel_bounds = _text_ink_render_bounds(padded, page, pixel_scale, pixmap_origin)
+                if any(fitz.Rect(pixel_bounds).intersects(rect) for rect in protected_render_rects):
+                    continue
+                if any(
+                    _segment_intersects_rect(a, b, padded + (-m, -m, m, m)) for a, b, m in segments
+                ):
+                    continue
+                char_box = _text_ink_render_bounds(source, page, pixel_scale, pixmap_origin)
+                if not _text_char_has_visible_ink(pixels, char_box, color):
+                    continue
+                box = (
+                    max(0, pixel_bounds[0]), max(0, pixel_bounds[1]),
+                    min(pixmap.width, pixel_bounds[2]), min(pixmap.height, pixel_bounds[3]),
+                )
+                if box[0] < box[2] and box[1] < box[3]:
+                    result.append(tuple(float(v) for v in box))
+        except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+            continue
+    return result, ("available" if result else "no_visible_text_ink")
+
+
 def _page_vector_texts(
     page: fitz.Page,
     pixel_scale: float,
@@ -4464,6 +4675,9 @@ def run_pdf(
             pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             rendered_png_bytes = pixmap.tobytes("png")
             rendered_png_sha256 = hashlib.sha256(rendered_png_bytes).hexdigest()
+            text_ink_boxes, text_ink_status = _page_text_ink_exclusion_boxes(
+                page, scale, (pixmap.x, pixmap.y), pixmap
+            )
             _write_pdf_output(
                 image_path,
                 output_dir,
@@ -4537,6 +4751,8 @@ def run_pdf(
                 vector_kwargs["pdf_layer_line_witnesses"] = pdf_layer_line_witnesses
             if pdf_vector_lines:
                 vector_kwargs["pdf_vector_lines"] = pdf_vector_lines
+            if text_ink_boxes:
+                vector_kwargs["pdf_text_ink_boxes"] = text_ink_boxes
 
             def process_page_ir(path: Path) -> None:
                 (
@@ -4629,6 +4845,8 @@ def run_pdf(
                     "rendered_png_sha256": rendered_png_sha256,
                     "primitive_ir": str(output_path.relative_to(output_dir)),
                     "pdf_vector_text_status": pdf_text_status,
+                    "pdf_text_ink_exclusion_status": text_ink_status,
+                    "pdf_text_ink_exclusion_box_count": len(text_ink_boxes),
                     "pdf_vector_arc_count": len(pdf_vector_arcs),
                     "skipped_pdf_vector_text_span_count": skipped_pdf_text_spans,
                     "excluded_unverified_pdf_vector_text_span_count": len(pdf_vector_texts),

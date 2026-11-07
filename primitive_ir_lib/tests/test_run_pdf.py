@@ -7,11 +7,367 @@ from pathlib import Path
 from unittest.mock import patch
 
 import fitz
+import cv2
+import numpy as np
 import pytest
 
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
 from primitive_ir_lib.run_pdf import _write_pdf_output, run_pdf
 from primitive_ir_lib.text_extraction import RawText
+
+
+@pytest.mark.parametrize("mode", ["wide_stroke", "inside_tick", "fill", "invisible", "image"])
+def test_text_ink_exclusion_preserves_competing_source_paint(mode):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "8", fontsize=14,
+                         render_mode=3 if mode == "invisible" else 0)
+        glyph = fitz.Rect(page.get_texttrace()[0]["chars"][0][3])
+        if mode == "wide_stroke":
+            y = glyph.y1 + 3
+            page.draw_line((glyph.x0 - 8, y), (glyph.x1 + 8, y), width=16)
+        elif mode == "inside_tick":
+            page.draw_line(glyph.tl + (2, 4), glyph.tl + (4, 4), width=0.2)
+        elif mode == "fill":
+            page.draw_rect(glyph + (-20, -20, 20, 20), color=None, fill=(0, 0, 0))
+        elif mode == "image":
+            pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10))
+            pix.clear_with(255)
+            page.insert_image(glyph + (-5, -5, 5, 5), pixmap=pix)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (pixmap.x, pixmap.y), pixmap)
+    assert boxes == []
+
+
+@pytest.mark.parametrize("rotation", [90, 180, 270])
+def test_text_ink_exclusion_uses_render_frame_for_rotated_page(rotation):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "12,70", fontsize=14)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        original, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        page.set_rotation(rotation)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        rotated, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        assert len(original) == len(rotated) > 0
+        for box, observed in zip(original, rotated):
+            expected = fitz.Rect(box) * fitz.Matrix(page.rotation_matrix.a,
+                                                   page.rotation_matrix.b,
+                                                   page.rotation_matrix.c,
+                                                   page.rotation_matrix.d,
+                                                   page.rotation_matrix.e * 2,
+                                                   page.rotation_matrix.f * 2)
+            assert tuple(expected) == observed
+
+
+def test_text_ink_exclusion_preserves_geometry_with_and_without_distant_text(tmp_path):
+    results = []
+    for with_text in (False, True):
+        source = tmp_path / f"geometry-{with_text}.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=450, height=180)
+            page.draw_line((30, 35), (220, 35), width=1)
+            page.draw_circle((95, 80), 12, width=1)
+            if with_text:
+                page.insert_text((290, 140), "15,00 O0o8", fontsize=14)
+            document.save(source)
+        with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+            output = tmp_path / f"out-{with_text}"
+            run_pdf(source, output, scale_mm_per_px=1, dpi=144)
+        payload = json.loads((output / "primitive_ir/page_01.json").read_text())
+        results.append(sorted(json.dumps((p["type"], p["geometry"]), sort_keys=True)
+                              for p in payload["primitives"] if p["type"] != "text"))
+    assert results[0]
+    assert results[0] == results[1]
+
+
+def test_text_ink_exclusion_rejects_unknown_shading():
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "8", fontsize=14)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        bounds = page.get_bboxlog() + [("fill-shade", (0, 0, 250, 150))]
+        with patch.object(page, "get_bboxlog", return_value=bounds):
+            boxes, status = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        assert boxes == []
+        assert status == "unsupported_paint"
+
+
+def test_white_text_on_filled_background_keeps_outline_support():
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.draw_rect((20, 20, 220, 120), fill=(0, 0, 0))
+        page.insert_text((40, 80), "8", fontsize=14, color=(1, 1, 1))
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        # Retaining ambiguous text ink is safe; filled paint can carry an
+        # unreported text clip/mask, so its interior must stay protected.
+        assert boxes == []
+        assert all(box[0] > 40 and box[2] < 440 and box[1] > 40 and box[3] < 240
+                   for box in boxes)
+
+
+def test_clipped_rectangle_paint_cannot_delete_real_geometry_inside_glyph():
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    from primitive_ir_lib.run_image import _exclude_text_ink_candidates
+    from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+    renders, results = [], []
+    streams = (b"q 0 g 42 65 32 1 re f Q",
+               b"q 42 65 32 1 re W n 0 g 10 10 220 130 re f Q")
+    for stream in streams:
+        with fitz.open() as document:
+            page = document.new_page(width=250, height=150)
+            page.insert_text((40, 80), "W", fontsize=39)
+            xref = document.get_new_xref()
+            document.update_object(xref, "<<>>")
+            document.update_stream(xref, stream)
+            contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+            document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            renders.append(pixmap.samples)
+            image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), dtype=np.uint8),
+                                 cv2.IMREAD_COLOR)
+            geometry = extract_raw_geometry(image)
+            assert len(geometry.lines) == 2
+            expected = [(line.p1_px, line.p2_px) for line in geometry.lines]
+            boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+            _exclude_text_ink_candidates(geometry, boxes, image.shape)
+            observed = [(line.p1_px, line.p2_px) for line in geometry.lines]
+            assert observed == expected
+            results.append(observed)
+    assert renders[0] == renders[1]
+    assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("paint", ["text_clip", "tiling_pattern"])
+def test_unexpanded_pdf_paint_keeps_source_strokes_inside_text_bounds(paint):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    from primitive_ir_lib.run_image import _exclude_text_ink_candidates
+    from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "W", fontsize=39)
+        if paint == "text_clip":
+            stream = (b"q BT /helv 50 Tf 1 0 0 1 42 70 Tm 7 Tr (_) Tj ET "
+                      b"0 g 0 0 250 150 re f Q")
+        else:
+            tile = document.get_new_xref()
+            document.update_object(tile, "<< /Type /Pattern /PatternType 1 /PaintType 1 "
+                                   "/TilingType 1 /BBox [0 0 40 20] /XStep 40 /YStep 20 "
+                                   "/Resources <<>> >>")
+            document.update_stream(tile, b"0 g 2 4 32 1 re f")
+            resources = int(document.xref_get_key(page.xref, "Resources")[1].split()[0])
+            document.xref_set_key(resources, "Pattern", f"<< /P1 {tile} 0 R >>")
+            stream = b"q /Pattern cs /P1 scn 10 10 220 130 re f Q"
+        xref = document.get_new_xref()
+        document.update_object(xref, "<<>>")
+        document.update_stream(xref, stream)
+        contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+        document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), dtype=np.uint8),
+                             cv2.IMREAD_COLOR)
+        geometry = extract_raw_geometry(
+            image, preset="default" if paint == "text_clip" else "real_scan_tuned_v1"
+        )
+        expected = [(line.p1_px, line.p2_px) for line in geometry.lines]
+        assert expected
+        boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        _exclude_text_ink_candidates(geometry, boxes, image.shape)
+        assert [(line.p1_px, line.p2_px) for line in geometry.lines] == expected
+        if paint == "tiling_pattern":
+            with fitz.open() as control:
+                direct = control.new_page(width=250, height=150)
+                direct.insert_text((40, 80), "W", fontsize=39)
+                explicit = ("q 10 10 220 130 re W n 0 g " + " ".join(
+                    f"{2 + 40*i} {4 + 20*j} 32 1 re f"
+                    for i in range(7) for j in range(8)) + " Q").encode()
+                xref = control.get_new_xref()
+                control.update_object(xref, "<<>>")
+                control.update_stream(xref, explicit)
+                contents = " ".join(f"{n} 0 R" for n in direct.get_contents() + [xref])
+                control.xref_set_key(direct.xref, "Contents", f"[{contents}]")
+                equivalent = direct.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                assert pixmap.samples == equivalent.samples
+
+
+def test_visible_pdf_text_paint_does_not_become_raster_geometry(tmp_path):
+    source = tmp_path / "text-only.pdf"
+    with fitz.open() as document:
+        page = document.new_page(width=500, height=180)
+        page.insert_text((35, 90), "15,00 M6x1-6H O0o8", fontsize=28)
+        document.save(source)
+    with patch("primitive_ir_lib.run_image.extract_text_tesseract", return_value=[]):
+        manifest = run_pdf(source, tmp_path / "output", scale_mm_per_px=1,
+                           dpi=144, auto_ocr_roi=False)
+    payload = json.loads((tmp_path / "output/primitive_ir/page_01.json").read_text())
+    geometry = [p for p in payload["primitives"] if p["type"] in {"line", "circle"}]
+    assert geometry == []
+    assert (manifest["pages"][0]["text_ink_excluded_line_count"]
+            + manifest["pages"][0]["text_ink_excluded_circle_count"]) > 0
+    assert payload["cross_validations"] == []
+
+
+@pytest.mark.parametrize("kind", ["closed_cubic_miter", "nonuniform_ctm"])
+@pytest.mark.parametrize("cropped_rotated", [False, True])
+def test_actual_stroke_paint_is_never_glyph_only(kind, cropped_rotated):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    from primitive_ir_lib.run_image import _exclude_text_ink_candidates, _text_ink_mask
+    from primitive_ir_lib.geometry_extraction import extract_raw_geometry
+    if kind == "closed_cubic_miter":
+        size, position, fontsize = (220, 160), (65, 90), 30
+        stream = b"q 2 w 30 M 0 j 100 80 m 140 78 140 82 100 80 c h S Q"
+    else:
+        size, position, fontsize = (250, 150), (40, 80), 39
+        stream = b"q 40 0 0 1 0 0 cm 1 w 0 G 2.225 70 m 2.225 95 l S Q"
+    images = []
+    for text in (True, False):
+        with fitz.open() as document:
+            page = document.new_page(width=size[0], height=size[1])
+            if text:
+                page.insert_text(position, "W", fontsize=fontsize)
+            xref = document.get_new_xref()
+            document.update_object(xref, "<<>>")
+            document.update_stream(xref, stream)
+            contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+            document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+            scale, clip = 2, None
+            if cropped_rotated:
+                page.set_cropbox(fitz.Rect(10.25, 5.5, size[0] - 5, size[1] - 5))
+                page.set_rotation(90)
+                scale = 1.25
+                clip = fitz.Rect(5, 5, page.rect.width - 5, page.rect.height - 5)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+            image = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), np.uint8), 1)
+            images.append(image)
+            if text:
+                geometry = extract_raw_geometry(image)
+                before = [(line.p1_px, line.p2_px) for line in geometry.lines]
+                assert before or cropped_rotated
+                boxes, _ = _page_text_ink_exclusion_boxes(
+                    page, scale, (pixmap.x, pixmap.y), pixmap
+                )
+                mask = _text_ink_mask(image.shape, boxes)
+                _exclude_text_ink_candidates(geometry, boxes, image.shape)
+                after = [(line.p1_px, line.p2_px) for line in geometry.lines]
+    # An independent graphic-only render is the oracle, not drawing metadata.
+    graphic_pixels = np.min(images[1], axis=2) < 220
+    assert np.count_nonzero(graphic_pixels & mask.astype(bool)) == 0
+    assert after == before
+    if kind == "nonuniform_ctm":
+        with fitz.open() as control:
+            page = control.new_page(width=size[0], height=size[1])
+            page.insert_text(position, "W", fontsize=fontsize)
+            xref = control.get_new_xref()
+            control.update_object(xref, "<<>>")
+            control.update_stream(xref, b"q 40 w 0 G 89 70 m 89 95 l S Q")
+            contents = " ".join(f"{n} 0 R" for n in page.get_contents() + [xref])
+            control.xref_set_key(page.xref, "Contents", f"[{contents}]")
+            if cropped_rotated:
+                page.set_cropbox(fitz.Rect(10.25, 5.5, size[0] - 5, size[1] - 5))
+                page.set_rotation(90)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+            equivalent = cv2.imdecode(np.frombuffer(pixmap.tobytes("png"), np.uint8), 1)
+            assert np.array_equal(equivalent, images[0])
+
+
+@pytest.mark.parametrize("bounds", [None, (0, 0, float("nan"), 20), (50, 50, 10, 10)])
+def test_missing_or_invalid_stroke_paint_bounds_disable_exclusions(bounds):
+    from primitive_ir_lib.run_pdf import _page_text_ink_exclusion_boxes
+    with fitz.open() as document:
+        page = document.new_page(width=250, height=150)
+        page.insert_text((40, 80), "8", fontsize=14)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        records = page.get_bboxlog() + [("stroke-path", bounds)]
+        with patch.object(page, "get_bboxlog", return_value=records):
+            boxes, _ = _page_text_ink_exclusion_boxes(page, 2, (0, 0), pixmap)
+        assert boxes == []
+
+
+@pytest.mark.real_data
+@pytest.mark.parametrize(
+    "variable,source_hash,render_hash,scale,merge,max_lines,circles,expected_geometry_sha256",
+    [
+        (
+            "CAD_AGENT_CASE01_TEXT_INK_PDF",
+            "1970e92e81d888437f55369c4605d0a5f71127177898fb6d5012084ae22fe162",
+            "8d3953028aca1570e18b951c1e6c9b53b9dee72f8215465087c46c6dca1b8252",
+            0.176388888889,
+            True,
+            915,
+            0,
+            None,
+        ),
+        (
+            "CAD_AGENT_FASTENING_BAR_PDF",
+            "bf374d514e47f25bf82b9227145e9c057ef398cb76226b2fd4be662b0596b1cd",
+            "e4fc9c6478a66962ae9756c0c2e860e52f0ac87d9195fec305b48c592e531d26",
+            1.0,
+            False,
+            365,
+            2,
+            "e009aba65514170f0b42d468facf3da094d53765f019b0a1f4ffd73f07ca51e3",
+        ),
+    ],
+)
+def test_real_pdf_text_ink_reduction_preserves_text_and_source_circles(
+    tmp_path,
+    variable,
+    source_hash,
+    render_hash,
+    scale,
+    merge,
+    max_lines,
+    circles,
+    expected_geometry_sha256,
+):
+    source = os.environ.get(variable)
+    if not source:
+        pytest.skip(f"set {variable} to the approved private source")
+    source = Path(source)
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash
+    output = tmp_path / "output"
+    # Fastening's unit scale here is diagnostic pixel normalization only,
+    # not an automatic-calibration or downstream-build acceptance receipt.
+    manifest = run_pdf(source, output, scale_mm_per_px=scale, dpi=144,
+                       merge_lines=merge, auto_ocr_roi=True)
+    entry = manifest["pages"][0]
+    assert entry["rendered_png_sha256"] == render_hash
+    payload = json.loads((output / "primitive_ir/page_01.json").read_text())
+    primitives = payload["primitives"]
+    line_count = sum(p["type"] == "line" for p in primitives)
+    if expected_geometry_sha256 is None:
+        assert line_count < max_lines
+        assert entry["text_ink_excluded_line_count"] > 0
+    else:
+        # Fastening Bar is a no-loss control: this source has no admitted
+        # exclusion boxes, so geometry must remain exactly equal to current
+        # main's source/render-bound baseline rather than being forced to show
+        # an improvement that the paint evidence does not support. The digest
+        # is frozen from current main 07c80c0 on the same source/render.
+        assert line_count == max_lines
+        geometry = sorted(
+            (
+                primitive["type"],
+                json.dumps(primitive["geometry"], sort_keys=True, separators=(",", ":")),
+            )
+            for primitive in primitives
+            if primitive["type"] in {"line", "circle"}
+        )
+        geometry_sha256 = hashlib.sha256(
+            json.dumps(geometry, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        assert geometry_sha256 == expected_geometry_sha256
+        assert entry["pdf_text_ink_exclusion_box_count"] == 0
+        assert entry["text_ink_excluded_line_count"] == 0
+        assert entry["text_ink_excluded_circle_count"] == 0
+    assert sum(p["type"] == "circle" for p in primitives) == circles
+    assert not any(p["type"] == "dimension" for p in primitives)
+    assert sum(p["type"] == "text" for p in primitives) == (114 if merge else 14)
 
 
 def test_run_pdf_excludes_unverified_pdf_only_text_and_binds_rendered_page(tmp_path: Path):
