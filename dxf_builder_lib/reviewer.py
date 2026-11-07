@@ -523,6 +523,21 @@ def _review_dxf_loaded(
         if identity_source == "part_id":
             build_result.component_handle_by_part_id[part_id] = entity.dxf.handle
 
+        expected_owner = doc.modelspace().block_record_handle
+        actual_owner = entity.dxf.get("owner")
+        if actual_owner != expected_owner:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id,
+                field="layout",
+                expected=expected_owner,
+                actual=actual_owner,
+                message=(
+                    f"{part_id}: INSERT thuộc owner {actual_owner!r}, "
+                    f"không thuộc ModelSpace owner {expected_owner!r}"
+                ),
+            ))
+            continue
+
         component_checked += 1
         dxftype = entity.dxftype()
         if dxftype != "INSERT":

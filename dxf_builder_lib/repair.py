@@ -300,6 +300,14 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
                 f"{part_id}: BỎ QUA repair — PART_ID không duy nhất trong ModelSpace"
             )
             continue
+        if old_entity is not None and old_entity.dxf.get("owner") != msp.block_record_handle:
+            result.skipped_part_ids.append(part_id)
+            result.skipped_count += 1
+            result.details.append(
+                f"{part_id}: BỎ QUA repair — INSERT thuộc owner "
+                f"{old_entity.dxf.get('owner')!r}, không thuộc ModelSpace; giữ nguyên entity"
+            )
+            continue
         if old_entity is not None:
             msp.delete_entity(old_entity)
 
