@@ -11,6 +11,66 @@ namespace CadAgent.AutoCAD2027.Tests.Ipc;
 public sealed class JsonFileStoreTests
 {
     [Fact]
+    public void OversizedOptedInInventoryBecomesSmallFailureWithoutPartialPayload()
+    {
+        using var fixture = new StoreFixture();
+        const string requestId = "inventory-cap-001";
+        var hash = new string('a', 64);
+        var request = new IpcRequest
+        {
+            RequestId = requestId,
+            SchemaVersion = ContractConstants.SchemaVersion,
+            Operation = "drawing_setup_audit",
+            DrawingFullPath = @"C:\drawings\source.dwg",
+            DrawingSha256 = hash,
+            Parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                """{"include_model_space_inventory":true}""")!,
+            Approval = null
+        };
+        var inventory = new Dictionary<string, JsonElement>
+        {
+            ["model_space_inventory"] = JsonSerializer.SerializeToElement(new
+            {
+                drawing_full_path = @"C:\drawings\source.dwg",
+                drawing_sha256_before = hash,
+                drawing_sha256_after = hash,
+                dbmod_before = 0,
+                dbmod_after = 0,
+                process_id = 123,
+                plugin_version = new string('v', 17 * 1024 * 1024),
+                plugin_binary_path = @"C:\plugin.dll",
+                plugin_binary_sha256 = hash,
+                entity_count = 0,
+                enumeration_complete = true,
+                bounds_complete = true,
+                entities = Array.Empty<object>()
+            })
+        };
+        var result = new IpcResult
+        {
+            RequestId = requestId,
+            Success = true,
+            Operation = "drawing_setup_audit",
+            DrawingFullPath = request.DrawingFullPath,
+            Changed = false,
+            EntityHandles = new List<string>(),
+            Warnings = new List<string>(),
+            Errors = new List<string>(),
+            StartedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Payload = inventory
+        };
+
+        fixture.Store.WriteResult(result, request);
+
+        var saved = fixture.Store.ReadResult(requestId);
+        Assert.False(saved.Success);
+        Assert.Contains("INVENTORY_RESPONSE_LIMIT_EXCEEDED", saved.Errors!);
+        Assert.Empty(saved.Payload!);
+        Assert.True(new FileInfo(fixture.Store.GetResultPath(requestId)).Length < 1024 * 1024);
+    }
+
+    [Fact]
     public void WritesAndReadsRequestWithDeterministicFileName()
     {
         using var fixture = new StoreFixture();

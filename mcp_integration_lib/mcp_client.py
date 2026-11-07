@@ -648,24 +648,34 @@ class FileIPCLiveMCPClient:
             return self._dispatch("drawing-list-open-paths", {}).get("paths", [])
         token = uuid.uuid4().hex[:12]
         result = self._dir / f"autocad_mcp_open_documents_{token}.txt"
+        begin = f"BEGIN:{token}"
+        end = f"END:{token}"
         lisp_path = str(result).replace("\\", "/").replace('"', '\\"')
         try:
             self._raw_lisp_trigger(
                 '(progn (vl-load-com) '
                 f'(setq mcp-doc-file (open "{lisp_path}" "w")) '
+                f'(write-line "{begin}" mcp-doc-file) '
                 '(vlax-for mcp-open-doc '
                 '(vla-get-Documents (vlax-get-acad-object)) '
                 '(write-line (vla-get-FullName mcp-open-doc) mcp-doc-file)) '
+                f'(write-line "{end}" mcp-doc-file) '
                 "(close mcp-doc-file))"
             )
             deadline = time.time() + self._timeout
             while time.time() < deadline:
                 if result.is_file():
-                    return [
-                        line.strip()
-                        for line in result.read_text(encoding="utf-8").splitlines()
-                        if line.strip()
-                    ]
+                    # Existence alone includes the writer's empty/partial file.
+                    # Only a complete response can prove that a target is absent.
+                    text = result.read_text(encoding="utf-8")
+                    lines = text.splitlines()
+                    if (text.endswith("\n") and len(lines) >= 2
+                            and lines[0] == begin and lines[-1] == end
+                            and all(not line.startswith(("BEGIN:", "END:"))
+                                    for line in lines[1:-1])):
+                        # Unsaved native documents have no FullName. As before,
+                        # omit those entries from this saved-path inventory.
+                        return [line.strip() for line in lines[1:-1] if line.strip()]
                 time.sleep(self._poll)
             raise MCPTimeoutError("Timeout waiting for AutoCAD open-document list")
         finally:

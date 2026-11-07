@@ -15,6 +15,27 @@ public sealed record LayoutSetupSnapshot(
     IReadOnlyList<double> ViewportScales,
     bool Locked);
 
+public sealed record ModelSpaceEntityBoundsSnapshot(
+    string Handle,
+    string Type,
+    string BoundsStatus,
+    double[]? Bounds);
+
+public sealed record ModelSpaceInventorySnapshot(
+    string DrawingFullPath,
+    string DrawingSha256Before,
+    string DrawingSha256After,
+    int DbModBefore,
+    int DbModAfter,
+    int ProcessId,
+    string PluginVersion,
+    string PluginBinaryPath,
+    string PluginBinarySha256,
+    int EntityCount,
+    bool EnumerationComplete,
+    bool BoundsComplete,
+    IReadOnlyList<ModelSpaceEntityBoundsSnapshot> Entities);
+
 public sealed record DrawingSetupSnapshot(
     string DrawingFullPath,
     int DbModBefore,
@@ -29,4 +50,5 @@ public sealed record DrawingSetupSnapshot(
     IReadOnlyList<string> TableStyles,
     IReadOnlyList<LayoutSetupSnapshot> Layouts,
     IReadOnlyList<string> MissingFonts,
-    IReadOnlyList<string> SubstitutedFonts);
+    IReadOnlyList<string> SubstitutedFonts,
+    ModelSpaceInventorySnapshot? ModelSpaceInventory = null);
