@@ -643,8 +643,10 @@ class FileIPCClientTests(unittest.TestCase):
             def raw_trigger(command):
                 match = re.search(r'\(open "([^"]+)" "w"\)', command)
                 self.assertIsNotNone(match)
-                Path(match.group(1)).write_text(
-                    "C:/work/a.dxf\nC:/work/b.dxf\n",
+                output = Path(match.group(1))
+                token = output.stem.removeprefix("autocad_mcp_open_documents_")
+                output.write_text(
+                    f"BEGIN:{token}\nC:/work/a.dxf\nC:/work/b.dxf\nEND:{token}\n",
                     encoding="utf-8",
                 )
 
