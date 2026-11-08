@@ -6,8 +6,10 @@ import ctypes
 import copy
 import hashlib
 import json
+import math
 import os
 import re
+import tempfile
 from contextlib import contextmanager
 from collections.abc import Mapping
 from ctypes import wintypes
@@ -543,7 +545,19 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_valid_image_scale(value: object) -> bool:
+    """Return whether a manual image scale is a finite positive numeric value."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
 def new_manifest(source: Path, scale_mm_per_px: float, approval: str) -> dict[str, Any]:
+    if not is_valid_image_scale(scale_mm_per_px):
+        raise ManifestError("Image scale must be a finite positive number.")
     return classify_draft_reference({
         "schema_version": "1.0",
         "source": {"name": source.name, "sha256": sha256_file(source), "kind": "image"},
@@ -799,9 +813,15 @@ def _manifest_lock(path: Path):
 
 def _write_manifest_unlocked(path: Path, manifest: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
     try:
-        temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
         try:

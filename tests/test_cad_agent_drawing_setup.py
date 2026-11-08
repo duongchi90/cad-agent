@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import cad_agent.drawing_setup as drawing_setup_module
 from cad_agent.cli import main
 from cad_agent.drawing_contracts import DrawingContractError, canonical_json_sha256, read_contract
 from cad_agent.drawing_setup import (
@@ -18,7 +19,7 @@ from cad_agent.drawing_setup import (
     evaluate_setup_plan,
     require_setup_verified,
 )
-from cad_agent.manifest import sha256_file
+from cad_agent.manifest import sha256_file, write_manifest
 from drawing_setup_fixtures import (
     approved_setup_plan,
     apply_test_mutation,
@@ -26,7 +27,12 @@ from drawing_setup_fixtures import (
     matching_setup_ipc_result,
     write_approved_setup_inputs,
 )
-from mcp_integration_lib.dotnet_ipc import DotNetIPCClient, DotNetIPCResultError
+from mcp_integration_lib.dotnet_ipc import (
+    DotNetIPCClient,
+    DotNetIPCResultError,
+    atomic_write_json,
+    result_path,
+)
 
 
 def _approved_mappings(root: Path) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object], Path]:
@@ -38,6 +44,28 @@ def _approved_mappings(root: Path) -> tuple[dict[str, object], dict[str, object]
         read_contract(inputs.template_manifest, contract="template_manifest"),
         inputs.template_file,
     )
+
+
+def _layer_classifier():
+    classifier = getattr(drawing_setup_module, "create_layer_standard_check", None)
+    assert callable(classifier), "the existing Drawing Setup owner must expose classification"
+    return classifier
+
+
+def test_write_manifest_does_not_follow_preexisting_temporary_symlink(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+    protected = tmp_path / "source.dwg"
+    protected.write_bytes(b"source drawing bytes")
+    temporary_link = output.with_suffix(output.suffix + ".tmp")
+    try:
+        temporary_link.symlink_to(protected)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"filesystem symlink creation is unavailable: {exc}")
+
+    write_manifest(output, {"status": "CLASSIFIED"})
+
+    assert protected.read_bytes() == b"source drawing bytes"
+    assert json.loads(output.read_text(encoding="utf-8")) == {"status": "CLASSIFIED"}
 
 
 def _create_plan(
@@ -57,6 +85,250 @@ def _create_plan(
         template_manifest=template_manifest,
         template_file=template_file,
     )
+
+
+def test_layer_standard_check_classifies_every_audited_layer_by_literal_rules(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "drawing-setup-audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = [
+        {"name": "A-WALL", "linetype": "Continuous", "plottable": True},
+        {"name": "a-wall", "linetype": "Continuous", "plottable": True},
+        {"name": "MISC", "linetype": "Continuous", "plottable": True},
+        {"name": "MISC", "linetype": "Continuous", "plottable": True},
+    ]
+    write_manifest(audit_path, audit)
+    rules = {
+        "allowed_exact_names": ["A-WALL"],
+        "allowed_prefixes": ["A-"],
+        "case_sensitive": False,
+    }
+
+    result = _layer_classifier()(audit_path, rules)
+
+    assert result == {
+        "schema_version": "layer-standard-check-1.0",
+        "status": "CLASSIFIED",
+        "classification_scope": "LAYER_NAME_RULES_ONLY",
+        "audit_origin_authentication": "NOT_AUTHENTICATED",
+        "layer_inventory_completeness": "NOT_VERIFIED",
+        "classification_basis": "CALLER_SUPPLIED_AUDIT_LAYER_NAMES",
+        "engineering_compliance": "NOT_EVALUATED",
+        "audit_full_path": str(audit_path.resolve()),
+        "audit_sha256": sha256_file(audit_path),
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256": sha256_file(drawing),
+        "rules": rules,
+        "layer_count": 4,
+        "standard_count": 2,
+        "nonstandard_count": 2,
+        "standard_percentage": 50.0,
+        "layers": [
+            {
+                "name": "A-WALL",
+                "classification": "STANDARD",
+                "matching_rules": [
+                    {"kind": "EXACT_NAME", "value": "A-WALL"},
+                    {"kind": "PREFIX", "value": "A-"},
+                ],
+            },
+            {
+                "name": "a-wall",
+                "classification": "STANDARD",
+                "matching_rules": [
+                    {"kind": "EXACT_NAME", "value": "A-WALL"},
+                    {"kind": "PREFIX", "value": "A-"},
+                ],
+            },
+            {"name": "MISC", "classification": "NONSTANDARD", "matching_rules": []},
+            {"name": "MISC", "classification": "NONSTANDARD", "matching_rules": []},
+        ],
+    }
+
+
+def test_layer_standard_check_does_not_authenticate_pre_submission_audit_edits(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    # This schema-valid list may have been shortened before classification.
+    audit["layers"] = [{"name": "A-WALL", "linetype": "Continuous", "plottable": True}]
+    write_manifest(audit_path, audit)
+
+    result = _layer_classifier()(
+        audit_path,
+        {"allowed_exact_names": ["A-WALL"], "allowed_prefixes": [], "case_sensitive": True},
+    )
+
+    assert result["layer_count"] == 1
+    assert result["audit_origin_authentication"] == "NOT_AUTHENTICATED"
+    assert result["layer_inventory_completeness"] == "NOT_VERIFIED"
+    assert result["classification_basis"] == "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"
+
+
+def test_layer_standard_check_does_not_trim_or_ignore_case_when_not_requested(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = [
+        {"name": "a-wall", "linetype": "Continuous", "plottable": True},
+        {"name": " A-WALL ", "linetype": "Continuous", "plottable": True},
+    ]
+    write_manifest(audit_path, audit)
+    rules = {
+        "allowed_exact_names": ["A-WALL"],
+        "allowed_prefixes": ["A-"],
+        "case_sensitive": True,
+    }
+
+    result = _layer_classifier()(audit_path, rules)
+
+    assert [item["classification"] for item in result["layers"]] == [
+        "NONSTANDARD",
+        "NONSTANDARD",
+    ]
+
+
+def test_layer_standard_check_reports_empty_table_without_compliance_pass(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = []
+    write_manifest(audit_path, audit)
+
+    result = _layer_classifier()(
+        audit_path,
+        {"allowed_exact_names": [], "allowed_prefixes": [], "case_sensitive": True},
+    )
+
+    assert result["status"] == "EMPTY_TABLE"
+    assert result["layer_count"] == 0
+    assert result["standard_count"] == 0
+    assert result["nonstandard_count"] == 0
+    assert result["standard_percentage"] is None
+    assert result["engineering_compliance"] == "NOT_EVALUATED"
+    assert result["layers"] == []
+
+
+def test_layer_standard_check_rejects_stale_drawing_source(tmp_path: Path) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"original drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = []
+    write_manifest(audit_path, audit)
+    drawing.write_bytes(b"changed drawing bytes")
+
+    with pytest.raises(DrawingSetupError, match="source hash"):
+        _layer_classifier()(
+            audit_path,
+            {"allowed_exact_names": [], "allowed_prefixes": [], "case_sensitive": True},
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("changed", True), ("dbmod_after", 1)],
+)
+def test_layer_standard_check_rejects_mutated_or_inconsistent_audit(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit[field] = value
+    write_manifest(audit_path, audit)
+
+    with pytest.raises(DrawingSetupError):
+        _layer_classifier()(
+            audit_path,
+            {"allowed_exact_names": [], "allowed_prefixes": [], "case_sensitive": True},
+        )
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"allowed_exact_names": [], "allowed_prefixes": []},
+        {"allowed_exact_names": [], "allowed_prefixes": [""], "case_sensitive": True},
+        {
+            "allowed_exact_names": [],
+            "allowed_prefixes": [],
+            "case_sensitive": True,
+            "default_allowed": True,
+        },
+    ],
+)
+def test_layer_standard_check_rejects_rules_without_exact_explicit_semantics(
+    tmp_path: Path, rules: dict[str, object]
+) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = []
+    write_manifest(audit_path, audit)
+
+    with pytest.raises(DrawingSetupError):
+        _layer_classifier()(audit_path, rules)
+
+
+def test_layer_standard_check_cli_writes_valid_read_only_result(tmp_path: Path) -> None:
+    drawing = tmp_path / "source.dwg"
+    drawing.write_bytes(b"frozen drawing bytes")
+    audit_path = tmp_path / "drawing-setup-audit.json"
+    audit = matching_setup_audit(approved_setup_plan())
+    audit["drawing_full_path"] = str(drawing.resolve())
+    audit["drawing_sha256"] = sha256_file(drawing)
+    audit["layers"] = [
+        {"name": "A-WALL", "linetype": "Continuous", "plottable": True},
+        {"name": "MISC", "linetype": "Continuous", "plottable": True},
+    ]
+    write_manifest(audit_path, audit)
+    rules_path = tmp_path / "rules.json"
+    rules = {"allowed_exact_names": ["A-WALL"], "allowed_prefixes": [], "case_sensitive": True}
+    rules_path.write_text(json.dumps(rules), encoding="utf-8")
+    output = tmp_path / "layer-standard-check.json"
+
+    assert main([
+        "layer-standard-check", "--audit", str(audit_path),
+        "--rules", str(rules_path), "--output", str(output),
+    ]) == 0
+
+    result = read_contract(output, contract="layer_standard_check")
+    assert result["status"] == "CLASSIFIED"
+    assert result["audit_origin_authentication"] == "NOT_AUTHENTICATED"
+    assert result["layer_inventory_completeness"] == "NOT_VERIFIED"
+    assert result["classification_basis"] == "CALLER_SUPPLIED_AUDIT_LAYER_NAMES"
+    assert result["engineering_compliance"] == "NOT_EVALUATED"
+    assert result["standard_count"] == 1
+    assert result["nonstandard_count"] == 1
 
 
 def _policy_plan(
@@ -730,6 +1002,81 @@ def test_create_setup_audit_output_round_trips_with_empty_text_style(
     assert read_contract(output, contract="drawing_setup_audit") == audit
 
 
+def test_create_setup_audit_preserves_hash_bound_model_space_inventory(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": digest,
+        "drawing_sha256_after": digest,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "process_id": 123,
+        "plugin_version": "test",
+        "plugin_binary_path": r"C:\\plugin.dll",
+        "plugin_binary_sha256": "a" * 64,
+        "entity_count": 0,
+        "enumeration_complete": True,
+        "bounds_complete": True,
+        "entities": [],
+    }
+
+    audit = create_setup_audit(drawing, digest, result)
+
+    assert audit["model_space_inventory"]["drawing_sha256_before"] == digest
+    output = tmp_path / "audit-with-model-space-inventory.json"
+    output.write_text(json.dumps(audit), encoding="utf-8")
+    assert read_contract(output, contract="drawing_setup_audit") == audit
+
+
+def test_create_setup_audit_rejects_cross_bound_inventory_dbmod(
+    tmp_path: Path,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["dbmod_before"] = 1
+    result["payload"]["dbmod_after"] = 1
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": digest,
+        "drawing_sha256_after": digest,
+        "dbmod_before": 0,
+        "dbmod_after": 0,
+        "process_id": 123,
+        "plugin_version": "test",
+        "plugin_binary_path": r"C:\\plugin.dll",
+        "plugin_binary_sha256": "a" * 64,
+        "entity_count": 0,
+        "enumeration_complete": True,
+        "bounds_complete": True,
+        "entities": [],
+    }
+
+    with pytest.raises(DrawingContractError, match="DBMOD"):
+        create_setup_audit(drawing, digest, result)
+
+
+def test_create_setup_audit_rejects_model_space_hash_mismatch(tmp_path: Path) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    result = matching_setup_ipc_result(approved_setup_plan(), str(drawing.resolve()))
+    result["payload"]["model_space_inventory"] = {
+        "drawing_full_path": str(drawing.resolve()),
+        "drawing_sha256_before": "b" * 64,
+        "drawing_sha256_after": "b" * 64,
+    }
+
+    with pytest.raises(DrawingSetupError, match="path/hash"):
+        create_setup_audit(drawing, digest, result)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -775,10 +1122,12 @@ def test_drawing_setup_audit_cli_writes_a_hash_bound_contract(
         drawing_full_path: str | Path,
         *,
         drawing_sha256: str,
+        include_model_space_inventory: bool = False,
         request_id: str | None = None,
     ) -> dict[str, object]:
         observed["path"] = Path(drawing_full_path)
         observed["sha256"] = drawing_sha256
+        observed["include_model_space_inventory"] = include_model_space_inventory
         return matching_setup_ipc_result(
             approved_setup_plan(), str(Path(drawing_full_path).resolve())
         )
@@ -794,7 +1143,11 @@ def test_drawing_setup_audit_cli_writes_a_hash_bound_contract(
     ]) == 0
 
     artifact = read_contract(output, contract="drawing_setup_audit")
-    assert observed == {"path": drawing.resolve(), "sha256": sha256_file(drawing)}
+    assert observed == {
+        "path": drawing.resolve(),
+        "sha256": sha256_file(drawing),
+        "include_model_space_inventory": False,
+    }
     assert artifact["drawing_sha256"] == sha256_file(drawing)
     assert artifact["drawing_full_path"] == str(drawing.resolve())
 
@@ -843,6 +1196,149 @@ def test_drawing_setup_audit_cli_reports_ipc_failure_without_output(
         "--output", str(output),
     ]) == 2
     assert "active drawing mismatch" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_drawing_setup_audit_cli_rejects_missing_opt_in_inventory_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_legacy_success() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            atomic_write_json(
+                result_path(ipc_dir, request["request_id"]),
+                response,
+            )
+
+        return respond_with_legacy_success
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "model_space_inventory" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_drawing_setup_audit_cli_rejects_partial_opt_in_inventory_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_partial_inventory() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            response["payload"]["model_space_inventory"] = {
+                "drawing_full_path": request["drawing_full_path"],
+                "drawing_sha256_before": request["drawing_sha256"],
+                "drawing_sha256_after": request["drawing_sha256"],
+            }
+            atomic_write_json(
+                result_path(ipc_dir, request["request_id"]),
+                response,
+            )
+
+        return respond_with_partial_inventory
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "missing required properties" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("dbmod_field", ["dbmod_before", "dbmod_after"])
+def test_drawing_setup_audit_cli_rejects_boolean_inventory_dbmod_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    dbmod_field: str,
+) -> None:
+    drawing = tmp_path / "setup-lite.dwg"
+    drawing.write_bytes(b"synthetic-dwg")
+    digest = sha256_file(drawing)
+    ipc_dir = tmp_path / "ipc"
+    output = tmp_path / "audit.json"
+
+    def dispatcher(_hwnd: int):
+        def respond_with_boolean_dbmod() -> None:
+            request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+            request = json.loads(request_file.read_text(encoding="utf-8"))
+            response = matching_setup_ipc_result(
+                approved_setup_plan(), request["drawing_full_path"]
+            )
+            response["request_id"] = request["request_id"]
+            response["payload"]["model_space_inventory"] = {
+                "drawing_full_path": request["drawing_full_path"],
+                "drawing_sha256_before": digest,
+                "drawing_sha256_after": digest,
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "process_id": 123,
+                "plugin_version": "test",
+                "plugin_binary_path": r"C:\\plugin.dll",
+                "plugin_binary_sha256": "a" * 64,
+                "entity_count": 0,
+                "enumeration_complete": True,
+                "bounds_complete": True,
+                "entities": [],
+            }
+            response["payload"]["model_space_inventory"][dbmod_field] = False
+            atomic_write_json(result_path(ipc_dir, request["request_id"]), response)
+
+        return respond_with_boolean_dbmod
+
+    monkeypatch.setattr(
+        "mcp_integration_lib.dotnet_ipc.make_windows_dotnet_dispatch_trigger",
+        dispatcher,
+    )
+
+    assert main([
+        "drawing-setup-audit",
+        "--drawing", str(drawing),
+        "--hwnd", "123",
+        "--ipc-dir", str(ipc_dir),
+        "--output", str(output),
+        "--include-model-space-inventory",
+    ]) == 2
+    assert "DBMOD values must be integers" in capsys.readouterr().err
     assert not output.exists()
 
 

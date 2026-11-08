@@ -21,6 +21,7 @@ biết cách nối 1 vision_reader thật (dùng Anthropic API) vào chỗ này.
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ import cv2
 import numpy as np
 import pytesseract
 
-from .models import new_id, SemanticRole
+from .models import new_id, SemanticRole, SourceType
 
 Bbox = Tuple[int, int, int, int]  # (x_min, y_min, x_max, y_max) pixel
 
@@ -42,7 +43,7 @@ class RawText:
     bbox_px: Bbox
     rotation_deg: float
     confidence: float
-    source: str  # "text_tesseract" | "text_vision"
+    source: SourceType  # text_tesseract | text_vision | text_pdfvector
     parsed_value: Optional[float] = None
     semantic_role: SemanticRole = "unknown"
 
@@ -50,6 +51,10 @@ class RawText:
 # ---------------------------------------------------------- semantic role --
 _DRAWING_CODE_RE = re.compile(r"^[A-Z]{1,4}[-_][A-Z0-9]+([-_/][A-Z0-9]+)*$")
 _PURE_NUMBER_RE = re.compile(r"^\d{2,5}([.,]\d+)?$")
+_QUALIFIED_METRIC_THREAD_RE = re.compile(
+    r"^M\d+(?:[.,]\d+)?(?:[xX]\s*\d+(?:[.,]\d+)?(?:\s*-\s*[0-9A-Za-z]+)?|\s*-\s*[0-9A-Za-z]+)$",
+    re.IGNORECASE,
+)
 
 
 def classify_semantic_role(content: str) -> Tuple[SemanticRole, Optional[float]]:
@@ -57,6 +62,10 @@ def classify_semantic_role(content: str) -> Tuple[SemanticRole, Optional[float]]
     ban đầu. Vai trò cuối cùng còn phải chờ cross_validate() xác nhận (đối
     với dimension_value) hoặc Pattern Recognition (Phase 2) xác nhận thêm."""
     text = content.strip()
+
+    # Keep qualified metric thread callouts as note text, never driving dimensions.
+    if _QUALIFIED_METRIC_THREAD_RE.fullmatch(text):
+        return "general_note", None
 
     if _PURE_NUMBER_RE.match(text):
         value = float(text.replace(",", "."))
@@ -243,7 +252,96 @@ def detect_text_candidate_rois(
 
     # Sắp theo vị trí đọc tự nhiên: trên->dưới, trái->phải
     rois.sort(key=lambda b: (b[1], b[0]))
-    return rois
+    return _merge_punctuation_joined_rois(image_bgr, rois)
+
+
+def _short_ink_bridge(
+    labels: np.ndarray, stats: np.ndarray, left: Bbox, right: Bbox
+) -> bool:
+    """Require a small visible ink component, such as a hyphen, between ROIs."""
+    x0, y0, x1, y1 = left
+    u0, v0, u1, v1 = right
+    if x0 > u0:
+        left, right = right, left
+        x0, y0, x1, y1 = left
+        u0, v0, u1, v1 = right
+
+    gx0, gx1 = x1, u0
+    gy0, gy1 = max(y0, v0), min(y1, v1)
+    gap_width, band_height = gx1 - gx0, gy1 - gy0
+    if gap_width <= 0 or band_height <= 0:
+        return False
+
+    min_area = max(2, math.ceil(0.002 * gap_width * band_height))
+    for component_index in np.unique(labels[gy0:gy1, gx0:gx1]):
+        if component_index == 0:
+            continue
+        component_x, component_y, width, height, area = stats[component_index]
+        if (
+            # Measure the whole component: clipping a long drafting line to
+            # the gap must not manufacture a short punctuation witness.
+            gx0 <= component_x
+            and component_x + width <= gx1
+            and gy0 <= component_y
+            and component_y + height <= gy1
+            and area >= min_area
+            and width >= max(2, 0.05 * band_height)
+            and width <= 0.5 * band_height
+            and height >= 0.06 * band_height
+            and height <= 0.35 * band_height
+        ):
+            return True
+    return False
+
+
+def _merge_punctuation_joined_rois(
+    image_bgr: np.ndarray,
+    rois: List[Bbox],
+    max_gap_ratio: float = 0.6,
+    min_vertical_overlap: float = 0.8,
+    context_height_ratio: float = 0.12,
+) -> List[Bbox]:
+    """Join same-line OCR ROIs only when short visible ink bridges their gap."""
+    pending = sorted(rois, key=lambda roi: (roi[1], roi[0]))
+    if len(pending) < 2:
+        return pending
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (gray < 220).astype(np.uint8), connectivity=8
+    )
+    merged_rois: List[Bbox] = []
+    while pending:
+        current = pending.pop(0)
+        changed = True
+        while changed:
+            changed = False
+            x0, y0, x1, y1 = current
+            for index, other in enumerate(pending):
+                ox0, oy0, ox1, oy1 = other
+                smaller_height = min(y1 - y0, oy1 - oy0)
+                overlap = max(0, min(y1, oy1) - max(y0, oy0)) / max(
+                    1, smaller_height
+                )
+                gap = max(ox0 - x1, x0 - ox1, 0)
+                if (
+                    overlap < min_vertical_overlap
+                    or gap <= 0
+                    or gap > max_gap_ratio * smaller_height
+                    or not _short_ink_bridge(labels, stats, current, other)
+                ):
+                    continue
+                context_px = max(2, math.ceil(context_height_ratio * smaller_height))
+                current = (
+                    max(0, min(x0, ox0) - context_px),
+                    max(0, min(y0, oy0) - context_px),
+                    min(image_bgr.shape[1], max(x1, ox1) + context_px),
+                    min(image_bgr.shape[0], max(y1, oy1) + context_px),
+                )
+                pending.pop(index)
+                changed = True
+                break
+        merged_rois.append(current)
+    return merged_rois
 
 
 # -------------------------------------------------------------- tier 3: --

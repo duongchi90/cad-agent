@@ -7,9 +7,10 @@ import json
 import pytest
 
 from primitive_ir_lib.models import (
-    Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
+    ArcGeometry, Calibration, CircleGeometry, LineGeometry, Point2D, Primitive, TextData,
     PrimitiveIRDocument, SourceDocument, Trace,
 )
+from primitive_ir_lib.validator import validate_document as validate_primitive_document
 
 from semantic_ir_lib.constraint_detection import detect_circle_constraints, detect_constraints
 from semantic_ir_lib.io_utils import load_primitive_ir_document
@@ -56,6 +57,68 @@ def test_semantic_loader_refuses_unverified_calibration(tmp_path):
 
     with pytest.raises(ValueError, match="needs_verification"):
         load_primitive_ir_document(str(path))
+
+
+def test_semantic_loader_preserves_pdf_vector_text_provenance(tmp_path):
+    from primitive_ir_lib.models import PrimitiveIRDocument, SourceDocument, Trace
+
+    document = PrimitiveIRDocument(
+        source_document=SourceDocument("page.png", 0, 120, 80, "a" * 64),
+        calibration=Calibration(
+            unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 80), method="manual_override"
+        ),
+        primitives=[Primitive(
+            id="pdf-text", type="text", source="text_pdfvector", confidence=1.0,
+            trace=Trace((10, 20, 40, 32), extraction_tool="pymupdf"),
+            text_data=TextData("R7,50", Point2D(10, 20), 0.0, 12.0),
+        )],
+    )
+    path = tmp_path / "pdf-vector.json"
+    path.write_text(json.dumps(document.to_dict()), encoding="utf-8")
+
+    loaded = load_primitive_ir_document(str(path))
+
+    assert loaded.primitives[0].source == "text_pdfvector"
+    assert loaded.primitives[0].text_data.content == "R7,50"
+    assert loaded.primitives[0].trace.extraction_tool == "pymupdf"
+
+
+def test_semantic_loader_preserves_pdf_vector_arc_provenance(tmp_path):
+    source_pdf_sha256 = "a" * 64
+    render_sha256 = "b" * 64
+    document = PrimitiveIRDocument(
+        source_document=SourceDocument("page.pdf", 0, 120, 80, render_sha256),
+        calibration=Calibration(
+            unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 80), method="manual_override"
+        ),
+        primitives=[Primitive(
+            id="pdf-arc", type="arc", source="geometry_pdfvector", confidence=1.0,
+            trace=Trace(
+                bbox_px=(10, 20, 40, 50),
+                extraction_tool="pymupdf",
+                source_pdf_sha256=source_pdf_sha256,
+                source_page_index=0,
+                source_transform=(1.0, 0.0, 0.0, -1.0, 0.0, 80.0),
+                source_render_sha256=render_sha256,
+                source_render_dpi=72,
+                source_render_origin_px=(0, 0),
+            ),
+            geometry=ArcGeometry(
+                center=Point2D(25, 35), radius=15.0,
+                start_angle_deg=0.0, end_angle_deg=90.0,
+            ),
+        )],
+    )
+    source_payload = document.to_dict()
+    assert validate_primitive_document(source_payload) == []
+    path = tmp_path / "pdf-vector-arc.json"
+    path.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    loaded = load_primitive_ir_document(str(path))
+    round_trip_payload = loaded.to_dict()
+
+    assert validate_primitive_document(round_trip_payload) == []
+    assert round_trip_payload["primitives"][0]["trace"] == source_payload["primitives"][0]["trace"]
 
 
 # ------------------------------------------------------- pattern_recognition --

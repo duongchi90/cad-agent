@@ -97,6 +97,7 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Sequence, Tuple
 
+import cv2
 import numpy as np
 
 from .geometry_extraction import RawLine
@@ -113,6 +114,98 @@ def _angle_mod_pi(dx: float, dy: float) -> float:
     """Góc của đường thẳng, chuẩn hoá về [0, pi) vì đường thẳng không có hướng."""
     a = math.atan2(dy, dx) % math.pi
     return a
+
+
+def _freeze_metadata(value, _active_ids=None):
+    """Return a type-preserving key for metadata supported by the deduplicator.
+
+    Unknown objects use identity keys: preserving an extra line is safer than
+    treating custom equality or repr output as proof of metadata equivalence.
+    """
+    value_type = type(value)
+    # Keep actual runtime type identity, not user-controlled module/name labels.
+    type_tag = id(value_type)
+    if _active_ids is None:
+        _active_ids = set()
+
+    is_container = isinstance(value, (dict, list, tuple, set, frozenset))
+    tolist = getattr(value, "tolist", None)
+    is_array_like = callable(tolist)
+    if value_type is float and not math.isfinite(value):
+        # Non-finite values do not establish reliable metadata equivalence.
+        return ("ambiguous", object())
+    if is_container or is_array_like:
+        value_id = id(value)
+        if value_id in _active_ids:
+            # Preserve the records rather than failing or treating cycles as equal.
+            return ("ambiguous", object())
+        _active_ids.add(value_id)
+        try:
+            if isinstance(value, dict):
+                entries = tuple(
+                    sorted(
+                        ((_freeze_metadata(key, _active_ids), _freeze_metadata(item, _active_ids))
+                         for key, item in value.items()),
+                        key=repr,
+                    )
+                )
+                return ("dict", type_tag, entries)
+            if isinstance(value, list):
+                return ("list", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, tuple):
+                return ("tuple", type_tag, tuple(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, set):
+                return ("set", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            if isinstance(value, frozenset):
+                return ("frozenset", type_tag, frozenset(_freeze_metadata(item, _active_ids) for item in value))
+            dtype = getattr(value, "dtype", None)
+            shape = getattr(value, "shape", None)
+            return (
+                "array-like",
+                type_tag,
+                str(dtype) if dtype is not None else None,
+                tuple(shape) if shape is not None else None,
+                _freeze_metadata(tolist(), _active_ids),
+            )
+        finally:
+            _active_ids.remove(value_id)
+    if value is None or value_type in (bool, int, str, bytes):
+        return ("scalar", type_tag, value)
+    if value_type is float:
+        return ("scalar", type_tag, value.hex())
+    return ("identity", type_tag, id(value))
+
+
+def _deduplicate_exact_raw_lines(lines: Sequence[RawLine]) -> List[RawLine]:
+    """Remove only exact undirected geometry duplicates with matching metadata.
+
+    Coordinates are never quantized or tolerance-matched. IDs and confidence
+    are excluded from the identity key; the highest-confidence record wins,
+    with original input order breaking confidence ties. Other present fields
+    are preserved as identity so provenance or semantic differences survive.
+    """
+    unique = {}
+    excluded = {"id", "p1_px", "p2_px", "confidence"}
+    for line in lines:
+        try:
+            confidence = float(line.confidence)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("RawLine confidence must be finite") from None
+        if not math.isfinite(confidence):
+            raise ValueError("RawLine confidence must be finite")
+        p1 = tuple(line.p1_px)
+        p2 = tuple(line.p2_px)
+        geometry = (p1, p2) if p1 <= p2 else (p2, p1)
+        metadata = tuple(sorted(
+            (name, _freeze_metadata(value))
+            for name, value in vars(line).items()
+            if name not in excluded
+        ))
+        key = (geometry, metadata)
+        current = unique.get(key)
+        if current is None or confidence > current[1]:
+            unique[key] = (line, confidence)
+    return [line for line, _ in unique.values()]
 
 
 def _angle_diff_mod_pi(a: float, b: float) -> float:
@@ -144,6 +237,137 @@ def _line_angle_and_ref(line: RawLine) -> Tuple[float, float, float]:
     x2, y2 = line.p2_px
     angle = _angle_mod_pi(x2 - x1, y2 - y1)
     return angle, x1, y1
+
+
+def _source_dash_gap_intervals(
+    image_bgr: np.ndarray,
+    x0: float,
+    y0: float,
+    angle: float,
+    t_min: float,
+    t_max: float,
+    *,
+    include_single_gap: bool = False,
+) -> List[Tuple[float, float]]:
+    """Return source-unsupported intervals separating supported dark runs.
+
+    The normal cadence veto requires at least four dark runs, multiple
+    similarly sized gaps, and similarly sized runs along the actual raster
+    corridor. When explicitly requested, one unsupported interval between
+    exactly two dark runs is also returned for the merge-enabled source-gap
+    veto. Hough segment counts are not used as source evidence.
+    """
+    if image_bgr.ndim == 2:
+        gray = image_bgr
+    else:
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    start = int(math.floor(t_min))
+    end = int(math.ceil(t_max))
+    if end < start:
+        return []
+
+    direction = np.array([math.cos(angle), math.sin(angle)])
+    normal = np.array([-direction[1], direction[0]])
+    ts = np.arange(start, end + 1, dtype=np.float64)
+    offsets = np.arange(-3, 4, dtype=np.float64)
+    xs = np.rint(x0 + ts[:, None] * direction[0] + offsets[None, :] * normal[0]).astype(int)
+    ys = np.rint(y0 + ts[:, None] * direction[1] + offsets[None, :] * normal[1]).astype(int)
+    inside = (xs >= 0) & (xs < gray.shape[1]) & (ys >= 0) & (ys < gray.shape[0])
+    sampled_gray = gray[
+        np.clip(ys, 0, gray.shape[0] - 1),
+        np.clip(xs, 0, gray.shape[1] - 1),
+    ]
+    valid_corridor_values = sampled_gray[inside].reshape(-1, 1)
+    otsu_threshold, _ = cv2.threshold(
+        valid_corridor_values,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU,
+    )
+    dark_counts = np.sum(inside & (sampled_gray <= otsu_threshold), axis=1)
+    supported = dark_counts >= 1
+
+    # A single rasterization dropout inside a stroke is not a physical gap.
+    for index in range(1, len(supported) - 1):
+        if supported[index - 1] and supported[index + 1]:
+            supported[index] = True
+
+    transitions = np.diff(np.r_[False, supported, False].astype(np.int8))
+    run_starts = np.flatnonzero(transitions == 1)
+    run_ends = np.flatnonzero(transitions == -1) - 1
+    if include_single_gap and len(run_starts) == 2:
+        return [(float(start + run_ends[0]), float(start + run_starts[1]))]
+    if len(run_starts) < 4:
+        return []
+    run_lengths = run_ends - run_starts + 1
+    gap_lengths = run_starts[1:] - run_ends[:-1] - 1
+    if len(gap_lengths) < 3:
+        return []
+
+    def regular(values: np.ndarray) -> bool:
+        median = float(np.median(values))
+        return median > 0 and float(np.max(values) - np.min(values)) <= max(2.0, median * 0.45)
+
+    if not regular(run_lengths) or not regular(gap_lengths):
+        return []
+    return [
+        (float(start + left), float(start + right))
+        for left, right in zip(run_ends[:-1], run_starts[1:])
+    ]
+
+
+def _gap_matches_source_dash(
+    gap_start: float,
+    gap_end: float,
+    source_gaps: Sequence[Tuple[float, float]],
+) -> bool:
+    midpoint = (gap_start + gap_end) / 2.0
+    return any(
+        abs(midpoint - (source_start + source_end) / 2.0) <= max(2.0, (source_end - source_start) * 0.4)
+        for source_start, source_end in source_gaps
+    )
+
+
+def _source_dash_gaps_for_cluster(
+    image_bgr: np.ndarray,
+    cluster_lines: Sequence[RawLine],
+    ref_x0: float,
+    ref_y0: float,
+    ref_angle: float,
+    *,
+    include_single_gap: bool = False,
+) -> List[Tuple[float, float]]:
+    """Sample source gaps on the fitted group axis and return them in ref frame."""
+    points = np.asarray(
+        [point for line in cluster_lines for point in (line.p1_px, line.p2_px)],
+        dtype=np.float32,
+    )
+    vx, vy, fit_x0, fit_y0 = cv2.fitLine(
+        points, cv2.DIST_L2, 0, 0.01, 0.01
+    ).flatten()
+    fit_angle = math.atan2(float(vy), float(vx))
+    fit_direction = np.array([math.cos(fit_angle), math.sin(fit_angle)])
+    fit_origin = np.array([fit_x0, fit_y0], dtype=np.float64)
+    endpoint_values = (points.astype(np.float64) - fit_origin) @ fit_direction
+    fitted_gaps = _source_dash_gap_intervals(
+        image_bgr,
+        float(fit_x0),
+        float(fit_y0),
+        fit_angle,
+        float(np.min(endpoint_values)),
+        float(np.max(endpoint_values)),
+        include_single_gap=include_single_gap,
+    )
+
+    ref_origin = np.array([ref_x0, ref_y0], dtype=np.float64)
+    ref_direction = np.array([math.cos(ref_angle), math.sin(ref_angle)])
+    return [
+        tuple(sorted((
+            float((fit_origin + fit_direction * start - ref_origin) @ ref_direction),
+            float((fit_origin + fit_direction * end - ref_origin) @ ref_direction),
+        )))
+        for start, end in fitted_gaps
+    ]
 
 
 def merge_collinear_lines(
@@ -246,6 +470,10 @@ def merge_collinear_lines(
 
     # --- 1. Gom cụm các line cùng phương, cùng 1 đường thẳng (union-find) ---
     parent = list(range(n))
+    cluster_members = {idx: {idx} for idx in range(n)}
+    cluster_sizes = [1] * n
+    conflict_node_for_root = list(range(n))
+    incompatible_clusters = {idx: set() for idx in range(n)}
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -255,8 +483,57 @@ def merge_collinear_lines(
 
     def union(i: int, j: int) -> None:
         ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
+        if ri == rj:
+            return
+
+        conflict_i = conflict_node_for_root[ri]
+        conflict_j = conflict_node_for_root[rj]
+        if conflict_j in incompatible_clusters[conflict_i]:
+            return
+
+        # Pairwise compatibility is not transitive: a chain of nearby
+        # parallel detections can otherwise collapse distinct source strokes.
+        # Require every cross-component pair to satisfy the same line test
+        # before combining their projected intervals onto one reference axis.
+        for left in cluster_members[ri]:
+            for right in cluster_members[rj]:
+                first, second = sorted((left, right))
+                first_angle, first_x, first_y = angles[first]
+                second_angle, second_x, second_y = angles[second]
+                if _angle_diff_mod_pi(first_angle, second_angle) > angle_tol:
+                    incompatible_clusters[conflict_i].add(conflict_j)
+                    incompatible_clusters[conflict_j].add(conflict_i)
+                    return
+                if _perp_distance_point_to_line(
+                    second_x, second_y, first_x, first_y, first_angle
+                ) > perp_tol_px:
+                    incompatible_clusters[conflict_i].add(conflict_j)
+                    incompatible_clusters[conflict_j].add(conflict_i)
+                    return
+
+        # Rejected joins are monotonic: once two components contain an
+        # incompatible line pair, adding members cannot make them compatible.
+        # Carry that fact forward when either component grows, so later
+        # candidate edges do not rescan the same incompatible cross product.
+        if cluster_sizes[ri] < cluster_sizes[rj]:
+            ri, rj = rj, ri
+        parent[rj] = ri
+        cluster_sizes[ri] += cluster_sizes[rj]
+        cluster_members[ri].update(cluster_members.pop(rj))
+        conflict_i = conflict_node_for_root[ri]
+        conflict_j = conflict_node_for_root[rj]
+        if len(incompatible_clusters[conflict_i]) < len(incompatible_clusters[conflict_j]):
+            conflict_i, conflict_j = conflict_j, conflict_i
+        smaller_neighbors = incompatible_clusters[conflict_j]
+        larger_neighbors = incompatible_clusters[conflict_i]
+        for neighbor in smaller_neighbors:
+            incompatible_clusters[neighbor].discard(conflict_j)
+            incompatible_clusters[neighbor].add(conflict_i)
+        larger_neighbors.update(smaller_neighbors)
+        larger_neighbors.discard(conflict_i)
+        larger_neighbors.discard(conflict_j)
+        del incompatible_clusters[conflict_j]
+        conflict_node_for_root[ri] = conflict_i
 
     angles = []
     for line in raw_lines:
@@ -329,17 +606,40 @@ def merge_collinear_lines(
 
         if barrier_ts:
             clipped_segs = []
-            for t_min, t_max, line, _, _ in segs:
+            for t_min, t_max, line, p_at_min, p_at_max in segs:
                 cuts = [t_min] + [
                     barrier for barrier in barrier_ts
                     if t_min + 1e-6 < barrier < t_max - 1e-6
                 ] + [t_max]
-                dx, dy = math.cos(ref_angle), math.sin(ref_angle)
+                source_span = t_max - t_min
+                if source_span <= 1e-12:
+                    continue
+                source_dx = p_at_max[0] - p_at_min[0]
+                source_dy = p_at_max[1] - p_at_min[1]
                 for start, end in zip(cuts[:-1], cuts[1:]):
-                    p_start = (ref_x0 + dx * start, ref_y0 + dy * start)
-                    p_end = (ref_x0 + dx * end, ref_y0 + dy * end)
+                    start_fraction = (start - t_min) / source_span
+                    end_fraction = (end - t_min) / source_span
+                    p_start = (
+                        p_at_min[0] + source_dx * start_fraction,
+                        p_at_min[1] + source_dy * start_fraction,
+                    )
+                    p_end = (
+                        p_at_min[0] + source_dx * end_fraction,
+                        p_at_min[1] + source_dy * end_fraction,
+                    )
                     clipped_segs.append((start, end, line, p_start, p_end))
             segs = sorted(clipped_segs, key=lambda s: s[0])
+
+        source_gaps: List[Tuple[float, float]] = []
+        if image_bgr is not None:
+            source_gaps = _source_dash_gaps_for_cluster(
+                image_bgr,
+                cluster_lines,
+                ref_x0,
+                ref_y0,
+                ref_angle,
+                include_single_gap=True,
+            )
 
         # tính trước danh sách text "sát trục" (trong hành lang perp_tol lateral)
         # cùng toạ độ chiếu tâm bbox của chúng lên trục này
@@ -386,6 +686,8 @@ def merge_collinear_lines(
             blocked = gap > gap_tol_px or (
                 crosses_witness_barrier
                 or
+                _gap_matches_source_dash(cur_max, seg_min, source_gaps)
+                or
                 gap_blocked_by_tick_mark(cur_p_at_max, seg_p_at_min)
                 or gap_blocked_by_text(cur_max, seg_min)
             )
@@ -396,7 +698,29 @@ def merge_collinear_lines(
 
         for group in merged_groups:
             if len(group) == 1:
-                result.append(group[0][2])
+                t_min, t_max, line, p_start, p_end = group[0]
+                source_ts = sorted((
+                    _project_point(*line.p1_px, ref_x0, ref_y0, ref_angle),
+                    _project_point(*line.p2_px, ref_x0, ref_y0, ref_angle),
+                ))
+                if (
+                    abs(t_min - source_ts[0]) <= 1e-6
+                    and abs(t_max - source_ts[1]) <= 1e-6
+                ):
+                    result.append(line)
+                else:
+                    result.append(RawLine(
+                        id=new_id("rawline-clipped"),
+                        p1_px=p_start,
+                        p2_px=p_end,
+                        confidence=line.confidence,
+                        bbox_px=(
+                            min(p_start[0], p_end[0]),
+                            min(p_start[1], p_end[1]),
+                            max(p_start[0], p_end[0]),
+                            max(p_start[1], p_end[1]),
+                        ),
+                    ))
                 continue
             t_min = min(s[0] for s in group)
             t_max = max(s[1] for s in group)
@@ -416,4 +740,4 @@ def merge_collinear_lines(
                 bbox_px=bbox,
             ))
 
-    return result
+    return _deduplicate_exact_raw_lines(result)

@@ -12,6 +12,10 @@ public interface IDrawingGateway
 
     DrawingSetupSnapshot ReadDrawingSetup();
 
+    DrawingSetupSnapshot ReadDrawingSetupWithModelSpaceInventory(string expectedDrawingSha256) =>
+        throw new InvalidOperationException(
+            "This drawing gateway does not provide the opt-in ModelSpace inventory read.");
+
     VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request);
 
     NativeRenderEvidenceSnapshot ReadNativeRenderEvidence(NativeRenderRequest request);

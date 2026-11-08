@@ -75,6 +75,20 @@ def _primitive_from_dict(d: dict) -> Primitive:
         extracted_at=trace_d.get("extracted_at"),
         verification_request_sha256=trace_d.get("verification_request_sha256"),
         verification_result_sha256=trace_d.get("verification_result_sha256"),
+        source_pdf_sha256=trace_d.get("source_pdf_sha256"),
+        source_page_index=trace_d.get("source_page_index"),
+        source_transform=(
+            tuple(trace_d["source_transform"])
+            if trace_d.get("source_transform") is not None
+            else None
+        ),
+        source_render_sha256=trace_d.get("source_render_sha256"),
+        source_render_dpi=trace_d.get("source_render_dpi"),
+        source_render_origin_px=(
+            tuple(trace_d["source_render_origin_px"])
+            if trace_d.get("source_render_origin_px") is not None
+            else None
+        ),
     )
     validation_d = d.get("validation", {})
     validation = Validation(
