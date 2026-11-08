@@ -60,9 +60,11 @@ public sealed class CadAgentCommands
 
         var dispatcher = context.CreateDispatcher();
         IpcResult result;
+        IpcRequestReadSnapshot? requestRead = null;
         try
         {
-            result = dispatcher.DispatchFileIpcRequest(context.Store.ReadRequestForDispatch(requestId));
+            requestRead = context.Store.ReadRequestForDispatch(requestId);
+            result = dispatcher.DispatchFileIpcRequest(requestRead);
         }
         catch (System.Exception exception)
         {
@@ -80,7 +82,7 @@ public sealed class CadAgentCommands
                 exception);
         }
 
-        context.Store.WriteResult(result);
+        context.Store.WriteResult(result, requestRead?.Request);
         ScheduleCloseAfterResultPersistence(context, result);
         context.Report($"CADAGENT_DISPATCH: request {requestId} completed (success={result.Success}).");
     }

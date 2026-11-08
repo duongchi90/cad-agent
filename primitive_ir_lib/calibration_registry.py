@@ -23,6 +23,7 @@ def add_record(
     scale_mm_per_px: float,
     evidence: str,
     status: str = "verified",
+    image_sha256: str | None = None,
 ) -> dict:
     """Ghi 1 bản ghi calibration. status mặc định 'verified' (giữ hành vi cũ,
     dùng khi người dùng đã tự kiểm tra scale). Truyền status='needs_verification'
@@ -36,7 +37,14 @@ def add_record(
     if status not in ("verified", "needs_verification"):
         raise ValueError("status must be 'verified' or 'needs_verification'")
     registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {"schema_version": "1.0", "records": []}
-    record = {"id": identifier, "file_name": image_path.name, "sha256": file_sha256(image_path), "scale_mm_per_px": scale_mm_per_px, "evidence": evidence, "status": status}
+    record = {
+        "id": identifier,
+        "file_name": image_path.name,
+        "sha256": image_sha256 or file_sha256(image_path),
+        "scale_mm_per_px": scale_mm_per_px,
+        "evidence": evidence,
+        "status": status,
+    }
     registry["records"] = [item for item in registry.get("records", []) if item["id"] != identifier] + [record]
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")

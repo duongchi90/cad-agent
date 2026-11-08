@@ -349,7 +349,10 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 listing_path = Path(
                     command.split(marker, 1)[1].split('"', 1)[0].replace("/", "\\")
                 )
-                listing_path.write_text("C:/work/a.dxf\n", encoding="utf-8")
+                token = listing_path.stem.removeprefix("autocad_mcp_open_documents_")
+                listing_path.write_text(
+                    f"BEGIN:{token}\nC:/work/a.dxf\nEND:{token}\n", encoding="utf-8"
+                )
 
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
@@ -373,6 +376,117 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual(2, attempts)
         self.assertIsNotNone(listing_path)
         self.assertFalse(listing_path.exists())
+
+    def test_document_census_requires_complete_matching_response(self):
+        for mode in ("empty", "partial", "foreign", "truncated_end"):
+            with self.subTest(mode=mode):
+                def raw(command):
+                    marker = '(setq mcp-doc-file (open "'
+                    path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                    token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                    responses = {
+                        "empty": "",
+                        "partial": f"BEGIN:{token}\nC:/work/other.dxf\n",
+                        "foreign": "BEGIN:old\nEND:old\n",
+                        "truncated_end": f"BEGIN:{token}\nEND:{token}",
+                    }
+                    path.write_text(responses[mode], encoding="utf-8")
+
+                client = FileIPCLiveMCPClient(
+                    ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+                    timeout_s=0.02, poll_interval_s=0.001,
+                )
+                with self.assertRaises((MCPTimeoutError, MCPToolError)):
+                    client.drawing_list_open_paths()
+                self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_document_census_accepts_only_completed_empty_or_populated_list(self):
+        for paths in ([], ["C:/work/a.dxf", "C:/work/b.dwg"], ["", "C:/work/a.dxf"]):
+            with self.subTest(paths=paths):
+                commands = []
+
+                def raw(command):
+                    commands.append(command)
+                    marker = '(setq mcp-doc-file (open "'
+                    path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                    token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                    path.write_text("\n".join([f"BEGIN:{token}", *paths, f"END:{token}", ""]), encoding="utf-8")
+
+                client = FileIPCLiveMCPClient(
+                    ipc_dir=self._ipc_dir, raw_lisp_trigger=raw, timeout_s=0.02,
+                )
+                self.assertEqual([path for path in paths if path], client.drawing_list_open_paths())
+                self.assertIn('(write-line "BEGIN:', commands[0])
+                self.assertIn('(write-line "END:', commands[0])
+
+    def test_incomplete_census_cannot_confirm_close_or_clear_bound_target(self):
+        commands = []
+
+        def raw(command):
+            commands.append(command)
+            marker = '(setq mcp-doc-file (open "'
+            if marker in command:
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                path.write_text("", encoding="utf-8")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            timeout_s=0.01, poll_interval_s=0.001, document_settle_s=0,
+        )
+        client._active_drawing_path = "c:\\work\\a.dxf"
+        client._dispatch = lambda *_: {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+        with self.assertRaisesRegex(MCPToolError, "DRAWING_CLOSE_NOT_CONFIRMED"):
+            client.drawing_close()
+        self.assertEqual("c:\\work\\a.dxf", client._active_drawing_path)
+        self.assertEqual(1, sum('(command-s "_.CLOSE"' in command for command in commands))
+
+    def test_complete_census_with_target_does_not_confirm_close(self):
+        commands = []
+
+        def raw(command):
+            commands.append(command)
+            marker = '(setq mcp-doc-file (open "'
+            if marker in command:
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                path.write_text(f"BEGIN:{token}\nC:/work/a.dxf\nEND:{token}\n", encoding="utf-8")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            timeout_s=0.01, poll_interval_s=0.01, document_settle_s=0,
+        )
+        client._active_drawing_path = "c:\\work\\a.dxf"
+        client._dispatch = lambda *_: {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+        with self.assertRaisesRegex(MCPToolError, "DRAWING_CLOSE_NOT_CONFIRMED"):
+            client.drawing_close()
+        self.assertEqual("c:\\work\\a.dxf", client._active_drawing_path)
+        self.assertEqual(1, sum('(command-s "_.CLOSE"' in command for command in commands))
+
+    def test_document_census_waits_for_writer_to_finish(self):
+        reads = []
+
+        def raw(command):
+            marker = '(setq mcp-doc-file (open "'
+            path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+            path.write_text("", encoding="utf-8")
+
+        original_read = Path.read_text
+
+        def staged_read(path, *args, **kwargs):
+            if path.name.startswith("autocad_mcp_open_documents_"):
+                reads.append(path)
+                if len(reads) == 2:
+                    token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                    path.write_text(f"BEGIN:{token}\nC:/work/a.dxf\nEND:{token}\n", encoding="utf-8")
+            return original_read(path, *args, **kwargs)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            timeout_s=0.1, poll_interval_s=0.001,
+        )
+        with patch.object(Path, "read_text", staged_read):
+            self.assertEqual(["C:/work/a.dxf"], client.drawing_list_open_paths())
+        self.assertEqual(2, len(reads))
 
     def test_fail_closed_cleanup_preserves_disposable_fixture_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

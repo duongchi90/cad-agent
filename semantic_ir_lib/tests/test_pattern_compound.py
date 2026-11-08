@@ -3,13 +3,25 @@ Test thuần offline, không cần OpenCV/ảnh/solvespace/ezdxf."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import time
+from pathlib import Path
+
 from primitive_ir_lib.models import (
     CircleGeometry, LineGeometry, Point2D, Primitive, Trace,
 )
 
 from semantic_ir_lib.constraint_detection import detect_constraints
+from semantic_ir_lib import pattern_compound
+from semantic_ir_lib.models import Constraint
 from semantic_ir_lib.pattern_compound import build_compound_parts
 
+try:
+    import pytest
+except ModuleNotFoundError:  # Keep the standalone test runner usable without pytest.
+    pytest = None
 
 def _line(id_, x0, y0, x1, y1) -> Primitive:
     return Primitive(
@@ -276,6 +288,127 @@ def test_assemble_stores_pruned_constraints_not_detection_cartesian_product():
     assert {c.type for c in doc.constraints} == {"parallel", "equal_length"}
 
 
+def _rectangle_witness_input(corners, *, perpendicular=True):
+    constraints = [
+        Constraint("parallel", ["a", "b"], 0.9, {"angle_deg": 3.0}),
+        Constraint("parallel", ["c", "d"], 0.9, {"angle_deg": 3.0}),
+    ]
+    constraints.extend(
+        Constraint("coincident_endpoint", [a, b], 0.9, {"distance_mm": 5.0})
+        for a, b in corners
+    )
+    if perpendicular:
+        constraints.append(
+            Constraint("perpendicular", ["a", "c"], 0.9, {"angle_deg": 3.0})
+        )
+    idx = pattern_compound._index_constraints_by_pair(constraints)
+    parallel_pairs = pattern_compound._constraint_pairs(constraints, "parallel")
+    coincident_neighbors = pattern_compound._pair_neighbors(
+        pattern_compound._constraint_pairs(constraints, "coincident_endpoint")
+    )
+    return idx, parallel_pairs, coincident_neighbors
+
+
+def test_rectangle_candidate_index_matches_exhaustive_order_and_skips_nonparallel_pairs():
+    enumerate_pairs = getattr(pattern_compound, "_iter_parallel_neighbor_pairs", None)
+    assert callable(enumerate_pairs), "rectangle search needs an indexed candidate enumerator"
+
+    crossing = ["a", "b", "c", "d", "e"]
+    parallel_neighbors = {
+        "a": {"b", "d"},
+        "b": {"a", "c"},
+        "c": {"b"},
+        "d": {"a"},
+        "e": set(),
+    }
+    actual = list(enumerate_pairs(crossing, parallel_neighbors))
+    expected = [("a", "b"), ("a", "d"), ("b", "c")]
+    assert actual == expected
+    assert len(actual) < len(crossing) * (len(crossing) - 1) // 2
+
+    # This candidate is lexically before a possible outer pair such as ("z1", "z2");
+    # enumeration must not apply an outer/inner ordering cutoff.
+    assert ("a", "b") in actual
+
+
+def test_rectangle_index_preserves_three_corner_rule_and_perpendicular_witness():
+    three_corners = [("a", "c"), ("a", "d"), ("b", "c")]
+    idx, parallel_pairs, neighbors = _rectangle_witness_input(three_corners)
+    parts = pattern_compound._find_khung_chu_nhat(idx, parallel_pairs, neighbors)
+    assert len(parts) == 1
+    assert parts[0].primitive_ids == ["a", "b", "c", "d"]
+
+    idx, parallel_pairs, neighbors = _rectangle_witness_input(
+        three_corners, perpendicular=False
+    )
+    assert pattern_compound._find_khung_chu_nhat(idx, parallel_pairs, neighbors) == []
+
+
+def test_rectangle_index_deduplicates_complete_equal_confidence_witnesses():
+    all_corners = [("a", "c"), ("a", "d"), ("b", "c"), ("b", "d")]
+    idx, parallel_pairs, neighbors = _rectangle_witness_input(all_corners)
+    parts = pattern_compound._find_khung_chu_nhat(idx, parallel_pairs, neighbors)
+    assert len(parts) == 1
+    assert parts[0].primitive_ids == ["a", "b", "c", "d"]
+
+
+def test_case01_semantic_output_is_unchanged_within_performance_budget():
+    """Exact CASE01 regression, enabled only when its frozen private IR is supplied."""
+    if pytest is None:
+        raise AssertionError("pytest is required for the real_data CASE01 gate")
+
+    ir_path = os.environ.get("CAD_AGENT_CASE01_SEMANTIC_IR")
+    if not ir_path:
+        pytest.skip("CAD_AGENT_CASE01_SEMANTIC_IR is not configured")
+
+    ir_file = Path(ir_path)
+    raw_ir = ir_file.read_bytes()
+    assert hashlib.sha256(raw_ir).hexdigest() == (
+        "a91129de1f038ff831d85651ccde6a45a834a0e2f38a2a6932118c30fdfeb6da"
+    ), "CASE01 Primitive IR identity changed; refresh the frozen comparison first"
+
+    from semantic_ir_lib.assemble import build_semantic_document
+    from semantic_ir_lib.io_utils import load_primitive_ir_document_bytes
+
+    primitive_doc = load_primitive_ir_document_bytes(raw_ir)
+    started = time.process_time()
+    semantic_doc = build_semantic_document(
+        primitive_doc, primitive_ir_file_name="page_01.json"
+    )
+    elapsed = time.process_time() - started
+
+    def without_generated_ids(value):
+        if isinstance(value, dict):
+            return {
+                key: without_generated_ids(child)
+                for key, child in value.items()
+                if key != "id"
+            }
+        if isinstance(value, list):
+            return [without_generated_ids(child) for child in value]
+        return value
+
+    projection = json.dumps(
+        without_generated_ids(semantic_doc.to_dict()),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    assert hashlib.sha256(projection).hexdigest() == (
+        "647e51559eeb7bf1f8bd45ad97b4ee3462cb35d22f97734d8a8696bfacbd2d9a"
+    ), "CASE01 semantic output differs from the frozen baseline"
+    assert len(semantic_doc.parts) == 451
+    assert len(semantic_doc.constraints) == 3194
+    assert elapsed <= 30.0, f"CASE01 Semantic IR took {elapsed:.3f} CPU seconds"
+    print(f"CASE01 Semantic IR: {elapsed:.3f} CPU seconds; exact projection preserved")
+
+
+if pytest is not None:
+    test_case01_semantic_output_is_unchanged_within_performance_budget = pytest.mark.real_data(
+        test_case01_semantic_output_is_unchanged_within_performance_budget
+    )
+
+
 _TESTS = [
     test_khung_chu_nhat_perfect,
     test_khung_chu_nhat_dedup_no_gia_do,
@@ -293,6 +426,9 @@ _TESTS = [
     test_single_line_no_compound,
     test_dense_unrelated_parallel_lines_do_not_expand_compound_search,
     test_integration_via_assemble,
+    test_rectangle_candidate_index_matches_exhaustive_order_and_skips_nonparallel_pairs,
+    test_rectangle_index_preserves_three_corner_rule_and_perpendicular_witness,
+    test_rectangle_index_deduplicates_complete_equal_confidence_witnesses,
 ]
 
 

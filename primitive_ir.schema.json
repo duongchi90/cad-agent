@@ -19,7 +19,7 @@
       "required": ["file_name", "page_index", "image_width_px", "image_height_px"],
       "additionalProperties": false,
       "properties": {
-        "file_name": { "type": "string", "description": "Tên file scan/PDF gốc, vd. 'THACO_K165-CS_TK2_p2.png'." },
+        "file_name": { "type": "string", "description": "Tên ảnh đầu vào hoặc ảnh trang PDF đã render, vd. 'page_01.png'. Với run_pdf, manifest liên kết ảnh render này về PDF gốc." },
         "page_index": { "type": "integer", "minimum": 0, "description": "Trang thứ mấy trong PDF gốc (0-based)." },
         "image_width_px": { "type": "integer", "minimum": 1 },
         "image_height_px": { "type": "integer", "minimum": 1 },
@@ -88,18 +88,18 @@
         "type": {
           "type": "string",
           "enum": ["line", "circle", "arc", "text"],
-          "description": "line/circle/arc: geometry thuần từ OpenCV. text: nhãn/ghi chú/kích thước từ Tesseract hoặc Vision."
+          "description": "line/circle/arc: geometry thuần từ OpenCV. text: nhãn/ghi chú/kích thước từ Tesseract, Vision hoặc văn bản nhúng trong PDF."
         },
 
         "source": {
           "type": "string",
-          "enum": ["geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision"],
-          "description": "geometry_opencv: Canny+Hough đo hình học. geometry_external_ai: hình học do AI bên ngoài đề xuất nhưng chỉ sau khi exact source-bound deterministic verification đã pass. text_tesseract: OCR rule-based, dùng cho title block/mã bản vẽ sạch (tier 1, mục 9.2). text_vision: VLM đọc trực tiếp crop, dùng cho ghi chú dài/số kích thước xoay/chữ nhỏ mà Tesseract thất bại (tier 3, mục 9.2)."
+          "enum": ["geometry_opencv", "geometry_external_ai", "geometry_pdfvector", "text_tesseract", "text_vision", "text_pdfvector"],
+          "description": "geometry_opencv: Canny+Hough đo hình học. geometry_pdfvector: hình học đường cong lấy từ vector PDF, đã có witness raster và kiểm tra hiển thị/paint order; không tự xác nhận ý nghĩa kỹ thuật hoặc calibration. geometry_external_ai: hình học do AI bên ngoài đề xuất nhưng chỉ sau khi exact source-bound deterministic verification đã pass. text_tesseract: OCR rule-based, dùng cho title block/mã bản vẽ sạch (tier 1, mục 9.2). text_vision: VLM đọc trực tiếp crop, dùng cho ghi chú dài/số kích thước xoay/chữ nhỏ mà Tesseract thất bại (tier 3, mục 9.2). text_pdfvector: chuỗi văn bản nhúng được trích xuất trực tiếp từ nội dung PDF bằng PyMuPDF; provenance này không xác nhận khả năng nhìn thấy, ý nghĩa kỹ thuật, đơn vị, calibration hay liên kết hình học."
         },
 
         "confidence": {
           "type": "number", "minimum": 0, "maximum": 1,
-          "description": "Độ tin cậy RIÊNG theo nguồn trích xuất, không so sánh chéo giữa 2 nguồn khác nhau bằng cùng 1 thang. geometry_opencv: dựa trên độ dài đoạn/số điểm Hough vote. text_tesseract: dựa trên OCR engine confidence gốc. text_vision: dựa trên model tự báo cáo (self-reported) HOẶC 1.0 nếu đã được cross_validations xác nhận khớp với geometry."
+          "description": "Độ tin cậy RIÊNG theo nguồn trích xuất, không so sánh chéo giữa 2 nguồn khác nhau bằng cùng 1 thang. geometry_opencv: dựa trên độ dài đoạn/số điểm Hough vote. text_tesseract: dựa trên OCR engine confidence gốc. text_vision: dựa trên model tự báo cáo (self-reported) HOẶC 1.0 nếu đã được cross_validations xác nhận khớp với geometry. text_pdfvector: 1.0 chỉ biểu thị chuỗi nhúng được đọc trực tiếp; không xác nhận khả năng nhìn thấy, ý nghĩa kỹ thuật, calibration hay liên kết hình học."
         },
 
         "layer": {
@@ -139,7 +139,13 @@
             "extraction_tool": { "type": "string", "description": "vd. 'opencv-canny-hough-v1', 'tesseract-5.3', 'claude-vision'." },
             "extracted_at": { "type": "string", "format": "date-time" },
             "verification_request_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "verification_result_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            "verification_result_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "source_pdf_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "source_page_index": { "type": "integer", "minimum": 0 },
+            "source_transform": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 },
+            "source_render_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "source_render_dpi": { "type": "integer", "minimum": 1 },
+            "source_render_origin_px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
           }
         },
 
