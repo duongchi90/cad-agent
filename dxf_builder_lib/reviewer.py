@@ -262,12 +262,15 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
 
 
 def find_component_in_non_modelspace(doc, part_id):
-    """Return top-level INSERTs with this stable PART_ID outside ModelSpace."""
+    """Return INSERTs with this stable PART_ID outside ModelSpace owners."""
     modelspace_owner = doc.modelspace().block_record_handle
     matches = []
-    for layout in doc.layouts:
-        if layout.block_record_handle == modelspace_owner:
+    seen_owners = set()
+    for layout in (*doc.layouts, *doc.blocks):
+        owner = layout.block_record_handle
+        if owner == modelspace_owner or owner in seen_owners:
             continue
+        seen_owners.add(owner)
         for entity in layout:
             if entity.dxftype() != "INSERT":
                 continue

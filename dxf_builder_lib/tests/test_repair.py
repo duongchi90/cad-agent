@@ -324,6 +324,60 @@ def test_repair_insert_does_not_recreate_paperspace_component_with_stale_handle(
         assert not review_dxf(build_result).passed
 
 
+def test_repair_insert_does_not_recreate_named_block_component_with_stale_handle():
+    """A stale handle must not hide a component INSERT inside a referenced named BLOCK."""
+    if not _HAS_EZDXF:
+        print("SKIP test_repair_insert_does_not_recreate_named_block_component_with_stale_handle — chưa cài ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        document = ezdxf.readfile(out_path)
+        original_handle = build_result.component_handle_by_part_id[part_id]
+        foreign = document.blocks.new("ReferencedForeignOwner")
+        document.entitydb[original_handle].move_to_layout(foreign)
+        document.modelspace().add_blockref("ReferencedForeignOwner", (0, 0))
+        document.saveas(out_path)
+
+        build_result.component_handle_by_part_id[part_id] = "FFFFFF"
+        review_before = review_dxf(build_result)
+        assert not review_before.passed
+
+        repair_result = repair_insert_components(
+            build_result, review_before.component_mismatches,
+        )
+
+        assert repair_result.repaired_count == 0
+        assert repair_result.skipped_count == 1
+        assert repair_result.skipped_part_ids == [part_id]
+        reopened = ezdxf.readfile(out_path)
+        foreign_inserts = [
+            entity for entity in reopened.blocks.get("ReferencedForeignOwner")
+            if entity.dxftype() == "INSERT"
+            and any(
+                str(attribute.dxf.tag) == "PART_ID"
+                and str(attribute.dxf.text) == part_id
+                for attribute in entity.attribs
+            )
+        ]
+        modelspace_component_inserts = [
+            entity for entity in reopened.modelspace()
+            if entity.dxftype() == "INSERT"
+            and any(
+                str(attribute.dxf.tag) == "PART_ID"
+                and str(attribute.dxf.text) == part_id
+                for attribute in entity.attribs
+            )
+        ]
+        assert [entity.dxf.handle for entity in foreign_inserts] == [original_handle]
+        assert not modelspace_component_inserts
+        assert any(
+            entity.dxftype() == "INSERT"
+            and entity.dxf.name == "ReferencedForeignOwner"
+            for entity in reopened.modelspace()
+        )
+        assert not review_dxf(build_result).passed
+
+
 def test_repair_insert_empty_mismatches_does_nothing():
     """Không có component_mismatch -> repair không làm gì, file giữ nguyên
     (tương tự test_repair_empty_mismatches_does_nothing nhưng cho INSERT)."""
@@ -553,6 +607,7 @@ _TESTS = [
     test_repair_fixes_layer_mismatch,
     test_repair_multiple_entities_independently,
     test_repair_insert_empty_mismatches_does_nothing,
+    test_repair_insert_does_not_recreate_named_block_component_with_stale_handle,
     test_repair_insert_fixes_block_name_mismatch,
     test_repair_insert_fixes_scale_and_rotation_mismatch,
     test_repair_insert_fixes_missing_attrib,
