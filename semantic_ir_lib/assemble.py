@@ -47,7 +47,18 @@ def build_semantic_document(
     enable_compound_parts: True (mặc định) — chạy thêm pattern_compound để
     ghép linh kiện phức hợp (khung/gia_do/ban_le/diem_noi). Đặt False nếu chỉ
     muốn single-parts (vd so sánh trước/sau khi bật compound, hoặc debug).
+
+    Semantic geometry fields and detection tolerances are expressed in mm.
+    Convert source coordinates explicitly to millimetres before calling this
+    entry point; it does not normalize coordinates based on calibration.unit.
     """
+    calibration_unit = getattr(getattr(primitive_doc, "calibration", None), "unit", None)
+    if calibration_unit != "mm":
+        raise ValueError(
+            "Semantic IR requires Primitive IR calibration.unit == 'mm'; "
+            "convert coordinates explicitly to millimetres before semantic inference"
+        )
+
     primitives: List[Primitive] = primitive_doc.primitives
     line_primitives = [p for p in primitives if p.type == "line"]
     circle_primitives = [p for p in primitives if p.type == "circle"]

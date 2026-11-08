@@ -20,6 +20,12 @@ sinh **Semantic IR** đúng `semantic_ir.schema.json` từ 1 `PrimitiveIRDocumen
 
 ## Chạy demo
 
+`build_semantic_document()` accepts only Primitive IR whose calibration unit is
+exactly `mm`. Its geometry summaries and detection tolerances are millimetre
+based. Convert coordinates explicitly before calling it; this entry point does
+not normalize `cm`, `m`, or other unit labels. Lower-level helpers that accept
+bare primitives require callers to supply millimetre coordinates.
+
 ```bash
 pip install python-solvespace --break-system-packages   # optional, cần cho bước Constraint Solving
 python3 -m primitive_ir_lib.demo_pipeline   # sinh demo_output/primitive_ir_demo_output.json trước
