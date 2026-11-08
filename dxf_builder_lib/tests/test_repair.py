@@ -378,6 +378,72 @@ def test_repair_insert_does_not_recreate_named_block_component_with_stale_handle
         assert not review_dxf(build_result).passed
 
 
+def test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id():
+    """A corrupt PART_ID must not hide the tracked INSERT's foreign owner."""
+    if not _HAS_EZDXF:
+        print("SKIP test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id — chưa cài ezdxf")
+        return
+    for owner_kind in ("paperspace", "named", "anonymous"):
+        with tempfile.TemporaryDirectory() as tmp:
+            build_result, part_id, out_path = _build_beam_component(tmp)
+            document = ezdxf.readfile(out_path)
+            original_handle = build_result.component_handle_by_part_id[part_id]
+            if owner_kind == "paperspace":
+                foreign = document.layouts.new("CorruptPartIdOwner")
+            elif owner_kind == "named":
+                foreign = document.blocks.new("CorruptPartIdOwner")
+                document.modelspace().add_blockref("CorruptPartIdOwner", (0, 0))
+            else:
+                foreign = document.blocks.new_anonymous_block("U")
+                document.modelspace().add_blockref(foreign.name, (0, 0))
+
+            tracked_insert = document.entitydb[original_handle]
+            tracked_insert.move_to_layout(foreign)
+            original_owner = tracked_insert.dxf.owner
+            part_id_attribute = next(
+                attribute for attribute in tracked_insert.attribs
+                if str(attribute.dxf.tag) == "PART_ID"
+            )
+            tracked_insert.attribs.remove(part_id_attribute)
+            document.saveas(out_path)
+
+            review_before = review_dxf(build_result)
+            assert not review_before.passed
+            assert any(
+                mismatch.part_id == part_id and mismatch.field == "layout"
+                for mismatch in review_before.component_mismatches
+            )
+
+            repair_result = repair_insert_components(
+                build_result, review_before.component_mismatches,
+            )
+
+            assert repair_result.repaired_count == 0, owner_kind
+            assert repair_result.skipped_count == 1, owner_kind
+            assert build_result.component_handle_by_part_id[part_id] == original_handle
+            reopened = ezdxf.readfile(out_path)
+            foreign_layout = next(
+                layout for layout in (*reopened.layouts, *reopened.blocks)
+                if layout.block_record_handle == original_owner
+            )
+            assert any(
+                entity.dxftype() == "INSERT"
+                and entity.dxf.handle == original_handle
+                and not any(str(attribute.dxf.tag) == "PART_ID" for attribute in entity.attribs)
+                for entity in foreign_layout
+            ), owner_kind
+            assert not any(
+                entity.dxftype() == "INSERT"
+                and any(
+                    str(attribute.dxf.tag) == "PART_ID"
+                    and str(attribute.dxf.text) == part_id
+                    for attribute in entity.attribs
+                )
+                for entity in reopened.modelspace()
+            ), owner_kind
+            assert not review_dxf(build_result).passed, owner_kind
+
+
 def test_repair_insert_empty_mismatches_does_nothing():
     """Không có component_mismatch -> repair không làm gì, file giữ nguyên
     (tương tự test_repair_empty_mismatches_does_nothing nhưng cho INSERT)."""
@@ -608,6 +674,7 @@ _TESTS = [
     test_repair_multiple_entities_independently,
     test_repair_insert_empty_mismatches_does_nothing,
     test_repair_insert_does_not_recreate_named_block_component_with_stale_handle,
+    test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id,
     test_repair_insert_fixes_block_name_mismatch,
     test_repair_insert_fixes_scale_and_rotation_mismatch,
     test_repair_insert_fixes_missing_attrib,

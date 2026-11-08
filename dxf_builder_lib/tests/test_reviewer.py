@@ -421,6 +421,58 @@ def test_review_rejects_builder_component_moved_to_paperspace(tmp_path):
     )
 
 
+def test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses_part_id(tmp_path):
+    """A ModelSpace replacement must not hide the tracked foreign INSERT after PART_ID corruption."""
+    if not _HAS_EZDXF:
+        print("SKIP test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses_part_id — chưa cài ezdxf")
+        return
+
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    document = ezdxf.readfile(out_path)
+    original_handle = build_result.component_handle_by_part_id[part_id]
+    foreign = document.blocks.new("ReplacementHidesForeignOwner")
+    original = document.entitydb[original_handle]
+    original.move_to_layout(foreign)
+    original.attribs.remove(next(
+        attribute for attribute in original.attribs
+        if str(attribute.dxf.tag) == "PART_ID"
+    ))
+
+    written = build_result.written_component_by_part_id[part_id]
+    replacement = document.modelspace().add_blockref(
+        written["block_name"],
+        written["insert"],
+        dxfattribs={
+            "layer": written["layer"],
+            "xscale": written["xscale"],
+            "yscale": written["yscale"],
+            "zscale": written["zscale"],
+            "rotation": written["rotation_deg"],
+        },
+    )
+    replacement.add_auto_attribs(written.get("attribs", {}))
+    document.saveas(out_path)
+
+    result = review_dxf(build_result)
+
+    assert not result.passed, result.format_report()
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == "layout"
+        for mismatch in result.component_mismatches
+    )
+    reopened = ezdxf.readfile(out_path)
+    assert original_handle in reopened.entitydb
+    assert len([
+        entity for entity in reopened.modelspace()
+        if entity.dxftype() == "INSERT"
+        and any(
+            str(attribute.dxf.tag) == "PART_ID"
+            and str(attribute.dxf.text) == part_id
+            for attribute in entity.attribs
+        )
+    ]) == 1
+
+
 def test_review_flags_insert_handle_not_found_after_tamper():
     if not _HAS_EZDXF:
         print("SKIP test_review_flags_insert_handle_not_found_after_tamper — chưa cài ezdxf")
@@ -749,6 +801,7 @@ _TESTS = [
     test_readback_rejects_geometry_outside_approved_tolerance,
     # INSERT round-trip (Reviewer #1 mở rộng)
     test_review_insert_passes_on_correctly_built_component,
+    test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses_part_id,
     test_review_flags_insert_handle_not_found_after_tamper,
     test_review_flags_insert_missing_written_component,
     test_review_flags_insert_block_name_mismatch,

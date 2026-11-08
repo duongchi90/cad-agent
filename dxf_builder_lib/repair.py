@@ -272,7 +272,9 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
             )
             continue
 
-        misplaced = find_component_in_non_modelspace(doc, part_id)
+        misplaced = find_component_in_non_modelspace(
+            doc, part_id, tracked_handle=handle,
+        )
         if misplaced:
             owners = tuple(entity.dxf.get("owner") for entity in misplaced)
             result.skipped_part_ids.append(part_id)

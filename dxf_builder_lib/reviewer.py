@@ -261,8 +261,8 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
     return None, "missing"
 
 
-def find_component_in_non_modelspace(doc, part_id):
-    """Return INSERTs with this stable PART_ID outside ModelSpace owners."""
+def find_component_in_non_modelspace(doc, part_id, tracked_handle=None):
+    """Return tracked or PART_ID-matched INSERTs outside ModelSpace owners."""
     modelspace_owner = doc.modelspace().block_record_handle
     matches = []
     seen_owners = set()
@@ -274,7 +274,7 @@ def find_component_in_non_modelspace(doc, part_id):
         for entity in layout:
             if entity.dxftype() != "INSERT":
                 continue
-            if any(
+            if entity.dxf.handle == tracked_handle or any(
                 str(attribute.dxf.tag) == "PART_ID"
                 and str(attribute.dxf.text) == part_id
                 for attribute in entity.attribs
@@ -526,7 +526,9 @@ def _review_dxf_loaded(
             ))
             continue
 
-        misplaced = find_component_in_non_modelspace(doc, part_id)
+        misplaced = find_component_in_non_modelspace(
+            doc, part_id, tracked_handle=handle,
+        )
         if misplaced:
             owners = tuple(entity.dxf.get("owner") for entity in misplaced)
             actual_owner = owners[0] if len(owners) == 1 else owners
