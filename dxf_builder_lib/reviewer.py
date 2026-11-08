@@ -261,6 +261,25 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
     return None, "missing"
 
 
+def find_component_in_non_modelspace(doc, part_id):
+    """Return top-level INSERTs with this stable PART_ID outside ModelSpace."""
+    modelspace_owner = doc.modelspace().block_record_handle
+    matches = []
+    for layout in doc.layouts:
+        if layout.block_record_handle == modelspace_owner:
+            continue
+        for entity in layout:
+            if entity.dxftype() != "INSERT":
+                continue
+            if any(
+                str(attribute.dxf.tag) == "PART_ID"
+                and str(attribute.dxf.text) == part_id
+                for attribute in entity.attribs
+            ):
+                matches.append(entity)
+    return matches
+
+
 def review_dxf(
     build_result: BuildResult,
     tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
@@ -501,6 +520,22 @@ def _review_dxf_loaded(
             component_mismatches.append(ComponentMismatch(
                 part_id=part_id, field="written_component", expected="<có ghi nhận>", actual=None,
                 message=f"{part_id}: không có written_component ghi nhận lúc build (bug ở builder.py)",
+            ))
+            continue
+
+        misplaced = find_component_in_non_modelspace(doc, part_id)
+        if misplaced:
+            owners = tuple(entity.dxf.get("owner") for entity in misplaced)
+            actual_owner = owners[0] if len(owners) == 1 else owners
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id,
+                field="layout",
+                expected=doc.modelspace().block_record_handle,
+                actual=actual_owner,
+                message=(
+                    f"{part_id}: encontró {len(misplaced)} INSERT con este PART_ID "
+                    f"fuera de ModelSpace, owners={owners!r}"
+                ),
             ))
             continue
 

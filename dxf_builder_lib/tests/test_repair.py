@@ -284,6 +284,46 @@ def test_repair_insert_skips_component_outside_modelspace():
         )
 
 
+def test_repair_insert_does_not_recreate_paperspace_component_with_stale_handle():
+    """A stale tracked handle must not hide an INSERT that still exists in PaperSpace."""
+    if not _HAS_EZDXF:
+        print("SKIP test_repair_insert_does_not_recreate_paperspace_component_with_stale_handle — chưa cài ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        document = ezdxf.readfile(out_path)
+        original_handle = build_result.component_handle_by_part_id[part_id]
+        paperspace = document.layouts.new("StaleHandleOverflow")
+        document.entitydb[original_handle].move_to_layout(paperspace)
+        document.saveas(out_path)
+
+        build_result.component_handle_by_part_id[part_id] = "FFFFFF"
+        review_before = review_dxf(build_result)
+        assert not review_before.passed
+
+        repair_result = repair_insert_components(
+            build_result, review_before.component_mismatches,
+        )
+
+        assert repair_result.repaired_count == 0
+        assert repair_result.skipped_count == 1
+        assert repair_result.skipped_part_ids == [part_id]
+        assert build_result.component_handle_by_part_id[part_id] == "FFFFFF"
+
+        reopened = ezdxf.readfile(out_path)
+        modelspace_inserts = [entity for entity in reopened.modelspace() if entity.dxftype() == "INSERT"]
+        paperspace_inserts = [
+            entity
+            for layout in reopened.layouts
+            if layout.block_record_handle != reopened.modelspace().block_record_handle
+            for entity in layout
+            if entity.dxftype() == "INSERT"
+        ]
+        assert not modelspace_inserts
+        assert [entity.dxf.handle for entity in paperspace_inserts] == [original_handle]
+        assert not review_dxf(build_result).passed
+
+
 def test_repair_insert_empty_mismatches_does_nothing():
     """Không có component_mismatch -> repair không làm gì, file giữ nguyên
     (tương tự test_repair_empty_mismatches_does_nothing nhưng cho INSERT)."""

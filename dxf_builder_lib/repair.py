@@ -42,7 +42,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set
 
 from .builder import BuildResult, _ensure_unicode_text_style
-from .reviewer import ComponentMismatch, resolve_component_insert
+from .reviewer import (
+    ComponentMismatch,
+    find_component_in_non_modelspace,
+    resolve_component_insert,
+)
 
 _EXPECTED_DXFTYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
 
@@ -265,6 +269,17 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
             result.skipped_count += 1
             result.details.append(
                 f"{part_id}: BỎ QUA repair — block '{block_name}' không tồn tại trong file DXF"
+            )
+            continue
+
+        misplaced = find_component_in_non_modelspace(doc, part_id)
+        if misplaced:
+            owners = tuple(entity.dxf.get("owner") for entity in misplaced)
+            result.skipped_part_ids.append(part_id)
+            result.skipped_count += 1
+            result.details.append(
+                f"{part_id}: BỎ QUA repair — INSERT cùng PART_ID thuộc owner "
+                f"{owners!r}, không thuộc ModelSpace; giữ nguyên entity"
             )
             continue
 
