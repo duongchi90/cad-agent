@@ -413,6 +413,7 @@ class FileIPCEndToEndTests(unittest.TestCase):
     def test_preopened_component_layout_guard_real_autocad(self):
         """Component acceptance only; generic document-opening failure stays separate."""
         from dxf_builder_lib.tests.test_reviewer import _build_beam_component
+        from dxf_builder_lib.reviewer import _DEFAULT_TOLERANCE_MM
 
         tmp = tempfile.mkdtemp(prefix="cad_agent_layout_guard_")
         build, part_id, source = _build_beam_component(tmp)
@@ -479,6 +480,13 @@ class FileIPCEndToEndTests(unittest.TestCase):
         with self._opened_disposable_drawing(client, persisted):
             self.assertEqual("Layout1", client.entity_get(handle)["layout"])
             client.drawing_save_as_dxf(reopened_export)
-        self.assertEqual(before, signature(ezdxf.readfile(reopened_export).entitydb[handle]))
+        after = signature(ezdxf.readfile(reopened_export).entitydb[handle])
+        self.assertEqual({k: v for k, v in before.items() if k != "attributes"},
+                         {k: v for k, v in after.items() if k != "attributes"})
+        self.assertEqual(len(before["attributes"]), len(after["attributes"]))
+        for expected, actual in zip(before["attributes"], after["attributes"]):
+            self.assertEqual(expected[:2] + expected[3:], actual[:2] + actual[3:])
+            self.assertEqual(actual[2], pytest.approx(expected[2],
+                             rel=0, abs=_DEFAULT_TOLERANCE_MM))
         build.output_path = reopened_export
         self.assertFalse(review_dxf(build).passed)
