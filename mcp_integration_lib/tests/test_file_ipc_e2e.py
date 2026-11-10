@@ -39,6 +39,11 @@ from mcp_integration_lib.dotnet_ipc import (
 )
 
 
+def _preopen_component_fixture(path):
+    """Opt-in workstation fixture adapter; never fabricates a native result."""
+    pytest.skip("requires explicit pre-opened component fixture preparation")
+
+
 def test_live_component_factory_requires_explicit_ipc_root(monkeypatch):
     monkeypatch.delenv("CAD_AGENT_FILE_IPC_DIR", raising=False)
     monkeypatch.setenv("CAD_AGENT_AUTOCAD_HWND", "123")
@@ -404,3 +409,76 @@ class FileIPCEndToEndTests(unittest.TestCase):
                 }
                 self.assertIn(os.path.normcase(os.path.normpath(second_path)), open_paths)
                 self.assertEqual({"CIRCLE"}, {entity["type"] for entity in client.entity_list()})
+
+    def test_preopened_component_layout_guard_real_autocad(self):
+        """Component acceptance only; generic document-opening failure stays separate."""
+        from dxf_builder_lib.tests.test_reviewer import _build_beam_component
+
+        tmp = tempfile.mkdtemp(prefix="cad_agent_layout_guard_")
+        build, part_id, source = _build_beam_component(tmp)
+        valid_export = os.path.join(tmp, "valid_native.dxf")
+        foreign_source = os.path.join(tmp, "tracked_paper_fixture.dxf")
+        foreign_export = os.path.join(tmp, "foreign_native.dxf")
+        persisted = os.path.join(tmp, "refused_repair_native.dwg")
+        reopened_export = os.path.join(tmp, "reopened_native.dxf")
+        client = self._client(source, valid_export, foreign_source,
+                              foreign_export, persisted, reopened_export)
+
+        def signature(entity):
+            return {
+                "handle": entity.dxf.handle, "owner": entity.dxf.owner,
+                "layout": entity.get_layout().name, "block": entity.dxf.name,
+                "layer": entity.dxf.layer, "insert": tuple(entity.dxf.insert),
+                "scale": (entity.dxf.xscale, entity.dxf.yscale, entity.dxf.zscale),
+                "rotation": entity.dxf.rotation,
+                "attributes": [(a.dxf.tag, a.dxf.text, tuple(a.dxf.insert),
+                                a.dxf.height, a.dxf.rotation) for a in entity.attribs],
+            }
+
+        _preopen_component_fixture(source)
+        with self._opened_disposable_drawing(client, source):
+            handle = self._rebind_component_handle(client, build, part_id)
+            self.assertEqual("Model", client.entity_get(handle)["layout"])
+            self.assertEqual(4, client.drawing_get_variables(["INSUNITS"])["INSUNITS"])
+            line = client.entity_get(build.handle_by_primitive_id["b1"])
+            self.assertEqual([0, 0, 0], line["start"])
+            self.assertEqual([500, 0, 0], line["end"])
+            client.drawing_save_as_dxf(valid_export)
+        build.output_path = valid_export
+        self.assertTrue(review_dxf(build).passed)
+
+        # Explicit fault preparation, not production repair: retain tracked handle,
+        # geometry and attributes while transferring the INSERT to PaperSpace.
+        doc = ezdxf.readfile(valid_export)
+        tracked = doc.entitydb[build.component_handle_by_part_id[part_id]]
+        doc.modelspace().move_to_layout(tracked, doc.layout("Layout1"))
+        doc.saveas(foreign_source)
+        _preopen_component_fixture(foreign_source)
+        with self._opened_disposable_drawing(client, foreign_source):
+            handle = self._rebind_component_handle(client, build, part_id)
+            self.assertEqual("Layout1", client.entity_get(handle)["layout"])
+            client.drawing_save_as_dxf(foreign_export)
+        build.output_path = foreign_export
+        before = signature(ezdxf.readfile(foreign_export).entitydb[handle])
+        review = review_dxf(build)
+        self.assertFalse(review.passed)
+        self.assertTrue(review.component_mismatches)
+        repaired = repair_insert_components(build, review.component_mismatches)
+        self.assertEqual(0, repaired.repaired_count)
+        self.assertEqual(1, repaired.skipped_count)
+        self.assertEqual(handle, build.component_handle_by_part_id[part_id])
+        self.assertEqual(before, signature(ezdxf.readfile(foreign_export).entitydb[handle]))
+        self.assertFalse(review_dxf(build).passed)
+
+        _preopen_component_fixture(foreign_export)
+        with self._opened_disposable_drawing(client, foreign_export):
+            self.assertEqual("Layout1", client.entity_get(handle)["layout"])
+            client.drawing_save(persisted)
+            client.drawing_open(persisted)  # Rebind the actual SAVEAS identity.
+        _preopen_component_fixture(persisted)
+        with self._opened_disposable_drawing(client, persisted):
+            self.assertEqual("Layout1", client.entity_get(handle)["layout"])
+            client.drawing_save_as_dxf(reopened_export)
+        self.assertEqual(before, signature(ezdxf.readfile(reopened_export).entitydb[handle]))
+        build.output_path = reopened_export
+        self.assertFalse(review_dxf(build).passed)
