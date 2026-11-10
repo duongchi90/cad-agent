@@ -261,6 +261,42 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
     return None, "missing"
 
 
+def find_component_in_non_modelspace(
+    doc, part_id, tracked_handle=None, written_component=None,
+):
+    """Find direct foreign identities and unresolved same-block occurrences.
+
+    Property similarity cannot resolve missing identity. An explicit distinct
+    PART_ID excludes fallback ambiguity, but never overrides a direct match.
+    """
+    modelspace_owner = doc.modelspace().block_record_handle
+    matches = []
+    seen_owners = set()
+    for layout in (*doc.layouts, *doc.blocks):
+        owner = layout.block_record_handle
+        if owner == modelspace_owner or owner in seen_owners:
+            continue
+        seen_owners.add(owner)
+        for entity in layout:
+            if entity.dxftype() != "INSERT":
+                continue
+            identities = [
+                str(attribute.dxf.text)
+                for attribute in entity.attribs
+                if str(attribute.dxf.tag) == "PART_ID"
+            ]
+            direct_match = entity.dxf.handle == tracked_handle or part_id in identities
+            independently_identified = len(identities) == 1 and bool(identities[0].strip())
+            ambiguous = (
+                not independently_identified
+                and written_component
+                and entity.dxf.name.casefold() == str(written_component.get("block_name")).casefold()
+            )
+            if direct_match or ambiguous:
+                matches.append(entity)
+    return matches
+
+
 def review_dxf(
     build_result: BuildResult,
     tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
@@ -504,6 +540,24 @@ def _review_dxf_loaded(
             ))
             continue
 
+        misplaced = find_component_in_non_modelspace(
+            doc, part_id, tracked_handle=handle, written_component=written,
+        )
+        if misplaced:
+            owners = tuple(entity.dxf.get("owner") for entity in misplaced)
+            actual_owner = owners[0] if len(owners) == 1 else owners
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id,
+                field="layout",
+                expected=doc.modelspace().block_record_handle,
+                actual=actual_owner,
+                message=(
+                    f"{part_id}: foreign INSERT identity match or unresolved same-block identity; "
+                    f"candidates(owner, handle)={tuple((e.dxf.owner, e.dxf.handle) for e in misplaced)!r}"
+                ),
+            ))
+            continue
+
         entity, identity_source = resolve_component_insert(
             db,
             doc.modelspace(),
@@ -522,6 +576,21 @@ def _review_dxf_loaded(
 
         if identity_source == "part_id":
             build_result.component_handle_by_part_id[part_id] = entity.dxf.handle
+
+        expected_owner = doc.modelspace().block_record_handle
+        actual_owner = entity.dxf.get("owner")
+        if actual_owner != expected_owner:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id,
+                field="layout",
+                expected=expected_owner,
+                actual=actual_owner,
+                message=(
+                    f"{part_id}: INSERT thuộc owner {actual_owner!r}, "
+                    f"không thuộc ModelSpace owner {expected_owner!r}"
+                ),
+            ))
+            continue
 
         component_checked += 1
         dxftype = entity.dxftype()

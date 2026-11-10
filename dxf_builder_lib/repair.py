@@ -42,7 +42,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set
 
 from .builder import BuildResult, _ensure_unicode_text_style
-from .reviewer import ComponentMismatch, resolve_component_insert
+from .reviewer import (
+    ComponentMismatch,
+    find_component_in_non_modelspace,
+    resolve_component_insert,
+)
 
 _EXPECTED_DXFTYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
 
@@ -268,6 +272,19 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
             )
             continue
 
+        misplaced = find_component_in_non_modelspace(
+            doc, part_id, tracked_handle=handle, written_component=written,
+        )
+        if misplaced:
+            result.skipped_part_ids.append(part_id)
+            result.skipped_count += 1
+            result.details.append(
+                f"{part_id}: BỎ QUA repair — foreign INSERT / identity unresolved, "
+                f"candidates(owner, handle)={tuple((e.dxf.owner, e.dxf.handle) for e in misplaced)!r}; "
+                "không thuộc ModelSpace; giữ nguyên entity"
+            )
+            continue
+
         # xoá entity cũ theo handle — entity có thể không còn trong db
         # nếu file đã bị sửa ngoài (bất thường), không crash
         old_entity, identity_source = resolve_component_insert(
@@ -298,6 +315,14 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
             result.skipped_count += 1
             result.details.append(
                 f"{part_id}: BỎ QUA repair — PART_ID không duy nhất trong ModelSpace"
+            )
+            continue
+        if old_entity is not None and old_entity.dxf.get("owner") != msp.block_record_handle:
+            result.skipped_part_ids.append(part_id)
+            result.skipped_count += 1
+            result.details.append(
+                f"{part_id}: BỎ QUA repair — INSERT thuộc owner "
+                f"{old_entity.dxf.get('owner')!r}, không thuộc ModelSpace; giữ nguyên entity"
             )
             continue
         if old_entity is not None:
