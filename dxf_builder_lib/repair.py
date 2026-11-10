@@ -276,12 +276,12 @@ def repair_insert_components(build_result: BuildResult, component_mismatches: Li
             doc, part_id, tracked_handle=handle, written_component=written,
         )
         if misplaced:
-            owners = tuple(entity.dxf.get("owner") for entity in misplaced)
             result.skipped_part_ids.append(part_id)
             result.skipped_count += 1
             result.details.append(
-                f"{part_id}: BỎ QUA repair — INSERT cùng PART_ID thuộc owner "
-                f"{owners!r}, không thuộc ModelSpace; giữ nguyên entity"
+                f"{part_id}: BỎ QUA repair — foreign INSERT / identity unresolved, "
+                f"candidates(owner, handle)={tuple((e.dxf.owner, e.dxf.handle) for e in misplaced)!r}; "
+                "không thuộc ModelSpace; giữ nguyên entity"
             )
             continue
 

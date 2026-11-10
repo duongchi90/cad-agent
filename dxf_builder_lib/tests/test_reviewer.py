@@ -475,7 +475,7 @@ def test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses
 
 
 def test_review_ignores_unrelated_foreign_insert_with_same_block_and_placement():
-    """A same-block, same-placement foreign INSERT with different attributes is not this part."""
+    """Explicit independent identity permits a same-block foreign detail."""
     if not _HAS_EZDXF:
         print("SKIP test_review_ignores_unrelated_foreign_insert_with_same_block_and_placement — chưa cài ezdxf")
         return
@@ -495,7 +495,7 @@ def test_review_ignores_unrelated_foreign_insert_with_same_block_and_placement()
             },
         )
         unrelated_attributes = dict(written.get("attribs", {}))
-        unrelated_attributes.pop("PART_ID", None)
+        unrelated_attributes["PART_ID"] = "INDEPENDENT_B"
         if "LENGTH_MM" in unrelated_attributes:
             unrelated_attributes["LENGTH_MM"] = "999.00"
         foreign_insert.add_auto_attribs(unrelated_attributes)

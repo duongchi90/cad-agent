@@ -261,47 +261,14 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
     return None, "missing"
 
 
-def _matches_written_component_signature(entity, written_component):
-    """Match block/placement identity when handle and PART_ID were both lost."""
-    if not written_component or entity.dxf.name != written_component.get("block_name"):
-        return False
-    try:
-        if any(
-            not math.isclose(float(actual), float(expected), rel_tol=0.0, abs_tol=1e-6)
-            for actual, expected in zip(entity.dxf.insert, written_component["insert"])
-        ):
-            return False
-        for field in (*_INSERT_SCALE_FIELDS, "rotation"):
-            expected = written_component[
-                "rotation_deg" if field == "rotation" else field
-            ]
-            default = 0.0 if field == "rotation" else 1.0
-            if not math.isclose(
-                float(entity.dxf.get(field, default)),
-                float(expected), rel_tol=0.0, abs_tol=1e-6,
-            ):
-                return False
-        expected_attributes = {
-            str(tag): str(value)
-            for tag, value in written_component.get("attribs", {}).items()
-            if str(tag) != "PART_ID"
-        }
-        actual_attributes = {
-            str(attribute.dxf.tag): str(attribute.dxf.text)
-            for attribute in entity.attribs
-            if str(attribute.dxf.tag) != "PART_ID"
-        }
-        if actual_attributes != expected_attributes:
-            return False
-    except (KeyError, TypeError, ValueError):
-        return False
-    return True
-
-
 def find_component_in_non_modelspace(
     doc, part_id, tracked_handle=None, written_component=None,
 ):
-    """Return tracked, PART_ID-, or written-signature-matched foreign INSERTs."""
+    """Find direct foreign identities and unresolved same-block occurrences.
+
+    Property similarity cannot resolve missing identity. An explicit distinct
+    PART_ID excludes fallback ambiguity, but never overrides a direct match.
+    """
     modelspace_owner = doc.modelspace().block_record_handle
     matches = []
     seen_owners = set()
@@ -313,11 +280,19 @@ def find_component_in_non_modelspace(
         for entity in layout:
             if entity.dxftype() != "INSERT":
                 continue
-            if entity.dxf.handle == tracked_handle or any(
-                str(attribute.dxf.tag) == "PART_ID"
-                and str(attribute.dxf.text) == part_id
+            identities = [
+                str(attribute.dxf.text)
                 for attribute in entity.attribs
-            ) or _matches_written_component_signature(entity, written_component):
+                if str(attribute.dxf.tag) == "PART_ID"
+            ]
+            direct_match = entity.dxf.handle == tracked_handle or part_id in identities
+            independently_identified = len(identities) == 1 and bool(identities[0].strip())
+            ambiguous = (
+                not independently_identified
+                and written_component
+                and entity.dxf.name.casefold() == str(written_component.get("block_name")).casefold()
+            )
+            if direct_match or ambiguous:
                 matches.append(entity)
     return matches
 
@@ -577,8 +552,8 @@ def _review_dxf_loaded(
                 expected=doc.modelspace().block_record_handle,
                 actual=actual_owner,
                 message=(
-                    f"{part_id}: encontró {len(misplaced)} INSERT con este PART_ID "
-                    f"fuera de ModelSpace, owners={owners!r}"
+                    f"{part_id}: foreign INSERT identity match or unresolved same-block identity; "
+                    f"candidates(owner, handle)={tuple((e.dxf.owner, e.dxf.handle) for e in misplaced)!r}"
                 ),
             ))
             continue

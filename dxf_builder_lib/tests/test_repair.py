@@ -458,6 +458,148 @@ def test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id(
             assert not review_dxf(build_result).passed, owner_kind
 
 
+def _foreign_owner(document, kind):
+    if kind == "paperspace":
+        return document.layouts.new("ForeignWitness")
+    block = (document.blocks.new("ForeignWitness") if kind == "named"
+             else document.blocks.new_anonymous_block("U"))
+    document.modelspace().add_blockref(block.name, (1000, 1000))
+    return block
+
+
+def test_ambiguous_foreign_insert_survives_identity_and_property_loss():
+    """Property drift cannot establish deletion after both identities disappear."""
+    for owner_kind in ("paperspace", "named", "anonymous"):
+        for empty_id in (False, True):
+            for mutation in ("rotation", "profile", "block_case"):
+                for replacement_present in (False, True):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        built, part_id, path = _build_beam_component(tmp)
+                        doc = ezdxf.readfile(path)
+                        original_handle = built.component_handle_by_part_id[part_id]
+                        original = doc.entitydb[original_handle]
+                        original.move_to_layout(_foreign_owner(doc, owner_kind))
+                        identity = original.get_attrib("PART_ID")
+                        if empty_id:
+                            identity.dxf.text = ""
+                        else:
+                            original.attribs.remove(identity)
+                        if mutation == "rotation":
+                            original.dxf.rotation = 1.0
+                        elif mutation == "profile":
+                            original.get_attrib("PROFILE").dxf.text = "CHANGED"
+                        else:
+                            original.dxf.name = original.dxf.name.swapcase()
+                        written = built.written_component_by_part_id[part_id]
+                        if replacement_present:
+                            replacement = doc.modelspace().add_blockref(
+                                written["block_name"], written["insert"],
+                            )
+                            replacement.add_auto_attribs(written["attribs"])
+                        doc.saveas(path)
+                        built.component_handle_by_part_id[part_id] = "FFFFFF"
+                        before = review_dxf(built)
+                        assert not before.passed
+                        outcome = repair_insert_components(built, before.component_mismatches)
+                        assert outcome.repaired_count == 0, (owner_kind, empty_id, mutation)
+                        assert outcome.skipped_part_ids == [part_id]
+                        assert built.component_handle_by_part_id[part_id] == "FFFFFF"
+                        reopened = ezdxf.readfile(path)
+                        assert reopened.entitydb[original_handle].dxf.owner != reopened.modelspace().block_record_handle
+                        assert len(list(reopened.modelspace().query("INSERT"))) == (
+                            (owner_kind != "paperspace") + replacement_present
+                        )
+                        assert not review_dxf(built).passed
+                        assert "unresolved" in " ".join(outcome.details).lower()
+                        assert original_handle in " ".join(outcome.details)
+
+
+def test_distinct_foreign_identity_preserves_valid_review_and_missing_repair():
+    """Independent foreign B cannot prevent recovery of genuinely deleted A."""
+    for owner_kind in ("paperspace", "named", "anonymous"):
+        with tempfile.TemporaryDirectory() as tmp:
+            built, part_id, path = _build_beam_component(tmp)
+            doc = ezdxf.readfile(path)
+            written = built.written_component_by_part_id[part_id]
+            foreign = _foreign_owner(doc, owner_kind).add_blockref(
+                written["block_name"], written["insert"],
+                dxfattribs={
+                    "xscale": written["xscale"], "yscale": written["yscale"],
+                    "zscale": written["zscale"], "rotation": written["rotation_deg"],
+                },
+            )
+            attributes = dict(written["attribs"], PART_ID="INDEPENDENT_B")
+            foreign.add_auto_attribs(attributes)
+            foreign_handle = foreign.dxf.handle
+            doc.saveas(path)
+            assert review_dxf(built).passed, owner_kind
+            target = doc.entitydb[built.component_handle_by_part_id[part_id]]
+            doc.modelspace().delete_entity(target)
+            doc.saveas(path)
+            before = review_dxf(built)
+            assert not before.passed
+            outcome = repair_insert_components(built, before.component_mismatches)
+            assert outcome.repaired_count == 1 and outcome.skipped_count == 0, owner_kind
+            assert review_dxf(built).passed
+            assert foreign_handle in ezdxf.readfile(path).entitydb
+
+
+def test_direct_foreign_identity_overrides_conflicting_properties():
+    for identity_source in ("handle", "part_id"):
+        with tempfile.TemporaryDirectory() as tmp:
+            built, part_id, path = _build_beam_component(tmp)
+            doc = ezdxf.readfile(path)
+            original = doc.entitydb[built.component_handle_by_part_id[part_id]]
+            original.move_to_layout(_foreign_owner(doc, "named"))
+            original.dxf.name = doc.blocks.new("DifferentBlock").name
+            original.dxf.rotation = 30.0
+            if identity_source == "handle":
+                original.get_attrib("PART_ID").dxf.text = "INDEPENDENT_B"
+            else:
+                built.component_handle_by_part_id[part_id] = "FFFFFF"
+            doc.saveas(path)
+            before = review_dxf(built)
+            assert not before.passed
+            outcome = repair_insert_components(built, before.component_mismatches)
+            assert outcome.skipped_part_ids == [part_id]
+            assert outcome.repaired_count == 0
+
+
+def test_ambiguous_component_does_not_block_unrelated_component_repair():
+    with tempfile.TemporaryDirectory() as tmp:
+        semantic = SemanticIRDocument(
+            primitive_ir_ref=PrimitiveIRRef(file_name="x.json", primitive_count=2),
+            parts=[
+                SemanticPart(part_type="thanh_ngang", primitive_ids=["beam"], confidence=1.0),
+                SemanticPart(part_type="lo_bat_vit", primitive_ids=["hole"], confidence=1.0),
+            ], constraints=[],
+        )
+        path = os.path.join(tmp, "out.dxf")
+        built = build_dxf(
+            _doc(_line("beam", 0, 0, 500, 0), _circle("hole", 100, 100, 5)),
+            path, semantic_doc=semantic, build_components=True,
+        )
+        ambiguous_id, repairable_id = (part.id for part in semantic.parts)
+        doc = ezdxf.readfile(path)
+        foreign = doc.entitydb[built.component_handle_by_part_id[ambiguous_id]]
+        foreign.move_to_layout(_foreign_owner(doc, "paperspace"))
+        foreign.get_attrib("PART_ID").dxf.text = ""
+        foreign.dxf.rotation = 1.0
+        foreign_handle = foreign.dxf.handle
+        built.component_handle_by_part_id[ambiguous_id] = "FFFFFF"
+        doc.entitydb[built.component_handle_by_part_id[repairable_id]].dxf.rotation = 20.0
+        doc.saveas(path)
+        before = review_dxf(built)
+        outcome = repair_insert_components(built, before.component_mismatches)
+        assert outcome.skipped_part_ids == [ambiguous_id]
+        assert outcome.repaired_part_ids == [repairable_id]
+        assert built.component_handle_by_part_id[ambiguous_id] == "FFFFFF"
+        assert foreign_handle in ezdxf.readfile(path).entitydb
+        after = review_dxf(built)
+        assert not after.passed
+        assert {m.part_id for m in after.component_mismatches} == {ambiguous_id}
+
+
 def test_repair_insert_empty_mismatches_does_nothing():
     """Không có component_mismatch -> repair không làm gì, file giữ nguyên
     (tương tự test_repair_empty_mismatches_does_nothing nhưng cho INSERT)."""
