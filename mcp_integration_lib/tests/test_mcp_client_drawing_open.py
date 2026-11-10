@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
@@ -432,13 +433,17 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
             timeout_s=0.01, poll_interval_s=0.001, document_settle_s=0,
+            disposable_close_client=SimpleNamespace(close_disposable=lambda path, **_: {
+                "success": True, "operation": "close_disposable", "drawing_full_path": path,
+            }),
+            disposable_close_paths=["C:/work/a.dxf"],
         )
         client._active_drawing_path = "c:\\work\\a.dxf"
         client._dispatch = lambda *_: {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
         with self.assertRaisesRegex(MCPToolError, "DRAWING_CLOSE_NOT_CONFIRMED"):
             client.drawing_close()
         self.assertEqual("c:\\work\\a.dxf", client._active_drawing_path)
-        self.assertEqual(1, sum('(command-s "_.CLOSE"' in command for command in commands))
+        self.assertFalse(any('(command-s "_.CLOSE"' in command for command in commands))
 
     def test_complete_census_with_target_does_not_confirm_close(self):
         commands = []
@@ -454,13 +459,17 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
             timeout_s=0.01, poll_interval_s=0.01, document_settle_s=0,
+            disposable_close_client=SimpleNamespace(close_disposable=lambda path, **_: {
+                "success": True, "operation": "close_disposable", "drawing_full_path": path,
+            }),
+            disposable_close_paths=["C:/work/a.dxf"],
         )
         client._active_drawing_path = "c:\\work\\a.dxf"
         client._dispatch = lambda *_: {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
         with self.assertRaisesRegex(MCPToolError, "DRAWING_CLOSE_NOT_CONFIRMED"):
             client.drawing_close()
         self.assertEqual("c:\\work\\a.dxf", client._active_drawing_path)
-        self.assertEqual(1, sum('(command-s "_.CLOSE"' in command for command in commands))
+        self.assertFalse(any('(command-s "_.CLOSE"' in command for command in commands))
 
     def test_document_census_waits_for_writer_to_finish(self):
         reads = []
