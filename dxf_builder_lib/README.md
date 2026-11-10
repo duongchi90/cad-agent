@@ -22,6 +22,14 @@ Primitive IR calibration whose unit is exactly `mm`. Convert coordinates to
 canonical millimetres explicitly before calling the builder; `cm` and `m` are
 not converted by this sink.
 
+For builder-tracked raw `LINE` primitives, `review_dxf()` requires the saved and
+reopened entity to remain owned by and present in that DXF's ModelSpace. A LINE
+found only in PaperSpace or another block layout is reported as a mismatch even
+when its handle and geometry still match. This does not change the default
+whole-inventory policy: unrelated extra ModelSpace entities remain allowed unless
+`strict_primitive_inventory=True` is requested. This is an offline candidate
+acceptance check, not native AutoCAD or live drawing acceptance.
+
 ## Cài đặt
 
 ```bash
