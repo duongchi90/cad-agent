@@ -379,7 +379,7 @@ def test_repair_insert_does_not_recreate_named_block_component_with_stale_handle
 
 
 def test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id():
-    """A corrupt PART_ID must not hide the tracked INSERT's foreign owner."""
+    """Both lost identity fields must not let a replacement hide a foreign INSERT."""
     if not _HAS_EZDXF:
         print("SKIP test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id — chưa cài ezdxf")
         return
@@ -405,6 +405,20 @@ def test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id(
                 if str(attribute.dxf.tag) == "PART_ID"
             )
             tracked_insert.attribs.remove(part_id_attribute)
+            written = build_result.written_component_by_part_id[part_id]
+            replacement = document.modelspace().add_blockref(
+                written["block_name"],
+                written["insert"],
+                dxfattribs={
+                    "layer": written["layer"],
+                    "xscale": written["xscale"],
+                    "yscale": written["yscale"],
+                    "zscale": written["zscale"],
+                    "rotation": written["rotation_deg"],
+                },
+            )
+            replacement.add_auto_attribs(written.get("attribs", {}))
+            build_result.component_handle_by_part_id[part_id] = "FFFFFF"
             document.saveas(out_path)
 
             review_before = review_dxf(build_result)
@@ -420,7 +434,7 @@ def test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id(
 
             assert repair_result.repaired_count == 0, owner_kind
             assert repair_result.skipped_count == 1, owner_kind
-            assert build_result.component_handle_by_part_id[part_id] == original_handle
+            assert build_result.component_handle_by_part_id[part_id] == "FFFFFF"
             reopened = ezdxf.readfile(out_path)
             foreign_layout = next(
                 layout for layout in (*reopened.layouts, *reopened.blocks)
@@ -432,15 +446,15 @@ def test_repair_insert_does_not_recreate_foreign_tracked_insert_without_part_id(
                 and not any(str(attribute.dxf.tag) == "PART_ID" for attribute in entity.attribs)
                 for entity in foreign_layout
             ), owner_kind
-            assert not any(
-                entity.dxftype() == "INSERT"
+            assert len([
+                entity for entity in reopened.modelspace()
+                if entity.dxftype() == "INSERT"
                 and any(
                     str(attribute.dxf.tag) == "PART_ID"
                     and str(attribute.dxf.text) == part_id
                     for attribute in entity.attribs
                 )
-                for entity in reopened.modelspace()
-            ), owner_kind
+            ]) == 1, owner_kind
             assert not review_dxf(build_result).passed, owner_kind
 
 
