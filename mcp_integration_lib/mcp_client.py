@@ -24,6 +24,13 @@ class MCPToolError(RuntimeError):
     """An MCP operation failed."""
 
 
+class DisposableCloseClient(Protocol):
+    """Existing application-idle close owner supplied by approved runtime setup."""
+
+    def close_disposable(self, drawing_full_path: str, *, disposable: bool,
+                         save_changes: bool) -> Dict[str, Any]: ...
+
+
 def _normalized_autocad_path(path: str) -> str:
     """Normalize an AutoCAD Windows document path for identity comparison."""
     return ntpath.normpath(path.replace("/", "\\")).casefold()
@@ -273,7 +280,9 @@ class FileIPCLiveMCPClient:
                  document_settle_s: float = 2.0,
                  command_trigger: Optional[Callable[[str], None]] = None,
                  start_tab_no_document_probe: Optional[Callable[[], bool]] = None,
-                 legacy_fixture_mode: Optional[bool] = None) -> None:
+                 legacy_fixture_mode: Optional[bool] = None,
+                 disposable_close_client: Optional[DisposableCloseClient] = None,
+                 disposable_close_paths: Optional[List[str]] = None) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
@@ -292,6 +301,12 @@ class FileIPCLiveMCPClient:
         self._start_tab_no_document_probe = start_tab_no_document_probe
         self._active_drawing_path: Optional[str] = None
         self._last_exchange_evidence: Optional[Dict[str, Any]] = None
+        # Explicit per-session disposable scope; never discover/load a plugin or
+        # infer approval from an arbitrary active document.
+        self._disposable_close_client = disposable_close_client
+        self._disposable_close_paths = frozenset(
+            _normalized_autocad_path(path) for path in (disposable_close_paths or [])
+        )
 
     @property
     def last_exchange_evidence(self) -> Optional[Dict[str, Any]]:
@@ -581,71 +596,48 @@ class FileIPCLiveMCPClient:
         return _autolisp_string_literal(expected_path.replace("\\", "/"))
 
     def drawing_close(self, save_changes: bool = False) -> None:
-        if self._raw_lisp_trigger is not None:
-            expected_path = self._active_drawing_path
-            expected_literal = self._assert_active_document_matches(expected_path)
-            if save_changes:
-                self._raw_lisp_trigger(
-                    "(progn (vl-load-com) "
-                    "(setq mcp-close-doc "
-                    "(vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    "mcp-close-target (findfile "
-                    + expected_literal
-                    + ")) "
-                    "(if (not mcp-close-target) "
-                    "(setq mcp-close-target "
-                    + expected_literal
-                    + ")) "
-                    "(if (= (strcase (vla-get-FullName mcp-close-doc)) "
-                    "(strcase mcp-close-target)) "
-                    "(vla-close mcp-close-doc :vlax-true) "
-                    '(princ "DRAWING_CLOSE_TARGET_MISMATCH")))'
-                )
-            else:
-                # Queue no-save close at AutoCAD's command boundary. Direct
-                # COM close can race the active File IPC dispatcher and
-                # report that the drawing is busy.
-                self._raw_lisp_trigger(
-                    "(progn (vl-load-com) "
-                    "(setq mcp-close-doc "
-                    "(vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    "mcp-close-target (findfile "
-                    + expected_literal
-                    + ")) "
-                    "(if (not mcp-close-target) "
-                    "(setq mcp-close-target "
-                    + expected_literal
-                    + ")) "
-                    "(if (= (strcase (vla-get-FullName mcp-close-doc)) "
-                    "(strcase mcp-close-target)) "
-                    '(command-s "_.CLOSE" "_N") '
-                    '(princ "DRAWING_CLOSE_TARGET_MISMATCH")))'
-                )
-            time.sleep(self._document_settle_s)
-            if expected_path is not None:
-                deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
-                close_confirmed = False
-                while time.time() < deadline:
-                    try:
-                        open_paths = {
-                            _normalized_autocad_path(open_path)
-                            for open_path in self.drawing_list_open_paths()
-                        }
-                        if expected_path not in open_paths:
-                            close_confirmed = True
-                            break
-                    except (MCPTimeoutError, MCPToolError):
-                        pass
-                    time.sleep(self._poll)
-                if not close_confirmed:
-                    raise MCPToolError("DRAWING_CLOSE_NOT_CONFIRMED")
-            self._active_drawing_path = None
-            return
-        self._dispatch("drawing-close", {"save_changes": save_changes})
+        closer = self._disposable_close_client
+        if closer is None or not callable(getattr(closer, "close_disposable", None)):
+            raise MCPToolError("DISPOSABLE_CLOSE_UNAVAILABLE")
+        if save_changes is not False:
+            raise MCPToolError("DISPOSABLE_CLOSE_NO_SAVE_ONLY")
+        expected_path = self._active_drawing_path
+        if expected_path is None:
+            raise MCPToolError("DRAWING_CLOSE_TARGET_UNBOUND")
+        if _normalized_autocad_path(expected_path) not in self._disposable_close_paths:
+            raise MCPToolError("DISPOSABLE_CLOSE_TARGET_NOT_AUTHORIZED")
+        self._assert_active_document_matches(expected_path)
+        self._assert_root_unchanged()
+        result = closer.close_disposable(expected_path, disposable=True, save_changes=False)
+        if (not isinstance(result, dict) or result.get("success") is not True
+                or result.get("operation") != "close_disposable"
+                or not isinstance(result.get("drawing_full_path"), str)
+                or _normalized_autocad_path(result["drawing_full_path"])
+                   != _normalized_autocad_path(expected_path)):
+            raise MCPToolError("DISPOSABLE_CLOSE_DISPATCH_INVALID")
+        # The .NET result is emitted before its application-idle action. It is
+        # an acknowledgement, never proof that the drawing actually closed.
+        deadline = time.monotonic() + self._timeout
+        while time.monotonic() < deadline:
+            self._assert_root_unchanged()
+            try:
+                paths = self.drawing_list_open_paths()
+                if _normalized_autocad_path(expected_path) not in {
+                    _normalized_autocad_path(path) for path in paths
+                }:
+                    self._active_drawing_path = None
+                    return
+            except (MCPTimeoutError, MCPToolError):
+                pass
+            time.sleep(self._poll)
+        raise MCPToolError("DRAWING_CLOSE_NOT_CONFIRMED")
 
     def drawing_list_open_paths(self) -> List[str]:
         if self._raw_lisp_trigger is None:
-            return self._dispatch("drawing-list-open-paths", {}).get("paths", [])
+            paths = self._dispatch("drawing-list-open-paths", {}).get("paths")
+            if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+                raise MCPToolError("DRAWING_CENSUS_INVALID")
+            return paths
         token = uuid.uuid4().hex[:12]
         result = self._dir / f"autocad_mcp_open_documents_{token}.txt"
         begin = f"BEGIN:{token}"
