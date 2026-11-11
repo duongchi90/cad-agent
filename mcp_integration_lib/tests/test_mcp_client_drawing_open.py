@@ -2,6 +2,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from itertools import count
 from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -77,8 +78,14 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         client._dispatch = lambda command, params: {
             "DWGPREFIX":"C:/work/", "DWGNAME":"wanted.dwg",
         }
-        with self.assertRaisesRegex(MCPToolError, "DRAWING_OPEN_READINESS_TARGET_MISMATCH"):
-            client.drawing_open("C:/work/wanted.dwg")
+        # Exercise acknowledgement identity, independent of host filesystem latency.
+        # Advancing on every read also keeps a missing acknowledgement bounded.
+        clock = SimpleNamespace(
+            monotonic=count(step=0.001).__next__, sleep=lambda _seconds: None,
+        )
+        with patch("mcp_integration_lib.mcp_client.time", clock):
+            with self.assertRaisesRegex(MCPToolError, "DRAWING_OPEN_READINESS_TARGET_MISMATCH"):
+                client.drawing_open("C:/work/wanted.dwg")
         self.assertEqual([], loaded)
         self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
 
