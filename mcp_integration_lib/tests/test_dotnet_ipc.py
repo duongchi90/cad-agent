@@ -1239,24 +1239,24 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertTrue(old_file.exists())
 
     def test_timeout_preserves_pair_for_receiver_that_finishes_late(self) -> None:
-        with TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary, ThreadPoolExecutor(max_workers=1) as pool:
             ipc_dir = Path(temporary)
             request_id = "timeout-late-001"
-            late_done = threading.Event()
+            finish_receiver = threading.Event()
+            receivers = []
 
             def trigger() -> None:
                 request_file = request_path(ipc_dir, request_id)
                 request = json.loads(request_file.read_text(encoding="utf-8"))
 
                 def late_receiver() -> None:
-                    time.sleep(0.20)
+                    finish_receiver.wait()
                     atomic_write_json(
                         result_path(ipc_dir, request_id),
                         {"request_id": request["request_id"], "late": True},
                     )
-                    late_done.set()
 
-                threading.Thread(target=late_receiver, daemon=True).start()
+                receivers.append(pool.submit(late_receiver))
 
             client = DotNetIPCClient(
                 ipc_dir=ipc_dir,
@@ -1265,11 +1265,19 @@ class DotNetIPCClientTests(unittest.TestCase):
                 poll_interval_s=0.01,
                 request_id_factory=lambda: request_id,
             )
-            with self.assertRaises(DotNetIPCTimeoutError):
-                client.health()
+            try:
+                with self.assertRaises(DotNetIPCTimeoutError):
+                    client.health()
 
+                self.assertTrue(request_path(ipc_dir, request_id).exists())
+                self.assertFalse(result_path(ipc_dir, request_id).exists())
+            finally:
+                # Finish only after timeout; join before the temporary root exits,
+                # including assertion failures. Filesystem latency is not a gate.
+                finish_receiver.set()
+            self.assertEqual(1, len(receivers))
+            receivers[0].result()
             self.assertTrue(request_path(ipc_dir, request_id).exists())
-            self.assertTrue(late_done.wait(2))
             self.assertTrue(result_path(ipc_dir, request_id).exists())
 
     def test_non_success_result_raises_and_cleans_request(self) -> None:
