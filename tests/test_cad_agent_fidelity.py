@@ -790,7 +790,13 @@ def test_source_linetype_reconstruction_refuses_stretched_stroke_and_preserves_p
     assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
 
 
-@pytest.mark.parametrize("case", ["identity", "uniform", "missing-callback", "wrong-dash-split", "unqualified"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "identity", "uniform", "bound-base", "replay-error-status", "late-cleanup-status",
+        "missing-callback", "wrong-dash-split", "unqualified",
+    ],
+)
 def test_source_linetype_reconstruction_binds_coincident_strokes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
 ) -> None:
@@ -828,6 +834,16 @@ def test_source_linetype_reconstruction_binds_coincident_strokes(
         "source_paint_seq": 2,
     }), encoding="utf-8")
 
+    base_reads = []
+    if case == "bound-base":
+        read_base_snapshot = fidelity_module._read_text_base_snapshot
+
+        def record_base_snapshot(path: Path):
+            snapshot, digest = read_base_snapshot(path)
+            base_reads.append((path, snapshot, digest))
+            return snapshot, digest
+
+        monkeypatch.setattr(fidelity_module, "_read_text_base_snapshot", record_base_snapshot)
     if case == "missing-callback":
         monkeypatch.setattr(fitz.mupdf, "fz_run_page", lambda *_: None)
     if case == "wrong-dash-split":
@@ -843,11 +859,45 @@ def test_source_linetype_reconstruction_binds_coincident_strokes(
     if case == "unqualified":
         monkeypatch.setattr(fitz, "VersionFitz", "0.0.0")
 
-    originals = {path: fidelity_module.sha256_file(path) for path in (source, base)}
-    if case in {"identity", "uniform"}:
+    originals = {path: fidelity_module.sha256_file(path) for path in (source, base, observation)}
+    if case in {"replay-error-status", "late-cleanup-status"}:
+        prior = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        prior_report = prior.with_name("report.json")
+        originals.update({path: fidelity_module.sha256_file(path) for path in (prior, prior_report)})
+    if case == "late-cleanup-status":
+        remove_staging_alias = fidelity_module._remove_staging_reparse_alias
+
+        def report_late_cleanup_status(staging: Path) -> None:
+            remove_staging_alias(staging)
+            raise fidelity_module.FileIdentityError("simulated late cleanup status")
+
+        monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", report_late_cleanup_status)
         result = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        assert result == output / "linetype_reconstruction-r2" / "page_01" / "layout.dxf"
+        report = json.loads(result.with_name("report.json").read_text(encoding="utf-8"))
+        assert report["state"] == "needs_review"
+        assert report["observation_sha256"] == originals[observation]
+        assert report["output_dxf_sha256"] == fidelity_module.sha256_file(result)
+        assert set(output.glob("linetype_reconstruction*/page_01")) == {prior.parent, result.parent}
+        assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+    elif case == "replay-error-status":
+        monkeypatch.setattr(fitz.mupdf.FzCookie, "errors", lambda _cookie: 1)
+        with pytest.raises(FidelityError, match="stroke replay"):
+            run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        assert list(output.glob("linetype_reconstruction*/page_01")) == [prior.parent]
+        assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+    elif case in {"identity", "uniform", "bound-base"}:
+        result = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        if case == "bound-base":
+            report = json.loads(result.with_name("report.json").read_text(encoding="utf-8"))
+            assert report["base_dxf_sha256"] == originals[base]
+            assert len(base_reads) == 1, "source mode must parse the bound base snapshot"
+            read_path, snapshot, digest = base_reads[0]
+            assert read_path == base and digest == report["base_dxf_sha256"]
         saved = ezdxf.readfile(result)
         saved_target = saved.entitydb[target.dxf.handle]
+        if case == "bound-base":
+            assert snapshot.entitydb[target.dxf.handle].dxf.linetype == saved_target.dxf.linetype
         assert (tuple(saved_target.dxf.start)[:2], tuple(saved_target.dxf.end)[:2]) == (start, end)
         assert saved.entitydb[decoy.dxf.handle].dxf.linetype == "BYLAYER"
         tags = saved.linetypes.get(saved_target.dxf.linetype).pattern_tags.tags

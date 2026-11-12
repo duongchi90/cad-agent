@@ -2852,13 +2852,20 @@ def _verify_source_stroke_transform(
                 )
 
         replay = PaintReplay()
-        mupdf.fz_run_page(page.this, replay, mupdf.FzMatrix(), mupdf.FzCookie())
+        cookie = mupdf.FzCookie()
+        mupdf.fz_run_page(page.this, replay, mupdf.FzMatrix(), cookie)
         mupdf.fz_close_device(replay)
+        completed = (cookie.errors(), cookie.incomplete(), cookie.abort()) == (0, 0, 0)
     except Exception as exc:
         # The native callback binding must fully replay before a source pattern can be admitted.
         raise FidelityError(replay_error) from exc
 
-    if not replay.matches or replay.index != len(paint_kinds) or replay.stroke is None:
+    if (
+        not completed
+        or not replay.matches
+        or replay.index != len(paint_kinds)
+        or replay.stroke is None
+    ):
         raise FidelityError(replay_error)
     matrix, endpoints, raw_lengths, raw_phase = replay.stroke
     a, b, c, d, _, _ = matrix
@@ -2995,11 +3002,46 @@ def _apply_source_horizontal_dash(
     line.dxf.linetype = name
 
 
-def _write_fidelity_linetype_output(document: Any, root: Path, report: dict[str, Any]) -> None:
+def _write_fidelity_linetype_output(document: Any, root: Path, report: dict[str, Any]) -> str:
     output = root / "layout.dxf"
     document.saveas(output)
     report["output_dxf_sha256"] = sha256_file(output)
-    (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    report_text = json.dumps(report, indent=2) + "\n"
+    (root / "report.json").write_text(report_text, encoding="utf-8")
+    return report_text
+
+
+def _published_source_linetype_matches(
+    root: Path, identity: tuple[int, int], report_text: str, output_sha256: str,
+) -> bool:
+    """Verify the exact pair written by the current publication attempt."""
+    try:
+        published = root.lstat()
+        if (published.st_dev, published.st_ino) != identity:
+            return False
+        with pin_directory_chain(root, create=False):
+            pinned = root.lstat()
+            if (pinned.st_dev, pinned.st_ino) != identity:
+                return False
+            report_path = root / "report.json"
+            descriptor, report_stat = open_bound_file(
+                report_path, flags=os.O_RDONLY | os.O_BINARY, label="Linetype report",
+            )
+            with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+                if stream.read() != report_text:
+                    return False
+                output = root / "layout.dxf"
+                descriptor, output_stat = open_bound_file(
+                    output, flags=os.O_RDONLY | os.O_BINARY, label="Linetype DXF",
+                )
+                with os.fdopen(descriptor, "rb") as drawing:
+                    if hashlib.file_digest(drawing, "sha256").hexdigest() != output_sha256:
+                        return False
+                    assert_path_identity(output, output_stat, label="Linetype DXF")
+                    assert_path_identity(report_path, report_stat, label="Linetype report")
+            return True
+    except (FileIdentityError, OSError, UnicodeError):
+        return False
 
 
 def _publish_source_linetype_output(document: Any, root: Path, report: dict[str, Any]) -> None:
@@ -3011,11 +3053,16 @@ def _publish_source_linetype_output(document: Any, root: Path, report: dict[str,
                 with pin_directory_chain(staging):
                     info = os.stat(staging, follow_symlinks=False)
                     try:
-                        _write_fidelity_linetype_output(document, staging, report)
+                        report_text = _write_fidelity_linetype_output(document, staging, report)
                     except OSError as exc:
                         raise FidelityError("Linetype candidate or report write failed.") from exc
-                _publish_staging_directory(staging, root, (info.st_dev, info.st_ino))
-                _remove_staging_reparse_alias(staging)
+                identity = (info.st_dev, info.st_ino)
+                try:
+                    _publish_staging_directory(staging, root, identity)
+                    _remove_staging_reparse_alias(staging)
+                except FileIdentityError:
+                    if not _published_source_linetype_matches(root, identity, report_text, report["output_dxf_sha256"]):
+                        raise
     except FileIdentityError as exc:
         raise FidelityError("Linetype publication requires a stable private directory.") from exc
 
@@ -3062,11 +3109,8 @@ def run_fidelity_linetype_reconstruct(
     audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     tolerance_mm = max(0.25, 3.0 * float(page["pixel_to_paper_mm"]["used"]))
-    import ezdxf
-
-    base_sha256 = sha256_file(base_dxf)
-    document = ezdxf.readfile(base_dxf)
     if source_mode:
+        document, base_sha256 = _read_text_base_snapshot(base_dxf)
         start, end, pattern = _source_horizontal_dash(
             source, manifest, page, audit["source_page"], observation["source_paint_seq"],
         )
@@ -3075,6 +3119,10 @@ def run_fidelity_linetype_reconstruct(
             raise FidelityError("Linetype base DXF changed during reconstruction.")
         matched, changed = 1, 1
     else:
+        import ezdxf
+
+        base_sha256 = sha256_file(base_dxf)
+        document = ezdxf.readfile(base_dxf)
         matched, changed = _apply_legacy_linetype_rows(document, observation, page, audit, tolerance_mm)
 
     base_root = output_root / "linetype_reconstruction"
