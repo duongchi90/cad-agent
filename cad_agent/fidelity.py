@@ -753,13 +753,18 @@ def _copy_fidelity_linetype(source_document: Any, target_document: Any, name: st
     if name in target_document.linetypes or name.upper() in {"BYLAYER", "BYBLOCK", "CONTINUOUS"}:
         return
     source_linetype = source_document.linetypes.get(name)
-    pattern = [tag.value for tag in source_linetype.pattern_tags.tags if tag.code == 49]
-    length = next((float(tag.value) for tag in source_linetype.pattern_tags.tags if tag.code == 40), 0.0)
+    pattern_tags = source_linetype.pattern_tags
+    pattern = [tag.value for tag in pattern_tags.tags if tag.code == 49]
+    if pattern_tags.is_complex_type():
+        pattern = pattern or [0.0]
+    else:
+        # ezdxf expects the total period before the signed pattern elements.
+        length = float(pattern_tags.tags.get_first_value(40, 0.0))
+        pattern.insert(0, length)
     target_document.linetypes.add(
         name,
-        pattern or [0.0],
+        pattern,
         description=str(source_linetype.dxf.get("description", "")),
-        length=length,
     )
 
 
@@ -3822,19 +3827,6 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
     def offset_point(point: Any, offset_x: float, offset_y: float) -> tuple[float, float, float]:
         return (float(point.x) + offset_x, float(point.y) + offset_y, float(point.z))
 
-    def copy_linetype(source_document: Any, name: str) -> None:
-        if name in composed.linetypes or name.upper() in {"BYLAYER", "BYBLOCK", "CONTINUOUS"}:
-            return
-        source_linetype = source_document.linetypes.get(name)
-        pattern = [tag.value for tag in source_linetype.pattern_tags.tags if tag.code == 49]
-        length = next((float(tag.value) for tag in source_linetype.pattern_tags.tags if tag.code == 40), 0.0)
-        composed.linetypes.add(
-            name,
-            pattern or [0.0],
-            description=str(source_linetype.dxf.get("description", "")),
-            length=length,
-        )
-
     def copy_text_style(source_document: Any, name: str) -> str:
         if not name or name in composed.styles:
             return name or _ensure_unicode_text_style(composed)
@@ -3907,7 +3899,7 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
             if entity.dxftype() == "LINE":
                 a, b = entity.dxf.start, entity.dxf.end
                 line_type = str(entity.dxf.get("linetype", "BYLAYER"))
-                copy_linetype(source_document, line_type)
+                _copy_fidelity_linetype(source_document, composed, line_type)
                 attributes = {"layer": "FIDELITY_GEOMETRY", "linetype": line_type}
                 if entity.dxf.hasattr("linetype_scale"):
                     attributes["linetype_scale"] = entity.dxf.linetype_scale
@@ -3915,7 +3907,7 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
             elif entity.dxftype() == "CIRCLE":
                 c = entity.dxf.center
                 line_type = str(entity.dxf.get("linetype", "BYLAYER"))
-                copy_linetype(source_document, line_type)
+                _copy_fidelity_linetype(source_document, composed, line_type)
                 model.add_circle(offset_point(c, offset_x, offset_y), entity.dxf.radius, dxfattribs={"layer": "FIDELITY_GEOMETRY", "linetype": line_type})
             elif entity.dxftype() in {"TEXT", "MTEXT"}:
                 add_text_entity(source_document, entity, offset_x, offset_y)
