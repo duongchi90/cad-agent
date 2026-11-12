@@ -13,9 +13,22 @@ nhận).
 | File | Vai trò |
 |---|---|
 | `builder.py` | `build_dxf()` — build file `.dxf` thật từ `PrimitiveIRDocument`, có thể ghi đè toạ độ line bằng `solved_primitives`, suy layer theo `part_type`, và tùy chọn tạo native `DIMENSION` chỉ từ `cross_validations` có trạng thái `confirmed` (`build_dimensions=True`). Ghi `handle` CAD thật ngược lại lên chính `Primitive.handle`. |
-| `reviewer.py` | `review_dxf()` — Reviewer #1: đọc lại file `.dxf` vừa build bằng `ezdxf.readfile()`, tra theo `handle`, so khớp tuyệt đối với `written_geometry_by_primitive_id` mà `builder.py` trả về. Bắt lỗi round-trip/serialize, không phán đoán Pattern Recognition đúng/sai. |
+| `reviewer.py` | `review_dxf()` — Reviewer #1: kiểm tra `tolerance_mm` là số `int`/`float` hữu hạn, không âm trước khi import `ezdxf` hoặc đọc file; sau đó đọc lại file `.dxf`, tra theo `handle`, so khớp với `written_geometry_by_primitive_id` mà `builder.py` trả về. Bắt lỗi round-trip/serialize, không phán đoán Pattern Recognition đúng/sai. |
 | `repair.py` | `repair_dxf()` — Repair #1: nhận `mismatches` từ `review_dxf()`, xoá entity bị lỗi theo handle và vẽ lại đúng từ `BuildResult.written_geometry_by_primitive_id`. Ghi đè vào đúng file gốc; caller chạy lại `review_dxf()` sau để xác nhận hết lỗi. |
 | `demo_pipeline.py` | Đọc `primitive_ir_demo_output.json` (Phase 1) + `semantic_ir_demo_output.json` (Phase 2) — 2 file độc lập, không cần chạy lại Phase 1/2 trong cùng tiến trình — tự chạy lại `prune_constraints()` + `solve_constraints()` để có toạ độ sạch, rồi build DXF → Reviewer #1 → Repair #1 (nếu có lỗi) → Reviewer #1 lần 2. |
+
+`build_dxf()` writes `$INSUNITS=4` (millimetres) and accepts only a verified
+Primitive IR calibration whose unit is exactly `mm`. Convert coordinates to
+canonical millimetres explicitly before calling the builder; `cm` and `m` are
+not converted by this sink.
+
+For builder-tracked raw `LINE` primitives, `review_dxf()` requires the saved and
+reopened entity to remain owned by and present in that DXF's ModelSpace. A LINE
+found only in PaperSpace or another block layout is reported as a mismatch even
+when its handle and geometry still match. This does not change the default
+whole-inventory policy: unrelated extra ModelSpace entities remain allowed unless
+`strict_primitive_inventory=True` is requested. This is an offline candidate
+acceptance check, not native AutoCAD or live drawing acceptance.
 
 ## Cài đặt
 
@@ -45,6 +58,7 @@ python3 -m dxf_builder_lib.tests.test_repair     # 5 test — 1 luôn chạy đ�
 
 - `test_builder.py`: raise ImportError rõ ràng khi chưa cài ezdxf; build line/circle/text gán handle đúng + ghi ngược lên `Primitive.handle`; layer suy đúng theo `part_type`; `solved_primitives` ghi đè toạ độ thô; primitive thiếu geometry bị skip chứ không crash cả file.
 - `test_reviewer.py`: raise ImportError rõ ràng; review pass trên file build đúng; bắt được handle không tìm thấy, toạ độ lệch sau khi file bị sửa tay, và layer ghi nhận sai so với layer thật trong file.
+- INSERT rotation review requires finite actual and expected angles while preserving the existing absolute 1e-4-degree tolerance; review remains read-only.
 - `test_repair.py`: raise ImportError rõ ràng; repair với mismatches rỗng không làm gì; sửa đúng mismatch toạ độ LINE; sửa đúng mismatch layer CIRCLE; sửa nhiều entity độc lập — tất cả xác nhận bằng `review_dxf()` lần 2 sau repair (review pass = hết lỗi).
 
 ## Việc CHƯA làm

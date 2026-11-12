@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import os
 import tempfile
+import math
+from pathlib import Path
 
 import pytest
 
 from primitive_ir_lib.models import (
-    Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
-    PrimitiveIRDocument, SourceDocument, Trace,
+    ArcGeometry, Calibration, CircleGeometry, LineGeometry, Point2D, Primitive,
+    PrimitiveIRDocument, SourceDocument, TextData, Trace,
 )
 from semantic_ir_lib.models import PrimitiveIRRef, SemanticIRDocument, SemanticPart
 
@@ -54,6 +56,145 @@ def _doc(*prims: Primitive) -> PrimitiveIRDocument:
         calibration=Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 0), method="manual_override"),
         primitives=list(prims),
     )
+
+
+@pytest.mark.parametrize("field,actual,want_pass", [
+    ("height", 3.5, True), ("height", 20.0, False),
+    ("rotation", 0.0, True), ("rotation", 45.0, False),
+    ("height", 3.5 + 0.5e-6, True), ("height", 3.5 + 2e-6, False),
+    ("rotation", 0.5e-4, True), ("rotation", 2e-4, False),
+    ("height", math.inf, False), ("rotation", math.nan, False),
+])
+def test_saved_text_drafting_must_match_written_height_and_rotation(
+    tmp_path, field, actual, want_pass,
+):
+    primitive = Primitive(
+        id="label", type="text", source="text_tesseract", confidence=1.0,
+        trace=Trace((0, 0, 100, 100)),
+        text_data=TextData("PART A", Point2D(0, 0), 0, 3.5),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    native = ezdxf.readfile(built.output_path)
+    handle = built.handle_by_primitive_id["label"]
+    native.entitydb[handle].dxf.set(field, actual)
+    native.saveas(built.output_path)
+    reopened = ezdxf.readfile(built.output_path)
+    saved = getattr(reopened.entitydb[handle].dxf, field)
+    assert math.isnan(saved) if math.isnan(actual) else saved == actual
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    result = review_dxf(built)
+    assert result.checked_count == 1
+    assert result.passed == want_pass
+    assert bool(result.mismatches) == (not want_pass)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
+
+
+def test_legacy_text_evidence_does_not_invent_undeclared_drafting_values(tmp_path):
+    primitive = Primitive(
+        id="label", type="text", source="text_tesseract", confidence=1.0,
+        trace=Trace((0, 0, 100, 100)),
+        text_data=TextData("PART A", Point2D(0, 0), 45, 20),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    # Older handoffs may carry only insertion/content expectations. Do not
+    # invent source-authorized height or rotation from a global default.
+    written = built.written_geometry_by_primitive_id["label"]
+    written.pop("height")
+    written.pop("rotation_deg")
+    assert review_dxf(built).passed
+
+
+@pytest.mark.parametrize("kind,field,expected", [
+    ("circle", "radius", 2.0), ("arc", "radius", 2.0),
+    ("arc", "start_angle", 0.0), ("arc", "end_angle", 90.0),
+])
+@pytest.mark.parametrize("change,want_pass", [
+    ("nan", False), ("infinity", False), ("exact", True),
+    ("within-tolerance", True), ("outside-tolerance", False),
+])
+def test_saved_standalone_scalar_geometry_is_finite_and_source_matching(
+    tmp_path, kind, field, expected, change, want_pass,
+):
+    primitive = _circle("source", 0, 0, 2) if kind == "circle" else Primitive(
+        id="source", type="arc", source="geometry_external_ai", confidence=1.0,
+        trace=Trace((0, 0, 10, 10)), geometry=ArcGeometry(Point2D(0, 0), 2, 0, 90),
+    )
+    built = build_dxf(_doc(primitive), str(tmp_path / "candidate.dxf"))
+    tolerance = 1e-6 if field == "radius" else 1e-4
+    actual = {
+        "nan": math.nan, "infinity": math.inf, "exact": expected,
+        "within-tolerance": expected + tolerance / 2,
+        "outside-tolerance": expected + tolerance * 2,
+    }[change]
+    native = ezdxf.readfile(built.output_path)
+    native.entitydb[built.handle_by_primitive_id["source"]].dxf.set(field, actual)
+    native.saveas(built.output_path)
+    reopened = ezdxf.readfile(built.output_path)
+    saved = reopened.entitydb[built.handle_by_primitive_id["source"]].dxf.get(field)
+    if change in ("nan", "infinity"):
+        assert not math.isfinite(saved), "The saved DXF must actually retain nonfinite data"
+    else:
+        assert saved == actual
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    report = review_dxf(built)
+    assert report.checked_count == 1
+    assert report.passed == want_pass
+    assert bool(report.mismatches) == (not want_pass)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "angle,approved_value,want_pass",
+    [
+        (0.0, 80.0, True),
+        (0.0, 70.0, False),
+        (math.nan, 80.0, False),
+    ],
+    ids=["finite-approved", "finite-approval-mismatch", "nonfinite-measurement"],
+)
+def test_saved_reopened_dimension_measurement_is_finite_and_approved(
+    tmp_path, angle, approved_value, want_pass,
+):
+    from dxf_builder_lib.tests.dxf_test_support import (
+        build_native_dimension_consumer_fixture,
+    )
+
+    built, _, _ = build_native_dimension_consumer_fixture(
+        tmp_path, 80.0, approved_value, "",
+    )
+    dimension_handle = next(
+        iter(built.dimension_handle_by_cross_validation_id.values())
+    )
+    document = ezdxf.readfile(built.output_path)
+    dimension = document.entitydb[dimension_handle]
+    dimension.dxf.angle = angle
+    document.saveas(built.output_path)
+
+    reopened = ezdxf.readfile(built.output_path)
+    reopened_dimension = reopened.entitydb[dimension_handle]
+    measurement = float(reopened_dimension.get_measurement())
+    saved_line = reopened.entitydb[built.handle_by_primitive_id["line"]]
+
+    assert tuple(saved_line.dxf.start) == (0.0, 0.0, 0.0)
+    assert tuple(saved_line.dxf.end) == (80.0, 0.0, 0.0)
+    assert all(
+        math.isfinite(value)
+        for point_name in ("defpoint2", "defpoint3")
+        for value in reopened_dimension.dxf.get(point_name)
+    )
+    assert math.isfinite(reopened_dimension.dxf.angle) == math.isfinite(angle)
+    if math.isnan(angle):
+        assert math.isnan(measurement), "the saved/reopened DXF must produce a real NaN measurement"
+    else:
+        assert measurement == 80.0
+
+    before_review = Path(built.output_path).read_bytes()
+    report = review_dxf(built)
+
+    assert report.dimension_checked_count == 1
+    assert not any("feature binding" in item for item in report.dimension_mismatches)
+    assert report.passed is want_pass
+    assert Path(built.output_path).read_bytes() == before_review
 
 
 def _beam_semantic_doc() -> SemanticIRDocument:
@@ -110,6 +251,38 @@ def test_review_passes_on_correctly_built_dxf():
         assert review_result.checked_count == 2
         assert review_result.mismatches == []
     print("OK   test_review_passes_on_correctly_built_dxf")
+
+
+@pytest.mark.parametrize("kind", ["line", "circle", "arc", "text"])
+@pytest.mark.parametrize("elevation_mm", [0.0, 2.0, float("nan")], ids=["source-plane", "displaced", "unreadable-z"])
+def test_source_written_2d_primitive_requires_native_zero_elevation(tmp_path, kind, elevation_mm):
+    primitives = {
+        "line": _line("line", 0, 0, 80, 0),
+        "circle": _circle("circle", 0, 0, 2),
+        "arc": Primitive(
+            id="arc", type="arc", source="geometry_external_ai", confidence=1.0,
+            trace=Trace((0, 0, 10, 10)), geometry=ArcGeometry(Point2D(0, 0), 2, 0, 90),
+        ),
+        "text": Primitive(
+            id="text", type="text", source="text_tesseract", confidence=1.0,
+            trace=Trace((0, 0, 10, 10)),
+            text_data=TextData("source label", Point2D(0, 0), 0, 3.5),
+        ),
+    }
+    built = build_dxf(_doc(primitives[kind]), str(tmp_path / "candidate.dxf"))
+    assert review_dxf(built).passed
+    native = ezdxf.readfile(built.output_path)
+    entity = native.entitydb[built.handle_by_primitive_id[kind]]
+    names = ("start", "end") if kind == "line" else (("insert",) if kind == "text" else ("center",))
+    for name in names:
+        point = entity.dxf.get(name)
+        entity.dxf.set(name, (point.x, point.y, elevation_mm))
+    native.saveas(built.output_path)
+    before = (tmp_path / "candidate.dxf").read_bytes()
+    observed = review_dxf(built)
+    assert observed.passed == (elevation_mm == 0)
+    assert bool(observed.mismatches) == (elevation_mm != 0)
+    assert (tmp_path / "candidate.dxf").read_bytes() == before
 
 
 def test_review_flags_handle_not_found_after_tamper():
@@ -217,6 +390,163 @@ def test_review_insert_passes_on_correctly_built_component():
         assert review_result.component_checked_count == 1
         assert review_result.component_mismatches == []
     print("OK   test_review_insert_passes_on_correctly_built_component")
+
+
+def test_review_rejects_builder_component_moved_to_paperspace(tmp_path):
+    if not _HAS_EZDXF:
+        print("SKIP test_review_rejects_builder_component_moved_to_paperspace — chưa cài ezdxf")
+        return
+
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    document = ezdxf.readfile(out_path)
+    handle = build_result.component_handle_by_part_id[part_id]
+    entity = document.entitydb[handle]
+    paperspace = document.layouts.new("ReviewOverflow")
+    entity.move_to_layout(paperspace)
+    document.saveas(out_path)
+
+    reopened = ezdxf.readfile(out_path)
+    moved = reopened.entitydb[handle]
+    assert moved.dxf.owner != reopened.modelspace().block_record_handle
+
+    result = review_dxf(build_result)
+
+    assert not result.passed, result.format_report()
+    assert any(
+        mismatch.part_id == part_id
+        and mismatch.field == "layout"
+        and mismatch.expected == reopened.modelspace().block_record_handle
+        and mismatch.actual == moved.dxf.owner
+        for mismatch in result.component_mismatches
+    )
+
+
+def test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses_part_id():
+    """A ModelSpace replacement must not hide the tracked foreign INSERT after PART_ID corruption."""
+    if not _HAS_EZDXF:
+        print("SKIP test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses_part_id — chưa cài ezdxf")
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        document = ezdxf.readfile(out_path)
+        original_handle = build_result.component_handle_by_part_id[part_id]
+        foreign = document.blocks.new("ReplacementHidesForeignOwner")
+        original = document.entitydb[original_handle]
+        original.move_to_layout(foreign)
+        original.attribs.remove(next(
+            attribute for attribute in original.attribs
+            if str(attribute.dxf.tag) == "PART_ID"
+        ))
+
+        written = build_result.written_component_by_part_id[part_id]
+        replacement = document.modelspace().add_blockref(
+            written["block_name"],
+            written["insert"],
+            dxfattribs={
+                "layer": written["layer"],
+                "xscale": written["xscale"],
+                "yscale": written["yscale"],
+                "zscale": written["zscale"],
+                "rotation": written["rotation_deg"],
+            },
+        )
+        replacement.add_auto_attribs(written.get("attribs", {}))
+        document.saveas(out_path)
+
+        result = review_dxf(build_result)
+
+        assert not result.passed, result.format_report()
+        assert any(
+            mismatch.part_id == part_id and mismatch.field == "layout"
+            for mismatch in result.component_mismatches
+        )
+        reopened = ezdxf.readfile(out_path)
+        assert original_handle in reopened.entitydb
+        assert len([
+            entity for entity in reopened.modelspace()
+            if entity.dxftype() == "INSERT"
+            and any(
+                str(attribute.dxf.tag) == "PART_ID"
+                and str(attribute.dxf.text) == part_id
+                for attribute in entity.attribs
+            )
+        ]) == 1
+
+
+def test_review_ignores_unrelated_foreign_insert_with_same_block_and_placement():
+    """Explicit independent identity permits a same-block foreign detail."""
+    if not _HAS_EZDXF:
+        print("SKIP test_review_ignores_unrelated_foreign_insert_with_same_block_and_placement — chưa cài ezdxf")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        build_result, part_id, out_path = _build_beam_component(tmp)
+        document = ezdxf.readfile(out_path)
+        written = build_result.written_component_by_part_id[part_id]
+        foreign_layout = document.layouts.new("UnrelatedSamePlacement")
+        foreign_insert = foreign_layout.add_blockref(
+            written["block_name"], written["insert"],
+            dxfattribs={
+                "layer": written["layer"],
+                "xscale": written["xscale"],
+                "yscale": written["yscale"],
+                "zscale": written["zscale"],
+                "rotation": written["rotation_deg"],
+            },
+        )
+        unrelated_attributes = dict(written.get("attribs", {}))
+        unrelated_attributes["PART_ID"] = "INDEPENDENT_B"
+        if "LENGTH_MM" in unrelated_attributes:
+            unrelated_attributes["LENGTH_MM"] = "999.00"
+        foreign_insert.add_auto_attribs(unrelated_attributes)
+        document.saveas(out_path)
+
+        result = review_dxf(build_result)
+
+        assert result.passed, result.format_report()
+@pytest.mark.parametrize(
+    ("field", "mismatch_field"),
+    [
+        ("xscale", "xscale"),
+        ("yscale", "yscale"),
+        ("zscale", "zscale"),
+        ("rotation", "rotation_deg"),
+    ],
+)
+def test_review_rejects_nonfinite_insert_transform_after_saved_roundtrip(
+    tmp_path, field, mismatch_field,
+):
+    if not _HAS_EZDXF:
+        pytest.skip("ezdxf is required for saved/reopened INSERT evidence")
+
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    written = build_result.written_component_by_part_id[part_id]
+    written_key = "rotation_deg" if field == "rotation" else field
+    expected_before = written[written_key]
+    assert math.isfinite(expected_before)
+
+    edit_doc = ezdxf.readfile(out_path)
+    entity = edit_doc.entitydb.get(build_result.component_handle_by_part_id[part_id])
+    setattr(entity.dxf, field, math.nan)
+    edit_doc.saveas(out_path)
+
+    reopened_doc = ezdxf.readfile(out_path)
+    reopened_entity = reopened_doc.entitydb.get(
+        build_result.component_handle_by_part_id[part_id]
+    )
+    actual_after_reopen = getattr(reopened_entity.dxf, field)
+    assert math.isnan(actual_after_reopen), "serialized DXF must retain the real NaN"
+    assert written[written_key] == expected_before, "builder evidence must remain frozen"
+
+    bytes_before_review = Path(out_path).read_bytes()
+    review_result = review_dxf(build_result)
+
+    assert not review_result.passed, review_result.format_report()
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == mismatch_field
+        for mismatch in review_result.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == bytes_before_review, "review must not mutate DXF"
 
 
 def test_review_flags_insert_handle_not_found_after_tamper():
@@ -378,6 +708,75 @@ def test_review_flags_insert_rotation_mismatch_after_manual_dxf_edit():
     print("OK   test_review_flags_insert_rotation_mismatch_after_manual_dxf_edit")
 
 
+@pytest.mark.parametrize(
+    "actual,want_pass",
+    [(0.0, True), (0.5e-4, True), (2e-4, False)],
+    ids=["equal", "within-tolerance", "outside-tolerance"],
+)
+def test_insert_rotation_preserves_finite_absolute_tolerance(
+    tmp_path, actual, want_pass,
+):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    edit_doc = ezdxf.readfile(out_path)
+    entity = edit_doc.entitydb.get(build_result.component_handle_by_part_id[part_id])
+    entity.dxf.rotation = actual
+    edit_doc.saveas(out_path)
+    before = Path(out_path).read_bytes()
+
+    review_result = review_dxf(build_result)
+
+    assert review_result.passed == want_pass
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == "rotation_deg"
+        for mismatch in review_result.component_mismatches
+    ) is (not want_pass)
+    assert Path(out_path).read_bytes() == before
+
+
+@pytest.mark.parametrize("actual", [math.nan, math.inf, -math.inf], ids=["nan", "positive-infinity", "negative-infinity"])
+def test_review_rejects_nonfinite_saved_insert_rotation(tmp_path, actual):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    edit_doc = ezdxf.readfile(out_path)
+    entity = edit_doc.entitydb.get(build_result.component_handle_by_part_id[part_id])
+    entity.dxf.rotation = actual
+    edit_doc.saveas(out_path)
+
+    reopened = ezdxf.readfile(out_path)
+    saved_actual = reopened.entitydb.get(build_result.component_handle_by_part_id[part_id]).dxf.rotation
+    assert math.isnan(saved_actual) if math.isnan(actual) else saved_actual == actual
+    before = Path(out_path).read_bytes()
+
+    review_result = review_dxf(build_result)
+
+    assert not review_result.passed
+    assert any(
+        mismatch.part_id == part_id
+        and mismatch.field == "rotation_deg"
+        and (math.isnan(mismatch.actual) if math.isnan(actual) else mismatch.actual == actual)
+        for mismatch in review_result.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == before
+
+
+@pytest.mark.parametrize("expected", [math.nan, math.inf, -math.inf], ids=["nan", "positive-infinity", "negative-infinity"])
+def test_review_rejects_nonfinite_expected_insert_rotation_without_mutating_candidate(
+    tmp_path, expected,
+):
+    build_result, part_id, out_path = _build_beam_component(str(tmp_path))
+    build_result.written_component_by_part_id[part_id]["rotation_deg"] = expected
+    before = Path(out_path).read_bytes()
+
+    review_result = review_dxf(build_result)
+
+    assert not review_result.passed
+    assert any(
+        mismatch.part_id == part_id and mismatch.field == "rotation_deg"
+        and (math.isnan(mismatch.expected) if math.isnan(expected) else mismatch.expected == expected)
+        for mismatch in review_result.component_mismatches
+    )
+    assert Path(out_path).read_bytes() == before
+
+
 def test_review_flags_insert_attrib_value_mismatch_after_manual_dxf_edit():
     if not _HAS_EZDXF:
         print("SKIP test_review_flags_insert_attrib_value_mismatch_after_manual_dxf_edit — chưa cài ezdxf")
@@ -469,6 +868,96 @@ def test_component_mismatch_is_structured_not_free_text():
     print("OK   test_component_mismatch_is_structured_not_free_text")
 
 
+@pytest.mark.parametrize("target_layout", ["paperspace", "owned-block"])
+def test_default_review_rejects_tracked_line_moved_out_of_modelspace(
+    tmp_path, target_layout,
+):
+    built = build_dxf(_doc(_line("tracked-line", 0, 0, 20, 0)), str(tmp_path / "candidate.dxf"))
+    handle = built.handle_by_primitive_id["tracked-line"]
+
+    document = ezdxf.readfile(built.output_path)
+    modelspace = document.modelspace()
+    entity = document.entitydb[handle]
+    original_layer = entity.dxf.layer
+    original_start = tuple(entity.dxf.start)
+    original_end = tuple(entity.dxf.end)
+    destination = (
+        document.layouts.get("Layout1")
+        if target_layout == "paperspace"
+        else document.blocks.new("TRACKED_LINE_OWNER_TEST")
+    )
+    modelspace.move_to_layout(entity, destination)
+    document.saveas(built.output_path)
+
+    reopened = ezdxf.readfile(built.output_path)
+    reopened_entity = reopened.entitydb[handle]
+    assert reopened_entity.dxf.layer == original_layer
+    assert tuple(reopened_entity.dxf.start) == original_start
+    assert tuple(reopened_entity.dxf.end) == original_end
+    assert reopened_entity.dxf.owner == destination.block_record_handle
+    assert reopened_entity not in reopened.modelspace()
+
+    candidate_before_review = Path(built.output_path).read_bytes()
+    result = review_dxf(built)
+
+    assert not result.passed
+    mismatch = next(message for message in result.mismatches if "tracked-line" in message)
+    assert handle in mismatch
+    assert "ModelSpace" in mismatch
+    assert destination.block_record_handle in mismatch
+    assert Path(built.output_path).read_bytes() == candidate_before_review
+
+
+@pytest.mark.parametrize("owner", [None, "DEADBEEF"], ids=["absent", "unresolved"])
+def test_default_review_fails_closed_for_absent_or_unresolved_tracked_line_owner(
+    tmp_path, monkeypatch, owner,
+):
+    built = build_dxf(_doc(_line("tracked-line", 0, 0, 20, 0)), str(tmp_path / "candidate.dxf"))
+    handle = built.handle_by_primitive_id["tracked-line"]
+    original_readfile = ezdxf.readfile
+
+    def read_with_controlled_owner_state(path):
+        document = original_readfile(path)
+        entity = document.entitydb[handle]
+        if owner is None:
+            entity.dxf.discard("owner")
+        else:
+            entity.dxf.owner = owner
+        return document
+
+    # DXF parsing normalizes malformed owner references, so this seam tests
+    # fail-closed handling after a real saved-file read without claiming the
+    # malformed owner survives serialization.
+    monkeypatch.setattr(ezdxf, "readfile", read_with_controlled_owner_state)
+    candidate_before_review = Path(built.output_path).read_bytes()
+
+    result = review_dxf(built)
+
+    assert not result.passed
+    mismatch = next(message for message in result.mismatches if "tracked-line" in message)
+    assert handle in mismatch
+    assert "ModelSpace" in mismatch
+    assert Path(built.output_path).read_bytes() == candidate_before_review
+
+
+def test_default_review_allows_untracked_modelspace_entity_but_strict_inventory_rejects_it(
+    tmp_path,
+):
+    built = build_dxf(_doc(_line("tracked-line", 0, 0, 20, 0)), str(tmp_path / "candidate.dxf"))
+    document = ezdxf.readfile(built.output_path)
+    document.modelspace().add_line((0, 10), (20, 10))
+    document.saveas(built.output_path)
+    candidate_before_review = Path(built.output_path).read_bytes()
+
+    default_result = review_dxf(built)
+    strict_result = review_dxf(built, strict_primitive_inventory=True)
+
+    assert default_result.passed
+    assert not strict_result.passed
+    assert any("extra untracked handles" in message for message in strict_result.mismatches)
+    assert Path(built.output_path).read_bytes() == candidate_before_review
+
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_review_passes_on_correctly_built_dxf,
@@ -478,6 +967,8 @@ _TESTS = [
     test_readback_rejects_geometry_outside_approved_tolerance,
     # INSERT round-trip (Reviewer #1 mở rộng)
     test_review_insert_passes_on_correctly_built_component,
+    test_review_rejects_modelspace_replacement_when_tracked_foreign_insert_loses_part_id,
+    test_review_ignores_unrelated_foreign_insert_with_same_block_and_placement,
     test_review_flags_insert_handle_not_found_after_tamper,
     test_review_flags_insert_missing_written_component,
     test_review_flags_insert_block_name_mismatch,

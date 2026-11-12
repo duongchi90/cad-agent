@@ -133,6 +133,35 @@ def test_phase4_primitive_binds_selected_shaft_and_hole_cluster(
     assert result.review.passed is True
 
 
+@pytest.mark.parametrize("scale", [0.1, 2.0])
+def test_phase4_primitive_scales_pixel_tolerances_into_cad_units(
+    tmp_path: Path, scale: float
+) -> None:
+    from cad_agent.mechanical_pilot import bind_simple_shaft_pilot_from_primitive
+
+    payload = _primitive_doc().to_dict()
+    payload["calibration"]["pixel_to_unit_scale"] = scale
+    for primitive in payload["primitives"]:
+        geometry = primitive["geometry"]
+        if primitive["type"] == "line":
+            for point in (geometry["start"], geometry["end"]):
+                point["x"] *= scale
+                point["y"] *= scale
+        else:
+            geometry["center"]["x"] *= scale
+            geometry["center"]["y"] *= scale
+            geometry["radius"] *= scale
+
+    primitive_path = tmp_path / f"scaled-{scale}.json"
+    primitive_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = bind_simple_shaft_pilot_from_primitive(
+        primitive_path, tmp_path / f"candidate-{scale}" / "candidate.dxf"
+    )
+
+    assert result.build.entity_count == 9
+    assert result.review.passed is True
+
+
 def test_phase4_primitive_refuses_ambiguous_geometry(tmp_path: Path) -> None:
     from cad_agent.mechanical_pilot import bind_simple_shaft_pilot_from_primitive
 

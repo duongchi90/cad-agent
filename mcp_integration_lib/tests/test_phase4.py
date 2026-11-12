@@ -3,7 +3,6 @@ import json
 import re
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 from dxf_builder_lib.builder import BuildResult
 from mcp_integration_lib.mcp_client import FakeMCPClient, FileIPCLiveMCPClient, MCPToolError, MCPTimeoutError
@@ -27,11 +26,13 @@ def _pair(kind="line", entity_get=False):
 class Phase4Tests(unittest.TestCase):
     def test_geometry_comparison_accepts_autocad_z_zero(self):
         self.assertTrue(_same((10.0, 0.0), (10.0, 0.0, 0.0)))
-    def test_structural_review_passes_when_entity_get_times_out(self):
+    def test_live_review_fails_when_entity_get_times_out(self):
         build, client = _pair()
         result = review_dxf_live(build, client)
-        self.assertTrue(result.passed)
+        self.assertFalse(result.passed)
         self.assertTrue(result.geometry_degraded)
+        self.assertFalse(result.mismatches)
+        self.assertTrue(any("geometry readback" in item for item in result.warnings))
 
     def test_geometry_mismatch_fails(self):
         build, client = _pair(entity_get=True)
@@ -61,7 +62,7 @@ class Phase4Tests(unittest.TestCase):
         self.assertTrue(any("measurement" in item for item in failed.mismatches))
 
     def test_repair_restores_review_and_updates_handle(self):
-        build, client = _pair()
+        build, client = _pair(entity_get=True)
         client._entities["10"].layer = "BAD"
         repair = repair_dxf_live(build, review_dxf_live(build, client).mismatches, client)
         self.assertEqual(repair.repaired_count, 1)
@@ -153,6 +154,34 @@ class FileIPCClientTests(unittest.TestCase):
                 (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(json.dumps({"request_id": command["request_id"], "ok": True, "payload": {}}))
             self.assertIsNone(FileIPCLiveMCPClient(tmp, trigger, .1, .001).drawing_save_as_dxf("a.dxf"))
 
+    def test_drawing_save_as_dxf_preserves_active_document_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ipc_dir = Path(tmp)
+
+            def trigger():
+                command = json.loads(
+                    next(ipc_dir.glob("autocad_mcp_cmd_*.json")).read_text()
+                )
+                (ipc_dir / f"autocad_mcp_result_{command['request_id']}.json").write_text(
+                    json.dumps(
+                        {
+                            "request_id": command["request_id"],
+                            "ok": True,
+                            "payload": {},
+                        }
+                    )
+                )
+
+            client = FileIPCLiveMCPClient(tmp, trigger, .1, .001)
+            client._active_drawing_path = r"c:\work\candidate.dxf"
+
+            client.drawing_save_as_dxf(r"C:\temp\export.dxf")
+
+            self.assertEqual(
+                r"c:\work\candidate.dxf",
+                client._active_drawing_path,
+            )
+
     def test_normalizes_windows_dxf_export_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             ipc_dir = Path(tmp)
@@ -223,76 +252,14 @@ class FileIPCClientTests(unittest.TestCase):
         self.assertIn(str(Path(self._ipc_dir)).replace("\\", "/"), raw_commands[1])
         self.assertIn('(load "C:/tools/mcp_dispatch.lsp")', raw_commands[1])
 
-    def test_raw_lisp_close_uses_com_false_without_save_modal_without_command_trigger(self):
-        raw_commands = []
-        command_sequences = []
-        client = FileIPCLiveMCPClient(
-            ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
-            command_trigger=command_sequences.append,
-            document_settle_s=0,
-        )
 
-        client.drawing_close(save_changes=False)
 
-        self.assertEqual(
-            [
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                ":vlax-false))"
-            ],
-            raw_commands,
-        )
-        self.assertEqual([], command_sequences)
 
-    def test_raw_lisp_close_prefers_com_even_with_command_trigger(self):
-        raw_commands = []
-        command_sequences = []
-        client = FileIPCLiveMCPClient(
-            ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
-            command_trigger=command_sequences.append,
-            document_settle_s=0,
-        )
 
-        client.drawing_close(save_changes=False)
 
-        self.assertEqual(
-            [
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                ":vlax-false))"
-            ],
-            raw_commands,
-        )
-        self.assertEqual([], command_sequences)
 
-    def test_raw_lisp_close_fails_closed_when_active_document_remains_open(self):
-        raw_commands = []
-        client = FileIPCLiveMCPClient(
-            ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
-            command_trigger=lambda command: None,
-            document_settle_s=0,
-            poll_interval_s=0,
-        )
-        client._active_drawing_path = r"c:\work\candidate.dxf"
-        client.drawing_list_open_paths = lambda: [r"C:\work\candidate.dxf"]
 
-        with patch(
-            "mcp_integration_lib.mcp_client.time.time",
-            side_effect=[0, 1, 6],
-        ), patch("mcp_integration_lib.mcp_client.time.sleep"):
-            with self.assertRaisesRegex(
-                MCPToolError, "^DRAWING_CLOSE_NOT_CONFIRMED$"
-            ):
-                client.drawing_close(save_changes=False)
 
-        self.assertEqual(
-            "c:\\work\\candidate.dxf",
-            client._active_drawing_path,
-        )
-        self.assertEqual(1, len(raw_commands))
 
     def test_drawing_open_falls_back_to_command_when_start_tab_has_no_document(self):
         raw_commands = []
@@ -327,24 +294,6 @@ class FileIPCClientTests(unittest.TestCase):
         assert client.drawing_open("C:/work/a.dxf") == {"path": "C:/work/a.dxf"}
         self.assertEqual(['_.OPEN\r"C:/work/a.dxf"'], command_sequences)
 
-    def test_raw_lisp_close_with_save_keeps_com_save_path(self):
-        raw_commands = []
-        client = FileIPCLiveMCPClient(
-            ipc_dir=self._ipc_dir,
-            raw_lisp_trigger=raw_commands.append,
-            document_settle_s=0,
-        )
-
-        client.drawing_close(save_changes=True)
-
-        self.assertEqual(
-            [
-                "(progn (vl-load-com) "
-                "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                ":vlax-true))"
-            ],
-            raw_commands,
-        )
 
     def test_bootstrap_waits_for_dispatcher_ping(self):
         raw_commands = []
@@ -449,8 +398,10 @@ class FileIPCClientTests(unittest.TestCase):
             def raw_trigger(command):
                 match = re.search(r'\(open "([^"]+)" "w"\)', command)
                 self.assertIsNotNone(match)
-                Path(match.group(1)).write_text(
-                    "C:/work/a.dxf\nC:/work/b.dxf\n",
+                output = Path(match.group(1))
+                token = output.stem.removeprefix("autocad_mcp_open_documents_")
+                output.write_text(
+                    f"BEGIN:{token}\nC:/work/a.dxf\nC:/work/b.dxf\nEND:{token}\n",
                     encoding="utf-8",
                 )
 

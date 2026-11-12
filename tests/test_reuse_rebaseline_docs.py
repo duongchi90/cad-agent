@@ -5,8 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "docs/superpowers/reuse/2026-08-04-reuse-integration-audit.md"
-ARCHITECTURE = ROOT / "docs/ARCHITECTURE.md"
-STATUS = ROOT / "docs/STATUS.md"
+ARCHITECTURE = ROOT / "docs/history/architecture-before-bvtl-consolidation.md"
+STATUS = ROOT / "docs/history/status-before-bvtl-consolidation.md"
 OLD_ROLLOUT = ROOT / "docs/superpowers/plans/2026-08-04-visual-supervisor-rollout.md"
 
 
@@ -85,7 +85,7 @@ def test_old_rollout_is_explicitly_superseded_after_vs_t3() -> None:
         assert historical_marker in text
 
 
-def test_architecture_and_status_reference_the_reuse_inventory() -> None:
+def test_historical_architecture_and_status_reference_the_reuse_inventory() -> None:
     inventory_path = "docs/superpowers/reuse/2026-08-04-reuse-inventory.json"
     assert inventory_path in ARCHITECTURE.read_text(encoding="utf-8")
     status = STATUS.read_text(encoding="utf-8")

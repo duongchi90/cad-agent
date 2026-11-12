@@ -8,10 +8,17 @@ mới thêm, không lặp lại.
 
 from __future__ import annotations
 
+import pytest
+
 import cv2
 import numpy as np
 
-from primitive_ir_lib.calibration import auto_estimate_calibration, find_nearest_line
+from primitive_ir_lib.assemble import build_document
+from primitive_ir_lib.calibration import (
+    auto_estimate_calibration,
+    estimate_calibration_from_reference,
+    find_nearest_line,
+)
 from primitive_ir_lib.geometry_extraction import RawLine
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 
@@ -284,3 +291,55 @@ def test_auto_estimate_require_consensus_false_keeps_old_first_wins_behavior():
     )
     assert cal is not None
     assert abs(cal.pixel_to_unit_scale - 30.0) < 1e-6
+
+
+def test_automatic_calibration_results_are_review_only_across_return_paths():
+    first_text, first_line = _pair("1000", 300, 500, "first")
+    lone_text, lone_line = _pair("1000", 1300, 500, "lone")
+    agree_text_a, agree_line_a = _pair("1000", 2300, 500, "agree-a")
+    agree_text_b, agree_line_b = _pair("2000", 3300, 1000, "agree-b")
+
+    first = auto_estimate_calibration([first_text], [first_line], image_height_px=200)
+    insufficient_consensus = auto_estimate_calibration(
+        [lone_text], [lone_line], image_height_px=200, require_consensus=True,
+    )
+    agreeing_consensus = auto_estimate_calibration(
+        [agree_text_a, agree_text_b], [agree_line_a, agree_line_b],
+        image_height_px=200, require_consensus=True,
+    )
+
+    assert first is not None and first.status == "needs_verification"
+    assert insufficient_consensus is not None
+    assert insufficient_consensus.status == "needs_verification"
+    assert agreeing_consensus is not None
+    assert agreeing_consensus.status == "needs_verification"
+    assert auto_estimate_calibration([], [], image_height_px=200) is None
+
+
+def test_serialized_automatic_calibration_is_refused_by_existing_consumers(tmp_path):
+    text, line = _pair("1000", 300, 500, "consumer")
+    calibration = auto_estimate_calibration([text], [line], image_height_px=200)
+    assert calibration is not None
+    doc = build_document(
+        file_name="synthetic.png", page_index=0, image_width_px=640,
+        image_height_px=200, calibration=calibration, raw_lines=[line],
+        raw_circles=[], raw_texts=[text],
+    )
+    primitive_payload = doc.to_dict()
+
+    from semantic_ir_lib.io_utils import _primitive_ir_document_from_dict
+    from dxf_builder_lib.builder import build_dxf
+
+    with pytest.raises(ValueError, match="needs_verification"):
+        _primitive_ir_document_from_dict(primitive_payload)
+    with pytest.raises(ValueError, match="needs_verification"):
+        build_dxf(doc, str(tmp_path / "automatic-candidate.dxf"))
+
+
+def test_known_dimension_reference_remains_verified():
+    text, line = _pair("1000", 300, 500, "known")
+    calibration = estimate_calibration_from_reference(
+        text, line, image_height_px=200,
+    )
+
+    assert calibration.status == "verified"

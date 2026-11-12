@@ -1,8 +1,9 @@
 """Deterministic R1C locator and render-provenance validation.
 
 This module binds caller-supplied locator/provenance records to already-validated
-SourceBundle and source-custody facts. It does not inspect source bytes,
-render media, or confer approval/publication authority.
+SourceBundle and source-custody facts. It also verifies the bounded source-fact
+profile used by the existing P1 compile owner. It does not inspect render media
+or confer approval/publication authority.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import decimal as _decimal
 import re as _re
 from collections.abc import Mapping as _Mapping
 
+import cad_agent.drawing_contracts as _drawing_contracts
+import cad_agent.source_integrity as _source_integrity
 from cad_agent.drawing_contracts import canonical_json_sha256 as _canonical_json_sha256
 from cad_agent.source_bundle import (
     source_bundle_sha256 as _source_bundle_sha256,
@@ -2823,6 +2826,275 @@ def _task7_evaluated_reference_hashes(
             blocking_codes.add("EXPIRED_REFERENCE")
         normalized_hashes.append(reference_hash)
     return sorted(normalized_hashes), sorted(blocking_codes)
+
+
+_SOURCE_FACT_SPEC_FIELDS = {
+    "schema_version",
+    "profile_id",
+    "source_encoding",
+    "required_source_identity",
+    "required_source_locator",
+    "required_linked_artifact_identity",
+    "required_linked_artifact_locator",
+    "facts",
+}
+_SOURCE_FACT_RECORD_FIELDS = {
+    "fact_id",
+    "source_key",
+    "quantity",
+    "unit",
+    "compile_field",
+}
+_SOURCE_FACT_PROFILE_ID = "source-facts-stepped-shaft-v1"
+_SOURCE_FACT_COMPILE_PROFILE_ID = "simple-stepped-shaft-p1-v1"
+_SOURCE_FACT_RECORD_CONTRACT = (
+    ("fact-001", "diameter_a_mm", "length", "mm", "shaft_diameter_a"),
+    ("fact-002", "diameter_b_mm", "length", "mm", "shaft_diameter_b"),
+    ("fact-003", "segment_a_mm", "length", "mm", "segment_length_a"),
+    ("fact-004", "segment_b_mm", "length", "mm", "segment_length_b"),
+    ("fact-005", "hole_diameter_mm", "length", "mm", "hole_diameter"),
+    ("fact-006", "hole_position_mm", "length", "mm", "hole_axial_position"),
+)
+
+
+def _source_fact_document(value: object, code: str) -> dict[str, object]:
+    if not isinstance(value, bytes):
+        _fail(code)
+    try:
+        decoded = _drawing_contracts.json.loads(value.decode("utf-8"))
+    except Exception:
+        _fail(code)
+    if not isinstance(decoded, dict):
+        _fail(code)
+    return decoded
+
+
+def verify_source_fact_evidence(
+    *,
+    source_bytes: object,
+    source_sha256: object,
+    source_locator: object,
+    source_identity: object,
+    linked_artifact_bytes: object,
+    linked_artifact_sha256: object,
+    linked_artifact_locator: object,
+    linked_artifact_identity: object,
+    source_custody: object,
+    source_acquisition_evidence: object,
+    source_acquisition_binding_sha256: object,
+    source_acquisition_replay: object,
+    extraction_profile_id: object,
+    extraction_spec: object,
+    extraction_spec_sha256: object,
+    proposed_facts: object,
+    evidence_basis: object,
+) -> dict[str, object]:
+    """Verify one source-bound fact proposal for the existing P1 compile owner.
+
+    The acquisition callback is supplied by the trusted owner seam and must be
+    bound outside caller-controlled evidence. All source and linked-artifact
+    bytes, identities, locators, and facts are then checked against its fresh
+    custody result before an existing compile input is emitted.
+    """
+    if not callable(source_acquisition_replay):
+        _fail("SOURCE_ACQUISITION_BINDING")
+    try:
+        replayed_custody = _validated_custody(source_acquisition_replay())
+    except SourceFusionError:
+        _fail("SOURCE_ACQUISITION_BINDING")
+    except Exception:
+        _fail("SOURCE_ACQUISITION_BINDING")
+    replayed_custody_digest = _custody_digest(replayed_custody)
+
+    try:
+        acquisition_evidence = _validated_custody(source_acquisition_evidence)
+    except Exception:
+        _fail("SOURCE_ACQUISITION_BINDING")
+    if _custody_digest(acquisition_evidence) != replayed_custody_digest:
+        _fail("SOURCE_ACQUISITION_BINDING")
+    if (
+        not isinstance(source_acquisition_binding_sha256, str)
+        or source_acquisition_binding_sha256 != replayed_custody_digest
+    ):
+        _fail("SOURCE_ACQUISITION_BINDING")
+
+    try:
+        normalized_custody = _validated_custody(source_custody)
+    except Exception:
+        _fail("SOURCE_CUSTODY_BINDING")
+    if _custody_digest(normalized_custody) != replayed_custody_digest:
+        _fail("SOURCE_CUSTODY_BINDING")
+
+    source_id = _identifier(source_identity, "SOURCE_IDENTITY")
+    linked_id = _identifier(linked_artifact_identity, "LINKED_ARTIFACT_IDENTITY")
+    if not isinstance(source_locator, str):
+        _fail("SOURCE_LOCATOR")
+    if not isinstance(linked_artifact_locator, str):
+        _fail("LINKED_ARTIFACT_LOCATOR")
+    source_digest = _sha256(source_sha256, "SOURCE_HASH")
+    linked_digest = _sha256(linked_artifact_sha256, "LINKED_ARTIFACT_HASH")
+    custody_items = _custody_items(replayed_custody)
+
+    source_item = custody_items.get(source_id)
+    if source_item is None:
+        _fail("SOURCE_IDENTITY")
+    if source_locator != source_item["relative_path"]:
+        _fail("SOURCE_LOCATOR")
+    if source_digest != source_item["declared_sha256"] or source_digest != source_item[
+        "observed_sha256"
+    ]:
+        _fail("SOURCE_HASH")
+    if not isinstance(source_bytes, bytes):
+        _fail("SOURCE_HASH")
+    if _source_integrity.hashlib.sha256(source_bytes).hexdigest() != source_digest:
+        _fail("SOURCE_HASH")
+
+    linked_item = custody_items.get(linked_id)
+    if linked_item is None:
+        _fail("LINKED_ARTIFACT_IDENTITY")
+    if linked_artifact_locator != linked_item["relative_path"]:
+        _fail("LINKED_ARTIFACT_LOCATOR")
+    if linked_digest != linked_item["declared_sha256"] or linked_digest != linked_item[
+        "observed_sha256"
+    ]:
+        _fail("LINKED_ARTIFACT_HASH")
+    if not isinstance(linked_artifact_bytes, bytes):
+        _fail("LINKED_ARTIFACT_HASH")
+    if _source_integrity.hashlib.sha256(linked_artifact_bytes).hexdigest() != linked_digest:
+        _fail("LINKED_ARTIFACT_HASH")
+
+    if evidence_basis != "declared_source_facts":
+        _fail("EVIDENCE_BASIS")
+    profile_id = _identifier(extraction_profile_id, "EXTRACTION_PROFILE_BINDING")
+    if profile_id != _SOURCE_FACT_PROFILE_ID:
+        _fail("EXTRACTION_PROFILE_BINDING")
+    spec = _closed(
+        extraction_spec,
+        _SOURCE_FACT_SPEC_FIELDS,
+        "EXTRACTION_PROFILE_BINDING",
+    )
+    if (
+        spec["schema_version"] != "source-fact-extraction-spec-1.0"
+        or spec["profile_id"] != profile_id
+        or spec["source_encoding"] != "utf-8"
+        or spec["required_source_identity"] != source_id
+        or spec["required_source_locator"] != source_locator
+        or spec["required_linked_artifact_identity"] != linked_id
+        or spec["required_linked_artifact_locator"] != linked_artifact_locator
+    ):
+        _fail("EXTRACTION_PROFILE_BINDING")
+    try:
+        normalized_spec_digest = _canonical_json_sha256(spec)
+    except Exception:
+        _fail("EXTRACTION_PROFILE_BINDING")
+    if extraction_spec_sha256 != normalized_spec_digest:
+        _fail("EXTRACTION_PROFILE_BINDING")
+
+    records = spec["facts"]
+    if not isinstance(records, list) or len(records) != len(_SOURCE_FACT_RECORD_CONTRACT):
+        _fail("EXTRACTION_PROFILE_BINDING")
+    normalized_records: list[tuple[object, ...]] = []
+    for record in records:
+        normalized = _closed(
+            record,
+            _SOURCE_FACT_RECORD_FIELDS,
+            "EXTRACTION_PROFILE_BINDING",
+        )
+        normalized_records.append(
+            tuple(
+                normalized[field]
+                for field in (
+                    "fact_id",
+                    "source_key",
+                    "quantity",
+                    "unit",
+                    "compile_field",
+                )
+            )
+        )
+    if tuple(normalized_records) != _SOURCE_FACT_RECORD_CONTRACT:
+        _fail("EXTRACTION_PROFILE_BINDING")
+
+    source_document = _source_fact_document(source_bytes, "FACT_REPRODUCTION")
+    linked_document = _source_fact_document(
+        linked_artifact_bytes,
+        "FACT_REPRODUCTION",
+    )
+    if (
+        source_document.get("source_identity") != source_id
+        or linked_document.get("linked_identity") != linked_id
+        or linked_document.get("profile") != "stepped_shaft"
+    ):
+        _fail("FACT_REPRODUCTION")
+
+    facts: list[dict[str, str]] = []
+    dimensions: dict[str, str] = {}
+    for record, contract in zip(records, _SOURCE_FACT_RECORD_CONTRACT):
+        _, source_key, quantity, unit, compile_field = contract
+        if source_key not in source_document:
+            _fail("FACT_REPRODUCTION")
+        raw_value = source_document[source_key]
+        canonical_value = _canonical_quantity(
+            raw_value,
+            quantity="physical_length" if quantity == "length" else quantity,
+            unit=unit,
+            code="FACT_REPRODUCTION",
+        )
+        value = raw_value if isinstance(raw_value, str) else canonical_value
+        facts.append(
+            {
+                "fact_id": record["fact_id"],
+                "source_key": source_key,
+                "quantity": quantity,
+                "unit": unit,
+                "value": value,
+                "source_sha256": source_digest,
+                "source_locator": source_locator,
+                "source_identity": source_id,
+                "linked_artifact_sha256": linked_digest,
+                "linked_artifact_locator": linked_artifact_locator,
+                "linked_artifact_identity": linked_id,
+            }
+        )
+        dimensions[compile_field] = value
+
+    if not isinstance(proposed_facts, list) or proposed_facts != facts:
+        _fail("FACT_REPRODUCTION")
+    compile_input = {
+        "profile_id": _SOURCE_FACT_COMPILE_PROFILE_ID,
+        "dimensions_mm": dimensions,
+    }
+    fact_evidence_material = {
+        "schema_version": SOURCE_FUSION_SCHEMA_VERSION,
+        "source_sha256": source_digest,
+        "source_locator": source_locator,
+        "source_identity": source_id,
+        "linked_artifact_sha256": linked_digest,
+        "linked_artifact_locator": linked_artifact_locator,
+        "linked_artifact_identity": linked_id,
+        "source_custody_sha256": replayed_custody_digest,
+        "extraction_profile_id": profile_id,
+        "extraction_spec_sha256": normalized_spec_digest,
+        "evidence_basis": evidence_basis,
+        "facts": facts,
+        "compile_input": compile_input,
+    }
+    return {
+        "source_sha256": source_digest,
+        "source_locator": source_locator,
+        "source_identity": source_id,
+        "linked_artifact_sha256": linked_digest,
+        "linked_artifact_locator": linked_artifact_locator,
+        "linked_artifact_identity": linked_id,
+        "source_custody": normalized_custody,
+        "source_acquisition_binding_sha256": replayed_custody_digest,
+        "extraction_profile_id": profile_id,
+        "extraction_spec_sha256": normalized_spec_digest,
+        "evidence_basis": evidence_basis,
+        "facts": facts,
+        "compile_input": compile_input,
+        "fact_evidence_sha256": _canonical_json_sha256(fact_evidence_material),
+    }
 
 
 def build_source_fusion_evaluation(

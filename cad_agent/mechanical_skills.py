@@ -7,6 +7,7 @@ from copy import deepcopy
 import re
 
 from cad_agent import cad_read_facade as _cad_read_facade
+from cad_agent import mechanical_pilot as _mechanical_pilot
 from cad_agent.drawing_contracts import canonical_json_sha256
 
 
@@ -87,8 +88,12 @@ _SHA_FIELDS = frozenset(
         "current_observation_sha256",
     }
 )
-_VALID_SUPPORT_STATES = frozenset({"READ_ONLY", "DEFERRED_UNSUPPORTED"})
-_VALID_OUTPUT_KINDS = frozenset({"READ_REQUEST_PLAN"})
+_VALID_SUPPORT_STATES = frozenset(
+    {"READ_ONLY", "COMPILE_ONLY", "DEFERRED_UNSUPPORTED"}
+)
+_VALID_OUTPUT_KINDS = frozenset(
+    {"READ_REQUEST_PLAN", "P1_SOURCE_BOUND_COMPILE_PLAN"}
+)
 _VALID_POLICIES = frozenset({"READ_ONLY", "PRESERVE", "DOWNSTREAM_OWNER_REQUIRED"})
 _TOKEN_PATTERN = re.compile(r"[\w-]+", re.UNICODE)
 
@@ -164,6 +169,34 @@ def _build_catalog() -> dict[str, object]:
                 "max_operations": 1,
                 "compatibility_version": "cad-agent-main-1",
                 "support_state": "READ_ONLY",
+                "blocked_by": None,
+            }
+        ),
+        _sealed_record(
+            {
+                "schema_version": MECHANICAL_SKILL_SCHEMA_VERSION,
+                "skill_id": "geometry.simple_shaft_pilot",
+                "skill_version": "1.0",
+                "category": "geometry",
+                "title": "Simple Shaft Pilot",
+                "description": (
+                    "Compile one source-bound stepped-shaft and transverse-hole "
+                    "proposal without CAD execution."
+                ),
+                "intent_tags": ["geometry", "shaft", "step", "hole", "pilot", "compile"],
+                "required_context": ["SOURCE_BOUND_P1_PROPOSAL"],
+                "parameter_schema_id": "P1_SOURCE_BOUND_PROPOSAL",
+                "output_kind": "P1_SOURCE_BOUND_COMPILE_PLAN",
+                "owner_route_id": "MECHANICAL_PILOT_COMPILE_ONLY",
+                "capability_refs": [
+                    "mechanical_shaft_step",
+                    "mechanical_hole_feature",
+                ],
+                "evidence_requirements": ["SOURCE_BINDING", "TRUTHFUL_PROVENANCE"],
+                "protected_constraint_policy": "PRESERVE",
+                "max_operations": 0,
+                "compatibility_version": "cad-agent-main-1",
+                "support_state": "COMPILE_ONLY",
                 "blocked_by": None,
             }
         ),
@@ -464,13 +497,13 @@ def invoke_skill(
     skill_id: str,
     *,
     parameters: Mapping[str, object],
-    drawing_observation: Mapping[str, object],
+    drawing_observation: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Compile exactly one existing read-only capability plan."""
+    """Compile one bounded read-only or compile-only Mechanical plan."""
 
     if type(skill_id) is not str or not skill_id:
         _fail("SKILL_NOT_FOUND")
-    if not isinstance(parameters, Mapping) or dict(parameters) != {}:
+    if not isinstance(parameters, Mapping):
         _fail("PARAMETERS_INVALID")
     catalog = validate_mechanical_skill_catalog(_CATALOG)
     record = next(
@@ -479,8 +512,31 @@ def invoke_skill(
     )
     if record is None:
         _fail("SKILL_NOT_FOUND")
+    if record["support_state"] == "DEFERRED_UNSUPPORTED":
+        _fail("SKILL_NOT_INVOCABLE")
+    if record["support_state"] == "COMPILE_ONLY":
+        if skill_id != "geometry.simple_shaft_pilot" or set(parameters) != {
+            "proposal",
+            "expected_binding",
+        }:
+            _fail("PARAMETERS_INVALID")
+        proposal = parameters.get("proposal")
+        expected_binding = parameters.get("expected_binding")
+        if not isinstance(proposal, Mapping) or not isinstance(expected_binding, Mapping):
+            _fail("PARAMETERS_INVALID")
+        try:
+            return _mechanical_pilot.compile_source_bound_simple_shaft_proposal(
+                proposal,
+                expected_binding=expected_binding,
+            )
+        except ValueError as error:
+            raise MechanicalSkillError(str(error)) from error
     if record["support_state"] != "READ_ONLY":
         _fail("SKILL_NOT_INVOCABLE")
+    if dict(parameters) != {}:
+        _fail("PARAMETERS_INVALID")
+    if drawing_observation is None:
+        _fail("DRAWING_OBSERVATION_INVALID")
     try:
         observation = _cad_read_facade.validate_observe_drawing_result(drawing_observation)
     except Exception as error:

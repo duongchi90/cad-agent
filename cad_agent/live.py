@@ -9,22 +9,27 @@ import hashlib
 import json
 import ntpath
 import os
-import stat
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.repair2 import repair_dxf_live
+from mcp_integration_lib.repair2 import MCPTimeoutError, MCPToolError, repair_dxf_live
 from mcp_integration_lib.reviewer2 import LiveReviewResult, review_dxf_live
 
+from .file_integrity import (
+    FileIdentityError,
+    assert_path_identity,
+    is_regular_non_reparse,
+    is_single_link_regular_non_reparse,
+    open_bound_file,
+    pin_directory_chain,
+)
 from .manifest import sha256_file
 
 
 BUILD_EVIDENCE_SCHEMA_VERSION = "1.0"
-_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
-
-
 class LiveSafetyError(ValueError):
     """Raised when a live drawing operation cannot meet its safety contract."""
 
@@ -54,6 +59,7 @@ def _build_result_dict(build: BuildResult) -> dict[str, Any]:
         "skipped_part_reasons": build.skipped_part_reasons,
         "component_count": build.component_count,
         "written_component_by_part_id": build.written_component_by_part_id,
+        "contour_join_by_id": build.contour_join_by_id,
     }
 
 
@@ -73,10 +79,7 @@ def write_build_evidence(path: Path, build: BuildResult) -> None:
         "dxf": {"name": dxf.name, "sha256": sha256_file(dxf)},
         "build_result": _build_result_dict(build),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_json_artifact(path, payload, label="Build evidence")
 
 
 def load_build_evidence(path: Path, dxf: Path) -> BuildResult:
@@ -101,10 +104,52 @@ def review_dict(review: LiveReviewResult) -> dict[str, Any]:
 
 
 def write_live_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_json_artifact(path, report, label="Live report")
+
+
+def _write_json_artifact(path: Path, payload: dict[str, Any], *, label: str) -> None:
+    """Publish exact JSON through the existing bound-file and directory owner."""
+    path = Path(os.path.abspath(path))
+    data = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    owned_stat = None
+    try:
+        with pin_directory_chain(path.parent):
+            def destination_identity():
+                try:
+                    current = os.stat(path, follow_symlinks=False)
+                except FileNotFoundError:
+                    return None
+                if not is_single_link_regular_non_reparse(current):
+                    raise LiveSafetyError(f"{label} destination must be a single-link regular non-reparse file.")
+                return current
+
+            before = destination_identity()
+            try:
+                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+                with os.fdopen(descriptor, "wb") as stream:
+                    owned_stat = os.fstat(stream.fileno())
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                assert_path_identity(temporary, owned_stat, label=f"{label} temporary")
+                current = destination_identity()
+                if (before is None) != (current is None) or (before is not None and not os.path.samestat(before, current)):
+                    raise LiveSafetyError(f"{label} destination identity changed before publication.")
+                os.replace(temporary, path)
+                descriptor, published_stat = open_bound_file(
+                    path, flags=os.O_RDONLY | getattr(os, "O_BINARY", 0), label=f"{label} destination")
+                with os.fdopen(descriptor, "rb") as stream:
+                    persisted = stream.read()
+                assert_path_identity(path, published_stat, label=f"{label} destination")
+                if not os.path.samestat(owned_stat, published_stat) or persisted != data:
+                    raise LiveSafetyError(f"{label} persisted identity/bytes differ from publication.")
+            finally:
+                if owned_stat is not None and os.path.lexists(temporary):
+                    assert_path_identity(temporary, owned_stat, label=f"{label} temporary cleanup")
+                    temporary.unlink()
+    except (FileIdentityError, OSError) as error:
+        raise LiveSafetyError(f"{label} identity-safe publication failed: {error}") from error
 
 
 def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Path]:
@@ -120,28 +165,20 @@ def _backup_paths(dxf: Path, evidence: Path, backup_dir: Path) -> tuple[Path, Pa
 
 
 def _is_regular_non_reparse(stat_result: os.stat_result) -> bool:
-    return stat.S_ISREG(stat_result.st_mode) and not bool(
-        getattr(stat_result, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
-    )
+    return is_regular_non_reparse(stat_result)
 
 
 def _is_single_link_regular_non_reparse(stat_result: os.stat_result) -> bool:
-    return _is_regular_non_reparse(stat_result) and getattr(stat_result, "st_nlink", 1) == 1
+    return is_single_link_regular_non_reparse(stat_result)
 
 
 def _assert_path_identity(
     path: Path, opened_stat: os.stat_result, *, label: str
 ) -> None:
     try:
-        path_stat = os.stat(path, follow_symlinks=False)
-    except OSError as exc:
-        raise LiveSafetyError(f"{label} identity could not be verified.") from exc
-    if not _is_single_link_regular_non_reparse(path_stat) or not os.path.samestat(
-        opened_stat, path_stat
-    ):
-        raise LiveSafetyError(
-            f"{label} must remain the same single-link regular non-reparse file."
-        )
+        assert_path_identity(path, opened_stat, label=label)
+    except FileIdentityError as exc:
+        raise LiveSafetyError(str(exc)) from exc
 
 
 def _assert_backup_path_identity(path: Path, opened_stat: os.stat_result) -> None:
@@ -226,74 +263,60 @@ def _backup(
     *,
     owned_paths: dict[Path, os.stat_result | None] | None = None,
 ) -> dict[str, Any]:
-    dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
-    backup_paths = (dxf_backup, evidence_backup)
-    owned_paths = {} if owned_paths is None else owned_paths
+    backup_dir = Path(os.path.abspath(backup_dir))
     try:
-        dxf_source_before = sha256_file(dxf)
-        evidence_source_before = sha256_file(evidence)
-        dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
-        evidence_backup_hash = _copy_to_exclusive_backup(
-            evidence, evidence_backup, owned_paths
-        )
-        dxf_source_after = sha256_file(dxf)
-        evidence_source_after = sha256_file(evidence)
-        verified = (
-            dxf_source_before == dxf_source_after == dxf_backup_hash
-            and evidence_source_before == evidence_source_after == evidence_backup_hash
-        )
-        if not verified:
-            raise LiveSafetyError(
-                "Production backup verification failed; repair is refused before mutation."
-            )
-        return {
-            "dxf_path": str(dxf_backup),
-            "dxf_source_sha256": dxf_source_before,
-            "dxf_backup_sha256": dxf_backup_hash,
-            "build_evidence_path": str(evidence_backup),
-            "build_evidence_source_sha256": evidence_source_before,
-            "build_evidence_backup_sha256": evidence_backup_hash,
-            "verified": True,
-        }
-    except Exception as exc:
-        try:
-            _cleanup_backup_artifacts(backup_paths, owned_paths)
-        except LiveSafetyError as cleanup_exc:
-            raise LiveSafetyError(
-                "backup acquisition failed; cleanup could not prove zero survivors."
-            ) from cleanup_exc
-        if isinstance(exc, LiveSafetyError):
-            raise exc
-        raise LiveSafetyError(
-            "backup acquisition failed; zero owned survivors were proven."
-        ) from exc
+        with pin_directory_chain(backup_dir):
+            dxf_backup, evidence_backup = _backup_paths(dxf, evidence, backup_dir)
+            backup_paths = (dxf_backup, evidence_backup)
+            owned_paths = {} if owned_paths is None else owned_paths
+            try:
+                dxf_source_before = sha256_file(dxf)
+                evidence_source_before = sha256_file(evidence)
+                dxf_backup_hash = _copy_to_exclusive_backup(dxf, dxf_backup, owned_paths)
+                evidence_backup_hash = _copy_to_exclusive_backup(
+                    evidence, evidence_backup, owned_paths
+                )
+                dxf_source_after = sha256_file(dxf)
+                evidence_source_after = sha256_file(evidence)
+                verified = (
+                    dxf_source_before == dxf_source_after == dxf_backup_hash
+                    and evidence_source_before == evidence_source_after == evidence_backup_hash
+                )
+                if not verified:
+                    raise LiveSafetyError(
+                        "Production backup verification failed; repair is refused before mutation."
+                    )
+                return {
+                    "dxf_path": str(dxf_backup),
+                    "dxf_source_sha256": dxf_source_before,
+                    "dxf_backup_sha256": dxf_backup_hash,
+                    "build_evidence_path": str(evidence_backup),
+                    "build_evidence_source_sha256": evidence_source_before,
+                    "build_evidence_backup_sha256": evidence_backup_hash,
+                    "verified": True,
+                }
+            except Exception as exc:
+                try:
+                    _cleanup_backup_artifacts(backup_paths, owned_paths)
+                except LiveSafetyError as cleanup_exc:
+                    raise LiveSafetyError(
+                        "backup acquisition failed; cleanup could not prove zero survivors."
+                    ) from cleanup_exc
+                if isinstance(exc, LiveSafetyError):
+                    raise exc
+                raise LiveSafetyError(
+                    "backup acquisition failed; zero owned survivors were proven."
+                ) from exc
+
+    except FileIdentityError as error:
+        raise LiveSafetyError("Backup directory identity could not be established.") from error
 
 
 def _open_bound_file(path: Path, *, flags: int, label: str) -> tuple[int, os.stat_result]:
     try:
-        path_stat = os.stat(path, follow_symlinks=False)
-    except OSError as exc:
-        raise LiveSafetyError(f"{label} identity could not be verified.") from exc
-    if not _is_single_link_regular_non_reparse(path_stat):
-        raise LiveSafetyError(
-            f"{label} must be a single-link regular non-reparse file."
-        )
-
-    descriptor = -1
-    try:
-        descriptor = os.open(path, flags)
-        opened_stat = os.fstat(descriptor)
-        if (
-            not _is_single_link_regular_non_reparse(opened_stat)
-            or not os.path.samestat(path_stat, opened_stat)
-        ):
-            raise LiveSafetyError(f"{label} identity changed while opening.")
-        _assert_path_identity(path, opened_stat, label=label)
-        return descriptor, opened_stat
-    except Exception:
-        if descriptor >= 0:
-            os.close(descriptor)
-        raise
+        return open_bound_file(path, flags=flags, label=label)
+    except FileIdentityError as exc:
+        raise LiveSafetyError(str(exc)) from exc
 
 
 def _sha256_open_file(handle: Any) -> str:
@@ -513,13 +536,13 @@ def _attest_saved_candidate(
             "POST_SAVE_EVIDENCE_READ_FAILED: persisted build evidence could not be loaded."
         ) from exc
     persisted_review = review_dxf_live(persisted_build, client, open_drawing=False)
-    if not persisted_review.passed:
-        raise LiveSafetyError(
-            "POST_SAVE_REVIEW_FAILED: persisted candidate did not pass fresh live review."
-        )
     if persisted_review.geometry_degraded:
         raise LiveSafetyError(
             "POST_SAVE_REVIEW_DEGRADED: persisted candidate geometry was not freshly revalidated."
+        )
+    if not persisted_review.passed:
+        raise LiveSafetyError(
+            "POST_SAVE_REVIEW_FAILED: persisted candidate did not pass fresh live review."
         )
     return {
         "closed_without_save": True,
@@ -563,6 +586,21 @@ def repair_live(
     }
     if before.passed:
         return report
+    if before.geometry_degraded:
+        raise LiveSafetyError(
+            "GEOMETRY_READBACK_UNAVAILABLE: repair is refused because live geometry was not freshly read."
+        )
+    if before.contour_mismatches:
+        raise LiveSafetyError(
+            "CONTOUR_JOIN_REPAIR_UNSUPPORTED: declared joins are not proven; "
+            "an explicit coupled feature plan is required."
+        )
+
+    if before.dimension_feature_mismatches:
+        raise LiveSafetyError(
+            "DIMENSION_FEATURE_REPAIR_UNSUPPORTED: declared DIM/LINE binding is not proven; "
+            "primitive erase/recreate cannot repair a dimension relationship."
+        )
 
     owned_backup_paths: dict[Path, os.stat_result | None] = {}
     backup = _backup(
@@ -572,7 +610,33 @@ def repair_live(
         owned_paths=owned_backup_paths,
     )
     report["backup"] = backup
-    repaired = repair_dxf_live(build, before.mismatches, client)
+    handles_before_repair = dict(build.handle_by_primitive_id)
+    try:
+        repaired = repair_dxf_live(build, before.mismatches, client)
+    except (MCPTimeoutError, MCPToolError):
+        # An acknowledgement can be lost after remote mutation. No handle is
+        # trustworthy until the existing canonical recovery owner proves restore.
+        build.handle_by_primitive_id.clear()
+        report["repair_error"] = "REPAIR_CAPABILITY_FAILED"
+        try:
+            client.drawing_close(save_changes=False)
+            restored = _restore_canonical(
+                client=client,
+                dxf=dxf,
+                evidence_path=evidence_path,
+                backup=backup,
+            )
+        except Exception:
+            report["rollback_restore"] = {
+                "recovery_verified": False,
+                "error": "ROLLBACK_FAILED",
+            }
+            report["rollback_state"] = "rollback_failed"
+        else:
+            build.handle_by_primitive_id.update(handles_before_repair)
+            report["rollback_restore"] = {"recovery_verified": True, **restored}
+            report["rollback_state"] = "failed_canonical_restored"
+        return report
     report["repair"] = asdict(repaired)
     after = review_dxf_live(build, client, open_drawing=False)
     report["after_review"] = review_dict(after)

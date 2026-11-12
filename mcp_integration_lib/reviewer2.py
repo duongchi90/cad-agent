@@ -6,6 +6,9 @@ from math import isclose
 from typing import Any, Dict, List
 
 from dxf_builder_lib.builder import BuildResult
+from dxf_builder_lib.reviewer import (
+    contour_endpoints, linear_dimension_matches_feature, review_contour_joins,
+)
 from .mcp_client import MCPClient, MCPTimeoutError, MCPToolError
 
 _DXF_TYPE = {"line": "LINE", "circle": "CIRCLE", "arc": "ARC", "text": "TEXT"}
@@ -17,6 +20,9 @@ class LiveReviewResult:
     structural_checked: int = 0
     geometry_checked: int = 0
     dimension_checked: int = 0
+    dimension_feature_mismatches: List[str] = field(default_factory=list)
+    contour_checked: int = 0
+    contour_mismatches: List[str] = field(default_factory=list)
     geometry_degraded: bool = False
     mismatches: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -25,15 +31,19 @@ class LiveReviewResult:
         self.passed = False
         self.mismatches.append(message)
 
+    def dimension_feature_mismatch(self, message: str) -> None:
+        self.passed = False
+        self.dimension_feature_mismatches.append(message)
 
-def _same(a: Any, b: Any, tolerance: float = 1e-6) -> bool:
+
+def _same(a: Any, b: Any, tolerance: float = 1e-6, *, relative_tolerance: float = 1e-9) -> bool:
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return isclose(float(a), float(b), abs_tol=tolerance)
+        return isclose(float(a), float(b), rel_tol=relative_tolerance, abs_tol=tolerance)
     if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)) and {len(a), len(b)} == {2, 3}:
         short, long = (a, b) if len(a) == 2 else (b, a)
-        return _same(short, long[:2], tolerance) and isclose(float(long[2]), 0.0, abs_tol=tolerance)
+        return _same(short, long[:2], tolerance, relative_tolerance=relative_tolerance) and isclose(float(long[2]), 0.0, abs_tol=tolerance)
     if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)) and len(a) == len(b):
-        return all(_same(x, y, tolerance) for x, y in zip(a, b))
+        return all(_same(x, y, tolerance, relative_tolerance=relative_tolerance) for x, y in zip(a, b))
     return a == b
 
 
@@ -57,8 +67,10 @@ def _check_geometry(pid: str, written: Dict[str, Any], actual: Dict[str, Any], r
 
 def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawing: bool = True,
                     attempt_geometry: bool = True) -> LiveReviewResult:
-    """Check handles/type/layer always; degrade gracefully when ``entity:get`` times out."""
+    """Check structure; exact-approved dimensions require readable measurements."""
     result = LiveReviewResult()
+    actual_features = {}
+    contour_endpoints_by_id = {}
     if open_drawing:
         try:
             client.drawing_open(build_result.output_path)
@@ -91,10 +103,32 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
             actual = client.entity_get(str(handle))
         except (MCPTimeoutError, MCPToolError) as exc:
             result.geometry_degraded = True
-            result.warnings.append(f"{pid}: bỏ qua geometry check ({exc})")
+            result.warnings.append(
+                f"{pid}: geometry readback unavailable; check skipped ({exc})"
+            )
+            # Missing readback is not a proven geometry mismatch; keeping it
+            # out of mismatches prevents the repair owner from treating a
+            # transport failure as authorization to replace the entity.
+            result.passed = False
         else:
             result.geometry_checked += 1
             _check_geometry(pid, written, actual, result)
+            actual_features[pid] = dict(actual, type=str(entity.get("type", "")).upper())
+            if build_result.contour_join_by_id:
+                try:
+                    if actual.get("layout") != "Model":
+                        raise ValueError("contour endpoint is not proven in ModelSpace")
+                    # entity:list identifies native type; entity:get supplies geometry.
+                    native_geometry = dict(actual, type=str(entity.get("type", "")).lower())
+                    contour_endpoints_by_id[pid] = contour_endpoints(native_geometry)
+                except (ValueError, TypeError, OverflowError):
+                    pass  # The declared obligation below becomes unavailable/nonPASS.
+    result.contour_checked, contour_mismatches = review_contour_joins(
+        build_result.contour_join_by_id, contour_endpoints_by_id,
+    )
+    for mismatch in contour_mismatches:
+        result.passed = False
+        result.contour_mismatches.append(mismatch)
     actual_dimension_count = sum(
         1
         for entity in listed.values()
@@ -133,6 +167,8 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
                 f"{validation_id}: DIMENSION layer does not match build evidence"
             )
         if not attempt_geometry:
+            if expected.get("geometry_primitive_id") is not None:
+                result.dimension_feature_mismatch(f"{validation_id}: DIMENSION feature binding requires geometry readback")
             continue
         try:
             actual = client.entity_get(str(handle))
@@ -141,11 +177,35 @@ def review_dxf_live(build_result: BuildResult, client: MCPClient, *, open_drawin
             result.warnings.append(
                 f"{validation_id}: skipped DIMENSION measurement check ({exc})"
             )
+            if expected.get("approved_value_mm") is not None:
+                result.mismatch(
+                    f"{validation_id}: DIMENSION measurement unavailable for "
+                    "approved_value_mm"
+                )
+            else:
+                result.mismatch(
+                    f"{validation_id}: DIMENSION measurement readback unavailable"
+                )
+            if expected.get("geometry_primitive_id") is not None:
+                result.dimension_feature_mismatch(f"{validation_id}: DIMENSION feature binding readback unavailable")
             continue
         actual_measurement = _actual(actual, "measurement")
         if not _same(expected.get("measurement"), actual_measurement):
             result.mismatch(
                 f"{validation_id}: DIMENSION measurement does not match build "
                 "evidence"
+            )
+        approved = expected.get("approved_value_mm")
+        if approved is not None and not _same(approved, actual_measurement, relative_tolerance=0.0):
+            result.mismatch(
+                f"{validation_id}: DIMENSION measurement does not match "
+                "approved_value_mm"
+            )
+        feature_id = expected.get("geometry_primitive_id")
+        if feature_id is not None and not linear_dimension_matches_feature(
+            actual, actual_features.get(feature_id, {}),
+        ):
+            result.dimension_feature_mismatch(
+                f"{validation_id}: DIMENSION feature binding unavailable or differs from LINE {feature_id!r}"
             )
     return result

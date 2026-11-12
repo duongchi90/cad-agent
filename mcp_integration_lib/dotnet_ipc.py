@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import ntpath
 import os
 import re
@@ -35,6 +36,7 @@ from cad_agent.visual_evidence import (
     snapshot_visual_run_manifest,
     validate_visual_evidence_freshness,
 )
+from cad_agent.drawing_contracts import DrawingContractError, validate_contract_payload
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_IPC_DIR = Path(r"C:\temp")
@@ -42,6 +44,7 @@ IPC_DIR_ENV_VAR = "CAD_AGENT_DOTNET_IPC_DIR"
 DEFAULT_DISPOSABLE_WORKSPACE_DIR = "disposable-workspaces"
 MAX_REQUEST_ID_LENGTH = 128
 DEFAULT_MAX_READ_BYTES = 1024 * 1024
+MODEL_SPACE_INVENTORY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 REQUEST_PREFIX = "cadagent_dotnet_request_"
 RESULT_PREFIX = "cadagent_dotnet_result_"
@@ -66,15 +69,19 @@ SUPPORTED_OPERATIONS = frozenset(
         "native_render_evidence",
         "exact_base_xref_inspection",
         "exact_base_xref_extraction",
+        "bounded_native_line_edit",
     }
 )
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _WM_CHAR = 0x0102
+_GA_ROOT = 2
 _DOTNET_DISPATCH_COMMAND = "\x1b\x1bCADAGENT_DISPATCH\r"
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _EXACT_BASE_XREF_INSPECTION = "exact_base_xref_inspection"
 _EXACT_BASE_XREF_EXTRACTION = "exact_base_xref_extraction"
+_BOUNDED_NATIVE_LINE_EDIT = "bounded_native_line_edit"
+_BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES = frozenset({"UNCHANGED", "ROLLED_BACK", "UNCERTAIN"})
 _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE = "INSPECTION_HOST"
 _EXACT_BASE_XREF_EXTRACTION_TARGET_ROLE = "DISPOSABLE_CANDIDATE"
 _EXACT_BASE_XREF_LIVE_OWNED_FIELDS = frozenset(
@@ -120,6 +127,7 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
         enum_child_windows = user32.EnumChildWindows
         is_window_visible = user32.IsWindowVisible
         get_foreground_window = user32.GetForegroundWindow
+        get_ancestor = user32.GetAncestor
         post_message = user32.PostMessageW
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         set_native_signature(
@@ -139,6 +147,11 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
         )
         set_native_signature(is_window_visible, [wintypes.HWND], wintypes.BOOL)
         set_native_signature(get_foreground_window, [], wintypes.HWND)
+        set_native_signature(
+            get_ancestor,
+            [wintypes.HWND, wintypes.UINT],
+            wintypes.HWND,
+        )
         set_native_signature(
             post_message,
             [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM],
@@ -177,15 +190,19 @@ def make_windows_dotnet_dispatch_trigger(hwnd: int) -> Callable[[], None]:
             raise DotNetIPCError("WINDOW_RECEIVER_AMBIGUOUS")
         target = visible_owned_mdi_clients[0]
 
+        def foreground_is_exact_owner() -> bool:
+            foreground = get_foreground_window()
+            return bool(foreground) and get_ancestor(foreground, _GA_ROOT) == hwnd
+
         if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
             raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
-        if get_foreground_window() != hwnd:
+        if not foreground_is_exact_owner():
             raise DotNetIPCError("WINDOW_FOREGROUND_INVALID")
 
         for character in _DOTNET_DISPATCH_COMMAND:
             if window_pid(hwnd) != owner_pid or window_pid(target) != owner_pid:
                 raise DotNetIPCError("WINDOW_IDENTITY_CHANGED")
-            if get_foreground_window() != hwnd:
+            if not foreground_is_exact_owner():
                 raise DotNetIPCError("WINDOW_FOREGROUND_INVALID")
             if not post_message(target, _WM_CHAR, ord(character), 0):
                 raise DotNetIPCError("WINDOW_DELIVERY_FAILED")
@@ -577,6 +594,16 @@ class DotNetIPCResultError(DotNetIPCError):
         super().__init__(message)
         self.result = dict(result) if result is not None else None
 
+    @property
+    def durable_state(self) -> str | None:
+        """Return the bounded native edit's typed persistence outcome, if present."""
+
+        payload = self.result.get("payload") if self.result is not None else None
+        if not isinstance(payload, Mapping):
+            return None
+        state = payload.get("durable_state")
+        return state if isinstance(state, str) and state in _BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES else None
+
 
 class DisposableWorkspaceError(DotNetIPCError):
     """Base error for the server-owned disposable workspace seam."""
@@ -729,10 +756,17 @@ class DotNetIPCClient:
             _EXACT_BASE_XREF_EXTRACTION,
         }:
             self._validate_exact_base_xref_hash(normalized_sha256, "drawing_sha256")
+            allow_source_drawing_alias = (
+                normalized_operation == _EXACT_BASE_XREF_INSPECTION
+                and isinstance(normalized_parameters.get("inspection_expectations"), Mapping)
+                and normalized_parameters["inspection_expectations"].get("xref") is None
+            )
             self._validate_exact_base_xref_paths(
                 normalized_path,
                 normalized_parameters["source_full_path"],
                 candidate_output_path=normalized_parameters.get("candidate_output_path"),
+                allow_source_drawing_alias=allow_source_drawing_alias,
+                require_source_drawing_alias=allow_source_drawing_alias,
             )
         if approval is not None and not isinstance(approval, Mapping):
             raise ValueError("approval must be an object or null")
@@ -768,7 +802,70 @@ class DotNetIPCClient:
             if self.trigger is None:
                 raise DotNetIPCError("File IPC requires an AutoCAD dispatcher trigger")
             self.trigger()
-            result = self._poll_result(result_file, actual_request_id, normalized_operation)
+            result = self._poll_result(
+                result_file,
+                actual_request_id,
+                normalized_operation,
+                max_bytes=(
+                    MODEL_SPACE_INVENTORY_MAX_RESPONSE_BYTES
+                    if normalized_operation == "drawing_setup_audit"
+                    and normalized_parameters.get("include_model_space_inventory") is True
+                    else self.max_read_bytes
+                ),
+            )
+            if (
+                normalized_operation == "drawing_setup_audit"
+                and normalized_parameters.get("include_model_space_inventory") is True
+                and result["success"] is True
+            ):
+                result_drawing_path = result.get("drawing_full_path")
+                if (
+                    normalized_path is None
+                    or not isinstance(result_drawing_path, str)
+                    or normalize_windows_absolute_path(result_drawing_path).casefold()
+                    != normalized_path.casefold()
+                ):
+                    raise DotNetIPCProtocolError(
+                        "drawing_setup_audit result drawing_full_path does not match the requested drawing"
+                    )
+                payload = result.get("payload")
+                if not isinstance(payload, dict) or not isinstance(
+                    payload.get("model_space_inventory"), dict
+                ):
+                    raise DotNetIPCProtocolError(
+                        "drawing_setup_audit result is missing requested model_space_inventory"
+                    )
+                try:
+                    audit_payload = {
+                        **payload,
+                        "schema_version": "drawing-setup-audit-1.0",
+                        "drawing_full_path": normalized_path,
+                        "drawing_sha256": normalized_sha256,
+                    }
+                    validate_contract_payload(audit_payload, contract="drawing_setup_audit")
+                except DrawingContractError as exc:
+                    raise DotNetIPCProtocolError(
+                        f"drawing_setup_audit result has invalid ModelSpace inventory: {exc}"
+                    ) from exc
+                inventory = payload["model_space_inventory"]
+                try:
+                    inventory_path = normalize_windows_absolute_path(
+                        inventory["drawing_full_path"]
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise DotNetIPCProtocolError(
+                        "ModelSpace inventory identity does not match the requested drawing"
+                    ) from exc
+                if (
+                    inventory_path.casefold() != normalized_path.casefold()
+                    or inventory["drawing_sha256_before"].casefold()
+                    != normalized_sha256.casefold()
+                    or inventory["drawing_sha256_after"].casefold()
+                    != normalized_sha256.casefold()
+                ):
+                    raise DotNetIPCProtocolError(
+                        "ModelSpace inventory identity does not match the requested drawing"
+                    )
             if result["success"] is not True:
                 errors = result.get("errors", [])
                 message = "; ".join(str(error) for error in errors) if errors else "request failed"
@@ -783,6 +880,41 @@ class DotNetIPCClient:
         finally:
             if not timed_out:
                 cleanup_request_files(self.ipc_dir, actual_request_id)
+
+    def bounded_native_line_edit(
+        self,
+        drawing_full_path: str | Path,
+        *,
+        candidate_reference: Mapping[str, Any],
+        current_observation: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply one request-bound edit to the current disposable R3 candidate."""
+
+        from cad_agent.drawing_artifact_reference import (
+            require_current_drawing_artifact_reference,
+            validate_drawing_artifact_reference,
+        )
+
+        normalized_path = normalize_windows_absolute_path(drawing_full_path)
+        candidate_bytes = Path(normalized_path).read_bytes()
+        reference = validate_drawing_artifact_reference(
+            candidate_reference,
+            expected_artifact_role="R3_CANDIDATE",
+        )
+        require_current_drawing_artifact_reference(
+            reference=reference,
+            observation=current_observation,
+            artifact_bytes=candidate_bytes,
+        )
+        return self.request(
+            _BOUNDED_NATIVE_LINE_EDIT,
+            normalized_path,
+            drawing_sha256=hashlib.sha256(candidate_bytes).hexdigest(),
+            parameters=parameters,
+            request_id=request_id,
+        )
 
     def health(
         self,
@@ -1223,13 +1355,18 @@ class DotNetIPCClient:
         drawing_full_path: str | Path,
         *,
         drawing_sha256: str,
+        include_model_space_inventory: bool = False,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        if type(include_model_space_inventory) is not bool:
+            raise ValueError("include_model_space_inventory must be a boolean")
         return self.request(
             "drawing_setup_audit",
             drawing_full_path,
             drawing_sha256=drawing_sha256,
-            parameters={},
+            parameters={"include_model_space_inventory": True}
+            if include_model_space_inventory
+            else {},
             approval=None,
             request_id=request_id,
         )
@@ -1300,6 +1437,8 @@ class DotNetIPCClient:
             normalized_drawing,
             normalized_source,
             candidate_output_path=None,
+            allow_source_drawing_alias=validated_inspection["xref"] is None,
+            require_source_drawing_alias=validated_inspection["xref"] is None,
         )
         result = self.request(
             _EXACT_BASE_XREF_INSPECTION,
@@ -1671,11 +1810,16 @@ class DotNetIPCClient:
         result_file: Path,
         request_id: str,
         operation: str,
+        *,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + self.timeout_s
         while True:
             if result_file.is_file():
-                result = read_json_bounded(result_file, max_bytes=self.max_read_bytes)
+                result = read_json_bounded(
+                    result_file,
+                    max_bytes=self.max_read_bytes if max_bytes is None else max_bytes,
+                )
                 self._validate_result(result, request_id, operation)
                 return result
 
@@ -1727,8 +1871,12 @@ class DotNetIPCClient:
             if values:
                 raise ValueError("mechanical_bom parameters must be an empty object")
         elif operation == "drawing_setup_audit":
-            if values:
-                raise ValueError("drawing_setup_audit parameters must be an empty object")
+            if set(values) - {"include_model_space_inventory"}:
+                raise ValueError("drawing_setup_audit parameters contain unsupported fields")
+            if "include_model_space_inventory" in values and type(
+                values["include_model_space_inventory"]
+            ) is not bool:
+                raise ValueError("parameters.include_model_space_inventory must be a boolean")
         elif operation == "review":
             handles = values.get("handles")
             if not isinstance(handles, list) or not handles:
@@ -1752,7 +1900,66 @@ class DotNetIPCClient:
             DotNetIPCClient._validate_exact_base_xref_inspection_parameters(values)
         elif operation == _EXACT_BASE_XREF_EXTRACTION:
             DotNetIPCClient._validate_exact_base_xref_extraction_parameters(values)
+        elif operation == _BOUNDED_NATIVE_LINE_EDIT:
+            DotNetIPCClient._validate_bounded_native_line_edit_parameters(values)
         return values
+
+    @staticmethod
+    def _validate_bounded_native_line_edit_parameters(
+        parameters: Mapping[str, Any],
+    ) -> None:
+        required = {"targets", "protected"}
+        if set(parameters) != required:
+            raise ValueError("bounded_native_line_edit parameters must contain only targets and protected")
+        targets = parameters["targets"]
+        protected = parameters["protected"]
+        if not isinstance(targets, list) or not targets:
+            raise ValueError("parameters.targets must be a non-empty array")
+        if not isinstance(protected, list):
+            raise ValueError("parameters.protected must be an array")
+
+        seen_handles: set[str] = set()
+        for name, lines, required_line_fields in (
+            ("targets", targets, {"handle", "before", "after"}),
+            ("protected", protected, {"handle", "before"}),
+        ):
+            for index, line in enumerate(lines):
+                if not isinstance(line, Mapping) or set(line) != required_line_fields:
+                    raise ValueError(f"parameters.{name}[{index}] has an invalid shape")
+                handle = line["handle"]
+                if not isinstance(handle, str) or not re.fullmatch(r"[0-9A-Fa-f]+", handle):
+                    raise ValueError(f"parameters.{name}[{index}].handle must be hexadecimal")
+                normalized_handle = handle.upper()
+                if normalized_handle in seen_handles:
+                    raise ValueError("target and protected handles must be unique and disjoint")
+                seen_handles.add(normalized_handle)
+                before = DotNetIPCClient._validate_bounded_line_geometry(
+                    line["before"], f"parameters.{name}[{index}].before"
+                )
+                if name == "targets":
+                    after = DotNetIPCClient._validate_bounded_line_geometry(
+                        line["after"], f"parameters.{name}[{index}].after"
+                    )
+                    if before == after:
+                        raise ValueError(f"parameters.targets[{index}] must declare a geometry change")
+
+    @staticmethod
+    def _validate_bounded_line_geometry(value: Any, field_name: str) -> dict[str, list[int | float]]:
+        if not isinstance(value, Mapping) or set(value) != {"start", "end"}:
+            raise ValueError(f"{field_name} must contain only start and end")
+        points: dict[str, list[int | float]] = {}
+        for point_name in ("start", "end"):
+            point = value[point_name]
+            if (
+                not isinstance(point, list)
+                or len(point) != 3
+                or any(type(coordinate) not in (int, float) or not math.isfinite(coordinate) for coordinate in point)
+            ):
+                raise ValueError(f"{field_name}.{point_name} must contain three finite coordinates")
+            points[point_name] = list(point)
+        if points["start"] == points["end"]:
+            raise ValueError(f"{field_name} must describe a non-degenerate LINE")
+        return points
 
     @staticmethod
     def _validate_offline_xref_inspection(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1767,37 +1974,45 @@ class DotNetIPCClient:
             item["field"]: item["target"]
             for item in inspection["identity_observations"]
         }
-        return {
+        direct_native_base = inspection["xref"] is None
+        expectations = {
             "source": {
-                key: inspection["base_source"][key]
-                for key in ("source_id", "revision", "sha256")
+                "source_id": None if direct_native_base else inspection["base_source"]["source_id"],
+                "revision": None if direct_native_base else inspection["base_source"]["revision"],
+                "sha256": inspection["base_source"]["sha256"],
             },
-            "identity": identity,
-            "critical_dimensions": [
-                {
-                    "control": item["control"],
-                    "target": item["target"],
-                    "tolerance": item["tolerance"],
-                    "unit": item["unit"],
-                }
-                for item in inspection["critical_dimensions"]
-            ],
-            "xref": {"name": inspection["xref"]["name"]},
-            "components": [
-                {
-                    key: component[key]
-                    for key in (
-                        "component_type",
-                        "logical_component_id",
-                        "provenance",
-                        "source_block",
-                        "source_handle",
-                        "source_layer",
-                    )
-                }
-                for component in inspection["components"]
-            ],
+            "xref": None if direct_native_base else {"name": inspection["xref"]["name"]},
         }
+        if not direct_native_base:
+            expectations.update(
+                {
+                    "identity": identity,
+                    "critical_dimensions": [
+                        {
+                            "control": item["control"],
+                            "target": item["target"],
+                            "tolerance": item["tolerance"],
+                            "unit": item["unit"],
+                        }
+                        for item in inspection["critical_dimensions"]
+                    ],
+                    "components": [
+                        {
+                            key: component[key]
+                            for key in (
+                                "component_type",
+                                "logical_component_id",
+                                "provenance",
+                                "source_block",
+                                "source_handle",
+                                "source_layer",
+                            )
+                        }
+                        for component in inspection["components"]
+                    ],
+                }
+            )
+        return expectations
 
     @staticmethod
     def _resolve_xref_identity(
@@ -1808,6 +2023,8 @@ class DotNetIPCClient:
     ) -> tuple[str, str]:
         expected_revision = inspection["base_source"]["revision"]
         expected_run_id = inspection["run_id"]
+        if source_revision is not None and expected_revision is None:
+            raise ValueError("source_revision is not valid for a direct native base inspection")
         if source_revision is not None and source_revision != expected_revision:
             raise ValueError("source_revision does not match the offline inspection")
         if run_id is not None and run_id != expected_run_id:
@@ -1826,12 +2043,16 @@ class DotNetIPCClient:
         source_full_path: str | Path,
         *,
         candidate_output_path: str | Path | None,
+        allow_source_drawing_alias: bool = False,
+        require_source_drawing_alias: bool = False,
     ) -> None:
         if drawing_full_path is None:
             raise ValueError("drawing_full_path is required for exact-base Xref operations")
         normalized_drawing = normalize_windows_absolute_path(drawing_full_path).casefold()
         normalized_source = normalize_windows_absolute_path(source_full_path).casefold()
-        if normalized_source == normalized_drawing:
+        if require_source_drawing_alias and normalized_source != normalized_drawing:
+            raise ValueError("direct-native source_full_path must equal drawing_full_path")
+        if normalized_source == normalized_drawing and not allow_source_drawing_alias:
             raise ValueError("source_full_path must not equal drawing_full_path")
         if candidate_output_path is not None:
             normalized_output = normalize_windows_absolute_path(candidate_output_path).casefold()
@@ -1842,8 +2063,13 @@ class DotNetIPCClient:
 
     @staticmethod
     def _validate_exact_base_xref_expectations(expectations: Any) -> None:
-        required = {"source", "identity", "critical_dimensions", "xref", "components"}
-        if not isinstance(expectations, Mapping) or set(expectations) != required:
+        required = {"source", "xref"}
+        allowed = required | {"identity", "critical_dimensions", "components"}
+        if (
+            not isinstance(expectations, Mapping)
+            or not required.issubset(expectations)
+            or set(expectations) - allowed
+        ):
             raise ValueError("inspection_expectations must be a closed object")
 
         def reject_live_owned(value: Any, context: str) -> None:
@@ -1857,6 +2083,7 @@ class DotNetIPCClient:
                     reject_live_owned(nested, f"{context}[{index}]")
 
         reject_live_owned(expectations, "inspection_expectations")
+        direct_native_base = expectations.get("xref") is None
         if not isinstance(expectations["source"], Mapping) or set(expectations["source"]) != {
             "source_id",
             "revision",
@@ -1868,47 +2095,57 @@ class DotNetIPCClient:
             "inspection_expectations.source.sha256",
         )
         for name in ("source_id", "revision"):
-            if not isinstance(expectations["source"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
-                expectations["source"][name]
-            ):
+            value = expectations["source"][name]
+            if direct_native_base and value is None:
+                continue
+            if not isinstance(value, str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(value):
                 raise ValueError(f"inspection_expectations.source.{name} is invalid")
-        if not isinstance(expectations["identity"], Mapping) or set(expectations["identity"]) != {
-            "vehicle",
-            "model",
-        }:
-            raise ValueError("inspection_expectations.identity is not closed")
-        for name in ("vehicle", "model"):
-            if not isinstance(expectations["identity"][name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
-                expectations["identity"][name]
-            ):
-                raise ValueError(f"inspection_expectations.identity.{name} is invalid")
-        dimensions = expectations["critical_dimensions"]
-        if not isinstance(dimensions, list) or len(dimensions) != 5:
-            raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
-        for dimension in dimensions:
-            if not isinstance(dimension, Mapping) or set(dimension) != {
-                "control",
-                "target",
-                "tolerance",
-                "unit",
-            }:
-                raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
-        if not isinstance(expectations["xref"], Mapping) or set(expectations["xref"]) != {"name"}:
+        if direct_native_base:
+            if expectations["xref"] is not None:
+                raise ValueError("direct native base Xref must be null")
+            identity = expectations.get("identity")
+            if identity not in (None, {}):
+                raise ValueError("direct native base identity expectations must be empty")
+            dimensions = expectations.get("critical_dimensions")
+            if dimensions not in (None, []):
+                raise ValueError("direct native base dimension expectations must be empty")
+            components = expectations.get("components")
+            if components not in (None, []):
+                raise ValueError("direct native base component expectations must be empty")
+        elif not isinstance(expectations["xref"], Mapping) or set(expectations["xref"]) != {"name"}:
             raise ValueError("inspection_expectations.xref is not closed")
-        components = expectations["components"]
-        if not isinstance(components, list) or not components:
-            raise ValueError("inspection_expectations.components must not be empty")
-        component_fields = {
-            "component_type",
-            "logical_component_id",
-            "provenance",
-            "source_block",
-            "source_handle",
-            "source_layer",
-        }
-        for component in components:
-            if not isinstance(component, Mapping) or set(component) != component_fields:
-                raise ValueError("inspection_expectations.components entries are not closed")
+        else:
+            identity = expectations.get("identity")
+            if not isinstance(identity, Mapping) or set(identity) != {"vehicle", "model"}:
+                raise ValueError("inspection_expectations.identity is not closed")
+            for name in ("vehicle", "model"):
+                if not isinstance(identity[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(identity[name]):
+                    raise ValueError(f"inspection_expectations.identity.{name} is invalid")
+            dimensions = expectations.get("critical_dimensions")
+            if not isinstance(dimensions, list) or len(dimensions) != 5:
+                raise ValueError("inspection_expectations.critical_dimensions must contain five controls")
+            for dimension in dimensions:
+                if not isinstance(dimension, Mapping) or set(dimension) != {
+                    "control",
+                    "target",
+                    "tolerance",
+                    "unit",
+                }:
+                    raise ValueError("inspection_expectations.critical_dimensions entries are not closed")
+            components = expectations.get("components")
+            if not isinstance(components, list) or not components:
+                raise ValueError("inspection_expectations.components must not be empty")
+            component_fields = {
+                "component_type",
+                "logical_component_id",
+                "provenance",
+                "source_block",
+                "source_handle",
+                "source_layer",
+            }
+            for component in components:
+                if not isinstance(component, Mapping) or set(component) != component_fields:
+                    raise ValueError("inspection_expectations.components entries are not closed")
 
     @staticmethod
     def _validate_exact_base_xref_inspection_parameters(parameters: Mapping[str, Any]) -> None:
@@ -1919,19 +2156,30 @@ class DotNetIPCClient:
             "inspection_expectations",
             "target_role",
         }
-        if set(parameters) != required:
+        missing = required - set(parameters)
+        unknown = set(parameters) - required
+        if unknown or missing - {"source_revision"}:
             raise ValueError("exact_base_xref_inspection parameters must be closed")
-        for name in ("run_id", "source_revision"):
+        DotNetIPCClient._validate_exact_base_xref_expectations(
+            parameters["inspection_expectations"]
+        )
+        direct_native_base = parameters["inspection_expectations"].get("xref") is None
+        if "source_revision" not in parameters and not direct_native_base:
+            raise ValueError("parameters.source_revision is required for Xref inspection")
+        for name in ("run_id",):
             if not isinstance(parameters[name], str) or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(
                 parameters[name]
             ):
                 raise ValueError(f"parameters.{name} is invalid")
+        source_revision = parameters.get("source_revision")
+        if source_revision is not None and (
+            not isinstance(source_revision, str)
+            or not _VS_T3_IDENTIFIER_PATTERN.fullmatch(source_revision)
+        ):
+            raise ValueError("parameters.source_revision is invalid")
         normalize_windows_absolute_path(parameters["source_full_path"])
         if parameters["target_role"] != _EXACT_BASE_XREF_INSPECTION_TARGET_ROLE:
             raise ValueError("parameters.target_role must be INSPECTION_HOST")
-        DotNetIPCClient._validate_exact_base_xref_expectations(
-            parameters["inspection_expectations"]
-        )
 
     @staticmethod
     def _validate_exact_base_xref_extraction_parameters(parameters: Mapping[str, Any]) -> None:
@@ -2253,6 +2501,14 @@ class DotNetIPCClient:
         if type(result["success"]) is not bool:
             raise DotNetIPCProtocolError("result success must be a boolean")
         if result["operation"] != operation:
+            errors = result.get("errors")
+            if (
+                result["success"] is False
+                and isinstance(errors, list)
+                and errors
+                and all(isinstance(error, str) for error in errors)
+            ):
+                raise DotNetIPCResultError("; ".join(errors), result=result)
             raise DotNetIPCProtocolError("result operation does not match the request")
         if result["drawing_full_path"] is not None:
             try:
@@ -2318,6 +2574,22 @@ class DotNetIPCClient:
             ):
                 raise DotNetIPCProtocolError(
                     "exact_base_xref_extraction failure must be cleaned up and empty"
+                )
+        if operation == _BOUNDED_NATIVE_LINE_EDIT and result["success"] is False:
+            if result["changed"] is not False or result["entity_handles"]:
+                raise DotNetIPCProtocolError(
+                    "bounded_native_line_edit failure must be unchanged and contain no entity handles"
+                )
+            payload = result.get("payload")
+            if payload not in (None, {}) and (
+                not isinstance(payload, dict)
+                or set(payload) != {"durable_state", "save_performed"}
+                or not isinstance(payload.get("durable_state"), str)
+                or payload.get("durable_state") not in _BOUNDED_NATIVE_LINE_EDIT_FAILURE_STATES
+                or type(payload.get("save_performed")) is not bool
+            ):
+                raise DotNetIPCProtocolError(
+                    "bounded_native_line_edit failure payload has an invalid durable state"
                 )
         for name in ("started_at", "completed_at"):
             if not isinstance(result[name], str) or not result[name]:

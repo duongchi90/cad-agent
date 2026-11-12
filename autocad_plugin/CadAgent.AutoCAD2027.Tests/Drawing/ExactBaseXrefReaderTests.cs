@@ -44,7 +44,8 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
     public void InspectsOnlyNamedExternalXrefAndReturnsReadOnlyResult()
     {
         var database = new FakeExactBaseXrefDatabase(_targetPath, _sourcePath, TargetHash, SourceHash);
-        var result = CreateReader(database).Read(Request());
+        var request = Request();
+        var result = CreateReader(database).Read(request);
 
         Assert.True(result.Success);
         Assert.Equal(_targetPath, result.DrawingFullPath);
@@ -52,9 +53,43 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         Assert.Empty(result.EntityHandles);
         Assert.NotNull(result.Evidence);
         Assert.True(result.Evidence!.Eligible);
+        Assert.Equal(request.RequestId, result.Evidence.RequestId);
         Assert.Equal("vehicle-001", result.Evidence.IdentityObservations![0].Observed);
         Assert.Equal(1, database.NamedXrefReadCount);
         Assert.Equal(0, database.ModelSpaceScanCount);
+        Assert.Equal(0, database.SaveCallCount);
+    }
+
+    [Fact]
+    public void InspectsDirectNativeBaseFromModelSpaceWithoutXrefIdentity()
+    {
+        var database = new FakeExactBaseXrefDatabase(_sourcePath, _sourcePath, SourceHash, SourceHash)
+        {
+            IsExternalReference = false,
+            IsReadOnly = true
+        };
+
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            _root,
+            _sourcePath,
+            SourceHash,
+            _sourcePath,
+            SourceHash,
+            null));
+        var result = new AutoCadExactBaseXrefReader(
+            database,
+            directPolicy,
+            () => new DateTimeOffset(2026, 8, 6, 8, 0, 1, TimeSpan.Zero))
+            .Read(Request(directNativeBase: true));
+
+        Assert.True(result.Success);
+        Assert.True(result.Evidence!.Eligible);
+        Assert.Null(result.Evidence.Xref);
+        Assert.Empty(result.Evidence.IdentityObservations!);
+        Assert.Empty(result.Evidence.CriticalDimensions!);
+        Assert.Empty(result.Evidence.Components!);
+        Assert.Equal(0, database.NamedXrefReadCount);
+        Assert.Equal(1, database.ModelSpaceScanCount);
         Assert.Equal(0, database.SaveCallCount);
     }
 
@@ -305,6 +340,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         var inspection = Request();
         return new ExactBaseXrefExtractionParameters
         {
+            RequestId = inspection.RequestId,
             RunId = inspection.RunId,
             SourceFullPath = inspection.SourceFullPath,
             SourceRevision = inspection.SourceRevision,
@@ -360,55 +396,60 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         };
     }
 
-    private ExactBaseXrefInspectionParameters Request() => new()
+    private ExactBaseXrefInspectionParameters Request(bool directNativeBase = false) => new()
     {
+        RequestId = "xref-inspection-request-001",
         RunId = "run-001",
         SourceFullPath = _sourcePath,
-        SourceRevision = "rev-2026-08-05-01",
+        SourceRevision = directNativeBase ? null : "rev-2026-08-05-01",
         TargetRole = ExactBaseXrefOperationNames.InspectionTargetRole,
         InspectionExpectations = new ExactBaseXrefInspectionExpectations
         {
             Source = new ExactBaseXrefSourceExpectation
             {
-                SourceId = "base-vehicle-001",
-                Revision = "rev-2026-08-05-01",
+                SourceId = directNativeBase ? null : "base-vehicle-001",
+                Revision = directNativeBase ? null : "rev-2026-08-05-01",
                 Sha256 = SourceHash
             },
-            Identity = new ExactBaseXrefIdentityExpectation
+            Identity = directNativeBase ? null : new ExactBaseXrefIdentityExpectation
             {
                 Vehicle = "vehicle-001",
                 Model = "model-x"
             },
-            CriticalDimensions = new List<ExactBaseXrefDimensionExpectation>
-            {
-                new() { Control = "axle", Target = 100, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "cabin", Target = 200, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "chassis", Target = 300, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "track", Target = 400, Tolerance = 0.1, Unit = "mm" },
-                new() { Control = "wheelbase", Target = 500, Tolerance = 0.1, Unit = "mm" }
-            },
-            Xref = new ExactBaseXrefReference { Name = "BASE_XREF" },
-            Components = new List<ExactBaseXrefComponentExpectation>
-            {
-                new()
+            CriticalDimensions = directNativeBase
+                ? new List<ExactBaseXrefDimensionExpectation>()
+                : new List<ExactBaseXrefDimensionExpectation>
                 {
-                    ComponentType = "BLOCK",
-                    LogicalComponentId = "cab-001",
-                    Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
-                    SourceBlock = "CAB",
-                    SourceHandle = "1A2B",
-                    SourceLayer = "BODY"
+                    new() { Control = "axle", Target = 100, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "cabin", Target = 200, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "chassis", Target = 300, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "track", Target = 400, Tolerance = 0.1, Unit = "mm" },
+                    new() { Control = "wheelbase", Target = 500, Tolerance = 0.1, Unit = "mm" }
                 },
-                new()
+            Xref = directNativeBase ? null : new ExactBaseXrefReference { Name = "BASE_XREF" },
+            Components = directNativeBase
+                ? new List<ExactBaseXrefComponentExpectation>()
+                : new List<ExactBaseXrefComponentExpectation>
                 {
-                    ComponentType = "BLOCK",
-                    LogicalComponentId = "wheel-001",
-                    Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
-                    SourceBlock = "WHEEL",
-                    SourceHandle = "1A2C",
-                    SourceLayer = "RUNNING_GEAR"
+                    new()
+                    {
+                        ComponentType = "BLOCK",
+                        LogicalComponentId = "cab-001",
+                        Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
+                        SourceBlock = "CAB",
+                        SourceHandle = "1A2B",
+                        SourceLayer = "BODY"
+                    },
+                    new()
+                    {
+                        ComponentType = "BLOCK",
+                        LogicalComponentId = "wheel-001",
+                        Provenance = ExactBaseXrefOperationNames.ReusedFromBaseCad,
+                        SourceBlock = "WHEEL",
+                        SourceHandle = "1A2C",
+                        SourceLayer = "RUNNING_GEAR"
+                    }
                 }
-            }
         }
     };
 
@@ -477,13 +518,15 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
 
         public Exception? InspectionException { get; init; }
 
-        public int ReadDbmod() => NamedXrefReadCount == 0 ? DbmodBefore : DbmodAfter;
+        private int ReadCount => NamedXrefReadCount + ModelSpaceScanCount;
+
+        public int ReadDbmod() => ReadCount == 0 ? DbmodBefore : DbmodAfter;
 
         public string ComputeSha256(string path)
         {
             if (string.Equals(path, _sourcePath, StringComparison.OrdinalIgnoreCase))
             {
-                if (NamedXrefReadCount == 0)
+                if (ReadCount == 0)
                 {
                     return SourceHashBefore;
                 }
@@ -496,7 +539,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
                 return "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
             }
 
-            return NamedXrefReadCount == 0 ? _targetHash : TargetHashAfter;
+            return ReadCount == 0 ? _targetHash : TargetHashAfter;
         }
 
         public ExactBaseXrefDatabaseExtractionResult ExtractApprovedComponents(
@@ -532,7 +575,14 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
         public ExactBaseXrefDatabaseCapture ReadNamedExternalXref(
             ExactBaseXrefInspectionParameters request)
         {
-            NamedXrefReadCount++;
+            if (request.InspectionExpectations!.Xref is null)
+            {
+                ModelSpaceScanCount++;
+            }
+            else
+            {
+                NamedXrefReadCount++;
+            }
             if (InspectionException is not null)
             {
                 throw InspectionException;
@@ -540,7 +590,7 @@ public sealed class ExactBaseXrefReaderTests : IDisposable
 
             return new ExactBaseXrefDatabaseCapture
             {
-                XrefName = request.InspectionExpectations!.Xref!.Name!,
+                XrefName = request.InspectionExpectations!.Xref?.Name,
                 IsExternalReference = IsExternalReference,
                 IsReadOnly = IsReadOnly,
                 Vehicle = Vehicle,

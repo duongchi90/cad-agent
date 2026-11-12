@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import importlib
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from cad_agent import drawing_artifact_reference as drawing_artifacts
 from mcp_integration_lib import dotnet_ipc
 from mcp_integration_lib.dotnet_ipc import (
     DEFAULT_IPC_DIR,
@@ -46,6 +48,7 @@ class RecordingUser32:
         pid_sequences: dict[int, list[int]] | None = None,
         foreground_hwnd: int = 9001,
         foreground_sequence: list[int] | None = None,
+        root_ancestors: dict[int, int] | None = None,
         post_returns: list[bool] | None = None,
     ) -> None:
         self.top_pid = top_pid
@@ -63,6 +66,7 @@ class RecordingUser32:
         self.pid_sequences = pid_sequences or {}
         self.foreground_hwnd = foreground_hwnd
         self.foreground_sequence = foreground_sequence or []
+        self.root_ancestors = root_ancestors or {}
         self.post_returns = post_returns or []
         self.pid_calls: list[int] = []
         self.class_names: dict[int, str] = {}
@@ -104,6 +108,11 @@ class RecordingUser32:
         if self.foreground_sequence:
             return self.foreground_sequence.pop(0)
         return self.foreground_hwnd
+
+    def GetAncestor(self, hwnd, flags):
+        if flags != 2:  # GA_ROOT
+            return 0
+        return self.root_ancestors.get(hwnd, hwnd)
 
     def PostMessageW(self, target, message, wparam, lparam):
         self.post_calls.append((target, message, wparam, lparam))
@@ -203,6 +212,36 @@ class WindowsDotNetTriggerTests(unittest.TestCase):
                 trigger()
 
         self.assertGreaterEqual(user32.foreground_calls, 1)
+        self.assertEqual([], user32.post_calls)
+
+    def test_accepts_foreground_child_of_exact_admitted_top_level(self) -> None:
+        command = "\x1b\x1bCADAGENT_DISPATCH\r"
+        user32 = RecordingUser32(
+            foreground_hwnd=7007,
+            root_ancestors={7007: 9001},
+        )
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            factory(9001)()
+
+        self.assertEqual(
+            [(202, 0x0102, ord(character), 0) for character in command],
+            user32.post_calls,
+        )
+
+    def test_rejects_foreground_child_of_another_root_in_same_process(self) -> None:
+        user32 = RecordingUser32(
+            foreground_hwnd=7007,
+            root_ancestors={7007: 9002},
+            child_pids={7007: 4242, 9002: 4242},
+        )
+        factory = getattr(dotnet_ipc, "make_windows_dotnet_dispatch_trigger", None)
+
+        with patch.object(dotnet_ipc, "_get_user32", return_value=user32):
+            with self.assertRaises(DotNetIPCError):
+                factory(9001)()
+
         self.assertEqual([], user32.post_calls)
 
     def test_postmessage_failure_stops_at_first_failed_enqueue(self) -> None:
@@ -353,9 +392,15 @@ def _nested_mapping_keys(value: object) -> set[str]:
 
 
 class FakeDispatcher:
-    def __init__(self, ipc_dir: Path, payload: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        ipc_dir: Path,
+        payload: dict[str, object] | None = None,
+        result_overrides: dict[str, object] | None = None,
+    ) -> None:
         self.ipc_dir = ipc_dir
         self.payload = payload or {}
+        self.result_overrides = result_overrides or {}
         self.requests: list[dict[str, object]] = []
         self.request_bytes = b""
 
@@ -365,9 +410,11 @@ class FakeDispatcher:
         self.request_bytes = request_files[0].read_bytes()
         request = json.loads(self.request_bytes.decode("utf-8"))
         self.requests.append(request)
+        result = _result(request, self.payload)
+        result.update(self.result_overrides)
         atomic_write_json(
             result_path(self.ipc_dir, str(request["request_id"])),
-            _result(request, self.payload),
+            result,
         )
 
     @staticmethod
@@ -377,6 +424,139 @@ class FakeDispatcher:
 
 
 class DotNetIPCClientTests(unittest.TestCase):
+    def test_bounded_native_line_edit_dispatches_current_candidate_request_profiles(self) -> None:
+        profiles = [
+            {
+                "targets": [
+                    {
+                        "handle": "A1",
+                        "before": {"start": [0.0, 0.0, 0.0], "end": [4.0, 0.0, 0.0]},
+                        "after": {"start": [0.0, 0.0, 0.0], "end": [5.5, 0.0, 0.0]},
+                    },
+                    {
+                        "handle": "A2",
+                        "before": {"start": [3.0, 2.0, 0.0], "end": [3.0, 5.0, 0.0]},
+                        "after": {"start": [3.0, 2.0, 0.0], "end": [3.0, 6.25, 0.0]},
+                    },
+                ],
+                "protected": [
+                    {
+                        "handle": "AF",
+                        "before": {"start": [-1.0, 1.0, 0.0], "end": [-1.0, 8.0, 0.0]},
+                    }
+                ],
+            },
+            {
+                "targets": [
+                    {
+                        "handle": "B1",
+                        "before": {"start": [10.0, -2.0, 0.0], "end": [13.0, 2.0, 0.0]},
+                        "after": {"start": [10.0, -2.0, 0.0], "end": [14.5, 4.0, 0.0]},
+                    },
+                    {
+                        "handle": "B2",
+                        "before": {"start": [1.0, 7.0, 0.0], "end": [6.0, 7.0, 0.0]},
+                        "after": {"start": [1.0, 7.0, 0.0], "end": [8.0, 7.0, 0.0]},
+                    },
+                    {
+                        "handle": "B3",
+                        "before": {"start": [8.0, 9.0, 0.0], "end": [8.0, 3.0, 0.0]},
+                        "after": {"start": [8.0, 9.0, 0.0], "end": [8.0, 1.5, 0.0]},
+                    },
+                ],
+                "protected": [
+                    {
+                        "handle": "BF",
+                        "before": {"start": [20.0, 20.0, 0.0], "end": [22.0, 23.0, 0.0]},
+                    }
+                ],
+            },
+        ]
+        candidate_bytes = b"disposable candidate profile"
+        candidate_sha256 = hashlib.sha256(candidate_bytes).hexdigest()
+        reference = drawing_artifacts.issue_drawing_artifact_reference(
+            run_id="native-edit-run",
+            project_id="vehicle-project",
+            drawing_id="candidate-drawing",
+            artifact_role="R3_CANDIDATE",
+            artifact_bytes=candidate_bytes,
+            upstream_evidence={
+                "evidence_kind": "R3_CANDIDATE_CUSTODY",
+                "evidence_id": "candidate-custody",
+                "evidence_sha256": "a" * 64,
+            },
+            r3_provenance_binding={
+                "registry_snapshot_sha256": "b" * 64,
+                "provenance_sha256": "c" * 64,
+            },
+        )
+        observation = drawing_artifacts.observe_drawing_artifact_currentness(
+            reference=reference,
+            artifact_bytes=candidate_bytes,
+            observation_evidence_sha256="d" * 64,
+        )
+        observed_requests: list[dict[str, object]] = []
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            drawing_path = ipc_dir / "candidate.dwg"
+            drawing_path.write_bytes(candidate_bytes)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob(f"{REQUEST_PREFIX}*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                observed_requests.append(request)
+                parameters = request["parameters"]
+                payload = {
+                    "targets": [
+                        {
+                            "handle": item["handle"],
+                            "before": item["before"],
+                            "after": item["after"],
+                        }
+                        for item in parameters["targets"]
+                    ],
+                    "protected": [
+                        {
+                            "handle": item["handle"],
+                            "before": item["before"],
+                            "after": item["before"],
+                        }
+                        for item in parameters["protected"]
+                    ],
+                    "candidate_sha256_before": candidate_sha256,
+                    "candidate_sha256_after": "e" * 64,
+                    "save_performed": True,
+                }
+                result = _result(request, payload)
+                result["changed"] = True
+                result["entity_handles"] = [item["handle"] for item in parameters["targets"]]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), result)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            operation = getattr(client, "bounded_native_line_edit", None)
+            self.assertTrue(
+                callable(operation),
+                "DotNetIPCClient must expose the bounded native edit through existing FileIPC",
+            )
+            for index, parameters in enumerate(profiles, start=1):
+                with self.subTest(profile=index):
+                    result = operation(
+                        drawing_path,
+                        candidate_reference=reference,
+                        current_observation=observation,
+                        parameters=parameters,
+                        request_id=f"generic-line-edit-{index}",
+                    )
+                    self.assertTrue(result["success"])
+                    self.assertTrue(result["changed"])
+
+        self.assertEqual(2, len(observed_requests))
+        for request, expected in zip(observed_requests, profiles, strict=True):
+            self.assertEqual("bounded_native_line_edit", request["operation"])
+            self.assertEqual(candidate_sha256, request["drawing_sha256"])
+            self.assertEqual(expected, request["parameters"])
+
     def test_request_preserves_utf8_and_request_id(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
@@ -465,6 +645,127 @@ class DotNetIPCClientTests(unittest.TestCase):
         )
         self.assertFalse(result["changed"])
         self.assertEqual([], result["entity_handles"])
+
+    def test_direct_native_base_inspection_binds_absolute_source_without_xref_metadata(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+        inspection["request_id"] = "direct-native-request-001"
+        requests: list[dict[str, object]] = []
+
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                requests.append(request)
+                atomic_write_json(
+                    result_path(ipc_dir, str(request["request_id"])),
+                    _exact_result(
+                        request,
+                        copy.deepcopy(inspection),
+                        changed=False,
+                        entity_handles=[],
+                    ),
+                )
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            result = client.exact_base_xref_inspection(
+                r"C:\approved\BVTL.dwg",
+                drawing_sha256="b" * 64,
+                source_full_path=r"C:\approved\BVTL.dwg",
+                inspection=inspection,
+                request_id="direct-native-request-001",
+            )
+
+        parameters = requests[0]["parameters"]
+        self.assertIsNone(parameters["source_revision"])
+        self.assertIsNone(parameters["inspection_expectations"]["xref"])
+        self.assertIsNone(parameters["inspection_expectations"]["source"]["source_id"])
+        self.assertEqual("a" * 64, parameters["inspection_expectations"]["source"]["sha256"])
+        self.assertNotIn("identity", parameters["inspection_expectations"])
+        self.assertNotIn("critical_dimensions", parameters["inspection_expectations"])
+        self.assertNotIn("components", parameters["inspection_expectations"])
+        self.assertEqual([], result["entity_handles"])
+
+    def test_fallback_result_surfaces_server_error_before_operation_mismatch(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+        inspection["request_id"] = "causal-red-20260920-001"
+        inspection["run_id"] = "causal-red-run-001"
+        request_id = "causal-red-20260920-001"
+        drawing_path = r"C:\approved\BVTL.dwg"
+        sentinel = "sentinel-read-request-failure"
+
+        with TemporaryDirectory(prefix="dotnet-causal-red-") as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob(f"{dotnet_ipc.REQUEST_PREFIX}*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                fallback = _result(request)
+                fallback["success"] = False
+                fallback["operation"] = "health"
+                fallback["errors"] = [sentinel]
+                atomic_write_json(result_path(ipc_dir, request_id), fallback)
+
+            client = DotNetIPCClient(
+                ipc_dir=ipc_dir,
+                trigger=trigger,
+                request_id_factory=lambda: request_id,
+            )
+            with self.assertRaises(DotNetIPCResultError) as raised:
+                client.exact_base_xref_inspection(
+                    drawing_path,
+                    drawing_sha256="b" * 64,
+                    source_full_path=drawing_path,
+                    inspection=inspection,
+                    request_id=request_id,
+                )
+
+            self.assertEqual(sentinel, str(raised.exception))
+            self.assertEqual("health", raised.exception.result["operation"])
+            self.assertFalse(request_path(ipc_dir, request_id).exists())
+            self.assertFalse(result_path(ipc_dir, request_id).exists())
+
+    def test_direct_native_base_rejects_distinct_active_drawing(self) -> None:
+        fixture = _exact_base_fixture()
+        inspection = copy.deepcopy(fixture["inspection"])
+        inspection["base_source"]["source_id"] = None
+        inspection["base_source"]["revision"] = None
+        inspection["xref"] = None
+        inspection["identity_observations"] = []
+        inspection["critical_dimensions"] = []
+        inspection["components"] = []
+
+        def unexpected_trigger() -> None:
+            raise AssertionError("direct-native path must reject before FileIPC dispatch")
+
+        with TemporaryDirectory() as temporary:
+            client = DotNetIPCClient(
+                ipc_dir=Path(temporary),
+                trigger=unexpected_trigger,
+            )
+            with self.assertRaises(ValueError):
+                client.exact_base_xref_inspection(
+                    r"C:\temp\accepted-target.dwg",
+                    drawing_sha256="b" * 64,
+                    source_full_path=r"C:\approved\BVTL.dwg",
+                    inspection=inspection,
+                    request_id="direct-native-mismatch-001",
+                )
 
     def test_exact_base_xref_extraction_validates_plan_and_binds_approval(self) -> None:
         fixture = _exact_base_fixture()
@@ -734,6 +1035,149 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertFalse(result["changed"])
             self.assertEqual(payload, result["payload"])
 
+    def test_drawing_setup_audit_supports_explicit_model_space_inventory_opt_in(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "schema_version": "drawing-setup-audit-1.0",
+                "drawing_full_path": r"C:\\temp\\setup-lite.dwg",
+                "drawing_sha256": "a" * 64,
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "changed": False,
+                "variables": {},
+                "current_layer": "0",
+                "custom_properties": {},
+                "layers": [],
+                "styles": {"text": ["Standard"], "dimension": ["Standard"], "mleader": ["Standard"], "table": ["Standard"]},
+                "layouts": [],
+                "font_report": {"missing": [], "substituted": []},
+                "model_space_inventory": {
+                    "drawing_full_path": r"C:\\temp\\setup-lite.dwg",
+                    "drawing_sha256_before": "a" * 64,
+                    "drawing_sha256_after": "a" * 64,
+                    "dbmod_before": 0,
+                    "dbmod_after": 0,
+                    "process_id": 123,
+                    "plugin_version": "test",
+                    "plugin_binary_path": r"C:\\plugin.dll",
+                    "plugin_binary_sha256": "b" * 64,
+                    "enumeration_complete": True,
+                    "entity_count": 0,
+                    "bounds_complete": True,
+                    "entities": [],
+                },
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            result = client.drawing_setup_audit(
+                r"C:\temp\setup-lite.dwg",
+                drawing_sha256="a" * 64,
+                include_model_space_inventory=True,
+                request_id="setup-lite-inventory-001",
+            )
+
+            request = dispatcher.requests[0]
+            self.assertEqual(
+                {"include_model_space_inventory": True},
+                request["parameters"],
+            )
+            self.assertTrue(result["payload"]["model_space_inventory"]["enumeration_complete"])
+
+    def test_drawing_setup_audit_rejects_inventory_identity_crossbind(self) -> None:
+        drawing_path = r"C:\temp\setup-lite.dwg"
+        requested_hash = "a" * 64
+        inventory = {
+            "drawing_full_path": drawing_path,
+            "drawing_sha256_before": requested_hash,
+            "drawing_sha256_after": requested_hash,
+            "dbmod_before": 0,
+            "dbmod_after": 0,
+            "process_id": 123,
+            "plugin_version": "test",
+            "plugin_binary_path": r"C:\plugin.dll",
+            "plugin_binary_sha256": "c" * 64,
+            "enumeration_complete": True,
+            "entity_count": 0,
+            "bounds_complete": True,
+            "entities": [],
+        }
+        payload = {
+            "schema_version": "drawing-setup-audit-1.0",
+            "drawing_full_path": drawing_path,
+            "drawing_sha256": requested_hash,
+            "dbmod_before": 0,
+            "dbmod_after": 0,
+            "changed": False,
+            "variables": {},
+            "current_layer": "0",
+            "custom_properties": {},
+            "layers": [],
+            "styles": {"text": ["Standard"], "dimension": ["Standard"], "mleader": ["Standard"], "table": ["Standard"]},
+            "layouts": [],
+            "font_report": {"missing": [], "substituted": []},
+            "model_space_inventory": inventory,
+        }
+        mismatches = (
+            ("hash", {"drawing_sha256_before": "b" * 64, "drawing_sha256_after": "b" * 64}, {}),
+            ("path", {"drawing_full_path": r"C:\temp\other.dwg"}, {}),
+            ("outer_result_path", {}, {"drawing_full_path": r"C:\temp\other-result.dwg"}),
+        )
+
+        for field, mismatch, result_overrides in mismatches:
+            with self.subTest(field=field), TemporaryDirectory() as temporary:
+                candidate = copy.deepcopy(payload)
+                candidate["model_space_inventory"].update(mismatch)
+                ipc_dir = Path(temporary)
+                client = DotNetIPCClient(
+                    ipc_dir=ipc_dir,
+                    trigger=FakeDispatcher(ipc_dir, candidate, result_overrides),
+                )
+                message = (
+                    "drawing_setup_audit result drawing_full_path does not match the requested drawing"
+                    if field == "outer_result_path"
+                    else "ModelSpace inventory identity does not match the requested drawing"
+                )
+
+                with self.assertRaisesRegex(DotNetIPCProtocolError, message):
+                    client.drawing_setup_audit(
+                        drawing_path,
+                        drawing_sha256=requested_hash,
+                        include_model_space_inventory=True,
+                        request_id=f"setup-lite-inventory-crossbind-{field}",
+                    )
+
+    def test_drawing_setup_audit_rejects_incomplete_requested_inventory(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+            payload = {
+                "schema_version": "drawing-setup-audit-1.0",
+                "drawing_full_path": r"C:\\temp\\setup-lite.dwg",
+                "drawing_sha256": "a" * 64,
+                "dbmod_before": 0,
+                "dbmod_after": 0,
+                "changed": False,
+                "variables": {},
+                "current_layer": "0",
+                "custom_properties": {},
+                "layers": [],
+                "styles": {"text": ["Standard"], "dimension": ["Standard"], "mleader": ["Standard"], "table": ["Standard"]},
+                "layouts": [],
+                "font_report": {"missing": [], "substituted": []},
+                "model_space_inventory": {"entity_count": 0},
+            }
+            dispatcher = FakeDispatcher(ipc_dir, payload)
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=dispatcher)
+
+            with self.assertRaisesRegex(DotNetIPCProtocolError, "invalid ModelSpace inventory"):
+                client.drawing_setup_audit(
+                    r"C:\temp\setup-lite.dwg",
+                    drawing_sha256="a" * 64,
+                    include_model_space_inventory=True,
+                    request_id="setup-lite-inventory-incomplete-001",
+                )
+
     def test_drawing_setup_audit_rejects_a_mutating_result(self) -> None:
         with TemporaryDirectory() as temporary:
             ipc_dir = Path(temporary)
@@ -795,24 +1239,24 @@ class DotNetIPCClientTests(unittest.TestCase):
             self.assertTrue(old_file.exists())
 
     def test_timeout_preserves_pair_for_receiver_that_finishes_late(self) -> None:
-        with TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary, ThreadPoolExecutor(max_workers=1) as pool:
             ipc_dir = Path(temporary)
             request_id = "timeout-late-001"
-            late_done = threading.Event()
+            finish_receiver = threading.Event()
+            receivers = []
 
             def trigger() -> None:
                 request_file = request_path(ipc_dir, request_id)
                 request = json.loads(request_file.read_text(encoding="utf-8"))
 
                 def late_receiver() -> None:
-                    time.sleep(0.20)
+                    finish_receiver.wait()
                     atomic_write_json(
                         result_path(ipc_dir, request_id),
                         {"request_id": request["request_id"], "late": True},
                     )
-                    late_done.set()
 
-                threading.Thread(target=late_receiver, daemon=True).start()
+                receivers.append(pool.submit(late_receiver))
 
             client = DotNetIPCClient(
                 ipc_dir=ipc_dir,
@@ -821,11 +1265,19 @@ class DotNetIPCClientTests(unittest.TestCase):
                 poll_interval_s=0.01,
                 request_id_factory=lambda: request_id,
             )
-            with self.assertRaises(DotNetIPCTimeoutError):
-                client.health()
+            try:
+                with self.assertRaises(DotNetIPCTimeoutError):
+                    client.health()
 
+                self.assertTrue(request_path(ipc_dir, request_id).exists())
+                self.assertFalse(result_path(ipc_dir, request_id).exists())
+            finally:
+                # Finish only after timeout; join before the temporary root exits,
+                # including assertion failures. Filesystem latency is not a gate.
+                finish_receiver.set()
+            self.assertEqual(1, len(receivers))
+            receivers[0].result()
             self.assertTrue(request_path(ipc_dir, request_id).exists())
-            self.assertTrue(late_done.wait(2))
             self.assertTrue(result_path(ipc_dir, request_id).exists())
 
     def test_non_success_result_raises_and_cleans_request(self) -> None:
@@ -846,6 +1298,75 @@ class DotNetIPCClientTests(unittest.TestCase):
 
             self.assertIn("document mismatch", str(context.exception))
             self.assertFalse(list(ipc_dir.glob("cadagent_dotnet_*.json")))
+
+    def test_bounded_native_line_edit_failure_exposes_typed_uncertain_state(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["changed"] = False
+                failed["entity_handles"] = []
+                failed["payload"] = {"durable_state": "UNCERTAIN", "save_performed": True}
+                failed["errors"] = ["DURABLE_STATE_UNCERTAIN"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCResultError) as raised:
+                client.request(
+                    "bounded_native_line_edit",
+                    r"C:\temp\candidate.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={
+                        "targets": [
+                            {
+                                "handle": "A1",
+                                "before": {"start": [0, 0, 0], "end": [4, 0, 0]},
+                                "after": {"start": [0, 0, 0], "end": [5, 0, 0]},
+                            }
+                        ],
+                        "protected": [],
+                    },
+                )
+
+            self.assertEqual("UNCERTAIN", raised.exception.durable_state)
+            self.assertEqual("UNCERTAIN", raised.exception.result["payload"]["durable_state"])
+
+    def test_bounded_native_line_edit_rejects_unknown_failure_durable_state(self) -> None:
+        with TemporaryDirectory() as temporary:
+            ipc_dir = Path(temporary)
+
+            def trigger() -> None:
+                request_file = next(ipc_dir.glob("cadagent_dotnet_request_*.json"))
+                request = json.loads(request_file.read_text(encoding="utf-8"))
+                failed = _result(request)
+                failed["success"] = False
+                failed["changed"] = False
+                failed["entity_handles"] = []
+                failed["payload"] = {"durable_state": "MAYBE", "save_performed": False}
+                failed["errors"] = ["native edit did not reach SAVED"]
+                atomic_write_json(result_path(ipc_dir, str(request["request_id"])), failed)
+
+            client = DotNetIPCClient(ipc_dir=ipc_dir, trigger=trigger)
+            with self.assertRaises(DotNetIPCProtocolError):
+                client.request(
+                    "bounded_native_line_edit",
+                    r"C:\temp\candidate.dwg",
+                    drawing_sha256="a" * 64,
+                    parameters={
+                        "targets": [
+                            {
+                                "handle": "A1",
+                                "before": {"start": [0, 0, 0], "end": [4, 0, 0]},
+                                "after": {"start": [0, 0, 0], "end": [5, 0, 0]},
+                            }
+                        ],
+                        "protected": [],
+                    },
+                )
 
     def test_oversized_result_is_rejected_by_bounded_read(self) -> None:
         with TemporaryDirectory() as temporary:

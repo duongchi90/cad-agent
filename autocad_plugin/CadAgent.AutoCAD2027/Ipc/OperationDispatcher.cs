@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CadAgent.AutoCAD2027.Commands;
 using CadAgent.AutoCAD2027.Drawing;
@@ -21,6 +22,15 @@ public sealed class OperationDispatcher
     }
 
     public IpcResult Dispatch(IpcRequest? request)
+        => DispatchCore(request, requestRead: null);
+
+    internal IpcResult DispatchFileIpcRequest(IpcRequestReadSnapshot requestRead)
+    {
+        ArgumentNullException.ThrowIfNull(requestRead);
+        return DispatchCore(requestRead.Request, requestRead);
+    }
+
+    private IpcResult DispatchCore(IpcRequest? request, IpcRequestReadSnapshot? requestRead)
     {
         var startedAt = _context.Clock();
         _context.ClearMechanicalWarnings();
@@ -46,6 +56,7 @@ public sealed class OperationDispatcher
                 "drawing_setup_audit" => DispatchDrawingSetupAudit(request, startedAt),
                 "visual_evidence_export" => DispatchVisualEvidenceExport(request, startedAt),
                 "native_render_evidence" => DispatchNativeRenderEvidence(request, startedAt),
+                "bounded_native_line_edit" => DispatchBoundedNativeLineEdit(request, requestRead, startedAt),
                 ExactBaseXrefOperationNames.Inspection => DispatchExactBaseXrefInspection(request, startedAt),
                 ExactBaseXrefOperationNames.Extraction => DispatchExactBaseXrefExtraction(request, startedAt),
                 _ => Failure(request, new[] { "operation is not supported" }, startedAt)
@@ -222,7 +233,12 @@ public sealed class OperationDispatcher
             return Failure(request, new[] { error }, startedAt);
         }
 
-        var snapshot = _context.DrawingGateway.ReadDrawingSetup();
+        var includeInventory = request.Parameters is not null
+            && request.Parameters.TryGetValue("include_model_space_inventory", out var includeInventoryValue)
+            && includeInventoryValue.ValueKind == JsonValueKind.True;
+        var snapshot = includeInventory
+            ? _context.DrawingGateway.ReadDrawingSetupWithModelSpaceInventory(request.DrawingSha256!)
+            : _context.DrawingGateway.ReadDrawingSetup();
         return CreateResult(
             request.RequestId!,
             "drawing_setup_audit",
@@ -287,6 +303,105 @@ public sealed class OperationDispatcher
             payload: NativeRenderPayload.Create(snapshot),
             startedAt);
     }
+
+    private IpcResult DispatchBoundedNativeLineEdit(
+        IpcRequest request,
+        IpcRequestReadSnapshot? requestRead,
+        DateTimeOffset startedAt)
+    {
+        using var custody = _context.Store.AcquireNativeEditCustody(requestRead);
+        var boundRequest = custody.Request;
+        if (!TryMatchActiveDocument(boundRequest.DrawingFullPath, out var activePath, out var error))
+        {
+            return Failure(boundRequest, new[] { error }, startedAt);
+        }
+
+        var editRequest = ParseBoundedNativeLineEditRequest(boundRequest);
+        var snapshot = _context.DrawingGateway.ApplyBoundedNativeLineEdit(editRequest);
+        if (!snapshot.Changed
+            || !string.Equals(snapshot.DurableState, "SAVED", StringComparison.Ordinal)
+            || !snapshot.SavePerformed
+            || snapshot.Errors.Count != 0)
+        {
+            var failure = Failure(
+                boundRequest,
+                snapshot.Errors.Count > 0
+                    ? snapshot.Errors
+                    : new[] { "bounded_native_line_edit did not produce a saved readback" },
+                startedAt);
+            var durableState = snapshot.DurableState is "UNCHANGED" or "ROLLED_BACK" or "UNCERTAIN"
+                ? snapshot.DurableState
+                : "UNCERTAIN";
+            failure = failure with
+            {
+                Payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+                {
+                    ["durable_state"] = JsonSerializer.SerializeToElement(durableState),
+                    ["save_performed"] = JsonSerializer.SerializeToElement(snapshot.SavePerformed)
+                }
+            };
+            return ContractValidator.NormalizeResult(failure);
+        }
+
+        var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["changed"] = JsonSerializer.SerializeToElement(snapshot.Changed),
+            ["durable_state"] = JsonSerializer.SerializeToElement(snapshot.DurableState),
+            ["save_performed"] = JsonSerializer.SerializeToElement(snapshot.SavePerformed),
+            ["drawing_sha256_before"] = JsonSerializer.SerializeToElement(snapshot.DrawingSha256Before),
+            ["drawing_sha256_after"] = JsonSerializer.SerializeToElement(snapshot.DrawingSha256After),
+            ["targets"] = SerializeNativeLineStates(snapshot.Targets),
+            ["protected"] = SerializeNativeLineStates(snapshot.Protected),
+            ["warnings"] = JsonSerializer.SerializeToElement(snapshot.Warnings),
+            ["errors"] = JsonSerializer.SerializeToElement(snapshot.Errors)
+        };
+        var result = CreateResult(
+            boundRequest.RequestId!,
+            "bounded_native_line_edit",
+            activePath,
+            success: true,
+            changed: true,
+            snapshot.Targets.Select(target => target.Handle),
+            snapshot.Warnings,
+            Array.Empty<string>(),
+            payload,
+            startedAt);
+        return ContractValidator.NormalizeResult(result);
+    }
+
+    private static BoundedNativeLineEditRequest ParseBoundedNativeLineEditRequest(IpcRequest request)
+    {
+        var parameters = request.Parameters!;
+        var targets = parameters["targets"].EnumerateArray()
+            .Select(target => new BoundedNativeLineTarget(
+                target.GetProperty("handle").GetString()!,
+                ParseNativeLineGeometry(target.GetProperty("before")),
+                ParseNativeLineGeometry(target.GetProperty("after"))))
+            .ToArray();
+        var protectedEntities = parameters["protected"].EnumerateArray()
+            .Select(entity => new BoundedNativeLineProtectedEntity(
+                entity.GetProperty("handle").GetString()!,
+                ParseNativeLineGeometry(entity.GetProperty("before"))))
+            .ToArray();
+        return new BoundedNativeLineEditRequest(
+            request.DrawingFullPath!,
+            request.DrawingSha256!,
+            targets,
+            protectedEntities);
+    }
+
+    private static NativeLineGeometry ParseNativeLineGeometry(JsonElement value) => new(
+        value.GetProperty("start").EnumerateArray().Select(point => point.GetDouble()).ToArray(),
+        value.GetProperty("end").EnumerateArray().Select(point => point.GetDouble()).ToArray());
+
+    private static JsonElement SerializeNativeLineStates(
+        IReadOnlyList<BoundedNativeLineEditState> states) =>
+        JsonSerializer.SerializeToElement(states.Select(state => new
+        {
+            handle = state.Handle,
+            before = new { start = state.Before.Start, end = state.Before.End },
+            after = new { start = state.After.Start, end = state.After.End }
+        }).ToArray());
 
     private IpcResult DispatchExactBaseXrefInspection(IpcRequest request, DateTimeOffset startedAt)
     {
@@ -369,10 +484,23 @@ public sealed class OperationDispatcher
 
     private static Dictionary<string, JsonElement> SerializeInspectionEvidence(
         ExactBaseXrefLiveInspection evidence) =>
-        JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-            JsonSerializer.Serialize(evidence, ContractJson.Options),
-            ContractJson.Options)
-        ?? throw new InvalidOperationException("exact-base inspection evidence could not be serialized");
+        NormalizeInspectionEvidenceTimestamp(
+            JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                JsonSerializer.Serialize(evidence, ContractJson.Options),
+                ContractJson.Options)
+            ?? throw new InvalidOperationException("exact-base inspection evidence could not be serialized"),
+            evidence.CaptureTimestamp);
+
+    private static Dictionary<string, JsonElement> NormalizeInspectionEvidenceTimestamp(
+        Dictionary<string, JsonElement> payload,
+        DateTimeOffset captureTimestamp)
+    {
+        payload["capture_timestamp"] = JsonSerializer.SerializeToElement(
+            captureTimestamp.ToUniversalTime().ToString(
+                "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'",
+                CultureInfo.InvariantCulture));
+        return payload;
+    }
 
     private static IReadOnlyList<MechanicalComponentSnapshot> NormalizeMechanicalComponents(
         IReadOnlyList<MechanicalComponentSnapshot> components) =>

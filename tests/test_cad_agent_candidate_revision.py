@@ -507,6 +507,162 @@ def test_public_surface_rejects_omitted_required_arguments() -> None:
         validate_candidate_revision({})
 
 
+def test_external_r3_root_is_accepted_by_existing_r4_owner(
+    tmp_path: Path,
+) -> None:
+    """External R3 evidence must bind through the existing R4 root contract."""
+
+    helper_path = Path(__file__).with_name(
+        "test_cad_agent_mechanical_pilot_provenance.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "external_r4_test_fixtures", helper_path
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("external provenance fixture loader unavailable")
+    fixtures = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixtures)
+
+    from cad_agent import mechanical_pilot_provenance as provenance
+
+    artifacts = fixtures._external_artifacts_for_test(tmp_path)
+    inputs = provenance.build_external_geometry_r3_inputs(
+        pilot_id="external-geometry-ai-p1",
+        primitive_ir_path=artifacts["primitive_path"],
+        candidate_path=artifacts["candidate_path"],
+        build_evidence_path=artifacts["build_evidence_path"],
+        verification_request=artifacts["verification_request"],
+        verification_result=artifacts["verification_result"],
+        source_render_bytes=artifacts["source_render_bytes"],
+    )
+    context = inputs["upstream_context"]
+    registry = r3.build_component_view_registry(**inputs)
+    registry_provenance = r3.component_view_registry_provenance_evidence(
+        registry,
+        upstream_context=context,
+    )
+    artifact_bytes = artifacts["candidate_path"].read_bytes()
+    candidate_sha256 = _sha256_bytes(artifact_bytes)
+    scope = {
+        "run_id": "run-external-r4-001",
+        "project_id": "project-external-r4",
+        "drawing_id": "drawing-external-r4",
+    }
+    baseline_reference = dara.issue_drawing_artifact_reference(
+        **scope,
+        artifact_role="BASELINE",
+        artifact_bytes=artifact_bytes,
+        upstream_evidence={
+            "evidence_kind": "BASELINE_CUSTODY",
+            "evidence_id": "external-r4-baseline",
+            "evidence_sha256": canonical_json_sha256(
+                {
+                    "identity_kind": "external-r4-baseline-v1",
+                    "candidate_sha256": candidate_sha256,
+                }
+            ),
+        },
+    )
+    baseline_observation = dara.observe_drawing_artifact_currentness(
+        reference=baseline_reference,
+        artifact_bytes=artifact_bytes,
+        observation_evidence_sha256=canonical_json_sha256(
+            {
+                "identity_kind": "external-r4-baseline-observation-v1",
+                "reference_sha256": baseline_reference["reference_sha256"],
+            }
+        ),
+    )
+    candidate_reference = dara.issue_drawing_artifact_reference(
+        **scope,
+        artifact_role="R3_CANDIDATE",
+        artifact_bytes=artifact_bytes,
+        upstream_evidence={
+            "evidence_kind": "R3_CANDIDATE_CUSTODY",
+            "evidence_id": "external-r4-candidate",
+            "evidence_sha256": canonical_json_sha256(
+                {
+                    "identity_kind": "external-r4-candidate-v1",
+                    "candidate_sha256": candidate_sha256,
+                    "registry_snapshot_sha256": registry[
+                        "registry_snapshot_sha256"
+                    ],
+                }
+            ),
+        },
+        r3_provenance_binding={
+            "registry_snapshot_sha256": registry[
+                "registry_snapshot_sha256"
+            ],
+            "provenance_sha256": registry_provenance["provenance_sha256"],
+        },
+    )
+    candidate_observation = dara.observe_drawing_artifact_currentness(
+        reference=candidate_reference,
+        artifact_bytes=artifact_bytes,
+        observation_evidence_sha256=canonical_json_sha256(
+            {
+                "identity_kind": "external-r4-candidate-observation-v1",
+                "reference_sha256": candidate_reference["reference_sha256"],
+            }
+        ),
+    )
+    component_ids = [
+        component["component_id"] for component in registry["components"]
+    ]
+    impact = r3.project_linked_view_impacts(
+        registry=registry,
+        component_ids=component_ids,
+        view_ids=[],
+        upstream_context=context,
+    )
+    change_impact = {
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+        "impact": impact,
+        "provenance_evidence": registry_provenance,
+        "upstream_context": deepcopy(context),
+        "root_candidate_reference": deepcopy(candidate_reference),
+        "root_candidate_observation": deepcopy(candidate_observation),
+        "root_candidate_artifact_bytes": artifact_bytes,
+    }
+    mutation_evidence = {
+        "evidence_kind": "R4_ROOT_PRE_REPAIR",
+        "evidence_id": "external-r4-root",
+        "r3_candidate_reference_id": candidate_reference["reference_id"],
+        "r3_candidate_reference_sha256": candidate_reference[
+            "reference_sha256"
+        ],
+        "candidate_artifact_sha256": candidate_reference["artifact_sha256"],
+        "registry_snapshot_sha256": registry["registry_snapshot_sha256"],
+    }
+
+    revision = build_candidate_revision(
+        registry=registry,
+        base_cad_handoff=None,
+        baseline_context={
+            "reference": baseline_reference,
+            "observation": baseline_observation,
+            "artifact_bytes": artifact_bytes,
+        },
+        parent_candidate=None,
+        change_impact=change_impact,
+        mutation_evidence=mutation_evidence,
+        lineage_context=(),
+        schema_version=candidate_module.CANDIDATE_REVISION_V11_SCHEMA_VERSION,
+        candidate_kind=candidate_module.CANDIDATE_REVISION_ROOT_KIND,
+    )
+
+    assert revision["candidate_kind"] == candidate_module.CANDIDATE_REVISION_ROOT_KIND
+    assert revision["upstream_bindings"] == registry["upstream_bindings"]
+    assert revision["upstream_bindings"]["provenance_mode"] == (
+        "EXTERNAL_GEOMETRY_ONLY"
+    )
+    assert revision["upstream_bindings"]["candidate_drawing_sha256"] == (
+        candidate_sha256
+    )
+    assert registry["components"][0]["semantic_projection_refs"] == []
+
+
 def test_root_revision_is_sealed_closed_and_deterministic() -> None:
     args = _valid_args()
     first = build_candidate_revision(**deepcopy(args))

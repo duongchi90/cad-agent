@@ -555,10 +555,24 @@
   out
 )
 
+(defun mcp-json-normalize-real-text (text / normalized)
+  (setq normalized
+    (cond
+      ((= (substr text 1 2) "-.") (strcat "-0" (substr text 2)))
+      ((= (substr text 1 1) ".") (strcat "0" text))
+      (T text)
+    )
+  )
+  (if (= (substr normalized (strlen normalized) 1) ".")
+    (strcat normalized "0")
+    normalized
+  )
+)
+
 (defun mcp-json-encode-number (value)
   (if (= (type value) 'INT)
     (itoa value)
-    (vl-princ-to-string value)
+    (mcp-json-normalize-real-text (rtos value 2 16))
   )
 )
 
@@ -806,90 +820,31 @@
   (mcp-object nil)
 )
 
-(defun mcp-deferred-drawing-close (reactor event-data / pending reaction root request-id claim nonce doc save envelope close-result result)
-  (vl-load-com)
+(defun mcp-deferred-drawing-close (reactor event-data / pending root request-id nonce envelope claim result)
+  ; Retire any pending old callback safely on reload. Never close a document
+  ; from its own Lisp event handler (Autodesk ActiveX Close contract).
   (setq pending (vlr-data reactor)
-        reaction (vlr-current-reaction-name)
         root (nth 0 pending)
         request-id (nth 1 pending)
         nonce (nth 2 pending)
-        doc (nth 3 pending)
-        save (nth 4 pending)
         envelope (nth 5 pending)
         claim (mcp-json-get envelope "claim"))
   (vlr-remove reactor)
-  (if
-    (not (mcp-result-owner-matches-p root request-id nonce))
-    (princ (strcat "\n" *mcp-error-result-conflict*))
-    (if
-      (not (mcp-result-slot-free-p root request-id nonce))
-      (princ (strcat "\n" *mcp-error-result-conflict*))
-      (progn
-        (cond
-          ((eq reaction ':vlr-lispEnded)
-            (setq close-result
-              (vl-catch-all-apply
-                'vla-Close
-                (list doc (if (eq save 'MCP_JSON_TRUE) :vlax-true :vlax-false))
-              )
-              result
-              (if (vl-catch-all-error-p close-result)
-                (mcp-failure request-id claim *mcp-error-failed*)
-                envelope
-              )
-            )
-          )
-          ((eq reaction ':vlr-lispCancelled)
-            (setq result (mcp-failure request-id claim *mcp-error-failed*))
-          )
-          (T
-            (setq result nil)
-          )
-        )
-        (if result
-          (if (mcp-write-result root request-id result nonce)
-            (mcp-result-owner-release root request-id nonce)
-            (princ (strcat "\n" *mcp-error-result-conflict*))
-          )
-          (princ (strcat "\n" *mcp-error-result-conflict*))
-        )
+  (if (and (mcp-result-owner-matches-p root request-id nonce)
+           (mcp-result-slot-free-p root request-id nonce))
+    (progn
+      (setq result (mcp-failure request-id claim *mcp-error-failed*))
+      (if (mcp-write-result root request-id result nonce)
+        (mcp-result-owner-release root request-id nonce)
       )
     )
   )
 )
 
-(defun mcp-defer-drawing-close (root request-id params envelope / save doc nonce reactor)
-  (setq save (mcp-param params "save_changes")
-        doc (vla-get-ActiveDocument (vlax-get-acad-object)))
-  (setq nonce (mcp-result-owner-reserve root request-id))
-  (if (not nonce)
-    nil
-    (progn
-      (setq reactor
-        (vl-catch-all-apply
-          'vlr-lisp-reactor
-          (list
-            (list root request-id nonce doc save envelope)
-            '(
-              (:vlr-lispEnded . mcp-deferred-drawing-close)
-              (:vlr-lispCancelled . mcp-deferred-drawing-close)
-            )
-          )
-        )
-      )
-      (if
-        (or
-          (vl-catch-all-error-p reactor)
-          (not reactor)
-        )
-        (progn
-          (mcp-result-owner-release root request-id nonce)
-          nil
-        )
-        reactor
-      )
-    )
-  )
+(defun mcp-defer-drawing-close (root request-id params envelope)
+  ; No safe Lisp event context can close its own drawing. Returning nil makes
+  ; the existing dispatcher publish a claim-bound failure, with no reactor.
+  nil
 )
 
 (defun mcp-op-drawing-list-open-paths (params / docs paths)
@@ -908,6 +863,7 @@
   (if
     (or
       (not (= (type path) 'STR))
+      (= (strlen path) 0)
       (= (strcase path) (strcase (vla-get-FullName doc)))
       (findfile path)
     )
@@ -1065,6 +1021,7 @@
                 (cons "handle" (cdr (assoc 5 data)))
                 (cons "type" entity-type)
                 (cons "layer" (cdr (assoc 8 data)))
+                (cons "layout" (cdr (assoc 410 data)))
               ))
       (cond
         ((= entity-type "LINE")
@@ -1095,6 +1052,18 @@
                 (cons "radius" (cdr (assoc 40 data)))
                 (cons "start_angle_deg" (mcp-angle-degrees (cdr (assoc 50 data))))
                 (cons "end_angle_deg" (mcp-angle-degrees (cdr (assoc 51 data))))
+                (cons "extrusion" (mcp-array (if (assoc 210 data) (cdr (assoc 210 data)) '(0.0 0.0 1.0))))
+              )
+            )
+          )
+        )
+        ((= entity-type "DIMENSION")
+          (setq pairs
+            (append pairs
+              (list
+                (cons "dimtype" (cdr (assoc 70 data)))
+                (cons "defpoint2" (mcp-array (cdr (assoc 13 data))))
+                (cons "defpoint3" (mcp-array (cdr (assoc 14 data))))
               )
             )
           )

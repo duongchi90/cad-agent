@@ -20,7 +20,7 @@ from cad_agent.live import (
     write_build_evidence,
 )
 from dxf_builder_lib.builder import BuildResult
-from mcp_integration_lib.mcp_client import FakeMCPClient
+from mcp_integration_lib.mcp_client import FakeMCPClient, MCPTimeoutError, MCPToolError
 
 
 def _build(path: Path) -> BuildResult:
@@ -61,6 +61,105 @@ def test_build_evidence_round_trips_and_binds_dxf_hash() -> None:
 
         assert loaded.handle_by_primitive_id == {"line-1": "A"}
         assert loaded.written_geometry_by_primitive_id["line-1"]["end"] == [10.0, 0.0]
+
+
+@pytest.mark.parametrize("writer", ["build", "report"])
+def test_artifact_writer_rejects_reparse_parent_without_outside_write(tmp_path: Path, writer: str) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(outside, target_is_directory=True)
+    dxf = tmp_path / "staged.dxf"
+    dxf.write_bytes(b"staged dxf")
+    with pytest.raises(LiveSafetyError, match="directory|reparse|identity"):
+        if writer == "build":
+            write_build_evidence(linked / "nested" / "evidence.json", _build(dxf))
+        else:
+            live_module.write_live_report(linked / "nested" / "report.json", {"state": "candidate"})
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("writer", ["build", "report"])
+def test_artifact_writer_does_not_follow_existing_temporary_link(tmp_path: Path, writer: str) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside sentinel")
+    destination = tmp_path / "artifact.json"
+    temporary = destination.with_suffix(".json.tmp")
+    temporary.symlink_to(outside)
+    dxf = tmp_path / "staged.dxf"
+    dxf.write_bytes(b"staged dxf")
+    if writer == "build":
+        write_build_evidence(destination, _build(dxf))
+    else:
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert outside.read_bytes() == b"outside sentinel"
+    assert temporary.is_symlink()
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_artifact_writer_refuses_linked_destination(tmp_path: Path, link_kind: str) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside sentinel")
+    destination = tmp_path / "report.json"
+    if link_kind == "symlink":
+        destination.symlink_to(outside)
+    else:
+        os.link(outside, destination)
+    with pytest.raises(LiveSafetyError, match="destination|regular|identity"):
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert outside.read_bytes() == b"outside sentinel"
+
+
+def test_artifact_writer_pins_parent_during_creation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = tmp_path / "reports"
+    parent.mkdir()
+    original_open = live_module.os.open
+    blocked = []
+
+    def try_parent_replacement(path, flags, *args, **kwargs):
+        if Path(path).suffix == ".tmp":
+            try:
+                parent.rename(tmp_path / "moved-parent")
+            except OSError:
+                blocked.append(True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(live_module.os, "open", try_parent_replacement)
+    live_module.write_live_report(parent / "report.json", {"state": "candidate"})
+    assert blocked == [True]
+    assert json.loads((parent / "report.json").read_text()) == {"state": "candidate"}
+
+
+def test_artifact_writer_cleans_owned_temp_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    destination = tmp_path / "report.json"
+    destination.write_bytes(b"previous report")
+
+    def fail_sync(_descriptor):
+        raise OSError("injected flush failure")
+
+    monkeypatch.setattr(live_module.os, "fsync", fail_sync)
+    with pytest.raises(LiveSafetyError, match="publication"):
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert destination.read_bytes() == b"previous report"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_artifact_writer_refuses_post_publish_identity_substitution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    destination = tmp_path / "report.json"
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"outside sentinel")
+    original_replace = live_module.os.replace
+
+    def substitute(source, target):
+        original_replace(source, target)
+        Path(target).unlink()
+        Path(target).symlink_to(outside)
+
+    monkeypatch.setattr(live_module.os, "replace", substitute)
+    with pytest.raises(LiveSafetyError, match="identity|regular"):
+        live_module.write_live_report(destination, {"state": "candidate"})
+    assert outside.read_bytes() == b"outside sentinel"
+    assert destination.is_symlink()
 
 
 def test_repair_requires_approval_before_backup_or_mutation() -> None:
@@ -281,6 +380,29 @@ def test_post_save_attestation_rejects_degraded_geometry() -> None:
             _attest_saved_candidate(build, client, dxf, evidence)
 
 
+def test_repair_refuses_to_mutate_when_geometry_readback_is_unavailable() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _CanonicalIdentityFakeMCPClient(fail_entity_get=True)
+        client.preload_entity(
+            "A", "LINE", "0", {"start": (0.0, 0.0), "end": (10.0, 0.0)}
+        )
+        before = dxf.read_bytes(), evidence.read_bytes()
+        backup_dir = root / "backups"
+
+        with pytest.raises(LiveSafetyError, match="GEOMETRY_READBACK_UNAVAILABLE"):
+            repair_live(build, client, dxf, evidence, backup_dir, "change-42")
+
+        assert (dxf.read_bytes(), evidence.read_bytes()) == before
+        assert set(client._entities) == {"A"}
+        assert not backup_dir.exists()
+
+
 class _DriftingActiveClient(FakeMCPClient):
     def __init__(self) -> None:
         super().__init__(fail_entity_get=False)
@@ -467,6 +589,76 @@ def test_failed_second_review_restores_canonical_dxf_and_build_evidence(
         assert load_build_evidence(evidence, dxf).output_path == str(dxf)
 
 
+@pytest.mark.parametrize("failure", [MCPTimeoutError("timeout"), MCPToolError("tool")])
+def test_uncertain_repair_fails_closed_and_restores_canonical_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        dxf_before = dxf.read_bytes()
+        evidence_before = evidence.read_bytes()
+        handles_before = dict(build.handle_by_primitive_id)
+        client = _mismatched_client()
+
+        def uncertain_repair(*_args: object, **_kwargs: object) -> _FakeRepairResult:
+            raise failure
+
+        monkeypatch.setattr("cad_agent.live.repair_dxf_live", uncertain_repair)
+
+        report = repair_live(build, client, dxf, evidence, root / "backups", "change-42")
+
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "failed_canonical_restored"
+        assert report["rollback_restore"]["recovery_verified"] is True
+        assert report["rollback_restore"]["canonical_document_open"] is True
+        assert client.closed_without_save is True
+        assert build.handle_by_primitive_id == handles_before
+        assert dxf.read_bytes() == dxf_before
+        assert evidence.read_bytes() == evidence_before
+        assert load_build_evidence(evidence, dxf).output_path == str(dxf)
+
+
+def test_uncertain_repair_quarantines_handles_until_recovery_is_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        build = _build(dxf)
+        write_build_evidence(evidence, build)
+        client = _mismatched_client()
+        observed_handles: list[dict[str, str]] = []
+
+        def uncertain_repair(*_args: object, **_kwargs: object) -> _FakeRepairResult:
+            raise MCPToolError("tool")
+
+        def failed_restore(**_kwargs: object) -> dict[str, object]:
+            observed_handles.append(dict(build.handle_by_primitive_id))
+            raise LiveSafetyError("restore uncertain")
+
+        monkeypatch.setattr("cad_agent.live.repair_dxf_live", uncertain_repair)
+        monkeypatch.setattr("cad_agent.live._restore_canonical", failed_restore)
+
+        report = repair_live(build, client, dxf, evidence, root / "backups", "change-42")
+
+        assert report["repair_error"] == "REPAIR_CAPABILITY_FAILED"
+        assert report["rollback_state"] == "rollback_failed"
+        assert report["rollback_restore"] == {
+            "recovery_verified": False,
+            "error": "ROLLBACK_FAILED",
+        }
+        assert observed_handles == [{}]
+        assert build.handle_by_primitive_id == {}
+
+
 @pytest.mark.parametrize("linked_name", ["staged.dxf", "build-evidence.json"])
 def test_rollback_rejects_linked_canonical_destination_without_external_mutation(
     linked_name: str,
@@ -588,3 +780,69 @@ def test_corrupt_backup_aborts_before_repair(
         assert "A" in client._entities
         assert len(client._entities) == 1
         assert list((root / "backups").iterdir()) == []
+
+
+def test_backup_rejects_reparse_parent_without_external_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        outside = root / "outside"
+        outside.mkdir()
+        linked_parent = root / "backup-parent"
+        linked_parent.symlink_to(outside, target_is_directory=True)
+        backup_dir = linked_parent / "nested"
+
+        with pytest.raises(LiveSafetyError, match="backup|reparse|symlink|identity"):
+            _backup(dxf, evidence, backup_dir)
+
+        assert list(outside.iterdir()) == []
+
+
+def test_backup_parent_binding_blocks_reparse_parent_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        dxf = root / "staged.dxf"
+        dxf.write_bytes(b"staged dxf")
+        evidence = root / "build-evidence.json"
+        write_build_evidence(evidence, _build(dxf))
+
+        backups = root / "backups"
+        backups.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        original_copy = live_module._copy_to_exclusive_backup
+        copy_count = 0
+        substitution_blocked = False
+
+        def replace_parent_after_first_copy(
+            source, destination, owned_paths, **kwargs
+        ):  # type: ignore[no-untyped-def]
+            nonlocal copy_count, substitution_blocked
+            copy_count += 1
+            result = original_copy(source, destination, owned_paths, **kwargs)
+            if copy_count == 1:
+                try:
+                    moved = root / "backups-moved"
+                    backups.rename(moved)
+                    backups.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    substitution_blocked = True
+            return result
+
+        monkeypatch.setattr(
+            "cad_agent.live._copy_to_exclusive_backup",
+            replace_parent_after_first_copy,
+        )
+
+        backup = _backup(dxf, evidence, backups)
+
+        assert substitution_blocked is True
+        assert list(outside.iterdir()) == []
+        assert Path(backup["dxf_path"]).is_file()
+        assert Path(backup["build_evidence_path"]).is_file()

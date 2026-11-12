@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -10,7 +12,9 @@ import cv2
 import numpy as np
 import pytest
 
+import cad_agent.fidelity as fidelity_module
 from primitive_ir_lib.geometry_extraction import RawGeometry, RawLine
+from primitive_ir_lib.text_extraction import RawText
 from cad_agent.fidelity import (
     FidelityError,
     new_fidelity_manifest,
@@ -26,6 +30,7 @@ from cad_agent.fidelity import (
     run_fidelity_text_reconstruct,
     run_fidelity_dimension_observations,
     run_fidelity_linetype_reconstruct,
+    run_fidelity_semantic_region_handoff,
     run_fidelity_table_text_reconstruct,
     write_region_proposal,
     write_region_approval,
@@ -52,6 +57,28 @@ def _pdf(path: Path) -> None:
     page.insert_text((50, 100), "DRAWING LABEL", fontsize=20)
     document.save(path)
     document.close()
+
+
+def test_fidelity_renderer_preserves_explicit_local_coordinate_frame(tmp_path: Path) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    dxf = tmp_path / "coordinate-frame.dxf"
+    document = ezdxf.new("R2010")
+    model = document.modelspace()
+    model.add_line((20, 10), (80, 10))
+    model.add_line((80, 10), (80, 40))
+    document.saveas(dxf)
+
+    rendered = fidelity_module._render_layout_dxf(dxf, 100.0, 50.0, 200, 100)
+    expected = np.full((100, 200), 255, dtype=np.uint8)
+    cv2.line(expected, (40, 80), (160, 80), 0, 1, cv2.LINE_AA)
+    cv2.line(expected, (160, 80), (160, 20), 0, 1, cv2.LINE_AA)
+    metric = fidelity_module._edge_metrics(
+        cv2.Canny(expected, 50, 150),
+        cv2.Canny(cv2.cvtColor(rendered, cv2.COLOR_BGR2GRAY), 50, 150),
+        np.full((100, 200), 255, dtype=np.uint8),
+    )
+    assert metric["f1"] > 0.95
 
 
 def _dimension_pdf(path: Path) -> None:
@@ -114,6 +141,252 @@ def test_dimension_observation_persists_stable_line_endpoint_evidence(tmp_path: 
     assert set(candidate["nearby_lines"][0]) >= {"id", "p1_px", "p2_px", "bbox_px", "length_px"}
 
 
+def test_dimension_reconstruction_preserves_source_observed_normal_distance_for_1355_and_1525(
+    tmp_path: Path,
+) -> None:
+    """Source-observed dimension placement must beat synthetic bbox offset."""
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct, sha256_file
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    rendered = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+
+    fixtures = [
+        {
+            "candidate_id": "rawtext-bd621064",
+            "value": 1355.0,
+            "bbox_px": [1732, 1168, 1785, 1186],
+            "line_id": "rawline-5c0fc7e1",
+            "p1_px": [1645.0, 1189.0],
+            "p2_px": [1871.0, 1189.0],
+        },
+        {
+            "candidate_id": "rawtext-6044e704",
+            "value": 1525.0,
+            "bbox_px": [1732, 1198, 1785, 1216],
+            "line_id": "rawline-2e7a2d81",
+            "p1_px": [1630.0, 1219.0],
+            "p2_px": [1886.0, 1219.0],
+        },
+    ]
+    observation_path = output / "dimension-observation.json"
+    observation_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_human_approval",
+        "source": manifest["source"],
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {
+                "text": {
+                    "id": item["candidate_id"],
+                    "content": str(int(item["value"])),
+                    "bbox_px": item["bbox_px"],
+                    "rotation_deg": 0.0,
+                    "confidence": 1.0,
+                    "source": "test_fixture",
+                    "semantic_role": "dimension_value",
+                    "parsed_value": item["value"],
+                },
+                "nearby_line_ids": [item["line_id"]],
+                "nearby_lines": [{
+                    "id": item["line_id"],
+                    "p1_px": item["p1_px"],
+                    "p2_px": item["p2_px"],
+                    "bbox_px": [*item["p1_px"], *item["p2_px"]],
+                    "length_px": item["p2_px"][0] - item["p1_px"][0],
+                }],
+                "state": "needs_human_approval",
+            }
+            for item in fixtures
+        ],
+        "unresolved": [],
+    }), encoding="utf-8")
+
+    base_dxf = output / "base.dxf"
+    ezdxf.new("R2010").saveas(base_dxf)
+    approval_path = output / "dimension-approval.json"
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-dimension-mappings",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": {"path": observation_path.name, "sha256": sha256_file(observation_path)},
+        "base_dxf": {"path": base_dxf.name, "sha256": sha256_file(base_dxf)},
+        "approval_reference": "approved-test",
+        "mappings": [
+            {"candidate_id": item["candidate_id"], "line_evidence_id": item["line_id"]}
+            for item in fixtures
+        ],
+    }), encoding="utf-8")
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+    dimensions = {str(entity.dxf.text): entity for entity in ezdxf.readfile(result).modelspace().query("DIMENSION")}
+    scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
+    height_px = int(json.loads((output / manifest["pages"][0]["artifacts"]["layout_audit"]["artifact"]).read_text())["source_page"]["render_height_px"])
+
+    actual_distances = {}
+    expected_distances = {}
+    for item in fixtures:
+        bbox = item["bbox_px"]
+        line_y = (item["p1_px"][1] + item["p2_px"][1]) / 2.0
+        text_y = (bbox[1] + bbox[3]) / 2.0
+        expected_source_distance_mm = abs(line_y - text_y) * scale
+        p1 = (item["p1_px"][0] * scale, (height_px - item["p1_px"][1]) * scale)
+        p2 = (item["p2_px"][0] * scale, (height_px - item["p2_px"][1]) * scale)
+        line_midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        dimension = dimensions[str(int(item["value"]))]
+        assert (dimension.dxf.defpoint2.x, dimension.dxf.defpoint2.y) == pytest.approx(p1)
+        assert (dimension.dxf.defpoint3.x, dimension.dxf.defpoint3.y) == pytest.approx(p2)
+        actual_distances[str(int(item["value"]))] = abs(dimension.dxf.text_midpoint.y - line_midpoint[1])
+        expected_distances[str(int(item["value"]))] = expected_source_distance_mm
+
+    assert actual_distances == pytest.approx(expected_distances, abs=1e-9), (
+        "synthetic current offsets do not preserve the independent source-observed distances: "
+        f"actual={actual_distances}, expected={expected_distances}"
+    )
+
+
+@pytest.mark.causal_red
+def test_dimension_line_base_separation_red_for_1355_and_1525(tmp_path: Path) -> None:
+    """The dimension line base and the independently placed text must not share a point."""
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct, sha256_file
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    rendered = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+
+    fixtures = [
+        {
+            "candidate_id": "rawtext-bd621064",
+            "value": 1355.0,
+            "bbox_px": [1732, 1168, 1785, 1186],
+            "line_id": "rawline-5c0fc7e1",
+            "p1_px": [1645.0, 1189.0],
+            "p2_px": [1871.0, 1189.0],
+        },
+        {
+            "candidate_id": "rawtext-6044e704",
+            "value": 1525.0,
+            "bbox_px": [1732, 1198, 1785, 1216],
+            "line_id": "rawline-2e7a2d81",
+            "p1_px": [1630.0, 1219.0],
+            "p2_px": [1886.0, 1219.0],
+        },
+    ]
+    observation_path = output / "dimension-observation.json"
+    observation_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_human_approval",
+        "source": manifest["source"],
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "candidates": [
+            {
+                "text": {
+                    "id": item["candidate_id"],
+                    "content": str(int(item["value"])),
+                    "bbox_px": item["bbox_px"],
+                    "rotation_deg": 0.0,
+                    "confidence": 1.0,
+                    "source": "test_fixture",
+                    "semantic_role": "dimension_value",
+                    "parsed_value": item["value"],
+                },
+                "nearby_line_ids": [item["line_id"]],
+                "nearby_lines": [{
+                    "id": item["line_id"],
+                    "p1_px": item["p1_px"],
+                    "p2_px": item["p2_px"],
+                    "bbox_px": [*item["p1_px"], *item["p2_px"]],
+                    "length_px": item["p2_px"][0] - item["p1_px"][0],
+                }],
+                "state": "needs_human_approval",
+            }
+            for item in fixtures
+        ],
+        "unresolved": [],
+    }), encoding="utf-8")
+
+    base_dxf = output / "base.dxf"
+    ezdxf.new("R2010").saveas(base_dxf)
+    approval_path = output / "dimension-approval.json"
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-dimension-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-dimension-mappings",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": {"path": observation_path.name, "sha256": sha256_file(observation_path)},
+        "base_dxf": {"path": base_dxf.name, "sha256": sha256_file(base_dxf)},
+        "approval_reference": "approved-test",
+        "mappings": [
+            {"candidate_id": item["candidate_id"], "line_evidence_id": item["line_id"]}
+            for item in fixtures
+        ],
+    }), encoding="utf-8")
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+    dimensions = {str(entity.dxf.text): entity for entity in ezdxf.readfile(result).modelspace().query("DIMENSION")}
+    scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
+    height_px = int(json.loads(
+        (output / manifest["pages"][0]["artifacts"]["layout_audit"]["artifact"]).read_text()
+    )["source_page"]["render_height_px"])
+
+    base_separation_failures = []
+    for item in fixtures:
+        p1 = (item["p1_px"][0] * scale, (height_px - item["p1_px"][1]) * scale)
+        p2 = (item["p2_px"][0] * scale, (height_px - item["p2_px"][1]) * scale)
+        line_midpoint = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        length = (dx**2 + dy**2) ** 0.5
+        normal = (-dy / length, dx / length)
+        bbox = item["bbox_px"]
+        text_center = (
+            ((bbox[0] + bbox[2]) / 2.0) * scale,
+            (height_px - (bbox[1] + bbox[3]) / 2.0) * scale,
+        )
+        expected_text_distance = normal[0] * (text_center[0] - line_midpoint[0]) + normal[1] * (text_center[1] - line_midpoint[1])
+        dimension = dimensions[str(int(item["value"]))]
+
+        assert (dimension.dxf.defpoint2.x, dimension.dxf.defpoint2.y) == pytest.approx(p1)
+        assert (dimension.dxf.defpoint3.x, dimension.dxf.defpoint3.y) == pytest.approx(p2)
+        base_vector = (
+            dimension.dxf.defpoint.x - line_midpoint[0],
+            dimension.dxf.defpoint.y - line_midpoint[1],
+        )
+        actual_base_normal_distance = normal[0] * base_vector[0] + normal[1] * base_vector[1]
+        if actual_base_normal_distance != pytest.approx(0.0, abs=1e-9):
+            base_separation_failures.append({
+                "value": item["value"],
+                "actual_normal_distance": actual_base_normal_distance,
+                "base": (dimension.dxf.defpoint.x, dimension.dxf.defpoint.y),
+                "line_midpoint": line_midpoint,
+            })
+        actual_text_distance = normal[0] * (dimension.dxf.text_midpoint.x - line_midpoint[0]) + normal[1] * (
+            dimension.dxf.text_midpoint.y - line_midpoint[1]
+        )
+        assert actual_text_distance == pytest.approx(expected_text_distance, abs=1e-9)
+
+    assert not base_separation_failures, (
+        "dimension base must remain on the selected source line while text placement is independent: "
+        f"failures={base_separation_failures}"
+    )
+
+
 def test_dimension_reconstruction_emits_approved_native_dimension(tmp_path: Path) -> None:
     from cad_agent.fidelity import run_fidelity_dimension_reconstruct
 
@@ -129,6 +402,38 @@ def test_dimension_reconstruction_emits_approved_native_dimension(tmp_path: Path
     document = ezdxf.readfile(result)
     assert len(list(document.modelspace().query("DIMENSION"))) == 1
     assert list(document.modelspace().query("DIMENSION"))[0].dxf.layer == "FIDELITY_DIMENSIONS"
+
+
+def test_dimension_reconstruction_preserves_approved_display_text_and_endpoints(tmp_path: Path) -> None:
+    from cad_agent.fidelity import run_fidelity_dimension_reconstruct
+
+    source, output, manifest, _, approval_path, base_dxf = _dimension_reconstruction_fixture(tmp_path)
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    observation_path = output / approval["observation"]["path"]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    mapping = approval["mappings"][0]
+    candidate = next(item for item in observation["candidates"] if item["text"]["id"] == mapping["candidate_id"])
+    candidate["text"]["parsed_value"] = 1525
+    observation_path.write_text(json.dumps(observation), encoding="utf-8")
+    approval["observation"]["sha256"] = __import__("hashlib").sha256(observation_path.read_bytes()).hexdigest()
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    evidence = next(item for item in candidate["nearby_lines"] if item["id"] == mapping["line_evidence_id"])
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    height_px = int(audit["source_page"]["render_height_px"])
+    expected_p1 = (float(evidence["p1_px"][0]) * scale, (height_px - float(evidence["p1_px"][1])) * scale)
+    expected_p2 = (float(evidence["p2_px"][0]) * scale, (height_px - float(evidence["p2_px"][1])) * scale)
+
+    result = run_fidelity_dimension_reconstruct(
+        source, output, manifest, approval_path, base_dxf, workspace_root=Path.cwd(),
+    )
+
+    dimension = next(iter(ezdxf.readfile(result).modelspace().query("DIMENSION")))
+    assert dimension.dxf.text == "1525"
+    assert (dimension.dxf.defpoint2.x, dimension.dxf.defpoint2.y) == pytest.approx(expected_p1)
+    assert (dimension.dxf.defpoint3.x, dimension.dxf.defpoint3.y) == pytest.approx(expected_p2)
 
 
 def test_dimension_reconstruction_cli_writes_private_candidate(tmp_path: Path) -> None:
@@ -400,6 +705,54 @@ def test_linetype_reconstruction_cli_writes_private_candidate(tmp_path: Path) ->
     assert (output / "linetype_reconstruction" / "page_01" / "layout.dxf").is_file()
 
 
+def test_linetype_reconstruction_applies_center_to_hash_bound_horizontal_lines(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    rendered = output / page["artifacts"]["rendered_png"]["artifact"]
+    from cad_agent.fidelity import sha256_file
+
+    height_px = int(json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))["source_page"]["render_height_px"])
+    coordinate_px = 180
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    y_mm = (height_px - coordinate_px) * scale
+    base_dxf = output / "base.dxf"
+    document = ezdxf.new("R2010")
+    model = document.modelspace()
+    model.add_line((10, y_mm), (40, y_mm))
+    model.add_line((10, y_mm + 10), (40, y_mm + 10))
+    document.saveas(base_dxf)
+    observation = output / "linetype-center-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": sha256_file(rendered),
+        "patterns": [{
+            "axis": "horizontal",
+            "coordinate_px": coordinate_px,
+            "segment_count": 6,
+            "median_gap_px": 12.0,
+            "status": "needs_review",
+            "suggested_linetype": "CENTER",
+        }],
+    }), encoding="utf-8")
+
+    result = run_fidelity_linetype_reconstruct(
+        source, output, manifest, observation, base_dxf, workspace_root=Path.cwd(),
+    )
+
+    entities = list(ezdxf.readfile(result).modelspace().query("LINE"))
+    assert entities[0].dxf.linetype == "FIDELITY_CENTER"
+    assert entities[1].dxf.linetype == "BYLAYER"
+    assert "FIDELITY_CENTER" in ezdxf.readfile(result).linetypes
+
+
 def test_table_text_reconstruction_emits_only_matched_cells(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
@@ -533,7 +886,9 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert observation["source_layout_audit"]["sha256"]
         assert observation["candidates"]
         assert all(candidate["content"] for candidate in observation["candidates"])
-        assert observation["unresolved"] == ["no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"]
+        assert observation["unresolved"][0] == "no OCR candidate is emitted as DXF TEXT or MTEXT without per-text approval and a Unicode glyph-render check"
+        if observation["native_pdf_spans"]:
+            assert observation["unresolved"][1] == "native PDF spans are separate unverified evidence; they are not OCR approval or reconstruction candidates"
         review = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
         assert review.is_file()
         assert observation["candidates"][0]["id"] in review.read_text(encoding="utf-8")
@@ -548,6 +903,2071 @@ def test_text_observations_are_hash_bound_and_never_emit_dxf_text() -> None:
         assert (output / "fidelity_text_approvals" / "page_01.json").is_file()
         text_dxf = run_fidelity_text_reconstruct(source, output, manifest, output / "fidelity_text_approvals" / "page_01.json", workspace_root=Path.cwd())
         assert {entity.dxftype() for entity in ezdxf.readfile(text_dxf).modelspace()} == {"TEXT"}
+        assert json.loads((text_dxf.parent / "report.json").read_text(encoding="utf-8"))["output_dxf_sha256"] == __import__("hashlib").sha256(text_dxf.read_bytes()).hexdigest()
+
+
+def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_path: Path) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_spans"]
+    ocr = observation["candidates"]
+
+    assert len(native) == 1
+    assert native[0]["content"] == "NATIVE 123"
+    assert native[0]["visibility"] == "unverified"
+    assert native[0]["source_wmode"] == 0
+    assert native[0]["source_paint_evidence"]["wmode"] == 0
+    assert native[0]["source_paint_evidence"]["type"] == 0
+    assert native[0]["source_paint_evidence"]["opacity"] == 1.0
+    assert native[0]["source_sha256"] == manifest["source"]["sha256"]
+    audit_path = output / observation["source_layout_audit"]["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert native[0]["render_sha256"] == audit["source_page"]["render_sha256"]
+    assert native[0]["mapping_version"] == "displayed-page-box-v1"
+    assert native[0]["bbox_px"][0] == pytest.approx(80, abs=1.0)
+    assert native[0]["bbox_px"][2] > native[0]["bbox_px"][0]
+    assert all(item.get("source") != "native_pdf" for item in ocr)
+    assert all(not item.get("semantic_role") for item in native)
+    assert "TEXT" not in observation and "MTEXT" not in observation
+    with pytest.raises(FidelityError, match="unknown OCR candidate"):
+        write_fidelity_text_approval(
+            source, output, manifest, 1, observation_path, [native[0]["id"]], "approved-test",
+            workspace_root=Path.cwd(),
+        )
+
+    # A hand-crafted approval sidecar must not bypass the OCR-only candidate
+    # admission performed by write_fidelity_text_approval.
+    from cad_agent import fidelity as fidelity_module
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": fidelity_module._artifact(observation_path, output),
+        "approval_reference": "approved-test",
+        "approved_candidates": [{
+            "candidate": native[0],
+            "glyph_render": {"passed": True},
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="OCR candidate"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "414 MM", fontsize=18)
+    page.insert_text((190, 80), "ANNOTATION", fontsize=18)
+    traces = page.get_texttrace()
+    assert len(traces) == 2
+
+    merged = dict(traces[0])
+    merged_chars = [*traces[0]["chars"], *traces[1]["chars"]]
+    merged["chars"] = merged_chars
+    merged["seqno"] = 0
+    merged["bbox"] = (
+        min(trace["bbox"][0] for trace in traces),
+        min(trace["bbox"][1] for trace in traces),
+        max(trace["bbox"][2] for trace in traces),
+        max(trace["bbox"][3] for trace in traces),
+    )
+
+    class AggregatedPaintTracePage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            return [merged]
+
+        def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+            return [("fill-text", merged["bbox"])]
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            AggregatedPaintTracePage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == ["414 MM", "ANNOTATION"]
+    assert all(record["visibility"] == "unverified" for record in records)
+    assert all(record["semantic_role"] is None for record in records)
+    assert all(record["evidence_kind"] == "native_pdf" for record in records)
+    assert all(record["source_paint_evidence"]["bbox_pt"] != merged["bbox"] for record in records)
+    assert [record["source_paint_evidence"]["member_traces"][0]["text"] for record in records] == [
+        "414 MM", "ANNOTATION",
+    ]
+    assert all(
+        record["source_paint_evidence"]["member_traces"][0]["character_range"]
+        for record in records
+    )
+    assert records[0]["bbox_px"][0] == pytest.approx(80, abs=1.0)
+    assert records[0]["bbox_px"][2] > records[0]["bbox_px"][0]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_contents"),
+    [
+        ("source_mismatch", []),
+        ("origin_mismatch", []),
+        ("duplicate_trace", []),
+        ("later_paint", ["ANNOTATION"]),
+    ],
+)
+def test_native_pdf_aggregated_trace_mapping_fails_closed(
+    case: str, expected_contents: list[str],
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "414 MM", fontsize=18)
+    page.insert_text((190, 80), "ANNOTATION", fontsize=18)
+    traces = page.get_texttrace()
+    merged = dict(traces[0])
+    merged["chars"] = [*traces[0]["chars"], *traces[1]["chars"]]
+    merged["seqno"] = 0
+    merged["bbox"] = (
+        min(trace["bbox"][0] for trace in traces),
+        min(trace["bbox"][1] for trace in traces),
+        max(trace["bbox"][2] for trace in traces),
+        max(trace["bbox"][3] for trace in traces),
+    )
+    spans = [
+        span
+        for block in page.get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line.get("spans", [])
+    ]
+    target_bbox = next(span["bbox"] for span in spans if span["text"] == "414 MM")
+
+    class ControlledAggregatedTracePage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict" and case in {"source_mismatch", "origin_mismatch"}:
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            if span.get("text") == "414 MM":
+                                if case == "source_mismatch":
+                                    span["text"] = "415 MM"
+                                else:
+                                    span["origin"] = (span["origin"][0] + 10, span["origin"][1])
+            return result
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            if case == "duplicate_trace":
+                duplicate = dict(merged, seqno=1)
+                return [merged, duplicate]
+            return [merged]
+
+        def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+            result = [("fill-text", merged["bbox"])]
+            if case == "duplicate_trace":
+                result.append(("fill-text", merged["bbox"]))
+            elif case == "later_paint":
+                result.append(("fill-path", target_bbox))
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            ControlledAggregatedTracePage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == expected_contents
+    assert all(record["visibility"] == "unverified" for record in records)
+    assert all(record["semantic_role"] is None for record in records)
+
+
+def test_native_pdf_aggregated_trace_preserves_rotated_text_direction() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((190, 250), "ROTATED NOTE", fontsize=18, rotate=90)
+    page.insert_text((240, 250), "ROTATED CALL", fontsize=18, rotate=90)
+    traces = page.get_texttrace()
+    assert len(traces) == 2
+    merged = dict(traces[0])
+    merged["chars"] = [*traces[0]["chars"], *traces[1]["chars"]]
+    merged["seqno"] = 0
+    merged["bbox"] = (
+        min(trace["bbox"][0] for trace in traces),
+        min(trace["bbox"][1] for trace in traces),
+        max(trace["bbox"][2] for trace in traces),
+        max(trace["bbox"][3] for trace in traces),
+    )
+
+    class RotatedAggregatedTracePage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            return [merged]
+
+        def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+            return [("fill-text", merged["bbox"])]
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            RotatedAggregatedTracePage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == ["ROTATED NOTE", "ROTATED CALL"]
+    assert all(abs(abs(record["rotation_deg"]) - 90) < 0.01 for record in records)
+    assert all(record["visibility"] == "unverified" for record in records)
+    assert all(record["semantic_role"] is None for record in records)
+
+
+def test_native_pdf_observation_keeps_named_layer_and_trace_recovers_replacement_glyph() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    dimensions = document.add_ocg("Dimensions", on=1)
+    page.insert_text((40, 80), "639\u00b11", fontsize=18, oc=dimensions)
+
+    class ReplacementGlyphPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict":
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            if span.get("text") == "639\u00b11":
+                                span["text"] = "639\ufffd1"
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            ReplacementGlyphPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert len(records) == 1
+    assert records[0]["content"] == "639\u00b11"
+    assert records[0]["source_paint_evidence"]["layer"] == "Dimensions"
+    assert records[0]["visibility"] == "unverified"
+    assert records[0]["semantic_role"] is None
+
+
+def test_native_pdf_observation_refuses_conflicting_trace_character_mapping() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "639\u00b11", fontsize=18)
+
+    class ConflictingTextPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict":
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            if span.get("text") == "639\u00b11":
+                                span["text"] = "639X1"
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            ConflictingTextPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert records == []
+
+
+@pytest.mark.parametrize(
+    ("case", "expect_nominal"),
+    [
+        ("adjacent", True),
+        ("clear_trace_gap", True),
+        ("substantial_overlap", False),
+        ("different_baseline", False),
+        ("different_font_size", True),
+        ("different_font", False),
+        ("different_color", False),
+        ("degenerate_bounds", False),
+        ("wide_stroke_text", False),
+    ],
+)
+def test_native_pdf_observation_only_ignores_tiny_matching_text_edge(
+    case: str, expect_nominal: bool,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    font_size = 18
+    first_x = 40
+    first_y = 80
+    nominal = "639"
+    tolerance = "\u00b11"
+    first_width = fitz.get_text_length(nominal, fontname="helv", fontsize=font_size)
+    second_size = font_size - 1 if case == "different_font_size" else font_size
+    second_font = "tiro" if case == "different_font" else "helv"
+    overlap = 2.0 if case == "substantial_overlap" else -0.04 if case == "clear_trace_gap" else 0.02
+    second_x = first_x + first_width - overlap
+    second_y = first_y - 0.1 if case == "different_baseline" else first_y
+    render_mode = 1 if case == "wide_stroke_text" else 0
+    border_width = 10 if case == "wide_stroke_text" else 1
+    page.insert_text(
+        (first_x, first_y), nominal, fontname="helv", fontsize=font_size,
+        render_mode=render_mode, border_width=border_width,
+    )
+    text_color = (1, 0, 0) if case == "different_color" else (0, 0, 0)
+    page.insert_text(
+        (second_x, second_y), tolerance, fontname=second_font, fontsize=second_size,
+        color=text_color, render_mode=render_mode, border_width=border_width,
+    )
+
+    class SplitSpanPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = page.get_text(option, *args, **kwargs)
+            if option == "dict":
+                traces = page.get_texttrace()
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        spans = line.get("spans", [])
+                        if len(spans) == 1 and spans[0].get("text") == nominal + tolerance:
+                            source_span = spans[0]
+                            split = []
+                            for content, trace in zip((nominal, tolerance), traces):
+                                span = dict(source_span)
+                                span["text"] = content
+                                span["bbox"] = trace["bbox"]
+                                span["origin"] = trace["chars"][0][2]
+                                span["font"] = trace["font"]
+                                span["size"] = trace["size"]
+                                split.append(span)
+                            line["spans"] = split
+            return result
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            traces = page.get_texttrace()
+            if case == "degenerate_bounds" and len(traces) == 2:
+                traces[1] = dict(traces[1], bbox=(second_x, second_y, second_x, second_y))
+            return traces
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            SplitSpanPage(), 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    contents = [record["content"] for record in records]
+    assert (nominal in contents) is expect_nominal
+    if expect_nominal:
+        assert tolerance in contents
+        assert all(record["visibility"] == "unverified" for record in records)
+
+
+def test_native_pdf_observation_excludes_hidden_ocr_over_visible_raster_text(tmp_path: Path) -> None:
+    source = tmp_path / "visible-raster-hidden-ocr.pdf"
+    output = tmp_path / "private-staging"
+    image = np.full((48, 240, 3), 255, dtype=np.uint8)
+    cv2.putText(image, "OCR NOTE", (3, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 2)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_image(fitz.Rect(40, 45, 280, 93), stream=encoded.tobytes())
+    page.insert_text((48, 80), "OCR NOTE", fontsize=18, render_mode=3)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    rendered = cv2.imread(output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"])
+    assert rendered is not None and np.any(cv2.cvtColor(rendered, cv2.COLOR_BGR2GRAY) < 100)
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_zero_opacity_text(tmp_path: Path) -> None:
+    source = tmp_path / "transparent-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "TRANSPARENT", fontsize=18, fill_opacity=0)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_text_used_only_as_a_clipping_path(tmp_path: Path) -> None:
+    source = tmp_path / "clip-only-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "CLIP ONLY", fontsize=18, render_mode=7)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+@pytest.mark.parametrize("character_spacing", [0, 1, 2])
+def test_native_pdf_observation_excludes_partially_clipped_text(
+    tmp_path: Path, character_spacing: int,
+) -> None:
+    source = tmp_path / "partially-clipped-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "PARTIALLY CLIPPED", fontsize=18)
+    content_xrefs = page.get_contents()
+    assert len(content_xrefs) == 1
+    stream = document.xref_stream(content_xrefs[0])
+    if character_spacing:
+        stream = stream.replace(b"BT", f"BT\n{character_spacing} Tc".encode(), 1)
+    document.update_stream(content_xrefs[0], b"q 40 210 45 30 re W n\n" + stream + b"\nQ\n")
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_text_covered_by_later_paint(tmp_path: Path) -> None:
+    source = tmp_path / "covered-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "PARTIALLY COVERED", fontsize=18)
+    page.draw_rect(fitz.Rect(90, 65, 125, 85), color=None, fill=(1, 1, 1))
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_excludes_text_on_disabled_optional_content_layer(tmp_path: Path) -> None:
+    source = tmp_path / "disabled-layer-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    ocg = document.add_ocg("Hidden annotations", on=0)
+    page.insert_text((40, 80), "HIDDEN LAYER", fontsize=18, oc=ocg)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert observation["native_pdf_spans"] == []
+
+
+def test_native_pdf_observation_rejects_vertical_writing_mode(tmp_path: Path) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "VERTICAL", fontsize=18)
+
+    class VerticalWritingModePage:
+        def __init__(self, wrapped: fitz.Page) -> None:
+            self._wrapped = wrapped
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._wrapped, name)
+
+        def get_text(self, option: str, *args: Any, **kwargs: Any) -> Any:
+            result = self._wrapped.get_text(option, *args, **kwargs)
+            if option == "dict":
+                for block in result["blocks"]:
+                    for line in block.get("lines", []):
+                        line["wmode"] = 1
+            return result
+
+        def get_texttrace(self) -> list[dict[str, Any]]:
+            result = self._wrapped.get_texttrace()
+            for span in result:
+                span["wmode"] = 1
+            return result
+
+    with document:
+        records = fidelity_module._native_pdf_text_span_records(
+            VerticalWritingModePage(page), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+
+    assert records == []
+
+
+def test_native_pdf_text_review_shows_source_bound_visibility_choices(tmp_path: Path) -> None:
+    source = tmp_path / "native-review.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "VISIBLE NATIVE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+    review_path = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
+    review_html = review_path.read_text(encoding="utf-8")
+
+    assert "native_pdf_spans" in review_html
+    assert "native-span-review" in review_html
+    assert "visible_and_legible" in review_html
+    assert "VISIBLE NATIVE" in review_html
+
+
+@pytest.mark.parametrize("source_name", [
+    '</script><script id="injected">console.log("proof")</script>',
+    '</ScRiPt><img src=x onerror="console.log(1)">',
+    'Bản vẽ <1> & "quoted".pdf',
+])
+def test_native_pdf_text_review_keeps_manifest_source_name_inside_script_data(
+    tmp_path: Path, source_name: str,
+) -> None:
+    from html.parser import HTMLParser
+
+    class ReviewParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.tags: list[str] = []
+            self.script_data: list[str] = []
+            self.in_script = False
+
+        def handle_starttag(self, tag: str, attrs: list) -> None:
+            self.tags.append(tag)
+            self.in_script = tag == "script"
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "script":
+                self.in_script = False
+
+        def handle_data(self, data: str) -> None:
+            if self.in_script:
+                self.script_data.append(data)
+
+    source = tmp_path / "review-source.pdf"
+    output = tmp_path / "private-review"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    # A supplied manifest can retain the genuine PDF hash while changing its name.
+    manifest["source"]["name"] = source_name
+    run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+    review = write_fidelity_text_review_index(source, output, manifest, workspace_root=Path.cwd())
+    parser = ReviewParser()
+    parser.feed(review.read_text(encoding="utf-8"))
+
+    assert parser.tags.count("script") == 1
+    assert "img" not in parser.tags[parser.tags.index("script") + 1:]
+    script = "".join(parser.script_data)
+    source_json = script.removeprefix("const source=").split(";const nativeByPage=", 1)[0]
+    assert json.loads(source_json) == manifest["source"]
+
+
+def test_native_pdf_text_selection_creates_typed_per_span_approval(tmp_path: Path) -> None:
+    source = tmp_path / "native-selected.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "REPEATED NOTE", fontsize=18)
+    page.insert_text((40, 150), "REPEATED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native_spans = observation["native_pdf_spans"]
+    assert [item["content"] for item in native_spans] == ["REPEATED NOTE", "REPEATED NOTE"]
+
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True}
+                for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    approvals = write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    assert approvals[0]["state"] == "approved-text-items-only"
+    assert approvals[0]["approved_candidates"] == []
+    assert [item["span"]["id"] for item in approvals[0]["approved_native_spans"]] == [
+        item["id"] for item in native_spans
+    ]
+    assert all(item["visibility_review"]["selection"]["sha256"] for item in approvals[0]["approved_native_spans"])
+
+    assert approval_path.is_file()
+
+
+def test_native_pdf_text_reconstruction_emits_only_approved_source_spans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "native-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "REPEATED NOTE", fontsize=18)
+    page.insert_text((40, 150), "REPEATED NOTE", fontsize=18)
+    page.insert_text((40, 220), "UNSELECTED", fontsize=18)
+    page.insert_text((230, 100), "ROTATED", fontsize=14, rotate=90)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selected = [item for item in native_spans if item["content"] != "UNSELECTED"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in selected],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True}
+                for item in selected
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    from cad_agent import fidelity as fidelity_module
+
+    def unexpected_ocr_rerun(*args: object, **kwargs: object) -> list[dict[str, Any]]:
+        raise AssertionError("native-only reconstruction must not rerun OCR")
+
+    monkeypatch.setattr(fidelity_module, "_fresh_fidelity_ocr_candidates", unexpected_ocr_rerun)
+
+    output_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+        workspace_root=Path.cwd(),
+    )
+    emitted = list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))
+    assert len(emitted) == 3
+    assert sorted(item.dxf.text for item in emitted) == ["REPEATED NOTE", "REPEATED NOTE", "ROTATED"]
+    assert len({(round(item.dxf.insert.x, 4), round(item.dxf.insert.y, 4)) for item in emitted}) == 3
+    page_record = manifest["pages"][0]
+    audit = json.loads((output / page_record["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = audit["source_page"]["render_height_px"]
+    width_px = audit["source_page"]["render_width_px"]
+    scale = page_record["pixel_to_paper_mm"]["used"]
+    render_height = height_px
+    for entity, span in zip(emitted, selected):
+        origin_x, origin_y = span["source_origin_pt"]
+        expected_insert = (
+            origin_x * width_px / 400 * scale,
+            (height_px - origin_y * height_px / 300) * scale,
+        )
+        assert (entity.dxf.insert.x, entity.dxf.insert.y) == pytest.approx(expected_insert, abs=1e-5)
+        assert entity.dxf.height == pytest.approx(span["source_font_size_pt"] * render_height / 300 * scale, abs=1e-5)
+        assert entity.dxf.width == pytest.approx(1.0)
+        assert entity.dxf.rotation == pytest.approx(-span["rotation_deg"], abs=1e-5)
+    report = json.loads((output_dxf.parent / "report.json").read_text(encoding="utf-8"))
+    assert report["emitted_text_entities"] == 3
+    assert all(record["source_font_name"] for record in report["text_sizing"])
+
+
+def test_native_pdf_text_approval_rejects_junctioned_output_directory(tmp_path: Path) -> None:
+    import subprocess
+
+    if os.name != "nt":
+        pytest.skip("Directory junction protection is Windows-specific.")
+
+    source = tmp_path / "approval-junction.pdf"
+    output = tmp_path / "private-approval-junction"
+    external = tmp_path / "outside-private-root"
+    external.mkdir()
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "APPROVED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    candidate = observation["candidates"][0]
+    approval_directory = output / "fidelity_text_approvals"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(approval_directory), str(external)],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"Directory junction creation unavailable: {result.stderr.strip() or result.stdout.strip()}")
+    try:
+        with pytest.raises(FidelityError, match="directory|private|identity"):
+            write_fidelity_text_approval(
+                source, output, manifest, 1, observation_path, [candidate["id"]], "junction-test",
+                workspace_root=Path.cwd(),
+            )
+        assert not (external / "page_01.json").exists()
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", str(approval_directory)], capture_output=True, check=False)
+
+
+def test_native_pdf_text_reconstruction_refuses_retry_when_page_mapping_changes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mapping-retry.pdf"
+    output = tmp_path / "private-mapping-retry"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "MAPPED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    candidate = json.loads(observation_path.read_text(encoding="utf-8"))["candidates"][0]
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [candidate["id"]], "mapping-test",
+        workspace_root=Path.cwd(),
+    )
+    published = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    assert published.is_file()
+
+    manifest["pages"][0]["pixel_to_paper_mm"]["used"] *= 2
+    with pytest.raises(FidelityError, match="already exists"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+
+def test_native_pdf_text_reconstruction_reuses_retry_with_base_text(tmp_path: Path) -> None:
+    source = tmp_path / "base-text-retry.pdf"
+    output = tmp_path / "private-base-text-retry"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "RETRY NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    base_dxf = output / "base.dxf"
+    base_document = ezdxf.new("R2010")
+    base_document.modelspace().add_text("BASE NOTE", dxfattribs={"height": 2.5})
+    base_document.saveas(base_dxf)
+
+    first = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, base_dxf=base_dxf, workspace_root=Path.cwd(),
+    )
+    retry = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, base_dxf=base_dxf, workspace_root=Path.cwd(),
+    )
+
+    assert retry == first
+    entities = list(ezdxf.readfile(retry).modelspace().query("TEXT"))
+    assert sorted(entity.dxf.text for entity in entities) == ["BASE NOTE", "RETRY NOTE"]
+
+
+@pytest.mark.parametrize("dxf_format", ["asc", "bin"])
+@pytest.mark.parametrize("version", ["R2000", "R2010"])
+def test_text_base_snapshot_preserves_existing_dxf_encoding_and_bytes(
+    tmp_path: Path, dxf_format: str, version: str,
+) -> None:
+    import hashlib
+
+    base = tmp_path / "encoded-base.dxf"
+    drawing = ezdxf.new(version)
+    drawing.encoding = "cp1252"
+    drawing.modelspace().add_text("BASE Ø ± café", dxfattribs={"height": 2.5})
+    drawing.saveas(base, fmt=dxf_format)
+    expected = base.read_bytes()
+
+    snapshot, digest = fidelity_module._read_text_base_snapshot(base)
+
+    assert digest == hashlib.sha256(expected).hexdigest()
+    assert [e.dxf.text for e in snapshot.modelspace().query("TEXT")] == ["BASE Ø ± café"]
+    assert snapshot.dxfversion == drawing.dxfversion
+    assert base.read_bytes() == expected
+
+
+@pytest.mark.parametrize("dxf_format", ["asc", "bin"])
+def test_native_pdf_text_reconstruction_binds_base_read_and_retry_to_same_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dxf_format: str,
+) -> None:
+    import hashlib
+
+    source = tmp_path / "snapshot-retry.pdf"
+    output = tmp_path / "private-snapshot-retry"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "RETRY NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    spans = json.loads(observation.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection = output / "selection.json"
+    selection.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0", "source": manifest["source"],
+        "selections": [{"page": 1, "candidate_ids": [], "native_span_ids": [s["id"] for s in spans],
+                        "native_span_reviews": [{"span": s, "visible_and_legible": True} for s in spans]}],
+    }), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval = output / "fidelity_text_approvals/page_01.json"
+    base = output / "base.dxf"
+    replacement = output / "replacement.dxf"
+    for path, content in [(base, "BASE A"), (replacement, "BASE B")]:
+        drawing = ezdxf.new("R2010")
+        drawing.modelspace().add_text(content, dxfattribs={"height": 2.5})
+        drawing.saveas(path, fmt=dxf_format)
+    original_sha = hashlib.sha256(base.read_bytes()).hexdigest()
+    replacement_bytes = replacement.read_bytes()
+    original_read = ezdxf.readfile
+    original_load = ezdxf.document.Drawing.load
+    swapped = False
+
+    def read_then_replace(cls, *args, **kwargs):
+        nonlocal swapped
+        drawing = original_load(*args, **kwargs)
+        if not swapped and [e.dxf.text for e in drawing.modelspace().query("TEXT")] == ["BASE A"]:
+            base.write_bytes(replacement_bytes)
+            swapped = True
+        return drawing
+
+    monkeypatch.setattr(ezdxf.document.Drawing, "load", classmethod(read_then_replace))
+    first = run_fidelity_text_reconstruct(
+        source, output, manifest, approval, base_dxf=base, workspace_root=Path.cwd(),
+    )
+    assert swapped
+    assert sorted(e.dxf.text for e in original_read(first).modelspace().query("TEXT")) == ["BASE A", "RETRY NOTE"]
+    report = json.loads(first.with_name("report.json").read_text(encoding="utf-8"))
+    refused = False
+    try:
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval, base_dxf=base, workspace_root=Path.cwd(),
+        )
+    except FidelityError as error:
+        assert "already exists" in str(error)
+        refused = True
+    assert report["base_dxf_sha256"] == original_sha and refused, (
+        "BASE A output must bind BASE A bytes, and must not be reused as BASE B merely because TEXT counts match"
+    )
+
+
+def test_native_pdf_text_reconstruction_failure_after_dxf_write_is_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "atomic-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "ATOMIC NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    page_output = output / "text_reconstruction" / "page_01"
+    original_write_text = Path.write_text
+
+    def fail_report_write(path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        if path.name == "report.json" and path.parent.name.startswith(".page_01.staging-"):
+            raise OSError("injected report publication failure")
+        return original_write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_report_write)
+    with pytest.raises(FidelityError, match="report could not be published"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+    assert not page_output.exists(), "failed publication must not leave a partial final page"
+    staging_parent = page_output.parent
+    assert not list(staging_parent.glob(".page_01.staging-*")), "failed publication must clean its staging directory"
+
+    monkeypatch.setattr(Path, "write_text", original_write_text)
+    output_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    assert output_dxf == page_output / "layout.dxf"
+    assert output_dxf.is_file()
+    assert (page_output / "report.json").is_file()
+    assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
+
+
+@pytest.mark.parametrize("failure_site", ["publish-finalization", "staging-cleanup"])
+def test_native_pdf_text_reconstruction_postcommit_failure_is_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
+) -> None:
+    source = tmp_path / "postcommit-reconstruction.pdf"
+    output = tmp_path / "private-postcommit-staging"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "POSTCOMMIT NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    page_output = output / "text_reconstruction" / "page_01"
+
+    def publish_by_rename(staging: Path, destination: Path, identity: tuple[int, int]) -> None:
+        assert staging.parent == destination.parent
+        os.rename(staging, destination)
+        if failure_site == "publish-finalization":
+            raise fidelity_module.FileIdentityError("injected postcommit publication finalization failure")
+
+    def fail_cleanup(staging: Path) -> None:
+        raise fidelity_module.FileIdentityError("injected postcommit cleanup failure")
+
+    monkeypatch.setattr(fidelity_module, "_publish_staging_directory", publish_by_rename)
+    monkeypatch.setattr(
+        fidelity_module,
+        "_remove_staging_reparse_alias",
+        fail_cleanup if failure_site == "staging-cleanup" else lambda staging: None,
+    )
+    with pytest.raises(FidelityError, match=r"published and verified"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+    output_dxf = page_output / "layout.dxf"
+    report_path = page_output / "report.json"
+    assert output_dxf.is_file(), "the injected failure happens after atomic publication"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["output_dxf_sha256"] == fidelity_module.sha256_file(output_dxf)
+    assert report["staging_directory_identity"] == list(
+        (page_output.stat().st_dev, page_output.stat().st_ino)
+    )
+
+    monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", lambda staging: None)
+    assert run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    ) == output_dxf
+    assert len(list(ezdxf.readfile(output_dxf).modelspace().query("TEXT"))) == len(native_spans)
+
+    report["source_sha256"] = "0" * 64
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(FidelityError, match="already exists"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point retry regression")
+def test_native_pdf_text_reconstruction_rejects_junctioned_existing_output_parent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "junction-retry.pdf"
+    output = tmp_path / "private-junction-retry"
+    document = fitz.open()
+    document.new_page(width=400, height=300).insert_text((40, 80), "JUNCTION RETRY", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-junction-retry",
+        workspace_root=Path.cwd(),
+    )
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    page_output = output / "text_reconstruction" / "page_01"
+    output_dxf = run_fidelity_text_reconstruct(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    expected_hash = fidelity_module.sha256_file(output_dxf)
+
+    external_root = tmp_path / "outside-private-root"
+    external_root.mkdir()
+    relocated_parent = external_root / "text_reconstruction"
+    page_output.parent.rename(relocated_parent)
+    junction_result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(page_output.parent), str(relocated_parent)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if junction_result.returncode != 0:
+        pytest.skip(
+            f"Directory junction creation unavailable: "
+            f"{junction_result.stderr.strip() or junction_result.stdout.strip()}"
+        )
+
+    with pytest.raises(FidelityError, match="private|directory|output"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    relocated_dxf = external_root / "text_reconstruction" / "page_01" / "layout.dxf"
+    assert fidelity_module.sha256_file(relocated_dxf) == expected_hash
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point race regression")
+def test_native_pdf_text_reconstruction_pins_staging_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "staging-reparse-race.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "STAGING RACE", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    original_saveas = ezdxf.document.Drawing.saveas
+    original_rename = fidelity_module.os.rename
+    original_handle_rename = fidelity_module._set_file_information_by_handle
+    staging_replacement_blocked: list[bool] = []
+    publication_race_triggered: list[bool] = []
+    staging_for_publication: list[Path] = []
+    displaced_staging: list[Path] = []
+
+    def replace_staging_with_junction(
+        drawing: ezdxf.document.Drawing, filename: str | Path, *args: object, **kwargs: object,
+    ) -> None:
+        target = Path(filename)
+        staging = target.parent
+        if target.name == "layout.dxf" and staging.name.startswith(".page_01.staging-"):
+            staging_for_publication.append(staging)
+            try:
+                staging.rmdir()
+            except OSError:
+                staging_replacement_blocked.append(True)
+            else:
+                result = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(staging), str(outside)],
+                    capture_output=True, text=True, check=False,
+                )
+                if result.returncode != 0:
+                    staging.mkdir()
+                    pytest.skip(f"mklink /J unavailable: {result.stderr.strip()}")
+        original_saveas(drawing, filename, *args, **kwargs)
+
+    monkeypatch.setattr(ezdxf.document.Drawing, "saveas", replace_staging_with_junction)
+    page_output = output / "text_reconstruction" / "page_01"
+
+    def replace_staging_during_handle_publication(handle: object, destination: Path) -> None:
+        assert destination == page_output
+        assert staging_for_publication
+        staging = staging_for_publication[-1]
+        displaced = staging.with_name(f"{staging.name}.displaced")
+        original_rename(staging, displaced)
+        displaced_staging.append(displaced)
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(staging), str(outside)],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            original_rename(displaced, staging)
+            displaced_staging.clear()
+            pytest.skip(f"mklink /J unavailable: {result.stderr.strip()}")
+        publication_race_triggered.append(True)
+        original_handle_rename(handle, destination)
+
+    monkeypatch.setattr(
+        fidelity_module, "_set_file_information_by_handle", replace_staging_during_handle_publication,
+    )
+    try:
+        output_dxf = run_fidelity_text_reconstruct(
+            source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+            workspace_root=Path.cwd(),
+        )
+        assert publication_race_triggered, "test must replace the staging path after the object handle is bound"
+        assert output_dxf.is_file()
+        assert not (outside / "layout.dxf").exists(), "DXF must not be written through a staging junction"
+        assert not (outside / "report.json").exists(), "report must not be written through a staging junction"
+        assert staging_replacement_blocked, "staging directory must not be replaceable during output writes"
+    finally:
+        if page_output.exists() and getattr(page_output.lstat(), "st_file_attributes", 0) & 0x400:
+            page_output.rmdir()
+        for displaced in displaced_staging:
+            if displaced.exists():
+                import shutil
+
+                shutil.rmtree(displaced)
+
+
+def test_native_pdf_text_reconstruct_rejects_forged_mixed_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "mixed-overlap-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((50, 100), "12,00", fontsize=18)
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "12,00")
+    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "12,00")
+    assert (
+        max(native["bbox_px"][0], ocr["bbox_px"][0])
+        < min(native["bbox_px"][2], ocr["bbox_px"][2])
+        and max(native["bbox_px"][1], ocr["bbox_px"][1])
+        < min(native["bbox_px"][3], ocr["bbox_px"][3])
+    )
+
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\seguisym.ttf")
+    native_review = {"span": native, "visible_and_legible": True}
+    selection_path = output / "diagnostic-native-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    native_approval = write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [], "test-native-only",
+        workspace_root=Path.cwd(), native_span_ids=[native["id"]],
+        native_span_reviews=[native_review], selection_path=selection_path,
+    )
+    (output / "fidelity_text_approvals" / "page_01.json").unlink()
+
+    ocr_approval = write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path, [ocr["id"]], "test-ocr-only",
+        workspace_root=Path.cwd(),
+    )
+    selection = {
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [ocr["id"]],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }
+    selection_path.write_text(json.dumps(selection, ensure_ascii=False), encoding="utf-8")
+    selection_record = fidelity_module._artifact(selection_path, output)
+    native_approval["native_selection"] = selection_record
+    for record in native_approval["approved_native_spans"]:
+        record["visibility_review"]["selection"] = selection_record
+    approval_path = output / "diagnostic-forged-mixed-approval.json"
+    approval_path.write_text(json.dumps(native_approval, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="selection.*OCR|approved OCR"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+
+    native_approval["approved_candidates"] = ocr_approval["approved_candidates"]
+    approval_path.write_text(json.dumps(native_approval, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(FidelityError, match="overlap"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01" / "layout.dxf").exists()
+
+
+def test_native_pdf_text_reconstruction_rejects_junction_output_redirect(tmp_path: Path) -> None:
+    import subprocess
+
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Directory junction protection is Windows-specific.")
+
+    source = tmp_path / "native-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    external = tmp_path / "outside-private-root"
+    external.mkdir()
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "APPROVED NOTE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [item["id"] for item in native_spans],
+            "native_span_reviews": [
+                {"span": item, "visible_and_legible": True} for item in native_spans
+            ],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+
+    redirected_root = output / "text_reconstruction"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(redirected_root), str(external)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"Directory junction creation unavailable: {result.stderr.strip() or result.stdout.strip()}")
+
+    with pytest.raises(FidelityError, match="private|directory|output"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+            workspace_root=Path.cwd(),
+        )
+    assert not (external / "page_01").exists()
+
+
+@pytest.mark.parametrize("tamper", ["changed_source", "stale_render", "unselected_span", "failed_glyph", "unsupported_transform"])
+def test_native_pdf_text_reconstruction_fails_closed_before_output(tmp_path: Path, tamper: str) -> None:
+    source = tmp_path / "native-reconstruction.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "SELECTED", fontsize=18)
+    page.insert_text((40, 150), "NOT SELECTED", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_spans = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"]
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": [native_spans[0]["id"]],
+            "native_span_reviews": [{"span": native_spans[0], "visible_and_legible": True}],
+        }],
+    }), encoding="utf-8")
+    write_fidelity_text_approvals_from_selection(
+        source, output, manifest, selection_path, "approved-visible-native-spans", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    if tamper == "changed_source":
+        source.write_bytes(source.read_bytes() + b"changed")
+    elif tamper == "stale_render":
+        rendered_path = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+        Path(output, rendered_path).write_bytes(b"stale-render")
+    elif tamper == "unselected_span":
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        extra_span = native_spans[1]
+        approval["approved_native_spans"].append({
+            "span": extra_span,
+            "glyph_render": approval["approved_native_spans"][0]["glyph_render"],
+            "visibility_review": dict(approval["approved_native_spans"][0]["visibility_review"], span_id=extra_span["id"]),
+        })
+        approval_path.write_text(json.dumps(approval), encoding="utf-8")
+    elif tamper == "failed_glyph":
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        approval["approved_native_spans"][0]["glyph_render"]["passed"] = False
+        approval_path.write_text(json.dumps(approval), encoding="utf-8")
+    elif tamper == "unsupported_transform":
+        manifest["configuration"]["transform"] = "unknown-transform"
+
+    from cad_agent.manifest import ManifestError
+
+    with pytest.raises((FidelityError, ManifestError)):
+        run_fidelity_text_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+@pytest.mark.parametrize("tamper", ["duplicate_id", "stale_render", "visibility_not_confirmed"])
+def test_native_pdf_text_approval_rejects_unbound_or_unreviewed_selection(tmp_path: Path, tamper: str) -> None:
+    source = tmp_path / "native-review.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "VISIBLE NATIVE", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    native_span = json.loads(observation_path.read_text(encoding="utf-8"))["native_pdf_spans"][0]
+    review_span = dict(native_span)
+    if tamper == "stale_render":
+        review_span["render_sha256"] = "0" * 64
+    review = {"span": review_span, "visible_and_legible": tamper != "visibility_not_confirmed"}
+    native_span_ids = [native_span["id"]]
+    reviews = [review]
+    if tamper == "duplicate_id":
+        native_span_ids.append(native_span["id"])
+        reviews.append(review)
+    selection_path = output / "native-text-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [],
+            "native_span_ids": native_span_ids,
+            "native_span_reviews": reviews,
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError):
+        write_fidelity_text_approvals_from_selection(
+            source, output, manifest, selection_path, "approval-attempt", workspace_root=Path.cwd(),
+        )
+    assert not (output / "fidelity_text_approvals" / "page_01.json").exists()
+
+
+def test_text_reconstruction_rejects_changed_hash_bound_observation(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"]
+    write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path,
+        [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
+    )
+
+    observation["candidates"][0]["content"] = "CHANGED AFTER APPROVAL"
+    observation_path.write_text(json.dumps(observation), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="hash"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, output / "fidelity_text_approvals" / "page_01.json",
+            workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_text_reconstruction_rejects_rewritten_observation_and_matching_crafted_approval(
+    tmp_path: Path,
+) -> None:
+    """A native PDF span must not become OCR merely by rewriting both sidecars."""
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "invisible-native-text.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE ONLY", fontsize=18, render_mode=3)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"] == []
+    assert observation["native_pdf_spans"] == []
+    forged_candidate = {
+        "id": "forged-ocr-native-span",
+        "content": "NATIVE ONLY",
+        "bbox_px": [80, 121, 300, 170],
+        "rotation_deg": 0.0,
+        "confidence": 1.0,
+        "source": "text_tesseract",
+        "semantic_role": "unknown",
+        "parsed_value": None,
+    }
+    observation["state"] = "needs_human_approval"
+    observation["candidates"] = [forged_candidate]
+    observation_path.write_text(json.dumps(observation, ensure_ascii=False), encoding="utf-8")
+
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": fidelity_module._artifact(observation_path, output),
+        "approval_reference": "approved-test",
+        "approved_candidates": [{
+            "candidate": forged_candidate,
+            "glyph_render": fidelity_module._unicode_glyph_render_check(forged_candidate["content"]),
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="fresh OCR"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_text_reconstruction_rejects_alternate_native_observation(tmp_path: Path) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_spans"][0]
+
+    alternate_path = output / "fidelity_text_observations" / "alternate-page_01.json"
+    alternate = {**observation, "candidates": [native]}
+    alternate_path.write_text(json.dumps(alternate, ensure_ascii=False), encoding="utf-8")
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+        "observation": fidelity_module._artifact(alternate_path, output),
+        "approval_reference": "approved-test",
+        "approved_candidates": [{
+            "candidate": native,
+            "glyph_render": fidelity_module._unicode_glyph_render_check(native["content"]),
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="canonical OCR observation"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+def test_text_reconstruction_revalidates_glyph_render_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert observation["candidates"]
+    write_fidelity_text_approval(
+        source, output, manifest, 1, observation_path,
+        [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "fidelity_text_approvals" / "page_01.json"
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval["approved_candidates"][0]["glyph_render"] = {"passed": True}
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="glyph-render evidence"):
+        run_fidelity_text_reconstruct(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    assert not (output / "text_reconstruction" / "page_01").exists()
+
+
+@pytest.mark.parametrize("unsupported", ["rotation", "crop"])
+def test_native_pdf_text_observation_fails_closed_for_unsupported_page_frames(
+    tmp_path: Path, unsupported: str,
+) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    if unsupported == "rotation":
+        page.set_rotation(90)
+    else:
+        page.set_cropbox(fitz.Rect(10, 10, 390, 290))
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    with pytest.raises(FidelityError, match="[Nn]ative PDF text mapping"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+@pytest.mark.parametrize("stale_artifact", ["source", "render"])
+def test_native_pdf_text_observation_rejects_stale_source_or_render_hash(
+    tmp_path: Path, stale_artifact: str,
+) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    if stale_artifact == "source":
+        source.write_bytes(source.read_bytes() + b"stale")
+    else:
+        rendered = output / manifest["pages"][0]["artifacts"]["rendered_png"]["artifact"]
+        rendered.write_bytes(rendered.read_bytes() + b"stale")
+    expected_error = FidelityError
+    if stale_artifact == "source":
+        from cad_agent.manifest import ManifestError
+
+        expected_error = ManifestError
+    with pytest.raises(expected_error):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+@pytest.mark.parametrize("tamper", ["page_bool", "page_float", "page_wrong", "render_hash", "width_positive_wrong", "height_positive_wrong"])
+def test_native_pdf_text_observation_rejects_mismatched_audit_frame_metadata(
+    tmp_path: Path, tamper: str,
+) -> None:
+    source = tmp_path / "native.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "NATIVE 123", fontsize=18)
+    document.save(source)
+    document.close()
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+
+    record = manifest["pages"][0]["artifacts"]["layout_audit"]
+    audit_path = output / record["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    source_page = audit["source_page"]
+    if tamper == "page_bool":
+        source_page["page"] = True
+    elif tamper == "page_float":
+        source_page["page"] = 1.0
+    elif tamper == "page_wrong":
+        source_page["page"] = 2
+    elif tamper == "render_hash":
+        source_page["render_sha256"] = "0" * 64
+    elif tamper == "width_positive_wrong":
+        source_page["render_width_px"] += 1
+    else:
+        source_page["render_height_px"] += 1
+    audit_path.write_text(json.dumps(audit, indent=2) + "\n", encoding="utf-8")
+    record["sha256"] = __import__("hashlib").sha256(audit_path.read_bytes()).hexdigest()
+
+    with pytest.raises(FidelityError, match="[Nn]ative PDF text mapping"):
+        run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())
+
+
+def test_text_observation_uses_hash_bound_approved_region_for_single_component_dimension_roi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "dimension-band", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    write_region_approval(
+        source, output, manifest, 1, 1, ["dimension-band"], "approved-region-ocr-test", workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_detect(image: np.ndarray, **kwargs: object) -> list[tuple[int, int, int, int]]:
+        calls.append(("detect", kwargs))
+        return [(10, 10, 30, 30)]
+
+    def fake_ocr(
+        image: np.ndarray, *, roi_boxes: list[tuple[int, int, int, int]], min_confidence: int = 40,
+        psm: int = 6, lang: str = "vie+eng",
+    ) -> list[RawText]:
+        del image, min_confidence, psm, lang
+        calls.append(("ocr", roi_boxes))
+        return [RawText("approved-dimension", "1490", (5, 12, 15, 22), 0.0, 0.99, "text_tesseract", 1490.0, "dimension_value")]
+
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", fake_detect)
+    monkeypatch.setattr(fidelity_module, "extract_text_tesseract", fake_ocr)
+
+    observation_path = run_fidelity_text_observations(
+        source,
+        output,
+        manifest,
+        region_approval_path=approval_path,
+        workspace_root=Path.cwd(),
+    )[0]
+    payload = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert any(candidate["content"] == "1490" for candidate in payload["candidates"])
+    assert payload["region_approval"]["artifact"] == "region_approvals/page_01.json"
+    assert calls
+    rotated = next(candidate for candidate in payload["candidates"] if candidate["rotation_deg"] == 90.0)
+    assert rotated["bbox_px"] == [27, height - 35, 37, height - 25]
+
+
+def test_approved_title_region_ocr_keeps_block_level_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((700, 1400, 3), 255, dtype=np.uint8)
+    calls: list[tuple[tuple[int, int], list[tuple[int, int, int, int]], int]] = []
+
+    def fake_detect(image: np.ndarray, **kwargs: object) -> list[tuple[int, int, int, int]]:
+        del image, kwargs
+        return []
+
+    def fake_ocr(
+        image: np.ndarray,
+        *,
+        roi_boxes: list[tuple[int, int, int, int]],
+        min_confidence: int = 40,
+        psm: int = 6,
+        lang: str = "vie+eng",
+    ) -> list[RawText]:
+        del min_confidence, lang
+        calls.append((image.shape[:2], roi_boxes, psm))
+        if psm != 6:
+            return []
+        return [RawText(
+            "full-title",
+            "THIET KE CAI TAO O TO TAI THUNG KIN THACO K190",
+            (30, 45, 900, 80),
+            0.0,
+            0.90,
+            "text_tesseract",
+            None,
+            "general_note",
+        )]
+
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", fake_detect)
+    monkeypatch.setattr(fidelity_module, "extract_text_tesseract", fake_ocr)
+
+    candidates, metrics = fidelity_module._approved_region_text_candidates(
+        image,
+        [{"id": "title", "bbox_px": [100, 200, 1200, 580], "ocr_roi_px": [374, 0, 1089, 133]}],
+    )
+
+    assert metrics == {"detector_roi_count": 0, "ocr_call_count": 1}
+    assert [candidate["content"] for candidate in candidates] == [
+        "THIET KE CAI TAO O TO TAI THUNG KIN THACO K190",
+    ]
+    assert candidates[0]["approved_region_id"] == "title"
+    assert candidates[0]["bbox_px"] == [484, 215, 774, 226]
+    assert calls == [((399, 2145), [(0, 0, 2145, 399)], 6)]
+
+
+def test_approved_region_ocr_rejects_oversized_block_before_resize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((2000, 2000, 3), 255, dtype=np.uint8)
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", lambda image, **kwargs: [])
+    resize_calls: list[bool] = []
+
+    def fail_resize(*args: object, **kwargs: object) -> np.ndarray:
+        del args, kwargs
+        resize_calls.append(True)
+        raise AssertionError("oversized OCR ROI was resized before the bound check")
+
+    monkeypatch.setattr(fidelity_module.cv2, "resize", fail_resize)
+    with pytest.raises(FidelityError, match="canvas limit"):
+        fidelity_module._approved_region_text_candidates(
+            image,
+            [{"id": "title", "bbox_px": [0, 0, 2000, 2000], "ocr_roi_px": [0, 0, 2000, 2000]}],
+        )
+    assert resize_calls == []
+
+
+def test_text_observation_rejects_approved_region_page_other_than_page_one(tmp_path: Path) -> None:
+    source = tmp_path / "two-page-drawing.pdf"
+    document = fitz.open()
+    for label in ("PAGE ONE", "PAGE TWO"):
+        page = document.new_page(width=400, height=300)
+        page.insert_text((50, 100), label, fontsize=20)
+    document.save(source)
+    document.close()
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][1]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "page-two", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(source, output, manifest_path, manifest, 2, regions, workspace_root=Path.cwd())
+    write_region_approval(source, output, manifest, 2, 1, ["page-two"], "approved-region-ocr-test", workspace_root=Path.cwd())
+
+    with pytest.raises(FidelityError, match="page 1 only"):
+        run_fidelity_text_observations(
+            source,
+            output,
+            manifest,
+            region_approval_path=output / "region_approvals" / "page_02.json",
+            workspace_root=Path.cwd(),
+        )
+
+
+def test_text_observation_rejects_stale_region_proposal_page_metadata(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "dimension-band", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd())
+    write_region_approval(source, output, manifest, 1, 1, ["dimension-band"], "approved-region-ocr-test", workspace_root=Path.cwd())
+    proposal_path = output / "region_proposals" / "page_01.json"
+    approval_path = output / "region_approvals" / "page_01.json"
+    proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    proposal["page"]["number"] = 2
+    proposal_path.write_text(json.dumps(proposal, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval["proposal"]["sha256"] = __import__("hashlib").sha256(proposal_path.read_bytes()).hexdigest()
+    approval_path.write_text(json.dumps(approval, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="proposal page"):
+        run_fidelity_text_observations(
+            source, output, manifest, region_approval_path=approval_path, workspace_root=Path.cwd(),
+        )
+
+
+def test_text_observation_rejects_hash_consistent_malformed_approved_region_ocr_roi(
+    tmp_path: Path,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "title", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd())
+    write_region_approval(source, output, manifest, 1, 1, ["title"], "approved-region-ocr-test", workspace_root=Path.cwd())
+    proposal_path = output / "region_proposals" / "page_01.json"
+    approval_path = output / "region_approvals" / "page_01.json"
+    base_proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    for invalid_roi in (
+        [0, 0, "not-an-integer", 100],
+        [-1, 0, 100, 100],
+        [0, 0, width, 100],
+        [0, 0, 20, 20],
+    ):
+        proposal = json.loads(json.dumps(base_proposal))
+        proposal["regions"][0]["ocr_roi_px"] = invalid_roi
+        proposal["proposal_definition_sha256"] = fidelity_module._region_proposal_definition_sha256(proposal)
+        proposal_path.write_text(json.dumps(proposal, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        approval["proposal"]["sha256"] = __import__("hashlib").sha256(proposal_path.read_bytes()).hexdigest()
+        approval["proposal"]["definition_sha256"] = proposal["proposal_definition_sha256"]
+        approval_path.write_text(json.dumps(approval, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        with pytest.raises(FidelityError, match="ocr_roi_px"):
+            run_fidelity_text_observations(
+                source, output, manifest, region_approval_path=approval_path, workspace_root=Path.cwd(),
+            )
+
+
+def test_text_observation_discards_ocr_boxes_outside_approved_region(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "dimension-band", "bbox_px": [100, 100, width - 100, height - 100], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [20, 20, 70, 70], "purpose": "exclude"}],
+    }
+    write_region_proposal(source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd())
+    write_region_approval(source, output, manifest, 1, 1, ["dimension-band"], "approved-region-ocr-test", workspace_root=Path.cwd())
+    approval_path = output / "region_approvals" / "page_01.json"
+
+    def fake_detect(image: np.ndarray, **kwargs: object) -> list[tuple[int, int, int, int]]:
+        del image, kwargs
+        return [(10, 10, 30, 30)]
+
+    def fake_ocr(
+        image: np.ndarray, *, roi_boxes: list[tuple[int, int, int, int]], min_confidence: int = 40,
+        psm: int = 6, lang: str = "vie+eng",
+    ) -> list[RawText]:
+        del image, roi_boxes, min_confidence, psm, lang
+        return [RawText("outside", "OUTSIDE", (-50, 12, 15, 22), 0.0, 0.99, "text_tesseract", None, "general_text")]
+
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setattr(fidelity_module, "detect_text_candidate_rois", fake_detect)
+    monkeypatch.setattr(fidelity_module, "extract_text_tesseract", fake_ocr)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, region_approval_path=approval_path, workspace_root=Path.cwd(),
+    )[0]
+    payload = json.loads(observation_path.read_text(encoding="utf-8"))
+    assert not any(candidate["content"] == "OUTSIDE" for candidate in payload["candidates"])
+
+
+def test_text_observation_enforces_approved_region_canvas_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    manifest_path = output / "fidelity-run-manifest.json"
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    width = audit["source_page"]["render_width_px"]
+    height = audit["source_page"]["render_height_px"]
+    regions = {
+        "regions": [{"id": "dimension-band", "bbox_px": [20, 20, width - 100, height - 20], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [width - 70, 20, width - 20, height - 20], "purpose": "exclude"}],
+    }
+    write_region_proposal(source, output, manifest_path, manifest, 1, regions, workspace_root=Path.cwd())
+    write_region_approval(source, output, manifest, 1, 1, ["dimension-band"], "approved-region-ocr-test", workspace_root=Path.cwd())
+    approval_path = output / "region_approvals" / "page_01.json"
+
+    def fake_detect(image: np.ndarray, **kwargs: object) -> list[tuple[int, int, int, int]]:
+        del kwargs
+        return [(0, 0, image.shape[1], image.shape[0])] * 50
+
+    monkeypatch.setattr("cad_agent.fidelity.detect_text_candidate_rois", fake_detect)
+    with pytest.raises(FidelityError, match="canvas limit"):
+        run_fidelity_text_observations(
+            source, output, manifest, region_approval_path=approval_path, workspace_root=Path.cwd(),
+        )
 
 
 def test_text_selection_file_creates_page_approvals(tmp_path: Path) -> None:
@@ -772,7 +3192,7 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
         regions = {
             "regions": [
-                {"id": "main_view", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"},
+                {"id": "main_view", "bbox_px": [20, 20, 250, 150], "ocr_roi_px": [5, 5, 220, 120], "purpose": "layout-reconstruction"},
                 {"id": "detail", "bbox_px": [260, 20, 390, 150], "purpose": "layout-reconstruction"},
             ],
             "excluded_regions": [
@@ -786,6 +3206,7 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         assert proposal["unclassified_area_state"] == "needs_classification"
         assert proposal["page"]["coordinate_system"] == "pixel-top-left"
         assert proposal["source"] == {"name": "drawing.pdf", "sha256": manifest["source"]["sha256"], "kind": "pdf"}
+        assert proposal["regions"][0]["ocr_roi_px"] == [5, 5, 220, 120]
         assert (output / "region_proposals" / "page_01.json").is_file()
         assert not (output / "layout_dxf" / "page_01.dxf").read_text(encoding="utf-8").count("INSERT")
 
@@ -876,6 +3297,410 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
         foreign.write_text((output / "region_approvals" / "page_01-r2.json").read_text(encoding="utf-8"), encoding="utf-8")
         with pytest.raises(FidelityError, match="inside the private"):
             run_fidelity_reconstruct(source, output, manifest, foreign, workspace_root=Path.cwd())
+
+
+def test_fidelity_compose_preserves_semantic_entities_and_nondefault_linetype(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval = write_region_approval(
+        source, output, manifest, 1, 1, ["main"], "approved-compose-transfer-test", workspace_root=Path.cwd(),
+    )
+    candidate = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
+    candidate.parent.mkdir(parents=True)
+    document = ezdxf.new("R2010")
+    document.linetypes.add("DASHED", [0.0, 4.0, -2.0])
+    model = document.modelspace()
+    model.add_line((10, 10), (100, 10), dxfattribs={"linetype": "DASHED"})
+    model.add_circle((50, 50), 12)
+    model.add_text("TRANSFER ME", dxfattribs={"height": 5}).set_placement((20, 30))
+    dimension = model.add_linear_dim(base=(20, 70), p1=(10, 10), p2=(100, 10), location=(55, 70))
+    dimension.render()
+    document.saveas(candidate)
+
+    composed = run_fidelity_compose(
+        source, output, manifest, output / "region_approvals" / "page_01.json", workspace_root=Path.cwd(),
+    )
+    result = ezdxf.readfile(composed / "layout.dxf")
+    assert len(result.modelspace().query("LINE")) == 1
+    assert len(result.modelspace().query("CIRCLE")) == 1
+    assert len(result.modelspace().query("TEXT")) == 1
+    assert len(result.modelspace().query("DIMENSION")) == 1
+    assert result.modelspace().query("TEXT")[0].dxf.text == "TRANSFER ME"
+    assert result.modelspace().query("DIMENSION")[0].dxf.text == "<>"
+    assert result.modelspace().query("DIMENSION")[0].get_measurement() == pytest.approx(90.0)
+    assert result.modelspace().query("LINE")[0].dxf.linetype == "DASHED"
+    assert "DASHED" in result.linetypes
+
+
+def test_fidelity_compose_rejects_unsupported_dimension_type_before_linear_transfer(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval = write_region_approval(
+        source, output, manifest, 1, 1, ["main"], "approved-unsupported-dimension-test", workspace_root=Path.cwd(),
+    )
+    candidate = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
+    candidate.parent.mkdir(parents=True)
+    document = ezdxf.new("R2010")
+    dimension_override = document.modelspace().add_linear_dim(
+        base=(20, 70), p1=(10, 10), p2=(100, 10), location=(55, 70),
+    )
+    dimension_override.render()
+    dimension_override.dimension.dxf.dimtype = 2
+    document.saveas(candidate)
+
+    persisted = ezdxf.readfile(candidate).modelspace().query("DIMENSION")[0]
+    assert persisted.dxf.dimtype == 2
+    with pytest.raises(FidelityError, match=r"(?i)unsupported.*dimension"):
+        run_fidelity_compose(
+            source, output, manifest, output / "region_approvals" / "page_01.json", workspace_root=Path.cwd(),
+        )
+
+
+def test_semantic_owner_handoff_translates_owner_outputs_into_local_region_candidates(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "main", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["main"], "approved-semantic-owner-handoff", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    from cad_agent import fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+    rendered_sha256 = fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"])
+
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
+    candidate = ezdxf.readfile(candidate_path)
+    horizontal = next(
+        entity for entity in candidate.modelspace().query("LINE")
+        if abs(float(entity.dxf.start.y) - float(entity.dxf.end.y)) <= 1e-6
+    )
+    local_start = horizontal.dxf.start
+    local_end = horizontal.dxf.end
+
+    text_root = output / "text_reconstruction" / "page_01"
+    text_root.mkdir(parents=True)
+    text_dxf = text_root / "layout.dxf"
+    text_document = ezdxf.new("R2010")
+    text = text_document.modelspace().add_text("SEMANTIC TEXT", dxfattribs={"height": 4.0})
+    text.set_placement((offset_x + 20.0, offset_y + 15.0))
+    text_document.saveas(text_dxf)
+    text_approval = output / "fidelity_text_approvals" / "page_01.json"
+    text_approval.parent.mkdir(parents=True)
+    text_approval.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+    }), encoding="utf-8")
+    (text_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "text_approval_sha256": fidelity_module.sha256_file(text_approval),
+        "output_dxf_sha256": fidelity_module.sha256_file(text_dxf),
+    }), encoding="utf-8")
+
+    dimension_root = output / "dimension_reconstruction" / "page_01"
+    dimension_root.mkdir(parents=True)
+    dimension_dxf = dimension_root / "layout.dxf"
+    dimension_document = ezdxf.new("R2010")
+    dimension = dimension_document.modelspace().add_linear_dim(
+        base=(offset_x + 10.0, offset_y + 20.0),
+        p1=(offset_x + 10.0, offset_y + 10.0),
+        p2=(offset_x + 30.0, offset_y + 10.0),
+        location=(offset_x + 20.0, offset_y + 20.0),
+        text="<>",
+    )
+    dimension.render()
+    dimension_document.saveas(dimension_dxf)
+    (dimension_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": rendered_sha256,
+        "output_dxf_sha256": fidelity_module.sha256_file(dimension_dxf),
+    }), encoding="utf-8")
+
+    linetype_root = output / "linetype_reconstruction" / "page_01"
+    linetype_root.mkdir(parents=True)
+    linetype_dxf = linetype_root / "layout.dxf"
+    linetype_document = ezdxf.new("R2010")
+    linetype_document.linetypes.add("FIDELITY_CENTER", [0.0, 4.0, -1.0, 1.0, -1.0])
+    linetype_document.modelspace().add_line(
+        (offset_x + float(local_start.x), offset_y + float(local_start.y)),
+        (offset_x + float(local_end.x), offset_y + float(local_end.y)),
+        dxfattribs={"linetype": "FIDELITY_CENTER"},
+    )
+    linetype_document.modelspace().add_line(
+        (offset_x + float(local_start.x), offset_y + float(local_start.y) + 0.2),
+        (offset_x + float(local_end.x), offset_y + float(local_end.y) + 0.2),
+        dxfattribs={"linetype": "FIDELITY_CENTER"},
+    )
+    linetype_document.saveas(linetype_dxf)
+    (linetype_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": rendered_sha256,
+        "output_dxf_sha256": fidelity_module.sha256_file(linetype_dxf),
+    }), encoding="utf-8")
+
+    assert main([
+        "fidelity-semantic-region-handoff",
+        "--input", str(source),
+        "--manifest", str(output / "fidelity-run-manifest.json"),
+        "--approval", str(approval_path),
+    ]) == 0
+    handoff = json.loads((output / "semantic_region_handoff" / "page_01.json").read_text(encoding="utf-8"))
+    assert handoff["transferred"][0]["counts"]["LINETYPE"] == 1
+
+    candidate = ezdxf.readfile(candidate_path)
+    assert [entity.dxf.text for entity in candidate.modelspace().query("TEXT")] == ["SEMANTIC TEXT"]
+    dimensions = list(candidate.modelspace().query("DIMENSION"))
+    assert len(dimensions) == 1
+    assert dimensions[0].get_measurement() == pytest.approx(20.0)
+    assert sum(entity.dxf.linetype == "FIDELITY_CENTER" for entity in candidate.modelspace().query("LINE")) == 1
+
+    composed = run_fidelity_compose(source, output, manifest, approval_path, workspace_root=Path.cwd())
+    result = ezdxf.readfile(composed / "layout.dxf")
+    assert len(result.modelspace().query("TEXT")) == 1
+    assert len(result.modelspace().query("DIMENSION")) == 1
+    assert result.modelspace().query("LINE")[0].dxf.linetype == "FIDELITY_CENTER"
+    compose_report = json.loads((composed / "report.json").read_text(encoding="utf-8"))
+    assert "semantic owner handoff remains review-only" in compose_report["unresolved"]
+
+
+def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tmp_path: Path) -> None:
+    """The measured page-1 @512 DASHED owner line must reach side."""
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "measured-page1-horizontal-512", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    # These are the measured local endpoints from the exact BVTL page-1 @512
+    # failure. The intended local candidate is the existing overlapping side
+    # LINE; the owner output is the full-page transformed DASHED line.
+    local_target_start = (36.50253171971714, 35.44448713571971)
+    local_target_end = (46.024931239853855, 35.62082792998169)
+    owner_local_start = (34.033761458480235, 34.915465123207696)
+    owner_local_end = (43.379820304591384, 34.915465123207696)
+
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    candidate_document.modelspace().add_line(local_target_start, local_target_end)
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x + owner_local_start[0], offset_y + owner_local_start[1]),
+        (offset_x + owner_local_end[0], offset_y + owner_local_end[1]),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    # Intended GREEN behavior: one supported DASHED output transfers to the
+    # existing side LINE, with no unrelated LINE mutation.
+    run_fidelity_semantic_region_handoff(
+        source, output, manifest, approval_path, workspace_root=Path.cwd(),
+    )
+    candidate = ezdxf.readfile(candidate_path)
+    lines = list(candidate.modelspace().query("LINE"))
+    assert len(lines) == 1
+    assert lines[0].dxf.linetype == "FIDELITY_DASHED"
+    assert (float(lines[0].dxf.start.x), float(lines[0].dxf.start.y)) == pytest.approx(local_target_start)
+    assert (float(lines[0].dxf.end.x), float(lines[0].dxf.end.y)) == pytest.approx(local_target_end)
+
+
+def test_semantic_handoff_rejects_ambiguous_fuzzy_horizontal_matches(tmp_path: Path) -> None:
+    """Two fuzzy targets must not be resolved by target iteration order."""
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "ambiguous-fuzzy-horizontal", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    # Both distinct targets are outside the exact endpoint tolerance but are
+    # inside the existing one-pixel horizontal fuzzy rule and overlap the
+    # owner segment by the required 50% shorter-segment threshold.
+    local_targets = [
+        ((0.0, 0.6), (8.0, 0.6)),
+        ((2.0, 0.6), (10.0, 0.6)),
+    ]
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    for start, end in local_targets:
+        candidate_document.modelspace().add_line(start, end)
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x, offset_y),
+        (offset_x + 10.0, offset_y),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    try:
+        run_fidelity_semantic_region_handoff(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
+    except FidelityError as exc:
+        assert "ambiguous fuzzy horizontal" in str(exc).lower()
+        candidate = ezdxf.readfile(candidate_path)
+        assert all(str(line.dxf.get("linetype", "")).upper() in {"", "BYLAYER", "BYBLOCK", "CONTINUOUS"}
+                   for line in candidate.modelspace().query("LINE"))
+    else:
+        candidate = ezdxf.readfile(candidate_path)
+        dashed_indices = [
+            index for index, line in enumerate(candidate.modelspace().query("LINE"))
+            if str(line.dxf.get("linetype", "")).upper() == "FIDELITY_DASHED"
+        ]
+        pytest.fail(f"Current handoff silently selected matches[0]; dashed target indices={dashed_indices}.")
+
+
+def test_semantic_handoff_stays_fail_closed_for_unmatched_dashed_line(tmp_path: Path) -> None:
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    regions = {
+        "regions": [{"id": "side", "bbox_px": [20, 20, 350, 500], "purpose": "layout-reconstruction"}],
+        "excluded_regions": [{"id": "outside", "bbox_px": [360, 520, 390, 590], "purpose": "exclude"}],
+    }
+    write_region_proposal(
+        source, output, output / "fidelity-run-manifest.json", manifest, 1, regions, workspace_root=Path.cwd(),
+    )
+    approval_path = output / "region_approvals" / "page_01.json"
+    write_region_approval(source, output, manifest, 1, 1, ["side"], "unmatched-dashed-fail-closed", workspace_root=Path.cwd())
+    run_fidelity_reconstruct(source, output, manifest, approval_path, workspace_root=Path.cwd())
+
+    import cad_agent.fidelity as fidelity_module
+
+    page = manifest["pages"][0]
+    audit = json.loads((output / page["artifacts"]["layout_audit"]["artifact"]).read_text(encoding="utf-8"))
+    height_px = float(audit["source_page"]["render_height_px"])
+    scale = float(page["pixel_to_paper_mm"]["used"])
+    region = regions["regions"][0]
+    offset_x = float(region["bbox_px"][0]) * scale
+    offset_y = (height_px - float(region["bbox_px"][3])) * scale
+
+    candidate_path = output / "reconstruction_candidates" / "page_01" / "side" / "geometry.dxf"
+    candidate_document = ezdxf.new("R2010")
+    candidate_document.modelspace().add_line((10.0, 10.0), (20.0, 10.0))
+    candidate_document.saveas(candidate_path)
+
+    owner_root = output / "linetype_reconstruction" / "page_01"
+    owner_root.mkdir(parents=True)
+    owner_path = owner_root / "layout.dxf"
+    owner_document = ezdxf.new("R2010")
+    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.modelspace().add_line(
+        (offset_x + 30.0, offset_y + 40.0),
+        (offset_x + 40.0, offset_y + 40.0),
+        dxfattribs={"linetype": "FIDELITY_DASHED"},
+    )
+    owner_document.saveas(owner_path)
+    (owner_root / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "source_render_sha256": fidelity_module.sha256_file(output / page["artifacts"]["rendered_png"]["artifact"]),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner_path),
+    }), encoding="utf-8")
+
+    with pytest.raises(FidelityError, match="no matching local region line"):
+        run_fidelity_semantic_region_handoff(
+            source, output, manifest, approval_path, workspace_root=Path.cwd(),
+        )
 
 
 def test_fidelity_cli_creates_private_baseline() -> None:
@@ -1036,6 +3861,19 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
     _pdf(source)
+    from cad_agent import fidelity as fidelity_module
+
+    original_page_ocr = fidelity_module._fidelity_page_text_ocr
+
+    def unicode_fixture_ocr(image: np.ndarray, rois=None):
+        texts = original_page_ocr(image, rois)
+        if texts:
+            # Keep the recognized source geometry while exercising Unicode DXF
+            # styling with the existing visible-text fixture.
+            texts[0].content = "SỐ LƯỢNG"
+        return texts
+
+    monkeypatch.setattr(fidelity_module, "_fidelity_page_text_ocr", unicode_fixture_ocr)
     manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
     run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
 
@@ -1043,10 +3881,6 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     observation_path = outputs[0]
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     assert observation["candidates"], "fixture PDF phải có ít nhất 1 candidate OCR"
-    # ghi đè nội dung candidate đầu tiên thành tiếng Việt có dấu -- vẫn giữ
-    # nguyên cấu trúc/hash-binding thật do run_fidelity_text_observations tạo
-    observation["candidates"][0]["content"] = "SỐ LƯỢNG"
-    observation_path.write_text(json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     approved = write_fidelity_text_approval(
         source, output, manifest, 1, observation_path, [observation["candidates"][0]["id"]], "approved-test", workspace_root=Path.cwd(),
@@ -1067,6 +3901,118 @@ def test_text_reconstruction_uses_unicode_ttf_style_for_vietnamese_content(tmp_p
     )
 
 
+def test_text_reconstruction_sizes_from_visible_glyphs_but_keeps_ocr_anchor() -> None:
+    """OCR boxes may include line spacing that must not become DXF glyph height."""
+    from PIL import ImageFont
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((80, 240, 3), 255, dtype=np.uint8)
+    cv2.line(image, (10, 6), (229, 6), (0, 0, 0), 1)
+    cv2.line(image, (10, 55), (229, 55), (0, 0, 0), 1)
+    cv2.putText(image, "VISIBLE", (28, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 1, cv2.LINE_AA)
+    ocr_bbox = [10, 6, 230, 56]
+
+    sizing = fidelity_module._derive_text_reconstruction_size(
+        image, "VISIBLE", ocr_bbox, 0.1,
+    )
+
+    glyph_bbox = sizing["glyph_bbox_px"]
+    assert glyph_bbox[1] > ocr_bbox[1]
+    assert glyph_bbox[3] < ocr_bbox[3]
+    assert sizing["height_mm"] < (ocr_bbox[3] - ocr_bbox[1]) * 0.1
+    assert 0.0 < sizing["width_factor"] <= 2.0
+    assert sizing["insertion_px"] == [ocr_bbox[0], ocr_bbox[3]]
+
+    tight_bbox = [28, 20, 145, 41]
+    tight = fidelity_module._derive_text_reconstruction_size(
+        image, "VISIBLE", tight_bbox, 0.1, allow_tight_box_font_metric=True,
+    )
+    assert tight["glyph_bbox_px"] == tight_bbox
+    assert tight["height_mm"] == pytest.approx((tight_bbox[3] - tight_bbox[1]) * 0.1)
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", size=32)
+    mask_bbox = font.getmask("VISIBLE").getbbox()
+    expected_width_factor = (tight_bbox[2] - tight_bbox[0]) * (mask_bbox[3] - mask_bbox[1]) / ((tight_bbox[3] - tight_bbox[1]) * font.getlength("VISIBLE"))
+    assert tight["width_factor"] == pytest.approx(expected_width_factor)
+    assert tight["insertion_px"] == [tight_bbox[0], tight_bbox[3]]
+
+
+def test_page1_text_sizing_uses_font_width_for_tight_approved_boxes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tight OCR boxes still need the existing font-width correction."""
+    from PIL import ImageFont
+    from cad_agent import fidelity as fidelity_module
+
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\arial.ttf")
+    image = np.full((150, 500, 3), 255, dtype=np.uint8)
+    cases = [
+        ("TAO O TO THUNG KIN THACO K190", [10, 10, 463, 27]),
+        ("THANH 0 TO TAl TAP LAI", [10, 40, 303, 80]),
+        ("O TO SAU CAI TAGs", [10, 95, 401, 133]),
+    ]
+    # The first and third boxes model a tight source glyph band: every row is
+    # active, so the conservative helper intentionally returns the original box.
+    for _, bbox in (cases[0], cases[2]):
+        x0, y0, x1, y1 = bbox
+        image[y0:y1, x0:x1:5] = 0
+        image[y0:y1, x1 - 1] = 0
+    # The middle case models a separated glyph band and exercises the existing
+    # visible-band path without changing the expected OCR anchor.
+    x0, y0, x1, y1 = cases[1][1]
+    image[y0 + 10:y1 - 10, x0:x1:5] = 0
+    image[y0 + 10:y1 - 10, x1 - 1] = 0
+
+    font = ImageFont.truetype(r"C:\Windows\Fonts\arial.ttf", size=32)
+    for content, bbox in cases:
+        sizing = fidelity_module._derive_text_reconstruction_size(
+            image, content, bbox, 0.1, allow_tight_box_font_metric=True,
+        )
+        visible_width = bbox[2] - bbox[0]
+        visible_height = bbox[3] - bbox[1] if content != cases[1][0] else 20
+        mask_bbox = font.getmask(content).getbbox()
+        expected_width_factor = visible_width * (mask_bbox[3] - mask_bbox[1]) / (visible_height * font.getlength(content))
+        assert sizing["width_factor"] == pytest.approx(expected_width_factor, abs=1e-6)
+        assert sizing["height_mm"] == pytest.approx(visible_height * 0.1)
+        assert sizing["insertion_px"] == [bbox[0], bbox[3]]
+
+
+def test_text_sizing_preserves_unmeasurable_fallback_for_other_text() -> None:
+    """Text with no detectable glyphs keeps the existing safe fallback."""
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    bbox = [12, 18, 92, 42]
+
+    sizing = fidelity_module._derive_text_reconstruction_size(
+        image, "OTHER TEXT", bbox, 0.1,
+    )
+
+    assert sizing == {
+        "glyph_bbox_px": bbox,
+        "height_mm": pytest.approx(2.4),
+        "width_factor": 1.0,
+        "insertion_px": [12, 42],
+    }
+
+
+def test_text_sizing_keeps_tight_box_fallback_without_page1_opt_in() -> None:
+    """Other callers keep the legacy tight-box fallback unless opted in."""
+    from cad_agent import fidelity as fidelity_module
+
+    image = np.full((80, 120, 3), 255, dtype=np.uint8)
+    bbox = [12, 18, 92, 42]
+    x0, y0, x1, y1 = bbox
+    image[y0:y1, x0:x1:5] = 0
+    image[y0:y1, x1 - 1] = 0
+
+    sizing = fidelity_module._derive_text_reconstruction_size(
+        image, "OTHER TEXT", bbox, 0.1,
+    )
+
+    assert sizing["glyph_bbox_px"] == bbox
+    assert sizing["height_mm"] == pytest.approx(2.4)
+    assert sizing["width_factor"] == 1.0
+    assert sizing["insertion_px"] == [12, 42]
+
+
 def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None:
     from cad_agent.fidelity import _select_fidelity_geometry
 
@@ -1082,3 +4028,234 @@ def test_region_quality_removes_a_near_duplicate_only_when_f1_improves() -> None
     assert quality["selected_profile"] == "filtered"
     assert quality["filtered"]["edge_metric"]["f1"] > quality["baseline"]["edge_metric"]["f1"]
     assert [line.id for line in selected.lines] == ["main"]
+
+@pytest.mark.real_data
+def test_native_pdf_observation_maps_exact_b041_aigdt_gid80_to_unverified_diameter_text(
+    tmp_path: Path,
+) -> None:
+    """The exact embedded AIGDT glyph is mapped, but remains review-only TEXT evidence."""
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(
+        source, output, 144, "approved-test", workspace_root=Path.cwd(),
+    )
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = observation["native_pdf_spans"]
+
+    assert len(native) == 1  # Only B041 trace 321 has no later paint overlap under current policy.
+    span = native[0]
+    assert span["content"] == "\u2300"
+    assert span["source_text_raw"] == "n"
+    assert span["source_font_resource"] == {
+        "xref": 24,
+        "resource_name": "F5",
+        "base_font": "ADSINV+AIGDT",
+    }
+    assert span["source_font_file_sha256"] == (
+        "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b"
+    )
+    assert span["source_glyph_id"] == 80
+    assert span["source_glyph_name"] == "uniF06E"
+    assert span["source_cmap_codepoint"] == 0xF06E
+    assert span["source_paint_evidence"]["sequence_number"] == 321
+    assert span["visibility"] == "unverified"
+    assert span["source_sha256"] == manifest["source"]["sha256"]
+    audit_path = output / observation["source_layout_audit"]["artifact"]
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert span["render_sha256"] == audit["source_page"]["render_sha256"]
+    assert observation["candidates"]  # OCR remains a separate typed collection.
+    assert all(candidate.get("source") != "native_pdf" for candidate in observation["candidates"])
+    assert not any(key in observation for key in ("TEXT", "MTEXT", "DIMENSION"))
+
+
+@pytest.mark.real_data
+def test_native_pdf_observation_rejects_spoofed_b041_aigdt_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AIGDT resource naming and GID 80 cannot substitute for exact embedded font bytes."""
+    from cad_agent import fidelity as fidelity_module
+
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert fidelity_module.sha256_file(source) == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    original_extract = fitz.Document.extract_font
+
+    def spoof_font(document: fitz.Document, xref: int, *args: Any, **kwargs: Any) -> tuple[Any, ...]:
+        extracted = original_extract(document, xref, *args, **kwargs)
+        if xref == 24:
+            return (*extracted[:3], b"different embedded font bytes")
+        return extracted
+
+    monkeypatch.setattr(fitz.Document, "extract_font", spoof_font)
+    output = tmp_path / "private-staging-spoofed-font"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(source, output, manifest, workspace_root=Path.cwd())[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+
+    assert not any(span.get("source_glyph_id") == 80 for span in observation["native_pdf_spans"])
+    assert not any(span.get("content") == "\u2300" for span in observation["native_pdf_spans"])
+
+
+@pytest.mark.real_data
+def test_native_pdf_text_approval_rejects_overlapping_b041_ocr_and_native_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlapping OCR/native source boxes cannot both enter one text approval."""
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "\u2300")
+    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "12,00")
+    native_bbox = native["bbox_px"]
+    ocr_bbox = ocr["bbox_px"]
+    overlap_width = min(native_bbox[2], ocr_bbox[2]) - max(native_bbox[0], ocr_bbox[0])
+    overlap_height = min(native_bbox[3], ocr_bbox[3]) - max(native_bbox[1], ocr_bbox[1])
+    assert overlap_width > 0 and overlap_height > 0
+
+    selection_path = output / "diagnostic-mixed-selection.json"
+    native_review = {"span": native, "visible_and_legible": True}
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [ocr["id"]],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\seguisym.ttf")
+    try:
+        with pytest.raises(FidelityError, match="overlapping OCR and native PDF text"):
+            write_fidelity_text_approval(
+                source,
+                output,
+                manifest,
+                1,
+                observation_path,
+                [ocr["id"]],
+                "TEST_ONLY_DIAGNOSTIC_NOT_HUMAN_APPROVAL",
+                workspace_root=Path.cwd(),
+                native_span_ids=[native["id"]],
+                native_span_reviews=[native_review],
+                selection_path=selection_path,
+            )
+    finally:
+        monkeypatch.delenv("CAD_AGENT_FIDELITY_TEXT_FONT", raising=False)
+    assert not (output / "fidelity_text_approvals" / "page_01.json").exists()
+
+
+@pytest.mark.real_data
+def test_native_pdf_text_approval_keeps_nonoverlapping_b041_ocr_and_native_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_value = os.environ.get("CAD_AGENT_B041_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_B041_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "bf853aee4ba9b8381476d5ef1fa930d48a478ea56c3fe097695d41210d3afbe3"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "\u2300")
+    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "Adaptador")
+    assert (
+        max(ocr["bbox_px"][0], native["bbox_px"][0]) >= min(ocr["bbox_px"][2], native["bbox_px"][2])
+        or max(ocr["bbox_px"][1], native["bbox_px"][1]) >= min(ocr["bbox_px"][3], native["bbox_px"][3])
+    )
+    native_review = {"span": native, "visible_and_legible": True}
+    selection_path = output / "diagnostic-mixed-selection.json"
+    selection_path.write_text(json.dumps({
+        "schema_version": "fidelity-text-selection-1.0",
+        "source": manifest["source"],
+        "selections": [{
+            "page": 1,
+            "candidate_ids": [ocr["id"]],
+            "native_span_ids": [native["id"]],
+            "native_span_reviews": [native_review],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("CAD_AGENT_FIDELITY_TEXT_FONT", r"C:\Windows\Fonts\seguisym.ttf")
+    approval = write_fidelity_text_approval(
+        source,
+        output,
+        manifest,
+        1,
+        observation_path,
+        [ocr["id"]],
+        "TEST_ONLY_DIAGNOSTIC_NOT_HUMAN_APPROVAL",
+        workspace_root=Path.cwd(),
+        native_span_ids=[native["id"]],
+        native_span_reviews=[native_review],
+        selection_path=selection_path,
+    )
+    assert len(approval["approved_candidates"]) == 1
+    assert len(approval["approved_native_spans"]) == 1
+
+
+@pytest.mark.real_data
+def test_native_pdf_observation_aggregates_complete_nakuja_same_span_glyph_traces(
+    tmp_path: Path,
+) -> None:
+    source_value = os.environ.get("CAD_AGENT_NAKUJA_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_NAKUJA_PDF is not configured")
+    source = Path(source_value)
+    assert source.is_file()
+    assert __import__("hashlib").sha256(source.read_bytes()).hexdigest() == (
+        "c9411e6769725c252425da18380a76b4db07036ad2b7801ceabc11d17f8a246c"
+    )
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    spans = [span for span in observation["native_pdf_spans"] if span["content"] == "10,00"]
+    assert len(spans) == 1
+    span = spans[0]
+    assert span["visibility"] == "unverified"
+    assert span["source_text_agreement"] == "exact"
+    assert span["source_paint_evidence"]["member_sequence_numbers"] == [190, 191, 192, 193, 194]
+    member_traces = span["source_paint_evidence"]["member_traces"]
+    assert "".join(trace["text"] for trace in member_traces) == "10,00"
+    assert [trace["sequence_number"] for trace in member_traces] == [190, 191, 192, 193, 194]
+    assert all(trace["bbox_pt"] and trace["glyph_ids"] for trace in member_traces)

@@ -181,6 +181,21 @@ def test_entity_get_source_exposes_text_height_and_rotation() -> None:
     assert '(cons "rotation_deg" (mcp-angle-degrees (cdr (assoc 50 data))))' in source
 
 
+def test_dispatcher_serializes_real_numbers_with_round_trip_precision() -> None:
+    source = _dispatcher_source()
+    helper_start = source.index("(defun mcp-json-normalize-real-text")
+    start = source.index("(defun mcp-json-encode-number")
+    end = source.index("(defun mcp-json-encode-array", start)
+    helper = source[helper_start:start]
+    number_encoder = source[start:end]
+    assert '(= (substr text 1 2) "-.")' in helper
+    assert '(= (substr text 1 1) ".")' in helper
+    assert '(strcat normalized "0")' in helper
+    assert '(rtos value 2 16)' in number_encoder
+    assert '(mcp-json-normalize-real-text (rtos value 2 16))' in number_encoder
+    assert '(vl-princ-to-string value)' not in number_encoder
+
+
 @pytest.mark.parametrize(
     ("handler", "native_create"),
     (
@@ -207,7 +222,7 @@ def test_create_entities_validate_requested_layer_before_native_creation(
     assert validation >= 0, "missing-layer validation must be explicit"
     assert native_create_index >= 0, "creation owner must remain native COM"
     assert validation < native_create_index, (
-        "requested layer must be validated before AddLine so a bad layer "
+        "requested layer must be validated before native creation so a bad layer "
         "cannot leave an unsaved entity survivor"
     )
 
@@ -295,6 +310,86 @@ def test_file_ipc_dispatch_binds_request_filename_payload_and_result_identity(tm
     assert observed["claim"]
     assert not list(tmp_path.glob("autocad_mcp_cmd_*.json"))
     assert not list(tmp_path.glob("autocad_mcp_result_*.json"))
+
+
+def test_file_ipc_dispatch_exposes_privacy_safe_terminal_exchange_evidence(
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, str] = {}
+
+    def trigger() -> None:
+        request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        observed["request_id"] = request["request_id"]
+        result_path = tmp_path / f"autocad_mcp_result_{request['request_id']}.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "request_id": request["request_id"],
+                    "claim": request["claim"],
+                    "ok": True,
+                    "payload": {"ready": True},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        legacy_fixture_mode=False,
+        timeout_s=0.2,
+        poll_interval_s=0.001,
+    )
+    assert client._dispatch("ping", {}) == {"ready": True}
+    assert client.last_exchange_evidence == {
+        "request_id": observed["request_id"],
+        "command": "ping",
+        "claim_bound": True,
+        "terminal": True,
+        "ok": True,
+    }
+    assert "claim" not in client.last_exchange_evidence
+
+
+def test_file_ipc_dispatch_clears_previous_exchange_evidence_before_new_request(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def trigger() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            request_path = next(tmp_path.glob("autocad_mcp_cmd_*.json"))
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            (tmp_path / f"autocad_mcp_result_{request['request_id']}.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": request["request_id"],
+                        "claim": request["claim"],
+                        "ok": True,
+                        "payload": {"ready": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    client = FileIPCLiveMCPClient(
+        ipc_dir=str(tmp_path),
+        trigger=trigger,
+        legacy_fixture_mode=False,
+        timeout_s=0.02,
+        poll_interval_s=0.001,
+    )
+
+    assert client._dispatch("ping", {}) == {"ready": True}
+    assert client.last_exchange_evidence is not None
+
+    with pytest.raises(MCPTimeoutError, match="Timeout waiting for result"):
+        client._dispatch("ping", {})
+
+    assert client.last_exchange_evidence is None
 
 
 def test_file_ipc_client_mints_fresh_unpredictable_claims() -> None:
@@ -706,7 +801,7 @@ def test_live_harness_binds_file_ipc_and_dotnet_clients_to_explicit_root_envs() 
 
 
 def test_python_file_ipc_command_surface_is_exact_and_closed() -> None:
-    assert _file_ipc_dispatch_commands() == EXPECTED_FILE_IPC_COMMANDS
+    assert _file_ipc_dispatch_commands() == EXPECTED_FILE_IPC_COMMANDS - {"drawing-close"}
 
 
 def test_dispatcher_consumes_prebound_root_without_environment_or_shared_temp_authority() -> None:
@@ -751,7 +846,7 @@ def test_request_selection_is_single_candidate_identity_bound_bounded_and_fail_c
 def test_dispatcher_covers_every_existing_file_ipc_dispatch_command() -> None:
     source = _dispatcher_source().casefold()
     commands = _file_ipc_dispatch_commands()
-    assert commands == EXPECTED_FILE_IPC_COMMANDS
+    assert commands == EXPECTED_FILE_IPC_COMMANDS - {"drawing-close"}
     missing = sorted(command for command in commands if command.casefold() not in source)
     assert not missing, f"dispatcher is missing existing File IPC commands: {missing}"
 
@@ -776,9 +871,20 @@ def test_dxf_export_uses_dxfout_and_requires_destination_existence() -> None:
     assert "vla-saveas" not in body
 
 
+def test_dxf_export_rejects_empty_destination_path() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-op-drawing-save-as-dxf\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    assert "(= (strlen path) 0)" in match.group("body")
+
+
 def test_dxf_export_failure_is_a_categorical_terminal_failure() -> None:
     source = _dispatcher_source().casefold()
-    core = source[source.index("(defun mcp-dispatch-core"):]
+    core = source[source.index("(defun mcp-dispatch-core") :]
     assert "(= result 'mcp_command_failed_sentinel)" in core
     assert "*mcp-error-failed*" in core
 
@@ -996,38 +1102,8 @@ def test_drawing_close_does_not_close_active_document_inside_command_operation()
     )
 
 
-def test_deferred_drawing_close_commits_only_after_verified_close() -> None:
-    source = _dispatcher_source()
-    match = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert match is not None
-    body = match.group("body").casefold()
-    close_marker = "(vl-catch-all-apply"
-    vla_close_marker = "'vla-close"
-    result_marker = "(mcp-write-result"
-    assert close_marker in body
-    assert vla_close_marker in body
-    assert "(vl-catch-all-error-p close-result)" in body
-    assert "(mcp-failure request-id claim *mcp-error-failed*)" in body
-    assert result_marker in body
-    assert body.index(close_marker) < body.index(vla_close_marker) < body.index(result_marker)
-    assert "(if (eq save 'mcp_json_true) :vlax-true :vlax-false)" in body
 
 
-def test_deferred_drawing_close_cancellation_commits_failure_without_close() -> None:
-    source = _dispatcher_source()
-    match = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert match is not None
-    body = match.group("body").casefold()
-    assert "(eq reaction ':vlr-lispcancelled)" in body
-    assert "(mcp-failure request-id claim *mcp-error-failed*)" in body
 
 
 def test_drawing_close_defers_the_single_result_commit_to_reactor() -> None:
@@ -1048,33 +1124,6 @@ def test_drawing_close_defers_the_single_result_commit_to_reactor() -> None:
     ) is not None
 
 
-def test_deferred_close_claims_exclusive_result_owner_and_binds_nonce() -> None:
-    source = _dispatcher_source().casefold()
-    assert "*mcp-pending-result-owner*" in source
-    assert "mcp-result-owner-reserve" in source
-    assert "mcp-result-owner-matches-p" in source
-    match = re.search(
-        r"\(defun\s+mcp-defer-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert match is not None
-    body = match.group("body")
-    assert re.search(r"\(mcp-result-owner-reserve\s+root\s+request-id\)", body)
-    assert re.search(
-        r"\(list\s+root\s+request-id\s+nonce\s+doc\s+save\s+envelope\)",
-        body,
-    )
-
-    deferred = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert deferred is not None
-    deferred_body = deferred.group("body")
-    assert "(mcp-result-owner-matches-p root request-id nonce)" in deferred_body
-    assert "(mcp-write-result root request-id result nonce)" in deferred_body
 
 
 def test_deferred_close_replay_is_rejected_before_command_execution() -> None:
@@ -1110,59 +1159,10 @@ def test_deferred_close_replay_cannot_publish_a_competing_terminal_result() -> N
     assert body.index(guard) < body.index(writer)
 
 
-def test_deferred_close_checks_result_slot_before_close_and_releases_only_after_commit() -> None:
-    source = _dispatcher_source().casefold()
-    match = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert match is not None
-    body = match.group("body")
-    assert "mcp-result-slot-free-p" in body
-    assert "mcp-result-owner-release" in body
-    assert '(mcp-json-get envelope "claim")' in body
-    assert re.search(
-        r"\(if\s+\(mcp-write-result\s+root\s+request-id\s+result\s+nonce\).*?"
-        r"mcp-result-owner-release.*?mcp-error-result-conflict",
-        body,
-        flags=re.DOTALL,
-    ) is not None
-    assert body.index("mcp-result-slot-free-p") < body.index("'vla-close")
 
 
-def test_deferred_close_cancellation_and_close_failure_use_bound_terminal_failure() -> None:
-    source = _dispatcher_source().casefold()
-    match = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert match is not None
-    body = match.group("body")
-    assert "(eq reaction ':vlr-lispcancelled)" in body
-    assert "(vl-catch-all-error-p close-result)" in body
-    assert "(mcp-failure request-id claim *mcp-error-failed*)" in body
-    cancelled = body[body.index("':vlr-lispcancelled"):]
-    assert "mcp-failure request-id claim *mcp-error-failed*" in cancelled
-    assert "'vla-close" not in cancelled
 
 
-def test_deferred_close_uses_symbol_safe_comparisons_for_reaction_and_json_boolean() -> None:
-    source = _dispatcher_source().casefold()
-    match = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert match is not None
-    body = match.group("body")
-    assert "(eq reaction ':vlr-lispended)" in body
-    assert "(eq reaction ':vlr-lispcancelled)" in body
-    assert "(eq save 'mcp_json_true)" in body
-    assert "(= reaction ':vlr-lispended)" not in body
-    assert "(= reaction ':vlr-lispcancelled)" not in body
-    assert "(= save 'mcp_json_true)" not in body
 
 
 def test_dispatcher_reload_preserves_pending_owner_for_old_reactor_and_replay_guard() -> None:
@@ -1181,25 +1181,25 @@ def test_dispatcher_reload_preserves_pending_owner_for_old_reactor_and_replay_gu
     assert "(mcp-pending-result-owner-p root request-id)" in source
 
 
-def test_deferred_close_binds_existing_owner_into_result_slot_preflight_before_close() -> None:
-    source = _dispatcher_source().casefold()
-    slot = re.search(
-        r"\(defun\s+mcp-result-slot-free-p\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert slot is not None
-    slot_body = slot.group("body")
-    assert "owner-nonce" in slot_body
-    assert "(mcp-result-owner-matches-p root request-id owner-nonce)" in slot_body
 
-    deferred = re.search(
-        r"\(defun\s+mcp-deferred-drawing-close\b(?P<body>.*?)(?=\n\(defun\s+)",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    assert deferred is not None
-    deferred_body = deferred.group("body")
-    preflight = "(mcp-result-slot-free-p root request-id nonce)"
-    assert preflight in deferred_body
-    assert deferred_body.index(preflight) < deferred_body.index("'vla-close")
+
+def test_retired_close_callback_preserves_bound_failure_and_result_ownership():
+    source = _dispatcher_source().casefold()
+    callback = re.search(
+        r"\(defun\s+mcp-deferred-drawing-close\b(.*?)(?=\n\(defun)", source, re.S
+    ).group(1)
+    assert "vla-close" not in callback
+    guard = "(mcp-result-owner-matches-p root request-id nonce)"
+    slot = "(mcp-result-slot-free-p root request-id nonce)"
+    failure = "(mcp-failure request-id claim *mcp-error-failed*)"
+    commit = "(mcp-write-result root request-id result nonce)"
+    release = "(mcp-result-owner-release root request-id nonce)"
+    assert callback.index(guard) < callback.index(failure)
+    assert callback.index(slot) < callback.index(failure)
+    assert callback.index(failure) < callback.index(commit) < callback.index(release)
+    registration = re.search(
+        r"\(defun\s+mcp-defer-drawing-close\b(.*?)(?=\n\(defun)", source, re.S
+    ).group(1)
+    assert "vlr-lisp-reactor" not in registration
+    assert "mcp-result-owner-reserve" not in registration
+    assert registration.replace("\r\n", "\n").strip().endswith("nil\n)")

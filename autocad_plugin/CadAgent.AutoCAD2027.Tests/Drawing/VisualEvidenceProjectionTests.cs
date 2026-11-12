@@ -9,7 +9,7 @@ namespace CadAgent.AutoCAD2027.Tests.Drawing;
 public sealed class VisualEvidenceProjectionTests
 {
     [Fact]
-    public void NonConformalBlockBasisIsRejected()
+    public void ConformalBlockBasisAllowsReflectionButRejectsMetricDistortion()
     {
         Assert.True(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
             2,
@@ -23,7 +23,7 @@ public sealed class VisualEvidenceProjectionTests
             1,
             Math.Sqrt(2),
             1));
-        Assert.False(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
+        Assert.True(AutoCadVisualEvidenceReader.IsConformalBasisForTesting(
             2,
             2,
             0,
@@ -327,6 +327,170 @@ public sealed class VisualEvidenceProjectionTests
         }
 
         Assert.True(offChordPixels > 10);
+    }
+
+    [Fact]
+    public void RendererDrawsHatchBoundaryLoopsWithoutBoundingBoxFallback()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[320,320],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var snapshot = new EntitySnapshot(
+            "H1",
+            "HATCH",
+            "0",
+            new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = JsonSerializer.SerializeToElement(new
+                {
+                    min_x = 20.0,
+                    min_y = 20.0,
+                    max_x = 80.0,
+                    max_y = 80.0
+                }),
+                ["loops"] = JsonSerializer.SerializeToElement(new[]
+                {
+                    new
+                    {
+                        closed = true,
+                        vertices = new[]
+                        {
+                            new { x = 20.0, y = 20.0, bulge = 0.0 },
+                            new { x = 80.0, y = 20.0, bulge = 0.0 },
+                            new { x = 80.0, y = 80.0, bulge = 0.0 },
+                            new { x = 20.0, y = 80.0, bulge = 0.0 }
+                        }
+                    }
+                })
+            });
+
+        var png = AutoCadVisualEvidenceReader.RenderRegion(
+            region,
+            VisualEvidenceProjection.ProjectEntities(new[] { snapshot }));
+
+        Assert.True(png.Length > 100);
+    }
+
+    [Fact]
+    public void RendererDrawsLineAngularDimensionBoundary()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[320,320],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var snapshot = new EntitySnapshot(
+            "ANGULAR",
+            "DIMENSION",
+            "0",
+            new Dictionary<string, JsonElement>
+            {
+                ["text_position_x"] = JsonSerializer.SerializeToElement(60.0),
+                ["text_position_y"] = JsonSerializer.SerializeToElement(70.0),
+                ["height"] = JsonSerializer.SerializeToElement(10.0),
+                ["text"] = JsonSerializer.SerializeToElement("45°"),
+                ["dimension_kind"] = JsonSerializer.SerializeToElement("LINE_ANGULAR"),
+                ["xline1_start_x"] = JsonSerializer.SerializeToElement(50.0),
+                ["xline1_start_y"] = JsonSerializer.SerializeToElement(50.0),
+                ["xline1_end_x"] = JsonSerializer.SerializeToElement(90.0),
+                ["xline1_end_y"] = JsonSerializer.SerializeToElement(50.0),
+                ["xline2_start_x"] = JsonSerializer.SerializeToElement(50.0),
+                ["xline2_start_y"] = JsonSerializer.SerializeToElement(50.0),
+                ["xline2_end_x"] = JsonSerializer.SerializeToElement(50.0),
+                ["xline2_end_y"] = JsonSerializer.SerializeToElement(90.0),
+                ["arc_point_x"] = JsonSerializer.SerializeToElement(65.0),
+                ["arc_point_y"] = JsonSerializer.SerializeToElement(65.0)
+            });
+
+        var png = AutoCadVisualEvidenceReader.RenderRegion(
+            region,
+            VisualEvidenceProjection.ProjectEntities(new[] { snapshot }));
+
+        Assert.True(png.Length > 100);
+    }
+
+    [Fact]
+    public void RendererDrawsSampledEllipseBoundary()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[320,320],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var snapshot = new EntitySnapshot(
+            "E1",
+            "ELLIPSE",
+            "0",
+            new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = JsonSerializer.SerializeToElement(new
+                {
+                    min_x = 20.0,
+                    min_y = 30.0,
+                    max_x = 80.0,
+                    max_y = 70.0
+                }),
+                ["closed"] = JsonSerializer.SerializeToElement(true),
+                ["sampled_points"] = JsonSerializer.SerializeToElement(new[]
+                {
+                    new { x = 80.0, y = 50.0 },
+                    new { x = 20.0, y = 50.0 },
+                    new { x = 80.0, y = 50.0 }
+                })
+            });
+
+        var png = AutoCadVisualEvidenceReader.RenderRegion(
+            region,
+            VisualEvidenceProjection.ProjectEntities(new[] { snapshot }));
+
+        Assert.True(png.Length > 100);
+    }
+
+    [Fact]
+    public void RendererDrawsNativeBoundaryVertexRecords()
+    {
+        var region = JsonDocument.Parse(
+            "{\"model_bbox_mm\":[0,0,100,100],\"pixel_size\":[320,320],\"background\":\"WHITE\",\"include_layers\":[],\"exclude_layers\":[]}").RootElement;
+        var boundingBox = JsonSerializer.SerializeToElement(new
+        {
+            min_x = 10.0,
+            min_y = 10.0,
+            max_x = 90.0,
+            max_y = 90.0
+        });
+        var vertices = JsonSerializer.SerializeToElement(new[]
+        {
+            new { x = 10.0, y = 10.0 },
+            new { x = 90.0, y = 10.0 },
+            new { x = 90.0, y = 90.0 },
+            new { x = 10.0, y = 90.0 }
+        });
+        var snapshots = new[]
+        {
+            new EntitySnapshot("L1", "LEADER", "0", new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = boundingBox,
+                ["closed"] = JsonSerializer.SerializeToElement(false),
+                ["vertices"] = vertices
+            }),
+            new EntitySnapshot("S1", "SOLID", "0", new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = boundingBox,
+                ["closed"] = JsonSerializer.SerializeToElement(true),
+                ["vertices"] = vertices
+            }),
+            new EntitySnapshot("W1", "WIPEOUT", "0", new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = boundingBox,
+                ["closed"] = JsonSerializer.SerializeToElement(true),
+                ["vertices"] = vertices
+            }),
+            new EntitySnapshot("V1", "VIEWPORT", "0", new Dictionary<string, JsonElement>
+            {
+                ["bounding_box"] = boundingBox,
+                ["closed"] = JsonSerializer.SerializeToElement(true),
+                ["vertices"] = vertices
+            })
+        };
+
+        var png = AutoCadVisualEvidenceReader.RenderRegion(
+            region,
+            VisualEvidenceProjection.ProjectEntities(snapshots));
+
+        Assert.True(png.Length > 100);
     }
 
     [Fact]

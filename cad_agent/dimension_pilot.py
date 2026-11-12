@@ -378,6 +378,7 @@ def run_dimension_pilot(
     try:
         require_setup_verified(
             setup_evidence,
+            setup_plan=setup_plan,
             setup_plan_sha256=setup["setup_plan_sha256"],
             drawing_profile_sha256=setup["drawing_profile_sha256"],
             template_file_sha256=setup["template_file_sha256"],

@@ -33,6 +33,46 @@ from mcp_integration_lib.repair2 import repair_dxf_live
 from mcp_integration_lib.reviewer2 import review_dxf_live
 from dxf_builder_lib.repair import repair_insert_components
 from dxf_builder_lib.reviewer import review_dxf
+from mcp_integration_lib.dotnet_ipc import (
+    DotNetIPCClient,
+    make_windows_dotnet_dispatch_trigger,
+)
+
+
+def _preopen_component_fixture(path):
+    """Opt-in workstation fixture adapter; never fabricates a native result."""
+    pytest.skip("requires explicit pre-opened component fixture preparation")
+
+
+def test_live_component_factory_requires_explicit_ipc_root(monkeypatch):
+    monkeypatch.delenv("CAD_AGENT_FILE_IPC_DIR", raising=False)
+    monkeypatch.setenv("CAD_AGENT_AUTOCAD_HWND", "123")
+    monkeypatch.setenv("CAD_AGENT_AUTOCAD_LISP_PATH", "C:/approved/dispatcher.lsp")
+    with pytest.raises(KeyError, match="CAD_AGENT_FILE_IPC_DIR"):
+        FileIPCEndToEndTests()._client()
+
+
+def test_live_component_factory_has_no_implicit_close_authority(monkeypatch, tmp_path):
+    file_root = tmp_path / "lisp"
+    dotnet_root = tmp_path / "dotnet"
+    file_root.mkdir()
+    dotnet_root.mkdir()
+    monkeypatch.setenv("CAD_AGENT_FILE_IPC_DIR", str(file_root))
+    monkeypatch.setenv("CAD_AGENT_DOTNET_IPC_DIR", str(dotnet_root))
+    monkeypatch.setenv("CAD_AGENT_AUTOCAD_HWND", "123")
+    monkeypatch.setenv("CAD_AGENT_AUTOCAD_LISP_PATH", "C:/approved/dispatcher.lsp")
+    calls = []
+    for name in ("make_windows_dispatch_trigger", "make_windows_lisp_trigger",
+                 "make_windows_command_trigger"):
+        monkeypatch.setitem(globals(), name, lambda _hwnd: lambda *args: calls.append(args))
+    client = FileIPCEndToEndTests()._client()
+    assert client._dir == file_root
+    client._active_drawing_path = "c:\\protected\\source.dwg"
+    with pytest.raises(MCPToolError, match="DISPOSABLE_CLOSE_TARGET_NOT_AUTHORIZED"):
+        client.drawing_close(save_changes=False)
+    assert calls == []
+    assert client._active_drawing_path == "c:\\protected\\source.dwg"
+    assert not list(dotnet_root.iterdir())
 
 
 def test_file_ipc_result_requires_exact_per_request_claim() -> None:
@@ -122,13 +162,22 @@ def test_file_ipc_dispatch_accepts_exact_claim_on_terminal_error(tmp_path) -> No
 @pytest.mark.autocad_mechanical
 @unittest.skipUnless(os.getenv("CAD_AGENT_FILE_IPC") == "1", "requires AutoCAD File IPC")
 class FileIPCEndToEndTests(unittest.TestCase):
-    def _client(self):
+    def _client(self, *disposable_paths):
+        ipc_dir = os.environ["CAD_AGENT_FILE_IPC_DIR"]
+        dotnet_ipc_dir = os.environ["CAD_AGENT_DOTNET_IPC_DIR"]
         hwnd = int(os.environ["CAD_AGENT_AUTOCAD_HWND"])
         return FileIPCLiveMCPClient(
+            ipc_dir=ipc_dir,
             trigger=make_windows_dispatch_trigger(hwnd),
             raw_lisp_trigger=make_windows_lisp_trigger(hwnd),
             command_trigger=make_windows_command_trigger(hwnd),
             bootstrap_lisp_path=os.environ["CAD_AGENT_AUTOCAD_LISP_PATH"],
+            disposable_close_client=DotNetIPCClient(
+                ipc_dir=dotnet_ipc_dir,
+                trigger=make_windows_dotnet_dispatch_trigger(hwnd),
+            ),
+            disposable_close_paths=list(disposable_paths),
+            document_settle_s=3.0,
         )
 
     @contextmanager
@@ -157,12 +206,12 @@ class FileIPCEndToEndTests(unittest.TestCase):
         return candidates[0]
 
     def _repair_component_attribute(self, build, part_id, attribute):
-        client = self._client()
+        exported = build.output_path.replace(".dxf", "_roundtrip.dxf")
+        client = self._client(build.output_path, exported)
         with self._opened_disposable_drawing(client, build.output_path):
             handle = self._rebind_component_handle(client, build, part_id)
             expected = client.block_get_attributes(handle)[attribute]
             client.block_update_attribute(handle, attribute, "wrong")
-            exported = build.output_path.replace(".dxf", "_roundtrip.dxf")
             client.drawing_save_as_dxf(exported)
         build.output_path = exported
         before = review_dxf(build)
@@ -184,14 +233,14 @@ class FileIPCEndToEndTests(unittest.TestCase):
         ]
         for name, primitives, part_type, ids, attribute in cases:
             with self.subTest(name=name):
-                tmp = tempfile.mkdtemp(prefix="cad_agent_component_", dir="C:/temp")
+                tmp = tempfile.mkdtemp(prefix="cad_agent_component_")
                 source = PrimitiveIRDocument(SourceDocument(file_name=name, page_index=0, image_width_px=1, image_height_px=1), Calibration(unit="mm", pixel_to_unit_scale=1, origin_px=(0,0), method="manual_override"), primitives)
                 semantic = SemanticIRDocument(PrimitiveIRRef(file_name=name, primitive_count=len(primitives)), [SemanticPart(part_type=part_type, primitive_ids=ids, confidence=1)], [])
                 build = build_dxf(source, os.path.join(tmp, name + ".dxf"), semantic_doc=semantic, build_components=True)
                 self._repair_component_attribute(build, semantic.parts[0].id, attribute)
 
     def test_beam_insert_attribute_round_trip_real_autocad(self):
-        tmp = tempfile.mkdtemp(prefix="cad_agent_beam_", dir="C:/temp")
+        tmp = tempfile.mkdtemp(prefix="cad_agent_beam_")
         path = os.path.join(tmp, "beam_smoke.dxf")
         beam = Primitive(
             id="b1", type="line", source="phase4_smoke", confidence=1.0,
@@ -212,7 +261,8 @@ class FileIPCEndToEndTests(unittest.TestCase):
         )
         build = build_dxf(source, path, semantic_doc=semantic, build_components=True)
         part_id = semantic.parts[0].id
-        client = self._client()
+        saved_path = os.path.join(tmp, "beam_smoke_roundtrip.dxf")
+        client = self._client(build.output_path, saved_path)
         with self._opened_disposable_drawing(client, build.output_path):
             handle = self._rebind_component_handle(client, build, part_id)
             self.assertEqual(os.path.basename(path), client.drawing_get_variables(["DWGNAME"])["DWGNAME"])
@@ -222,7 +272,6 @@ class FileIPCEndToEndTests(unittest.TestCase):
 
             client.block_update_attribute(handle, "PART_ID", "wrong")
             self.assertEqual("wrong", client.block_get_attributes(handle)["PART_ID"])
-            saved_path = os.path.join(tmp, "beam_smoke_roundtrip.dxf")
             client.drawing_save_as_dxf(saved_path)
         build.output_path = saved_path
         saved = ezdxf.readfile(saved_path).entitydb.get(handle)
@@ -243,7 +292,7 @@ class FileIPCEndToEndTests(unittest.TestCase):
         # AutoCAD keeps the active DXF locked on Windows. Use a disposable IPC
         # directory and leave its cleanup to the OS rather than failing test
         # teardown while the application still has the drawing open.
-        tmp = tempfile.mkdtemp(prefix="cad_agent_phase4_", dir="C:/temp")
+        tmp = tempfile.mkdtemp(prefix="cad_agent_phase4_")
         path = os.path.join(tmp, "phase4_smoke.dxf")
         with self.subTest(path=path):
             primitive = Primitive(
@@ -259,7 +308,7 @@ class FileIPCEndToEndTests(unittest.TestCase):
                 primitives=[primitive],
             )
             build = build_dxf(source, path)
-            client = self._client()
+            client = self._client(path)
             with self._opened_disposable_drawing(client, path):
                 self.assertEqual(
                     os.path.basename(path),
@@ -291,7 +340,7 @@ class FileIPCEndToEndTests(unittest.TestCase):
                 self.assertTrue(final.passed, final.mismatches)
 
     def test_native_dimension_round_trip_real_autocad(self):
-        tmp = tempfile.mkdtemp(prefix="cad_agent_dimension_", dir="C:/temp")
+        tmp = tempfile.mkdtemp(prefix="cad_agent_dimension_")
         path = os.path.join(tmp, "dimension_smoke.dxf")
         line = Primitive(
             id="dimension-line",
@@ -326,15 +375,15 @@ class FileIPCEndToEndTests(unittest.TestCase):
             cross_validations=[validation],
         )
         build = build_dxf(source, path, build_dimensions=True)
-        client = self._client()
+        client = self._client(path)
         with self._opened_disposable_drawing(client, path):
             review = review_dxf_live(build, client, open_drawing=False)
             self.assertTrue(review.passed, review.mismatches)
             self.assertEqual(review.dimension_checked, 1)
 
     def test_same_named_drawings_in_different_directories_use_full_path_identity(self):
-        first_dir = tempfile.mkdtemp(prefix="cad_agent_same_a_", dir="C:/temp")
-        second_dir = tempfile.mkdtemp(prefix="cad_agent_same_b_", dir="C:/temp")
+        first_dir = tempfile.mkdtemp(prefix="cad_agent_same_a_")
+        second_dir = tempfile.mkdtemp(prefix="cad_agent_same_b_")
         first_path = os.path.join(first_dir, "same-name.dxf")
         second_path = os.path.join(second_dir, "same-name.dxf")
         first = ezdxf.new("R2010")
@@ -344,7 +393,7 @@ class FileIPCEndToEndTests(unittest.TestCase):
         second.modelspace().add_circle((5, 5), 2)
         second.saveas(second_path)
 
-        client = self._client()
+        client = self._client(first_path, second_path)
         with self._opened_disposable_drawing(client, first_path):
             with self._opened_disposable_drawing(client, second_path):
                 variables = client.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
@@ -360,3 +409,84 @@ class FileIPCEndToEndTests(unittest.TestCase):
                 }
                 self.assertIn(os.path.normcase(os.path.normpath(second_path)), open_paths)
                 self.assertEqual({"CIRCLE"}, {entity["type"] for entity in client.entity_list()})
+
+    def test_preopened_component_layout_guard_real_autocad(self):
+        """Component acceptance only; generic document-opening failure stays separate."""
+        from dxf_builder_lib.tests.test_reviewer import _build_beam_component
+        from dxf_builder_lib.reviewer import _DEFAULT_TOLERANCE_MM
+
+        tmp = tempfile.mkdtemp(prefix="cad_agent_layout_guard_")
+        build, part_id, source = _build_beam_component(tmp)
+        valid_export = os.path.join(tmp, "valid_native.dxf")
+        foreign_source = os.path.join(tmp, "tracked_paper_fixture.dxf")
+        foreign_export = os.path.join(tmp, "foreign_native.dxf")
+        persisted = os.path.join(tmp, "refused_repair_native.dwg")
+        reopened_export = os.path.join(tmp, "reopened_native.dxf")
+        client = self._client(source, valid_export, foreign_source,
+                              foreign_export, persisted, reopened_export)
+
+        def signature(entity):
+            return {
+                "handle": entity.dxf.handle, "owner": entity.dxf.owner,
+                "layout": entity.get_layout().name, "block": entity.dxf.name,
+                "layer": entity.dxf.layer, "insert": tuple(entity.dxf.insert),
+                "scale": (entity.dxf.xscale, entity.dxf.yscale, entity.dxf.zscale),
+                "rotation": entity.dxf.rotation,
+                "attributes": [(a.dxf.tag, a.dxf.text, tuple(a.dxf.insert),
+                                a.dxf.height, a.dxf.rotation) for a in entity.attribs],
+            }
+
+        _preopen_component_fixture(source)
+        with self._opened_disposable_drawing(client, source):
+            handle = self._rebind_component_handle(client, build, part_id)
+            self.assertEqual("Model", client.entity_get(handle)["layout"])
+            self.assertEqual(4, client.drawing_get_variables(["INSUNITS"])["INSUNITS"])
+            line = client.entity_get(build.handle_by_primitive_id["b1"])
+            self.assertEqual([0, 0, 0], line["start"])
+            self.assertEqual([500, 0, 0], line["end"])
+            client.drawing_save_as_dxf(valid_export)
+        build.output_path = valid_export
+        self.assertTrue(review_dxf(build).passed)
+
+        # Explicit fault preparation, not production repair: retain tracked handle,
+        # geometry and attributes while transferring the INSERT to PaperSpace.
+        doc = ezdxf.readfile(valid_export)
+        tracked = doc.entitydb[build.component_handle_by_part_id[part_id]]
+        doc.modelspace().move_to_layout(tracked, doc.layout("Layout1"))
+        doc.saveas(foreign_source)
+        _preopen_component_fixture(foreign_source)
+        with self._opened_disposable_drawing(client, foreign_source):
+            handle = self._rebind_component_handle(client, build, part_id)
+            self.assertEqual("Layout1", client.entity_get(handle)["layout"])
+            client.drawing_save_as_dxf(foreign_export)
+        build.output_path = foreign_export
+        before = signature(ezdxf.readfile(foreign_export).entitydb[handle])
+        review = review_dxf(build)
+        self.assertFalse(review.passed)
+        self.assertTrue(review.component_mismatches)
+        repaired = repair_insert_components(build, review.component_mismatches)
+        self.assertEqual(0, repaired.repaired_count)
+        self.assertEqual(1, repaired.skipped_count)
+        self.assertEqual(handle, build.component_handle_by_part_id[part_id])
+        self.assertEqual(before, signature(ezdxf.readfile(foreign_export).entitydb[handle]))
+        self.assertFalse(review_dxf(build).passed)
+
+        _preopen_component_fixture(foreign_export)
+        with self._opened_disposable_drawing(client, foreign_export):
+            self.assertEqual("Layout1", client.entity_get(handle)["layout"])
+            client.drawing_save(persisted)
+            client.drawing_open(persisted)  # Rebind the actual SAVEAS identity.
+        _preopen_component_fixture(persisted)
+        with self._opened_disposable_drawing(client, persisted):
+            self.assertEqual("Layout1", client.entity_get(handle)["layout"])
+            client.drawing_save_as_dxf(reopened_export)
+        after = signature(ezdxf.readfile(reopened_export).entitydb[handle])
+        self.assertEqual({k: v for k, v in before.items() if k != "attributes"},
+                         {k: v for k, v in after.items() if k != "attributes"})
+        self.assertEqual(len(before["attributes"]), len(after["attributes"]))
+        for expected, actual in zip(before["attributes"], after["attributes"]):
+            self.assertEqual(expected[:2] + expected[3:], actual[:2] + actual[3:])
+            self.assertEqual(actual[2], pytest.approx(expected[2],
+                             rel=0, abs=_DEFAULT_TOLERANCE_MM))
+        build.output_path = reopened_export
+        self.assertFalse(review_dxf(build).passed)

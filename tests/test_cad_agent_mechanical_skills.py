@@ -30,7 +30,45 @@ def _owner_observation() -> dict[str, object]:
     return facade.observe_drawing(client=module._client(), **module._bound_kwargs())
 
 
-def test_catalog_has_one_real_read_skill_and_deferred_pilot_metadata() -> None:
+def _source_bound_binding() -> dict[str, object]:
+    source_sha256 = "1" * 64
+    return {
+        "source_sha256": source_sha256,
+        "page_index": 0,
+        "roi_bbox_px": [10, 20, 410, 220],
+        "source_render_sha256": "2" * 64,
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": 0.5,
+            "origin_px": [10.0, 20.0],
+            "method": "manual_override",
+            "reference_note": "P1 source dimensions",
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "profile_id": "simple-stepped-shaft-p1-v1",
+    }
+
+
+def _source_bound_proposal() -> dict[str, object]:
+    binding = _source_bound_binding()
+    return {
+        "schema_version": "p1-source-bound-proposal-1.0",
+        "proposal_source": "external_ai",
+        **binding,
+        "dimensions_mm": {
+            "shaft_diameter_a": 40.0,
+            "shaft_diameter_b": 60.0,
+            "segment_length_a": 80.0,
+            "segment_length_b": 50.0,
+            "hole_diameter": 10.0,
+            "hole_axial_position": 95.0,
+        },
+        "evidence_refs": {},
+    }
+
+
+def test_catalog_has_read_bom_compile_only_bundle_and_deferred_generic_geometry() -> None:
     catalog = _skills().get_mechanical_skill_catalog()
 
     assert set(catalog) == {"schema_version", "skills", "catalog_sha256"}
@@ -40,6 +78,14 @@ def test_catalog_has_one_real_read_skill_and_deferred_pilot_metadata() -> None:
     assert records["inspect.mechanical_bom"]["owner_route_id"] == (
         "DOTNET_IPC_MECHANICAL_BOM_READ"
     )
+    assert records["geometry.simple_shaft_pilot"]["support_state"] == "COMPILE_ONLY"
+    assert records["geometry.simple_shaft_pilot"]["owner_route_id"] == (
+        "MECHANICAL_PILOT_COMPILE_ONLY"
+    )
+    assert records["geometry.simple_shaft_pilot"]["capability_refs"] == [
+        "mechanical_shaft_step",
+        "mechanical_hole_feature",
+    ]
     assert records["geometry.shaft_step"]["support_state"] == "DEFERRED_UNSUPPORTED"
     assert records["geometry.keyway"]["support_state"] == "DEFERRED_UNSUPPORTED"
     assert records["geometry.hole_feature"]["support_state"] == "DEFERRED_UNSUPPORTED"
@@ -55,11 +101,16 @@ def test_catalog_copy_is_defensive_and_search_is_deterministic() -> None:
     assert skills.search_skills("mechanical bom")[0]["skill_id"] == (
         "inspect.mechanical_bom"
     )
-    assert skills.search_skills("shaft") == []
+    assert [item["skill_id"] for item in skills.search_skills("shaft")] == [
+        "geometry.simple_shaft_pilot"
+    ]
     deferred = skills.search_skills("shaft", include_deferred=True)
     deferred_ids = [item["skill_id"] for item in deferred]
-    assert deferred_ids[0] == "geometry.shaft_step"
-    assert set(deferred_ids) == {"geometry.shaft_step", "geometry.keyway"}
+    assert set(deferred_ids) == {
+        "geometry.simple_shaft_pilot",
+        "geometry.shaft_step",
+        "geometry.keyway",
+    }
 
 
 @pytest.mark.parametrize("intent", ["", "x" * 257])
@@ -129,6 +180,27 @@ def test_invoke_compiles_one_closed_read_only_plan_bound_to_owner_observation() 
     assert skills.validate_skill_invocation_plan(plan) == plan
 
 
+def test_invoke_simple_shaft_bundle_returns_compile_only_plan_without_cad_observation() -> None:
+    skills = _skills()
+    proposal = _source_bound_proposal()
+    binding = _source_bound_binding()
+
+    plan = skills.invoke_skill(
+        "geometry.simple_shaft_pilot",
+        parameters={"proposal": proposal, "expected_binding": binding},
+    )
+
+    assert plan["schema_version"] == "p1-source-bound-compile-plan-1.0"
+    assert plan["proposal_source"] == "external_ai"
+    assert plan["source_binding"] == binding
+    assert plan["geometry_contract"]["line_count"] == 8
+    assert plan["geometry_contract"]["circle_count"] == 1
+    assert plan["feature_contract"]["shaft-profile-001"]["kind"] == "shaft_step"
+    assert plan["feature_contract"]["hole-axial-001"]["kind"] == "hole_feature"
+    assert "geometry_opencv" not in json.dumps(plan, sort_keys=True)
+    assert "drawing_binding" not in plan
+
+
 def test_invoke_reuses_phase1_owner_validator(monkeypatch: pytest.MonkeyPatch) -> None:
     facade = import_module("cad_agent.cad_read_facade")
     original = facade.validate_observe_drawing_result
@@ -168,6 +240,15 @@ def test_invoke_rejects_invalid_parameters_deferred_skills_and_tampered_observat
     with pytest.raises(skills.MechanicalSkillError, match="DRAWING_OBSERVATION_INVALID"):
         skills.invoke_skill(
             "inspect.mechanical_bom", parameters={}, drawing_observation=tampered
+        )
+
+
+def test_compile_only_bundle_refuses_arbitrary_parameters() -> None:
+    skills = _skills()
+    with pytest.raises(skills.MechanicalSkillError, match="PARAMETERS_INVALID"):
+        skills.invoke_skill(
+            "geometry.simple_shaft_pilot",
+            parameters={"command": "LINE"},
         )
 
 

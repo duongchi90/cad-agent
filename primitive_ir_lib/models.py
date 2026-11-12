@@ -18,7 +18,10 @@ from typing import Literal, Optional
 SCHEMA_VERSION = "1.0.0"
 
 PrimitiveType = Literal["line", "circle", "arc", "text"]
-SourceType = Literal["geometry_opencv", "text_tesseract", "text_vision"]
+SourceType = Literal[
+    "geometry_opencv", "geometry_external_ai", "text_tesseract", "text_vision",
+    "text_pdfvector", "geometry_pdfvector",
+]
 SemanticRole = Literal[
     "dimension_value", "title_block_field", "drawing_code",
     "general_note", "table_cell", "unknown",
@@ -114,6 +117,14 @@ class Trace:
     bbox_px: tuple  # (x_min, y_min, x_max, y_max)
     extraction_tool: Optional[str] = None
     extracted_at: Optional[str] = None
+    verification_request_sha256: Optional[str] = None
+    verification_result_sha256: Optional[str] = None
+    source_pdf_sha256: Optional[str] = None
+    source_page_index: Optional[int] = None
+    source_transform: Optional[tuple[float, float, float, float, float, float]] = None
+    source_render_sha256: Optional[str] = None
+    source_render_dpi: Optional[int] = None
+    source_render_origin_px: Optional[tuple[int, int]] = None
 
     def to_dict(self) -> dict:
         d = {"bbox_px": list(self.bbox_px)}
@@ -121,6 +132,22 @@ class Trace:
             d["extraction_tool"] = self.extraction_tool
         if self.extracted_at is not None:
             d["extracted_at"] = self.extracted_at
+        if self.verification_request_sha256 is not None:
+            d["verification_request_sha256"] = self.verification_request_sha256
+        if self.verification_result_sha256 is not None:
+            d["verification_result_sha256"] = self.verification_result_sha256
+        if self.source_pdf_sha256 is not None:
+            d["source_pdf_sha256"] = self.source_pdf_sha256
+        if self.source_page_index is not None:
+            d["source_page_index"] = self.source_page_index
+        if self.source_transform is not None:
+            d["source_transform"] = list(self.source_transform)
+        if self.source_render_sha256 is not None:
+            d["source_render_sha256"] = self.source_render_sha256
+        if self.source_render_dpi is not None:
+            d["source_render_dpi"] = self.source_render_dpi
+        if self.source_render_origin_px is not None:
+            d["source_render_origin_px"] = list(self.source_render_origin_px)
         return d
 
 

@@ -221,6 +221,87 @@ def test_public_surface_uses_the_accepted_parameter_modes() -> None:
         assert parameters["upstream_context"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
+def test_external_mode_rejects_semantic_projection_refs(tmp_path: Path) -> None:
+    provenance_tests = _existing_test_module(
+        "test_cad_agent_mechanical_pilot_provenance.py"
+    )
+    provenance = importlib.import_module("cad_agent.mechanical_pilot_provenance")
+    artifacts = provenance_tests._external_artifacts_for_test(tmp_path)
+    inputs = provenance.build_external_geometry_r3_inputs(
+        pilot_id="external-geometry-ai-p1",
+        primitive_ir_path=artifacts["primitive_path"],
+        candidate_path=artifacts["candidate_path"],
+        build_evidence_path=artifacts["build_evidence_path"],
+        verification_request=artifacts["verification_request"],
+        verification_result=artifacts["verification_result"],
+        source_render_bytes=artifacts["source_render_bytes"],
+    )
+    components = deepcopy(inputs["components"])
+    components[0]["semantic_projection_refs"] = ["f" * 64]
+
+    with pytest.raises(
+        _registry_module().ComponentViewRegistryError,
+        match="EXTERNAL_SEMANTIC_PROJECTION_REFS_FORBIDDEN",
+    ):
+        _registry_module().build_component_view_registry(
+            upstream_context=inputs["upstream_context"],
+            components=components,
+        )
+
+
+def test_external_mode_rejects_detached_packet_direct_admission() -> None:
+    provenance_tests = _existing_test_module(
+        "test_cad_agent_mechanical_pilot_provenance.py"
+    )
+    provenance = importlib.import_module("cad_agent.mechanical_pilot_provenance")
+    packet = provenance_tests._external_geometry_packet_for_test()
+    primitive_projections = packet["primitive_projections"]
+    upstream_context = {
+        "provenance_mode": "EXTERNAL_GEOMETRY_ONLY",
+        "candidate": {
+            "candidate_id": packet["candidate_id"],
+            "candidate_drawing_sha256": packet["candidate_sha256"],
+        },
+        "external_geometry_provenance": packet,
+        "primitive_ir_path": Path("detached-primitive.json"),
+        "candidate_path": Path("detached-candidate.dxf"),
+        "build_evidence_path": Path("detached-build-evidence.json"),
+        "verification_request": {},
+        "verification_result": {},
+        "source_render_bytes": b"detached-render",
+    }
+    component = {
+        "component_type": "EXTERNAL_GEOMETRY",
+        "origin_class": "RECONSTRUCTED_NEW",
+        "source_projection_refs": [
+            item["projection_ref"] for item in primitive_projections
+        ],
+        "semantic_projection_refs": [],
+        "base_cad_provenance_ref": None,
+        "candidate_entity_bindings": [
+            {
+                "target_namespace": "CANDIDATE",
+                "candidate_id": packet["candidate_id"],
+                "entity_handle": item["entity_handle"],
+                "block_name": item["block_name"],
+                "legacy_uuid": item["legacy_uuid"],
+                "relative_path": item["relative_path"],
+                "captured_at_utc": item["captured_at_utc"],
+            }
+            for item in primitive_projections
+        ],
+    }
+
+    with pytest.raises(
+        _registry_module().ComponentViewRegistryError,
+        match="EXTERNAL_PROVENANCE_EVIDENCE_INVALID",
+    ):
+        _registry_module().build_component_view_registry(
+            upstream_context=upstream_context,
+            components=[component],
+        )
+
+
 def test_builds_closed_task_one_registry_with_empty_views_and_links() -> None:
     module = _registry_module()
     context = _upstream_context()

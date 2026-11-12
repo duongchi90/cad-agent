@@ -1207,6 +1207,7 @@ def _stream_handle_sha256(
     *,
     chunk_size: int,
     max_file_bytes: int,
+    capture: bytearray | None = None,
 ) -> tuple[str, int]:
     try:
         adapter.rewind(handle)
@@ -1222,6 +1223,8 @@ def _stream_handle_sha256(
             if total > max_file_bytes:
                 raise SourceIntegrityError("RESOURCE_LIMIT")
             digest.update(chunk)
+            if capture is not None:
+                capture.extend(chunk)
         return digest.hexdigest(), total
     except SourceIntegrityError:
         raise
@@ -2518,7 +2521,7 @@ def _task3_complete_custody(
     return validate_source_custody(candidate)
 
 
-def inspect_source_bundle_media(
+def _inspect_source_bundle_media(
     *,
     approved_root_id: str,
     approved_root_revision: str,
@@ -2528,7 +2531,8 @@ def inspect_source_bundle_media(
     policy_limits: Mapping[str, int],
     media_limits: Mapping[str, int],
     source_bundle: object,
-) -> dict[str, object]:
+    _capture_bytes: bool,
+) -> dict[str, object] | tuple[dict[str, object], dict[str, dict[str, object]]]:
     """Attest media facts only after two stable original-handle hashes and replacement proof."""
     root_id = _identifier(approved_root_id, path="approved_root_id")
     root_revision = _identifier(approved_root_revision, path="approved_root_revision")
@@ -2570,6 +2574,7 @@ def inspect_source_bundle_media(
                 policy_limits=bound_limits,
             )
             observed_items: list[dict[str, object]] = []
+            captured_bytes: dict[str, bytes] = {}
             total_bytes = 0
             for item in items_value:
                 relative_path = str(item["relative_path"])
@@ -2605,11 +2610,13 @@ def inspect_source_bundle_media(
                         relative_path=final_relative,
                         object_token=object_token,
                     )
+                    first_data = bytearray() if _capture_bytes else None
                     first_sha, first_size = _stream_handle_sha256(
                         adapter,
                         source_handle,
                         chunk_size=limits["hash_chunk_size"],
                         max_file_bytes=limits["max_file_bytes"],
+                        capture=first_data,
                     )
                     if first_size != expected_size:
                         raise SourceIntegrityError("CHANGED_DURING_READ")
@@ -2715,6 +2722,8 @@ def inspect_source_bundle_media(
                         raise parser_error
                     if observation is None:
                         raise SourceIntegrityError("MALFORMED_MEDIA")
+                    if first_data is not None:
+                        captured_bytes[str(item["source_id"])] = bytes(first_data)
                     observed_items.append(
                         {
                             "source_id": item["source_id"],
@@ -2737,7 +2746,7 @@ def inspect_source_bundle_media(
                 total_bytes += expected_size
                 if total_bytes > limits["max_total_bytes"]:
                     raise SourceIntegrityError("RESOURCE_LIMIT")
-            return _task3_complete_custody(
+            custody = _task3_complete_custody(
                 bundle=bundle,
                 bundle_hash=bundle_hash,
                 root_id=root_id,
@@ -2746,10 +2755,70 @@ def inspect_source_bundle_media(
                 key_revision=key_revision,
                 observed_items=observed_items,
             )
+            if not _capture_bytes:
+                return custody
+            custody_digest = source_custody_sha256(custody)
+            snapshots = {
+                source_id: {
+                    "source_id": item["source_id"],
+                    "relative_path": item["relative_path"],
+                    "observed_sha256": item["observed_sha256"],
+                    "file_object_identity_token": item[
+                        "file_object_identity_token"
+                    ],
+                    "path_binding_sha256": item["path_binding_sha256"],
+                    "source_custody_sha256": custody_digest,
+                    "bytes": captured_bytes[source_id],
+                }
+                for source_id, item in (
+                    (str(item["source_id"]), item)
+                    for item in custody["items"]
+                )
+            }
+            return custody, snapshots
     except SourceIntegrityError:
         raise
     except Exception:
         raise SourceIntegrityError("EVIDENCE_UNAVAILABLE") from None
 
 
-__all__.extend(["inspect_source_bundle_media"])
+def inspect_source_bundle_media(
+    *,
+    approved_root_id: str,
+    approved_root_revision: str,
+    approved_root: object,
+    identity_key: bytes,
+    identity_key_revision: str,
+    policy_limits: Mapping[str, int],
+    media_limits: Mapping[str, int],
+    source_bundle: object,
+) -> dict[str, object]:
+    """Attest media facts through the existing custody-owned handle epoch."""
+    result = _inspect_source_bundle_media(
+        approved_root_id=approved_root_id,
+        approved_root_revision=approved_root_revision,
+        approved_root=approved_root,
+        identity_key=identity_key,
+        identity_key_revision=identity_key_revision,
+        policy_limits=policy_limits,
+        media_limits=media_limits,
+        source_bundle=source_bundle,
+        _capture_bytes=False,
+    )
+    if not isinstance(result, dict):
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+    return result
+
+
+def inspect_source_bundle_media_bytes(
+    **kwargs: object,
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    """Return media custody and transient bytes from the same handle epoch."""
+    result = _inspect_source_bundle_media(_capture_bytes=True, **kwargs)
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise SourceIntegrityError("EVIDENCE_UNAVAILABLE")
+    custody, snapshots = result
+    return custody, snapshots
+
+
+__all__.extend(["inspect_source_bundle_media", "inspect_source_bundle_media_bytes"])

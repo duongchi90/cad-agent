@@ -13,7 +13,8 @@ import math
 from primitive_ir_lib.calibration import estimate_calibration_from_reference, find_nearest_line
 from primitive_ir_lib.cross_validation import cross_validate
 from primitive_ir_lib.geometry_extraction import RawLine
-from primitive_ir_lib.models import Point2D, Primitive, LineGeometry, Trace
+from primitive_ir_lib.models import Point2D, Primitive, LineGeometry, Trace, Calibration, PrimitiveIRDocument, SourceDocument, TextData
+from primitive_ir_lib.assemble import text_to_primitive
 from primitive_ir_lib.table_extraction import build_cells, detect_grid, extract_table_cells
 from primitive_ir_lib.text_extraction import RawText, classify_semantic_role
 from primitive_ir_lib.validator import validate_document
@@ -132,6 +133,17 @@ def test_cross_validate_unverified_for_zero_dimension_value():
     assert len(results) == 1
     assert results[0].status == "unverified"
     assert results[0].geometry_primitive_id == ""
+
+
+def test_cross_validate_structural_gate_keyword_remains_fail_closed():
+    line = _line((100, 50), (100, 550))
+    text = _text("1700", (60, 280, 90, 320))
+    cal = estimate_calibration_from_reference(text, line, image_height_px=700)
+
+    results = cross_validate([text], [line], cal, require_dimension_geometry=True)
+
+    assert len(results) == 1
+    assert results[0].status == "unverified"
 
 
 # ----------------------------------------------------------- table tier 2 --
@@ -259,6 +271,55 @@ def test_validator_passes_on_well_formed_document():
     assert errors == [], f"Không mong đợi lỗi nhưng có: {errors}"
 
 
+def test_pdf_vector_text_uses_explicit_pymupdf_provenance():
+    raw = RawText(
+        id="pdf-text", content="R7,50", bbox_px=(10, 20, 40, 32),
+        rotation_deg=0.0, confidence=1.0, source="text_pdfvector",
+    )
+    primitive = text_to_primitive(
+        raw, Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 80), method="manual_override")
+    ).to_dict()
+    assert primitive["source"] == "text_pdfvector"
+    assert primitive["trace"]["extraction_tool"] == "pymupdf"
+
+
+def test_assemble_rejects_unknown_text_source_instead_of_labeling_vision():
+    raw = RawText(
+        id="unknown-source", content="note", bbox_px=(10, 20, 40, 32),
+        rotation_deg=0.0, confidence=0.8, source="text_unknown",
+    )
+    calibration = Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 80), method="manual_override")
+    try:
+        text_to_primitive(raw, calibration)
+    except ValueError as exc:
+        assert "Unsupported text source" in str(exc)
+    else:
+        raise AssertionError("Unknown text sources must not be mislabeled as claude-vision")
+
+
+def test_validator_and_schema_accept_pdf_vector_text_but_reject_unknown_source():
+    primitive = Primitive(
+        id="pdf-text", type="text", source="text_pdfvector", confidence=1.0,
+        trace=Trace(bbox_px=(10, 20, 40, 32), extraction_tool="pymupdf"),
+        text_data=TextData(content="R7,50", position=Point2D(10, 20), rotation_deg=0.0, height=12),
+    )
+    document = PrimitiveIRDocument(
+        source_document=SourceDocument("page.png", 0, 80, 120, "a" * 64),
+        calibration=Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0, 80), method="manual_override"),
+        primitives=[primitive],
+    ).to_dict()
+    assert validate_document(document) == []
+
+    import json
+    from pathlib import Path
+    schema = json.loads(Path("primitive_ir.schema.json").read_text(encoding="utf-8"))
+    source_schema = schema["definitions"]["Primitive"]["properties"]["source"]
+    assert "text_pdfvector" in source_schema["enum"]
+
+    document["primitives"][0]["source"] = "text_unknown"
+    assert any("source 'text_unknown' không hợp lệ" in e for e in validate_document(document))
+
+
 def test_validator_catches_missing_geometry():
     doc = {
         "schema_version": "1.0.0",
@@ -274,6 +335,29 @@ def test_validator_catches_missing_geometry():
     }
     errors = validate_document(doc)
     assert any("thiếu 'geometry'" in e for e in errors)
+
+
+def test_validator_rejects_unverified_external_geometry():
+    prim = Primitive(
+        id="external-unverified",
+        type="line",
+        source="geometry_external_ai",
+        confidence=0.99,
+        trace=Trace(bbox_px=(1, 1, 20, 20), extraction_tool="direct-caller"),
+        geometry=LineGeometry(Point2D(0, 0), Point2D(10, 0)),
+    )
+    doc = {
+        "schema_version": "1.0.0",
+        "source_document": {"file_name": "untrusted.png", "page_index": 0, "image_width_px": 64, "image_height_px": 64},
+        "calibration": {"unit": "mm", "pixel_to_unit_scale": 1.0, "origin_px": [0, 64], "method": "manual_override"},
+        "primitives": [prim.to_dict()],
+        "cross_validations": [],
+    }
+
+    errors = validate_document(doc)
+
+    assert any("verification_request_sha256" in error for error in errors)
+    assert any("verification_result_sha256" in error for error in errors)
 
 
 if __name__ == "__main__":

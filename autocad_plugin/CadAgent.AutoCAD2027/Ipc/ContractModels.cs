@@ -7,6 +7,8 @@ public static class ContractConstants
 {
     public const string SchemaVersion = "1.0";
     public const long DefaultMaxReadBytes = 1024 * 1024;
+    public const long ModelSpaceInventoryMaxResponseBytes = 16 * 1024 * 1024;
+    public const int ModelSpaceInventoryMaxEntityCount = 50_000;
     public const int MaxRequestIdLength = 128;
 
     public static readonly IReadOnlySet<string> SupportedOperations =
@@ -20,9 +22,43 @@ public static class ContractConstants
             "visual_evidence_export",
             "native_render_evidence",
             "exact_base_xref_inspection",
-            "exact_base_xref_extraction"
+            "exact_base_xref_extraction",
+            "bounded_native_line_edit"
         };
 }
+
+public sealed record NativeLineGeometry(double[] Start, double[] End);
+
+public sealed record BoundedNativeLineTarget(
+    string Handle,
+    NativeLineGeometry Before,
+    NativeLineGeometry After);
+
+public sealed record BoundedNativeLineProtectedEntity(
+    string Handle,
+    NativeLineGeometry Before);
+
+public sealed record BoundedNativeLineEditRequest(
+    string DrawingFullPath,
+    string DrawingSha256,
+    IReadOnlyList<BoundedNativeLineTarget> Targets,
+    IReadOnlyList<BoundedNativeLineProtectedEntity> Protected);
+
+public sealed record BoundedNativeLineEditState(
+    string Handle,
+    NativeLineGeometry Before,
+    NativeLineGeometry After);
+
+public sealed record BoundedNativeLineEditSnapshot(
+    bool Changed,
+    string DurableState,
+    bool SavePerformed,
+    string DrawingSha256Before,
+    string? DrawingSha256After,
+    IReadOnlyList<BoundedNativeLineEditState> Targets,
+    IReadOnlyList<BoundedNativeLineEditState> Protected,
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> Errors);
 
 public sealed record IpcRequest
 {

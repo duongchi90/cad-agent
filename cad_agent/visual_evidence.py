@@ -13,10 +13,20 @@ from collections.abc import Mapping
 from ctypes import wintypes
 from pathlib import Path
 
+from .drawing_contracts import canonical_json_sha256
 from .visual_contracts import VisualContractError, validate_visual_contract
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_EXTERNAL_ROOT_CURRENTNESS_SCHEMA_VERSION = "external-root-visual-currentness-1.0"
+_EXTERNAL_ROOT_IDENTITY_FIELDS = (
+    "candidate_id",
+    "candidate_sha256",
+    "build_evidence_sha256",
+    "provenance_sha256",
+    "source_sha256",
+    "source_render_sha256",
+)
 _CAPTURED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 _MAX_TOTAL_BYTES = 32 * 1024 * 1024
 _MAX_BYTES = {"render": 8 * 1024 * 1024, "entity_map": 8 * 1024 * 1024, "measurements": 4 * 1024 * 1024}
@@ -26,6 +36,44 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 class VisualEvidenceError(ValueError):
     """Raised when VS-T3 evidence cannot be accepted or persisted."""
+
+
+def derive_external_root_visual_currentness_sha256(
+    provenance_identity: Mapping[str, object],
+) -> str:
+    """Derive a genesis/currentness token for a validated external root.
+
+    The returned digest may bind the existing manifest currentness field for a
+    no-mutation external root, but it is deliberately not mutation evidence.
+    """
+
+    if not isinstance(provenance_identity, Mapping):
+        raise VisualEvidenceError("external root provenance identity must be an object")
+    try:
+        from .mechanical_pilot_provenance import (
+            validate_external_geometry_provenance,
+        )
+
+        validated_identity = validate_external_geometry_provenance(provenance_identity)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise VisualEvidenceError(
+            "external root provenance identity failed canonical external "
+            f"provenance validation: {exc}"
+        ) from exc
+
+    candidate_id = validated_identity["candidate_id"]
+    if not isinstance(candidate_id, str) or _IDENTIFIER.fullmatch(candidate_id) is None:
+        raise VisualEvidenceError("external root candidate_id is invalid")
+    for field in _EXTERNAL_ROOT_IDENTITY_FIELDS[1:]:
+        value = validated_identity[field]
+        if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+            raise VisualEvidenceError(f"external root {field} is invalid")
+    material = {
+        "schema_version": _EXTERNAL_ROOT_CURRENTNESS_SCHEMA_VERSION,
+        "provenance_mode": "EXTERNAL_GEOMETRY_ONLY",
+        **{field: validated_identity[field] for field in _EXTERNAL_ROOT_IDENTITY_FIELDS},
+    }
+    return canonical_json_sha256(material)
 
 
 def _path_contains_windows_reparse_point(path: str | os.PathLike[str]) -> bool:
@@ -841,6 +889,7 @@ __all__ = [
     "assert_dimension_register_unchanged",
     "build_dimension_register_datum_bindings",
     "canonical_region_config_sha256",
+    "derive_external_root_visual_currentness_sha256",
     "sha256_file",
     "snapshot_publication_file",
     "prepare_publication_replacement",

@@ -1,5 +1,6 @@
 using CadAgent.AutoCAD2027.Review;
 using CadAgent.AutoCAD2027.DrawingSetup;
+using CadAgent.AutoCAD2027.Ipc;
 
 namespace CadAgent.AutoCAD2027.Drawing;
 
@@ -10,6 +11,10 @@ public interface IDrawingGateway
     IReadOnlyList<EntitySnapshot> ReadEntities(IReadOnlyCollection<string> handles);
 
     DrawingSetupSnapshot ReadDrawingSetup();
+
+    DrawingSetupSnapshot ReadDrawingSetupWithModelSpaceInventory(string expectedDrawingSha256) =>
+        throw new InvalidOperationException(
+            "This drawing gateway does not provide the opt-in ModelSpace inventory read.");
 
     VisualEvidenceSnapshot ReadVisualEvidence(VisualEvidenceRequest request);
 
@@ -32,4 +37,9 @@ public interface IDrawingGateway
                 boundary.DrawingFullPath,
                 new[] { "S3B_LIVE_UNAVAILABLE" });
     }
+
+    BoundedNativeLineEditSnapshot ApplyBoundedNativeLineEdit(
+        BoundedNativeLineEditRequest request) =>
+        throw new InvalidOperationException(
+            "This drawing gateway does not provide the bounded native line edit operation.");
 }

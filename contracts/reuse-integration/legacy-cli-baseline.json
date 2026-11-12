@@ -65,6 +65,11 @@
           "nargs": null,
           "required": true
         },
+        "--include-model-space-inventory": {
+          "dest": "include_model_space_inventory",
+          "nargs": 0,
+          "required": false
+        },
         "--ipc-dir": {
           "dest": "ipc_dir",
           "nargs": null,
@@ -552,6 +557,25 @@
         }
       }
     },
+    "fidelity-semantic-region-handoff": {
+      "options": {
+        "--approval": {
+          "dest": "approval",
+          "nargs": null,
+          "required": true
+        },
+        "--input": {
+          "dest": "input",
+          "nargs": null,
+          "required": true
+        },
+        "--manifest": {
+          "dest": "manifest",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
     "fidelity-table-text-approve": {
       "options": {
         "--approval-reference": {
@@ -783,6 +807,25 @@
         }
       }
     },
+    "layer-standard-check": {
+      "options": {
+        "--audit": {
+          "dest": "audit",
+          "nargs": null,
+          "required": true
+        },
+        "--output": {
+          "dest": "output",
+          "nargs": null,
+          "required": true
+        },
+        "--rules": {
+          "dest": "rules",
+          "nargs": null,
+          "required": true
+        }
+      }
+    },
     "mechanical-review": {
       "options": {
         "--build-evidence": {
@@ -871,6 +914,11 @@
     },
     "run-pdf": {
       "options": {
+        "--auto-calibrate": {
+          "dest": "auto_calibrate",
+          "nargs": 0,
+          "required": false
+        },
         "--auto-ocr-roi": {
           "dest": "auto_ocr_roi",
           "nargs": 0,
@@ -879,7 +927,7 @@
         "--calibration-approval": {
           "dest": "calibration_approval",
           "nargs": null,
-          "required": true
+          "required": false
         },
         "--dpi": {
           "dest": "dpi",
@@ -891,6 +939,11 @@
           "nargs": null,
           "required": true
         },
+        "--no-auto-ocr-roi": {
+          "dest": "auto_ocr_roi",
+          "nargs": 0,
+          "required": false
+        },
         "--output-dir": {
           "dest": "output_dir",
           "nargs": null,
@@ -899,7 +952,7 @@
         "--scale-mm-per-px": {
           "dest": "scale_mm_per_px",
           "nargs": null,
-          "required": true
+          "required": false
         }
       }
     }

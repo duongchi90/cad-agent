@@ -54,6 +54,84 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
     }
 
     [Fact]
+    public void AcceptsDirectNativeBaseWithBindingFactsOnly()
+    {
+        var parameters = InspectionRequest().Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters.Remove("source_revision");
+
+        var expectations = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            parameters["inspection_expectations"].GetRawText())!;
+        expectations["source"] = JsonSerializer.SerializeToElement(new
+        {
+            source_id = (string?)null,
+            revision = (string?)null,
+            sha256 = new string('a', 64)
+        });
+        expectations.Remove("identity");
+        expectations.Remove("critical_dimensions");
+        expectations["xref"] = JsonSerializer.SerializeToElement<object?>(null);
+        expectations.Remove("components");
+        parameters["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations);
+
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            _root,
+            _sourcePath,
+            new string('a', 64),
+            _sourcePath,
+            new string('a', 64),
+            null));
+        var result = directPolicy.ValidateInspectionRequest(
+            InspectionRequest() with
+            {
+                DrawingFullPath = _sourcePath,
+                DrawingSha256 = new string('a', 64),
+                Parameters = parameters
+            });
+
+        Assert.Equal(new string('a', 64), result.InspectionExpectations!.Source!.Sha256);
+        Assert.Null(result.InspectionExpectations.Identity);
+        Assert.Null(result.InspectionExpectations.CriticalDimensions);
+        Assert.Null(result.InspectionExpectations.Components);
+        Assert.Null(result.InspectionExpectations.Xref);
+    }
+
+    [Fact]
+    public void RejectsDirectNativeBaseWhenActiveDrawingDiffersFromBoundSource()
+    {
+        var parameters = InspectionRequest().Parameters!
+            .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+        parameters.Remove("source_revision");
+
+        var expectations = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            parameters["inspection_expectations"].GetRawText())!;
+        expectations["source"] = JsonSerializer.SerializeToElement(new
+        {
+            source_id = (string?)null,
+            revision = (string?)null,
+            sha256 = new string('a', 64)
+        });
+        expectations.Remove("identity");
+        expectations.Remove("critical_dimensions");
+        expectations["xref"] = JsonSerializer.SerializeToElement<object?>(null);
+        expectations.Remove("components");
+        parameters["inspection_expectations"] = JsonSerializer.SerializeToElement(expectations);
+
+        var directPolicy = new ExactBaseXrefPolicy(new ExactBaseXrefServerConfiguration(
+            _root,
+            _acceptedPath,
+            new string('b', 64),
+            _sourcePath,
+            new string('a', 64),
+            null));
+
+        var error = Assert.Throws<ExactBaseXrefPolicyException>(() =>
+            directPolicy.ValidateInspectionRequest(InspectionRequest() with { Parameters = parameters }));
+
+        Assert.Equal(ExactBaseXrefPolicy.ActiveDocumentMismatchCode, error.Code);
+    }
+
+    [Fact]
     public void LoadsAllSixS3BValuesFromServerOwnedConfiguration()
     {
         var values = new Dictionary<string, string?>(StringComparer.Ordinal)
@@ -197,6 +275,58 @@ public sealed class ExactBaseXrefPolicyTests : IDisposable
         var escaped = Assert.Throws<ExactBaseXrefPolicyException>(() =>
             _policy.ValidateExtractionRequest(ExtractionRequest(outside)));
         Assert.Equal(ExactBaseXrefPolicy.CandidatePathUnsafeCode, escaped.Code);
+    }
+
+    [Fact]
+    public void AcceptsNativeEditOnlyForTheSameExistingDisposableCandidate()
+    {
+        var path = _policy.ValidateNativeEditCandidate(_candidateInputPath, _candidateInputPath);
+
+        Assert.Equal(Path.GetFullPath(_candidateInputPath), path);
+    }
+
+    [Theory]
+    [InlineData("source")]
+    [InlineData("accepted")]
+    [InlineData("outside")]
+    public void RejectsNativeEditForSourceAcceptedOrOutsideCandidate(string kind)
+    {
+        var outsideDirectory = Path.Combine(Path.GetTempPath(), "cadagent-s3b-native-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outsideDirectory);
+        var outsidePath = Path.Combine(outsideDirectory, "candidate.dwg");
+        File.WriteAllText(outsidePath, "outside");
+        var candidate = kind switch
+        {
+            "source" => _sourcePath,
+            "accepted" => _acceptedPath,
+            _ => outsidePath
+        };
+
+        try
+        {
+            var error = Assert.Throws<ExactBaseXrefPolicyException>(() =>
+                _policy.ValidateNativeEditCandidate(candidate, candidate));
+
+            Assert.Equal(kind switch
+            {
+                "source" => ExactBaseXrefPolicy.SourceAliasCode,
+                "accepted" => ExactBaseXrefPolicy.AcceptedAliasCode,
+                _ => ExactBaseXrefPolicy.CandidatePathUnsafeCode
+            }, error.Code);
+        }
+        finally
+        {
+            Directory.Delete(outsideDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RejectsNativeEditWhenActiveDocumentIsNotTheCandidate()
+    {
+        var error = Assert.Throws<ExactBaseXrefPolicyException>(() =>
+            _policy.ValidateNativeEditCandidate(_candidateInputPath, _candidateOutputPath));
+
+        Assert.Equal(ExactBaseXrefPolicy.ActiveDocumentMismatchCode, error.Code);
     }
 
     [Theory]

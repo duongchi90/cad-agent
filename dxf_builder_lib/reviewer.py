@@ -39,7 +39,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from .builder import BuildResult
+from .builder import BuildResult, DimensionLineExpectation, validate_contour_joins
 
 _DEFAULT_TOLERANCE_MM = 1e-6
 _ROTATION_TOLERANCE_DEG = 1e-4
@@ -78,6 +78,8 @@ class ReviewResult:
     dimension_checked_count: int = 0
     dimension_mismatches: List[str] = field(default_factory=list)
     dimension_measurement_by_id: Dict[str, float] = field(default_factory=dict)
+    contour_checked_count: int = 0
+    contour_mismatches: List[str] = field(default_factory=list)
 
     def format_report(self) -> str:
         """Report lỗi có cấu trúc, gom theo part_id — dùng khi debug thủ
@@ -98,6 +100,9 @@ class ReviewResult:
         )
         for mismatch in self.dimension_mismatches:
             lines.append(f"    - {mismatch}")
+        lines.append(f"  contour joins: {self.contour_checked_count} checked, {len(self.contour_mismatches)} mismatch")
+        for mismatch in self.contour_mismatches:
+            lines.append(f"    - {mismatch}")
         lines.append(
             f"  components (INSERT): {self.component_checked_count} checked, "
             f"{len(self.component_mismatches)} mismatch"
@@ -114,12 +119,115 @@ class ReviewResult:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class DimensionLineIntegrityResult:
+    qualification: str
+    semantic_review: ReviewResult | None
+    mismatches: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return self.qualification == "QUALIFIED"
+
+
 def _dist(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 def _dist3(a, b) -> float:
-    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+    a = (*a, 0.0) if len(a) == 2 else a
+    b = (*b, 0.0) if len(b) == 2 else b
+    distance = math.dist(a, b)
+    return distance if math.isfinite(distance) else math.inf
+
+
+def _scalar_matches(actual: float, expected: float, tolerance: float) -> bool:
+    """Require finite scalars without changing existing absolute tolerances."""
+    return (
+        math.isfinite(actual) and math.isfinite(expected)
+        and abs(actual - expected) <= tolerance
+    )
+
+
+def linear_dimension_matches_feature(dimension: dict, feature: dict) -> bool:
+    """Prove WCS extension origins match a declared direct ModelSpace LINE.
+
+    This checks measured-feature placement, not a native DIMASSOC dependency.
+    Missing readback cannot be filled from expected/build geometry.
+    """
+    def point(value):
+        if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+            raise ValueError("missing native point")
+        if any(type(item) not in (int, float) or not math.isfinite(item) for item in value):
+            raise ValueError("invalid native point")
+        return tuple(value) if len(value) == 3 else (*value, 0.0)
+
+    if feature.get("type") != "LINE" or feature.get("layout") != "Model":
+        return False
+    dimtype = dimension.get("dimtype")
+    # Linear/aligned types allow only block-reference (32) and moved-text (128)
+    # flags. Ordinate-only bit64 or unknown bits cannot prove this binding.
+    if (dimension.get("layout") != "Model" or type(dimtype) is not int
+            or dimtype not in (0, 1, 32, 33, 128, 129, 160, 161)):
+        return False
+    try:
+        origins = [point(dimension.get(name)) for name in ("defpoint2", "defpoint3")]
+        endpoints = [point(feature.get(name)) for name in ("start", "end")]
+        return any(all(math.dist(a, b) <= _DEFAULT_TOLERANCE_MM for a, b in zip(origins, ordered))
+                   for ordered in (endpoints, list(reversed(endpoints))))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def contour_endpoints(geometry: dict) -> dict:
+    """Resolve LINE/planar ARC endpoints using the existing ezdxf geometry API.
+
+    Snapshots must describe the actual native entity, never written expectations.
+    This is endpoint incidence only; it does not assert tangency or 3D fillets.
+    """
+    from ezdxf.math import ConstructionArc
+
+    def point(value):
+        if not isinstance(value, (tuple, list)) or len(value) not in (2, 3):
+            raise ValueError("unavailable contour point")
+        if any(type(item) not in (int, float) or not math.isfinite(item) for item in value):
+            raise ValueError("invalid contour point")
+        return tuple(value) if len(value) == 3 else (*value, 0.0)
+
+    if geometry.get("type") == "line":
+        return {"start": point(geometry.get("start")), "end": point(geometry.get("end"))}
+    if geometry.get("type") == "arc":
+        center = point(geometry.get("center"))
+        extrusion = point(geometry.get("extrusion"))
+        if extrusion != (0.0, 0.0, 1.0):
+            raise ValueError("unsupported contour ARC plane")
+        values = [geometry.get("radius"), geometry.get("start_angle_deg", geometry.get("start_angle")),
+                  geometry.get("end_angle_deg", geometry.get("end_angle"))]
+        if any(type(value) not in (int, float) or not math.isfinite(value) for value in values) or values[0] <= 0:
+            raise ValueError("invalid contour ARC geometry")
+        arc = ConstructionArc(center[:2], *values)
+        return {"start": (*arc.start_point, center[2]), "end": (*arc.end_point, center[2])}
+    raise ValueError("unsupported contour entity")
+
+
+def review_contour_joins(joins: dict, endpoints_by_primitive_id: dict) -> tuple[int, List[str]]:
+    """Check only declared endpoint pairs; unreadable obligations fail closed."""
+    try:
+        validate_contour_joins(joins)
+    except ValueError as error:
+        return 0, [f"contour: {error}"]
+    mismatches = []
+    for join_id, join in joins.items():
+        try:
+            points = [endpoints_by_primitive_id[side["primitive_id"]][side["endpoint"]]
+                      for side in (join["first"], join["second"])]
+            gap = math.dist(*points)
+        except (KeyError, TypeError, ValueError):
+            mismatches.append(f"{join_id}: contour endpoint readback unavailable")
+            continue
+        if not math.isfinite(gap) or gap > _DEFAULT_TOLERANCE_MM:
+            mismatches.append(f"{join_id}: open contour join, endpoint gap={gap:.12g} mm")
+    return len(joins), mismatches
 
 
 def resolve_component_insert(db, modelspace, handle, part_id, expected_block_name=None):
@@ -153,11 +261,63 @@ def resolve_component_insert(db, modelspace, handle, part_id, expected_block_nam
     return None, "missing"
 
 
-def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERANCE_MM) -> ReviewResult:
+def find_component_in_non_modelspace(
+    doc, part_id, tracked_handle=None, written_component=None,
+):
+    """Find direct foreign identities and unresolved same-block occurrences.
+
+    Property similarity cannot resolve missing identity. An explicit distinct
+    PART_ID excludes fallback ambiguity, but never overrides a direct match.
+    """
+    modelspace_owner = doc.modelspace().block_record_handle
+    matches = []
+    seen_owners = set()
+    for layout in (*doc.layouts, *doc.blocks):
+        owner = layout.block_record_handle
+        if owner == modelspace_owner or owner in seen_owners:
+            continue
+        seen_owners.add(owner)
+        for entity in layout:
+            if entity.dxftype() != "INSERT":
+                continue
+            identities = [
+                str(attribute.dxf.text)
+                for attribute in entity.attribs
+                if str(attribute.dxf.tag) == "PART_ID"
+            ]
+            direct_match = entity.dxf.handle == tracked_handle or part_id in identities
+            independently_identified = len(identities) == 1 and bool(identities[0].strip())
+            ambiguous = (
+                not independently_identified
+                and written_component
+                and entity.dxf.name.casefold() == str(written_component.get("block_name")).casefold()
+            )
+            if direct_match or ambiguous:
+                matches.append(entity)
+    return matches
+
+
+def review_dxf(
+    build_result: BuildResult,
+    tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+    *,
+    strict_primitive_inventory: bool = False,
+) -> ReviewResult:
     """Đọc lại `build_result.output_path` và đối chiếu từng primitive đã
     build (theo handle) với `written_geometry_by_primitive_id`. Raise
     ImportError nếu chưa cài `ezdxf` (cùng chiến lược lazy-import khác
     trong dự án)."""
+    if isinstance(tolerance_mm, bool) or type(tolerance_mm) not in (int, float):
+        raise ValueError("tolerance_mm must be a finite non-negative int or float")
+    try:
+        finite_tolerance = math.isfinite(tolerance_mm)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "tolerance_mm must be a finite non-negative int or float"
+        ) from exc
+    if not finite_tolerance or tolerance_mm < 0:
+        raise ValueError("tolerance_mm must be a finite non-negative int or float")
+
     try:
         import ezdxf
     except ImportError as exc:
@@ -167,10 +327,64 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
         ) from exc
 
     doc = ezdxf.readfile(build_result.output_path)
+    return _review_dxf_loaded(
+        build_result, doc, tolerance_mm,
+        strict_primitive_inventory=strict_primitive_inventory,
+    )
+
+
+def _review_dxf_loaded(
+    build_result: BuildResult,
+    doc,
+    tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+    *,
+    strict_primitive_inventory: bool = False,
+) -> ReviewResult:
+    """Run the legacy semantic/graphics review on an already loaded document."""
     db = doc.entitydb
 
     mismatches: List[str] = []
     checked = 0
+    contour_endpoints_by_id = {}
+    if build_result.contour_join_by_id:
+        for pid, handle in build_result.handle_by_primitive_id.items():
+            entity = db.get(handle)
+            if entity is None or entity.dxf.owner != doc.modelspace().block_record_handle:
+                continue
+            try:
+                if entity.dxftype() == "LINE":
+                    geometry = {"type": "line", "start": tuple(entity.dxf.start),
+                                "end": tuple(entity.dxf.end)}
+                elif entity.dxftype() == "ARC":
+                    geometry = {
+                        "type": "arc", "center": tuple(entity.dxf.center),
+                        "radius": entity.dxf.radius, "start_angle_deg": entity.dxf.start_angle,
+                        "end_angle_deg": entity.dxf.end_angle, "extrusion": tuple(entity.dxf.extrusion),
+                    }
+                else:
+                    continue
+                contour_endpoints_by_id[pid] = contour_endpoints(geometry)
+            except (ValueError, TypeError, OverflowError):
+                pass  # Unreadable/unsupported geometry cannot prove the join.
+    contour_checked, contour_mismatches = review_contour_joins(
+        build_result.contour_join_by_id, contour_endpoints_by_id,
+    )
+
+    if strict_primitive_inventory:
+        authorized_handles = (
+            set(build_result.handle_by_primitive_id.values())
+            | set(build_result.dimension_handle_by_cross_validation_id.values())
+            | set(build_result.component_handle_by_part_id.values())
+        )
+        actual_handles = {entity.dxf.handle for entity in doc.modelspace()}
+        if actual_handles != authorized_handles:
+            missing = sorted(authorized_handles - actual_handles)
+            extra = sorted(actual_handles - authorized_handles)
+            mismatches.append(
+                "Primitive inventory mismatch: "
+                f"missing tracked handles={missing}, "
+                f"extra untracked handles={extra}"
+            )
 
     for pid, handle in build_result.handle_by_primitive_id.items():
         written = build_result.written_geometry_by_primitive_id.get(pid)
@@ -193,6 +407,30 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             )
             continue
 
+        if written["type"] == "line":
+            modelspace = doc.modelspace()
+            expected_owner = modelspace.block_record_handle
+            actual_owner = entity.dxf.get("owner")
+            actual_owner_record = db.get(actual_owner) if actual_owner else None
+            actual_owner_name = (
+                actual_owner_record.dxf.get("name")
+                if actual_owner_record is not None
+                and actual_owner_record.dxftype() == "BLOCK_RECORD"
+                else "UNKNOWN"
+            )
+            is_modelspace_member = entity in modelspace
+            if actual_owner != expected_owner or not is_modelspace_member:
+                actual_owner_label = (
+                    f"{actual_owner_name} ({actual_owner})"
+                    if actual_owner
+                    else "MISSING"
+                )
+                mismatches.append(
+                    f"{pid}: LINE handle '{handle}' expected ModelSpace owner "
+                    f"'{expected_owner}', actual owner '{actual_owner_label}'; "
+                    f"ModelSpace membership={is_modelspace_member}"
+                )
+
         actual_layer = entity.dxf.layer
         if expected_layer is not None and actual_layer != expected_layer:
             mismatches.append(
@@ -200,31 +438,31 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             )
 
         if written["type"] == "line":
-            actual_start = (entity.dxf.start.x, entity.dxf.start.y)
-            actual_end = (entity.dxf.end.x, entity.dxf.end.y)
-            if _dist(actual_start, written["start"]) > tolerance_mm:
+            actual_start = tuple(entity.dxf.start)
+            actual_end = tuple(entity.dxf.end)
+            if _dist3(actual_start, written["start"]) > tolerance_mm:
                 mismatches.append(f"{pid}: điểm đầu LINE lệch — ghi {written['start']}, đọc lại {actual_start}")
-            if _dist(actual_end, written["end"]) > tolerance_mm:
+            if _dist3(actual_end, written["end"]) > tolerance_mm:
                 mismatches.append(f"{pid}: điểm cuối LINE lệch — ghi {written['end']}, đọc lại {actual_end}")
 
         elif written["type"] == "circle":
-            actual_center = (entity.dxf.center.x, entity.dxf.center.y)
-            if _dist(actual_center, written["center"]) > tolerance_mm:
+            actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
+            if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm CIRCLE lệch — ghi {written['center']}, đọc lại {actual_center}")
-            if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
+            if not _scalar_matches(entity.dxf.radius, written["radius"], tolerance_mm):
                 mismatches.append(
                     f"{pid}: bán kính CIRCLE lệch — ghi {written['radius']}, đọc lại {entity.dxf.radius}"
                 )
 
         elif written["type"] == "arc":
-            actual_center = (entity.dxf.center.x, entity.dxf.center.y)
-            if _dist(actual_center, written["center"]) > tolerance_mm:
+            actual_center = tuple(entity.ocs().to_wcs(entity.dxf.center))
+            if _dist3(actual_center, written["center"]) > tolerance_mm:
                 mismatches.append(f"{pid}: tâm ARC lệch — ghi {written['center']}, đọc lại {actual_center}")
-            if abs(entity.dxf.radius - written["radius"]) > tolerance_mm:
+            if not _scalar_matches(entity.dxf.radius, written["radius"], tolerance_mm):
                 mismatches.append(f"{pid}: bán kính ARC lệch")
-            if abs(entity.dxf.start_angle - written["start_angle_deg"]) > 1e-4:
+            if not _scalar_matches(entity.dxf.start_angle, written["start_angle_deg"], 1e-4):
                 mismatches.append(f"{pid}: góc bắt đầu ARC lệch")
-            if abs(entity.dxf.end_angle - written["end_angle_deg"]) > 1e-4:
+            if not _scalar_matches(entity.dxf.end_angle, written["end_angle_deg"], 1e-4):
                 mismatches.append(f"{pid}: góc kết thúc ARC lệch")
 
         elif written["type"] == "text":
@@ -232,9 +470,17 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
                 mismatches.append(
                     f"{pid}: nội dung TEXT lệch — ghi {written['content']!r}, đọc lại {entity.dxf.text!r}"
                 )
-            actual_insert = (entity.dxf.insert.x, entity.dxf.insert.y)
-            if _dist(actual_insert, written["insert"]) > tolerance_mm:
+            actual_insert = tuple(entity.ocs().to_wcs(entity.dxf.insert))
+            if _dist3(actual_insert, written["insert"]) > tolerance_mm:
                 mismatches.append(f"{pid}: vị trí TEXT lệch")
+            for field_name, actual_value, field_tolerance in (
+                ("height", entity.dxf.height, tolerance_mm),
+                ("rotation_deg", entity.dxf.rotation, _ROTATION_TOLERANCE_DEG),
+            ):
+                if field_name in written and not _scalar_matches(
+                    actual_value, written[field_name], field_tolerance
+                ):
+                    mismatches.append(f"{pid}: TEXT {field_name} lệch so với geometry đã build")
 
     # thiếu-hụt ngược: mọi primitive Builder đã coi là skip (không vẽ được)
     # không thuộc trách nhiệm Reviewer #1 (đó là lỗi dữ liệu Phase 1/2 gốc,
@@ -284,17 +530,41 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             )
         measurement = float(entity.get_measurement())
         dimension_measurement_by_id[validation_id] = measurement
-        if abs(measurement - float(expected["measurement"])) > tolerance_mm:
+        if not _scalar_matches(
+            measurement, float(expected["measurement"]), tolerance_mm,
+        ):
             dimension_mismatches.append(
                 f"{validation_id}: expected measurement "
                 f"{expected['measurement']}, actual {measurement}"
             )
         approved = expected.get("approved_value_mm")
-        if approved is not None and abs(measurement - float(approved)) > tolerance_mm:
+        if approved is not None and not _scalar_matches(
+            measurement, float(approved), tolerance_mm,
+        ):
             dimension_mismatches.append(
                 f"{validation_id}: approved measurement {approved}, "
                 f"actual {measurement}, tolerance {tolerance_mm}"
             )
+        feature_id = expected.get("geometry_primitive_id")
+        if feature_id is not None:
+            feature_handle = build_result.handle_by_primitive_id.get(feature_id)
+            feature = db.get(feature_handle) if feature_handle else None
+            feature_geometry = {}
+            if feature is not None and feature.dxftype() == "LINE":
+                feature_geometry = {
+                    "type": "LINE", "layout": "Model" if feature in doc.modelspace() else None,
+                    "start": tuple(feature.dxf.start), "end": tuple(feature.dxf.end),
+                }
+            definition = {
+                "dimtype": entity.dxf.dimtype,
+                "layout": "Model" if entity in doc.modelspace() else None,
+                "defpoint2": tuple(entity.dxf.get("defpoint2")) if entity.dxf.hasattr("defpoint2") else None,
+                "defpoint3": tuple(entity.dxf.get("defpoint3")) if entity.dxf.hasattr("defpoint3") else None,
+            }
+            if not linear_dimension_matches_feature(definition, feature_geometry):
+                dimension_mismatches.append(
+                    f"{validation_id}: DIMENSION feature binding unavailable or differs from LINE {feature_id!r}"
+                )
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
         written = build_result.written_component_by_part_id.get(part_id)
@@ -302,6 +572,24 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             component_mismatches.append(ComponentMismatch(
                 part_id=part_id, field="written_component", expected="<có ghi nhận>", actual=None,
                 message=f"{part_id}: không có written_component ghi nhận lúc build (bug ở builder.py)",
+            ))
+            continue
+
+        misplaced = find_component_in_non_modelspace(
+            doc, part_id, tracked_handle=handle, written_component=written,
+        )
+        if misplaced:
+            owners = tuple(entity.dxf.get("owner") for entity in misplaced)
+            actual_owner = owners[0] if len(owners) == 1 else owners
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id,
+                field="layout",
+                expected=doc.modelspace().block_record_handle,
+                actual=actual_owner,
+                message=(
+                    f"{part_id}: foreign INSERT identity match or unresolved same-block identity; "
+                    f"candidates(owner, handle)={tuple((e.dxf.owner, e.dxf.handle) for e in misplaced)!r}"
+                ),
             ))
             continue
 
@@ -323,6 +611,21 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
 
         if identity_source == "part_id":
             build_result.component_handle_by_part_id[part_id] = entity.dxf.handle
+
+        expected_owner = doc.modelspace().block_record_handle
+        actual_owner = entity.dxf.get("owner")
+        if actual_owner != expected_owner:
+            component_mismatches.append(ComponentMismatch(
+                part_id=part_id,
+                field="layout",
+                expected=expected_owner,
+                actual=actual_owner,
+                message=(
+                    f"{part_id}: INSERT thuộc owner {actual_owner!r}, "
+                    f"không thuộc ModelSpace owner {expected_owner!r}"
+                ),
+            ))
+            continue
 
         component_checked += 1
         dxftype = entity.dxftype()
@@ -363,7 +666,7 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
         for axis in _INSERT_SCALE_FIELDS:
             actual_val = getattr(entity.dxf, axis)
             expected_val = written[axis]
-            if abs(actual_val - expected_val) > tolerance_mm:
+            if not _scalar_matches(actual_val, expected_val, tolerance_mm):
                 component_mismatches.append(ComponentMismatch(
                     part_id=part_id, field=axis, expected=expected_val, actual=actual_val,
                     message=f"{part_id}: {axis} INSERT lệch — ghi {expected_val}, đọc lại {actual_val}",
@@ -371,7 +674,7 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
 
         actual_rotation = entity.dxf.rotation
         expected_rotation = written["rotation_deg"]
-        if abs(actual_rotation - expected_rotation) > _ROTATION_TOLERANCE_DEG:
+        if not _scalar_matches(actual_rotation, expected_rotation, _ROTATION_TOLERANCE_DEG):
             component_mismatches.append(ComponentMismatch(
                 part_id=part_id, field="rotation_deg",
                 expected=expected_rotation, actual=actual_rotation,
@@ -412,6 +715,7 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
             len(mismatches) == 0
             and len(component_mismatches) == 0
             and len(dimension_mismatches) == 0
+            and len(contour_mismatches) == 0
         ),
         checked_count=checked,
         mismatches=mismatches,
@@ -419,5 +723,169 @@ def review_dxf(build_result: BuildResult, tolerance_mm: float = _DEFAULT_TOLERAN
         component_mismatches=component_mismatches,
         dimension_checked_count=dimension_checked,
         dimension_mismatches=dimension_mismatches,
+        contour_checked_count=contour_checked,
+        contour_mismatches=contour_mismatches,
         dimension_measurement_by_id=dimension_measurement_by_id,
     )
+
+
+def _dimension_line_match(expected, actual, tolerance_mm: float) -> bool:
+    return (
+        _dist3(expected[0], actual[0]) <= tolerance_mm
+        and _dist3(expected[1], actual[1]) <= tolerance_mm
+    ) or (
+        _dist3(expected[0], actual[1]) <= tolerance_mm
+        and _dist3(expected[1], actual[0]) <= tolerance_mm
+    )
+
+
+def _has_complete_line_matching(expected, actual, tolerance_mm: float) -> bool:
+    """Deterministic augmenting-path matching; preserves duplicate multiplicity."""
+    edges = [
+        [index for index, candidate in enumerate(actual)
+         if _dimension_line_match(line, candidate, tolerance_mm)]
+        for line in expected
+    ]
+    matched_expected_by_actual: dict[int, int] = {}
+
+    def augment(expected_index: int, visited: set[int]) -> bool:
+        for actual_index in edges[expected_index]:
+            if actual_index in visited:
+                continue
+            visited.add(actual_index)
+            previous = matched_expected_by_actual.get(actual_index)
+            if previous is None or augment(previous, visited):
+                matched_expected_by_actual[actual_index] = expected_index
+                return True
+        return False
+
+    return all(augment(index, set()) for index in range(len(expected)))
+
+
+def review_dxf_with_dimension_line_integrity(
+    build_result: BuildResult,
+    tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+) -> DimensionLineIntegrityResult:
+    """Combine the unchanged review with captured anonymous-block LINE integrity."""
+    expectations = getattr(build_result, "dimension_line_expectations", None)
+    if (
+        type(build_result) is not BuildResult
+        or type(expectations) is not tuple
+        or not expectations
+        or len(expectations) != build_result.dimension_count
+        or len(expectations) > 256
+        or any(type(item) is not DimensionLineExpectation for item in expectations)
+    ):
+        return DimensionLineIntegrityResult("UNKNOWN", None, ("missing or invalid ephemeral expectations",))
+    expected_handles = build_result.dimension_handle_by_cross_validation_id
+    expectation_ids = [item.validation_id for item in expectations]
+    expectation_handles = [item.dimension_handle for item in expectations]
+    if (
+        len(expected_handles) != build_result.dimension_count
+        or set(expectation_ids) != set(expected_handles)
+        or len(set(expectation_ids)) != len(expectation_ids)
+        or len(set(expectation_handles)) != len(expectation_handles)
+        or any(
+        item.validation_id not in expected_handles
+        or expected_handles[item.validation_id] != item.dimension_handle
+        or any(not math.isfinite(value)
+               for line in item.line_endpoints for point in line for value in point)
+        for item in expectations
+        )
+    ):
+        return DimensionLineIntegrityResult(
+            "UNKNOWN", None,
+            ("expectations are not a complete unique mapping or contain non-finite geometry",),
+        )
+    if (
+        isinstance(tolerance_mm, bool)
+        or not isinstance(tolerance_mm, (int, float))
+        or not math.isfinite(tolerance_mm)
+        or tolerance_mm < 0
+        or tolerance_mm > _DEFAULT_TOLERANCE_MM
+    ):
+        return DimensionLineIntegrityResult("UNKNOWN", None,
+                                            ("tolerance is outside the approved policy",))
+    try:
+        import ezdxf
+    except ImportError as exc:
+        raise ImportError(
+            "Cần cài package 'ezdxf' để dùng Reviewer #1: "
+            "pip install ezdxf --break-system-packages"
+        ) from exc
+
+    doc = ezdxf.readfile(build_result.output_path)
+    semantic_review = _review_dxf_loaded(build_result, doc, tolerance_mm)
+    db = doc.entitydb
+    line_mismatches: list[str] = []
+    for expectation in expectations:
+        if (
+            not expectation.validation_id
+            or not expectation.dimension_handle
+            or not expectation.block_name
+            or not expectation.line_endpoints
+            or len(expectation.line_endpoints) > 64
+        ):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("malformed or incomplete expectations",))
+        dimension = db.get(expectation.dimension_handle)
+        if dimension is None or dimension.dxftype() != "DIMENSION":
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("missing or reassociated DIMENSION identity",))
+        if (int(dimension.dxf.dimtype) & 7) != 0:
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION type",))
+        try:
+            insertion = tuple(float(value) for value in dimension.dxf.insert)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION insertion transform",))
+        if (
+            len(insertion) != 3
+            or not all(math.isfinite(value) for value in insertion)
+            or insertion != (0.0, 0.0, 0.0)
+        ):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION insertion transform",))
+        extrusion = tuple(dimension.dxf.get("extrusion", (0.0, 0.0, 1.0)))
+        if extrusion != (0.0, 0.0, 1.0):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION extrusion",))
+        try:
+            actual_block_name = dimension.dxf.geometry
+            block = doc.blocks.get(actual_block_name)
+        except (AttributeError, KeyError, TypeError):
+            block = None
+            actual_block_name = None
+        if (block is None or actual_block_name != expectation.block_name
+                or tuple(block.base_point) != (0.0, 0.0, 0.0)):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("missing, reassociated, or unsupported anonymous block",))
+        actual_lines = []
+        for entity in block:
+            if entity.dxftype() != "LINE":
+                continue
+            try:
+                endpoints = (tuple(float(v) for v in entity.dxf.start),
+                             tuple(float(v) for v in entity.dxf.end))
+                if not all(math.isfinite(v) for point in endpoints for v in point):
+                    return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                        ("non-finite emitted LINE",))
+                actual_lines.append(endpoints)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                    ("malformed emitted LINE",))
+        expected_lines = expectation.line_endpoints
+        if len(actual_lines) != len(expected_lines) or not _has_complete_line_matching(
+            expected_lines, actual_lines, tolerance_mm,
+        ):
+            line_mismatches.append(
+                f"{expectation.validation_id}: anonymous block LINE inventory differs "
+                f"(expected {len(expected_lines)}, actual {len(actual_lines)})"
+            )
+    if line_mismatches:
+        return DimensionLineIntegrityResult("FAILED", semantic_review, tuple(line_mismatches))
+    if not semantic_review.passed:
+        return DimensionLineIntegrityResult("FAILED", semantic_review,
+                                            ("existing semantic/graphics review did not pass",))
+    return DimensionLineIntegrityResult("QUALIFIED", semantic_review)

@@ -2,8 +2,10 @@ import hashlib
 import json
 import tempfile
 import unittest
+from itertools import count
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from mcp_integration_lib.mcp_client import (
     FileIPCLiveMCPClient,
@@ -17,6 +19,113 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self._ipc_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._ipc_tmp.cleanup)
         self._ipc_dir = self._ipc_tmp.name
+
+    def test_claim_bound_open_waits_for_exact_document_ack_before_loader(self):
+        loaded = []
+        probes = []
+        target = "C:/work/slow-open.dwg"
+
+        def raw(command):
+            marker = '(setq mcp-ready-file (open "'
+            if marker in command:
+                probes.append(command)
+                # The first expression is dropped by the opening editor, as in
+                # the actual cold DWG log. A later readonly probe executes.
+                if len(probes) == 1:
+                    return
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                path.write_text(token + "\n" + target + "\nREADY\n", encoding="utf-8")
+            elif command.startswith("(progn (setq *cad-agent-file-ipc-root*"):
+                loaded.append(command)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            timeout_s=0.05, poll_interval_s=0.001, document_settle_s=0,
+            legacy_fixture_mode=False,
+        )
+
+        def dispatch(command, params):
+            if command == "ping" and len(probes) < 2:
+                raise MCPTimeoutError("dispatcher loader arrived before editor ready")
+            return {"DWGPREFIX":"C:/work/", "DWGNAME":"slow-open.dwg"}
+
+        client._dispatch = dispatch
+        self.assertEqual({"path":target}, client.drawing_open(target))
+        self.assertEqual(1, len(loaded))
+        self.assertEqual(2, len(probes))
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_claim_bound_open_without_exact_document_ack_never_loads(self):
+        loaded = []
+
+        def raw(command):
+            marker = '(setq mcp-ready-file (open "'
+            if marker in command:
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                path.write_text(token + "\nC:/work/protected-source.dwg\nREADY\n", encoding="utf-8")
+            elif command.startswith("(progn (setq *cad-agent-file-ipc-root*"):
+                loaded.append(command)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+            timeout_s=0.02, poll_interval_s=0.001, document_settle_s=0,
+            legacy_fixture_mode=False,
+        )
+        client._dispatch = lambda command, params: {
+            "DWGPREFIX":"C:/work/", "DWGNAME":"wanted.dwg",
+        }
+        # Exercise acknowledgement identity, independent of host filesystem latency.
+        # Advancing on every read also keeps a missing acknowledgement bounded.
+        clock = SimpleNamespace(
+            monotonic=count(step=0.001).__next__, sleep=lambda _seconds: None,
+        )
+        with patch("mcp_integration_lib.mcp_client.time", clock):
+            with self.assertRaisesRegex(MCPToolError, "DRAWING_OPEN_READINESS_TARGET_MISMATCH"):
+                client.drawing_open("C:/work/wanted.dwg")
+        self.assertEqual([], loaded)
+        self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_claim_bound_open_rejects_missing_incomplete_or_foreign_ack(self):
+        for mode in ("missing", "incomplete", "foreign"):
+            with self.subTest(mode=mode):
+                loaded = []
+                opened = []
+                probes = []
+
+                def raw(command):
+                    if "vla-open" in command:
+                        opened.append(command)
+                    marker = '(setq mcp-ready-file (open "'
+                    if marker in command:
+                        probes.append(command)
+                        path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                        token = path.stem.removeprefix("autocad_mcp_document_ready_")
+                        if mode != "missing":
+                            text = token + "\nC:/work/wanted.dwg\n"
+                            if mode == "foreign":
+                                text = "foreign-nonce\nC:/work/wanted.dwg\nREADY\n"
+                            path.write_text(text, encoding="utf-8")
+                    elif command.startswith("(progn (setq *cad-agent-file-ipc-root*"):
+                        loaded.append(command)
+
+                client = FileIPCLiveMCPClient(
+                    ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+                    bootstrap_lisp_path="C:/tools/mcp_dispatch.lsp",
+                    timeout_s=0.03, poll_interval_s=0.001, document_settle_s=0,
+                    legacy_fixture_mode=False,
+                )
+                client._dispatch = lambda *_args: self.fail("No dispatch before readiness")
+                error = MCPToolError if mode == "foreign" else MCPTimeoutError
+                with self.assertRaisesRegex(error, "DRAWING_OPEN_READINESS"):
+                    client.drawing_open("C:/work/wanted.dwg")
+                self.assertEqual([], loaded)
+                self.assertEqual(1, len(opened))
+                self.assertLessEqual(len(probes), 3)
+                self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
 
     def _client(self, raw_commands, command_sequences):
         return FileIPCLiveMCPClient(
@@ -248,7 +357,10 @@ class DrawingOpenFallbackTests(unittest.TestCase):
                 listing_path = Path(
                     command.split(marker, 1)[1].split('"', 1)[0].replace("/", "\\")
                 )
-                listing_path.write_text("C:/work/a.dxf\n", encoding="utf-8")
+                token = listing_path.stem.removeprefix("autocad_mcp_open_documents_")
+                listing_path.write_text(
+                    f"BEGIN:{token}\nC:/work/a.dxf\nEND:{token}\n", encoding="utf-8"
+                )
 
         client = FileIPCLiveMCPClient(
             ipc_dir=self._ipc_dir,
@@ -272,6 +384,125 @@ class DrawingOpenFallbackTests(unittest.TestCase):
         self.assertEqual(2, attempts)
         self.assertIsNotNone(listing_path)
         self.assertFalse(listing_path.exists())
+
+    def test_document_census_requires_complete_matching_response(self):
+        for mode in ("empty", "partial", "foreign", "truncated_end"):
+            with self.subTest(mode=mode):
+                def raw(command):
+                    marker = '(setq mcp-doc-file (open "'
+                    path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                    token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                    responses = {
+                        "empty": "",
+                        "partial": f"BEGIN:{token}\nC:/work/other.dxf\n",
+                        "foreign": "BEGIN:old\nEND:old\n",
+                        "truncated_end": f"BEGIN:{token}\nEND:{token}",
+                    }
+                    path.write_text(responses[mode], encoding="utf-8")
+
+                client = FileIPCLiveMCPClient(
+                    ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+                    timeout_s=0.02, poll_interval_s=0.001,
+                )
+                with self.assertRaises((MCPTimeoutError, MCPToolError)):
+                    client.drawing_list_open_paths()
+                self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
+
+    def test_document_census_accepts_only_completed_empty_or_populated_list(self):
+        for paths in ([], ["C:/work/a.dxf", "C:/work/b.dwg"], ["", "C:/work/a.dxf"]):
+            with self.subTest(paths=paths):
+                commands = []
+
+                def raw(command):
+                    commands.append(command)
+                    marker = '(setq mcp-doc-file (open "'
+                    path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                    token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                    path.write_text("\n".join([f"BEGIN:{token}", *paths, f"END:{token}", ""]), encoding="utf-8")
+
+                client = FileIPCLiveMCPClient(
+                    ipc_dir=self._ipc_dir, raw_lisp_trigger=raw, timeout_s=0.02,
+                )
+                self.assertEqual([path for path in paths if path], client.drawing_list_open_paths())
+                self.assertIn('(write-line "BEGIN:', commands[0])
+                self.assertIn('(write-line "END:', commands[0])
+
+    def test_incomplete_census_cannot_confirm_close_or_clear_bound_target(self):
+        commands = []
+
+        def raw(command):
+            commands.append(command)
+            marker = '(setq mcp-doc-file (open "'
+            if marker in command:
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                path.write_text("", encoding="utf-8")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            timeout_s=0.01, poll_interval_s=0.001, document_settle_s=0,
+            disposable_close_client=SimpleNamespace(close_disposable=lambda path, **_: {
+                "success": True, "operation": "close_disposable", "drawing_full_path": path,
+            }),
+            disposable_close_paths=["C:/work/a.dxf"],
+        )
+        client._active_drawing_path = "c:\\work\\a.dxf"
+        client._dispatch = lambda *_: {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+        with self.assertRaisesRegex(MCPToolError, "DRAWING_CLOSE_NOT_CONFIRMED"):
+            client.drawing_close()
+        self.assertEqual("c:\\work\\a.dxf", client._active_drawing_path)
+        self.assertFalse(any('(command-s "_.CLOSE"' in command for command in commands))
+
+    def test_complete_census_with_target_does_not_confirm_close(self):
+        commands = []
+
+        def raw(command):
+            commands.append(command)
+            marker = '(setq mcp-doc-file (open "'
+            if marker in command:
+                path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+                token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                path.write_text(f"BEGIN:{token}\nC:/work/a.dxf\nEND:{token}\n", encoding="utf-8")
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            timeout_s=0.01, poll_interval_s=0.01, document_settle_s=0,
+            disposable_close_client=SimpleNamespace(close_disposable=lambda path, **_: {
+                "success": True, "operation": "close_disposable", "drawing_full_path": path,
+            }),
+            disposable_close_paths=["C:/work/a.dxf"],
+        )
+        client._active_drawing_path = "c:\\work\\a.dxf"
+        client._dispatch = lambda *_: {"DWGPREFIX": "C:/work/", "DWGNAME": "a.dxf"}
+        with self.assertRaisesRegex(MCPToolError, "DRAWING_CLOSE_NOT_CONFIRMED"):
+            client.drawing_close()
+        self.assertEqual("c:\\work\\a.dxf", client._active_drawing_path)
+        self.assertFalse(any('(command-s "_.CLOSE"' in command for command in commands))
+
+    def test_document_census_waits_for_writer_to_finish(self):
+        reads = []
+
+        def raw(command):
+            marker = '(setq mcp-doc-file (open "'
+            path = Path(command.split(marker, 1)[1].split('"', 1)[0])
+            path.write_text("", encoding="utf-8")
+
+        original_read = Path.read_text
+
+        def staged_read(path, *args, **kwargs):
+            if path.name.startswith("autocad_mcp_open_documents_"):
+                reads.append(path)
+                if len(reads) == 2:
+                    token = path.stem.removeprefix("autocad_mcp_open_documents_")
+                    path.write_text(f"BEGIN:{token}\nC:/work/a.dxf\nEND:{token}\n", encoding="utf-8")
+            return original_read(path, *args, **kwargs)
+
+        client = FileIPCLiveMCPClient(
+            ipc_dir=self._ipc_dir, raw_lisp_trigger=raw,
+            timeout_s=0.1, poll_interval_s=0.001,
+        )
+        with patch.object(Path, "read_text", staged_read):
+            self.assertEqual(["C:/work/a.dxf"], client.drawing_list_open_paths())
+        self.assertEqual(2, len(reads))
 
     def test_fail_closed_cleanup_preserves_disposable_fixture_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

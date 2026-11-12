@@ -24,6 +24,13 @@ class MCPToolError(RuntimeError):
     """An MCP operation failed."""
 
 
+class DisposableCloseClient(Protocol):
+    """Existing application-idle close owner supplied by approved runtime setup."""
+
+    def close_disposable(self, drawing_full_path: str, *, disposable: bool,
+                         save_changes: bool) -> Dict[str, Any]: ...
+
+
 def _normalized_autocad_path(path: str) -> str:
     """Normalize an AutoCAD Windows document path for identity comparison."""
     return ntpath.normpath(path.replace("/", "\\")).casefold()
@@ -273,7 +280,9 @@ class FileIPCLiveMCPClient:
                  document_settle_s: float = 2.0,
                  command_trigger: Optional[Callable[[str], None]] = None,
                  start_tab_no_document_probe: Optional[Callable[[], bool]] = None,
-                 legacy_fixture_mode: Optional[bool] = None) -> None:
+                 legacy_fixture_mode: Optional[bool] = None,
+                 disposable_close_client: Optional[DisposableCloseClient] = None,
+                 disposable_close_paths: Optional[List[str]] = None) -> None:
         self._dir = _validate_file_ipc_root(ipc_dir)
         self._root_identity = _file_ipc_root_identity(self._dir)
         self._trigger = trigger
@@ -291,6 +300,20 @@ class FileIPCLiveMCPClient:
         self._command_trigger = command_trigger
         self._start_tab_no_document_probe = start_tab_no_document_probe
         self._active_drawing_path: Optional[str] = None
+        self._last_exchange_evidence: Optional[Dict[str, Any]] = None
+        # Explicit per-session disposable scope; never discover/load a plugin or
+        # infer approval from an arbitrary active document.
+        self._disposable_close_client = disposable_close_client
+        self._disposable_close_paths = frozenset(
+            _normalized_autocad_path(path) for path in (disposable_close_paths or [])
+        )
+
+    @property
+    def last_exchange_evidence(self) -> Optional[Dict[str, Any]]:
+        """Return privacy-safe evidence for the latest validated exchange."""
+        if self._last_exchange_evidence is None:
+            return None
+        return dict(self._last_exchange_evidence)
 
     def _assert_root_unchanged(self) -> None:
         try:
@@ -304,6 +327,9 @@ class FileIPCLiveMCPClient:
             raise MCPToolError("IPC_ROOT_CHANGED") from exc
 
     def _dispatch(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        # Evidence is scoped to the current exchange.  Never let a prior
+        # terminal success describe a later failed or incomplete request.
+        self._last_exchange_evidence = None
         if command not in _FILE_IPC_ALLOWED_COMMANDS:
             raise MCPToolError("IPC_COMMAND_UNSUPPORTED")
         self._assert_root_unchanged()
@@ -385,7 +411,15 @@ class FileIPCLiveMCPClient:
                         raw_result,
                         error_code="IPC_RESULT_INVALID",
                     )
-                    return _validate_file_ipc_result(data, request_id, claim)
+                    payload = _validate_file_ipc_result(data, request_id, claim)
+                    self._last_exchange_evidence = {
+                        "request_id": request_id,
+                        "command": command,
+                        "claim_bound": claim is not None,
+                        "terminal": True,
+                        "ok": True,
+                    }
+                    return payload
                 time.sleep(self._poll)
             raise MCPTimeoutError(f"Timeout waiting for result (request_id={request_id})")
         finally:
@@ -434,6 +468,8 @@ class FileIPCLiveMCPClient:
                         raise
                     self._command_trigger('_.OPEN\r"' + normalized_path + '"')
                 time.sleep(self._document_settle_s)
+                if not self._legacy_fixture_mode:
+                    self._wait_for_active_document(expected_path)
                 self._active_drawing_path = expected_path
                 self._assert_root_unchanged()
                 root_literal = _autolisp_string_literal(str(self._dir).replace("\\", "/"))
@@ -469,6 +505,56 @@ class FileIPCLiveMCPClient:
         self._active_drawing_path = _normalized_autocad_path(path)
         return result
 
+    def _wait_for_active_document(self, expected_path: str) -> None:
+        """Require a completed readonly expression in the target editor before load.
+
+        Opening a DWG can drop queued expressions while its document context is
+        changing. Only this readonly probe may repeat; open and loader do not.
+        Legacy replay fixtures retain their existing transport contract.
+        """
+        self._assert_root_unchanged()
+        token = uuid.uuid4().hex
+        result = self._dir / f"autocad_mcp_document_ready_{token}.txt"
+        if result.exists() or result.is_symlink():
+            raise MCPToolError("DRAWING_OPEN_READINESS_CONFLICT")
+        literal = _autolisp_string_literal(str(result).replace("\\", "/"))
+        expression = (
+            '(progn (setq mcp-ready-file (open ' + literal + ' "w")) '
+            '(write-line "' + token + '" mcp-ready-file) '
+            '(write-line (strcat (getvar "DWGPREFIX") (getvar "DWGNAME")) '
+            'mcp-ready-file) (write-line "READY" mcp-ready-file) '
+            '(close mcp-ready-file))'
+        )
+        deadline = time.monotonic() + self._timeout
+        probe_interval = self._timeout / 3
+        next_probe = 0.0
+        probes = 0
+        try:
+            while time.monotonic() < deadline:
+                self._assert_root_unchanged()
+                if result.is_symlink() or _file_ipc_path_has_reparse_point(result):
+                    raise MCPToolError("DRAWING_OPEN_READINESS_CONFLICT")
+                if result.is_file():
+                    lines = result.read_text(encoding="utf-8").splitlines()
+                    if len(lines) == 3 and lines[-1] == "READY":
+                        if lines[0] != token:
+                            raise MCPToolError("DRAWING_OPEN_READINESS_IDENTITY_MISMATCH")
+                        if _normalized_autocad_path(lines[1]) != expected_path:
+                            raise MCPToolError("DRAWING_OPEN_READINESS_TARGET_MISMATCH")
+                        return
+                now = time.monotonic()
+                if probes < 3 and now >= next_probe:
+                    assert self._raw_lisp_trigger is not None
+                    self._raw_lisp_trigger(expression)
+                    probes += 1
+                    next_probe = now + probe_interval
+                time.sleep(self._poll)
+            raise MCPTimeoutError("DRAWING_OPEN_READINESS_NOT_CONFIRMED")
+        finally:
+            self._assert_root_unchanged()
+            if not result.is_symlink() and not _file_ipc_path_has_reparse_point(result):
+                result.unlink(missing_ok=True)
+
     def _start_tab_no_document_is_proven(self, error: Exception) -> bool:
         message = str(error).casefold()
         if any(marker in message for marker in ("rpc_e_call_rejected", "modal", "select file", "dialog")):
@@ -496,66 +582,92 @@ class FileIPCLiveMCPClient:
     def drawing_save(self, path: Optional[str] = None) -> None:
         self._dispatch("drawing-save", {"path": path} if path else {})
 
+    def _assert_active_document_matches(self, expected_path: Optional[str]) -> str:
+        if expected_path is None:
+            raise MCPToolError("DRAWING_CLOSE_TARGET_UNBOUND")
+        variables = self.drawing_get_variables(["DWGPREFIX", "DWGNAME"])
+        prefix = variables.get("DWGPREFIX")
+        name = variables.get("DWGNAME")
+        active_path = _normalized_autocad_path(
+            ntpath.join(str(prefix or ""), str(name or ""))
+        )
+        if not prefix or not name or active_path != expected_path:
+            raise MCPToolError("DRAWING_CLOSE_TARGET_MISMATCH")
+        return _autolisp_string_literal(expected_path.replace("\\", "/"))
+
     def drawing_close(self, save_changes: bool = False) -> None:
-        if self._raw_lisp_trigger is not None:
-            if save_changes:
-                self._raw_lisp_trigger(
-                    "(progn (vl-load-com) "
-                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    ":vlax-true))"
-                )
-            else:
-                self._raw_lisp_trigger(
-                    "(progn (vl-load-com) "
-                    "(vla-close (vla-get-ActiveDocument (vlax-get-acad-object)) "
-                    ":vlax-false))"
-                )
-            time.sleep(self._document_settle_s)
-            expected_path = self._active_drawing_path
-            if self._command_trigger is not None and expected_path is not None:
-                deadline = time.time() + max(5.0, self._document_settle_s * 3.0)
-                close_confirmed = False
-                while time.time() < deadline:
-                    try:
-                        open_paths = {
-                            _normalized_autocad_path(open_path)
-                            for open_path in self.drawing_list_open_paths()
-                        }
-                        if expected_path not in open_paths:
-                            close_confirmed = True
-                            break
-                    except (MCPTimeoutError, MCPToolError):
-                        pass
-                    time.sleep(self._poll)
-                if not close_confirmed:
-                    raise MCPToolError("DRAWING_CLOSE_NOT_CONFIRMED")
-            self._active_drawing_path = None
-            return
-        self._dispatch("drawing-close", {"save_changes": save_changes})
+        closer = self._disposable_close_client
+        if closer is None or not callable(getattr(closer, "close_disposable", None)):
+            raise MCPToolError("DISPOSABLE_CLOSE_UNAVAILABLE")
+        if save_changes is not False:
+            raise MCPToolError("DISPOSABLE_CLOSE_NO_SAVE_ONLY")
+        expected_path = self._active_drawing_path
+        if expected_path is None:
+            raise MCPToolError("DRAWING_CLOSE_TARGET_UNBOUND")
+        if _normalized_autocad_path(expected_path) not in self._disposable_close_paths:
+            raise MCPToolError("DISPOSABLE_CLOSE_TARGET_NOT_AUTHORIZED")
+        self._assert_active_document_matches(expected_path)
+        self._assert_root_unchanged()
+        result = closer.close_disposable(expected_path, disposable=True, save_changes=False)
+        if (not isinstance(result, dict) or result.get("success") is not True
+                or result.get("operation") != "close_disposable"
+                or not isinstance(result.get("drawing_full_path"), str)
+                or _normalized_autocad_path(result["drawing_full_path"])
+                   != _normalized_autocad_path(expected_path)):
+            raise MCPToolError("DISPOSABLE_CLOSE_DISPATCH_INVALID")
+        # The .NET result is emitted before its application-idle action. It is
+        # an acknowledgement, never proof that the drawing actually closed.
+        deadline = time.monotonic() + self._timeout
+        while time.monotonic() < deadline:
+            self._assert_root_unchanged()
+            try:
+                paths = self.drawing_list_open_paths()
+                if _normalized_autocad_path(expected_path) not in {
+                    _normalized_autocad_path(path) for path in paths
+                }:
+                    self._active_drawing_path = None
+                    return
+            except (MCPTimeoutError, MCPToolError):
+                pass
+            time.sleep(self._poll)
+        raise MCPToolError("DRAWING_CLOSE_NOT_CONFIRMED")
 
     def drawing_list_open_paths(self) -> List[str]:
         if self._raw_lisp_trigger is None:
-            return self._dispatch("drawing-list-open-paths", {}).get("paths", [])
+            paths = self._dispatch("drawing-list-open-paths", {}).get("paths")
+            if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+                raise MCPToolError("DRAWING_CENSUS_INVALID")
+            return paths
         token = uuid.uuid4().hex[:12]
         result = self._dir / f"autocad_mcp_open_documents_{token}.txt"
+        begin = f"BEGIN:{token}"
+        end = f"END:{token}"
         lisp_path = str(result).replace("\\", "/").replace('"', '\\"')
         try:
             self._raw_lisp_trigger(
                 '(progn (vl-load-com) '
                 f'(setq mcp-doc-file (open "{lisp_path}" "w")) '
+                f'(write-line "{begin}" mcp-doc-file) '
                 '(vlax-for mcp-open-doc '
                 '(vla-get-Documents (vlax-get-acad-object)) '
                 '(write-line (vla-get-FullName mcp-open-doc) mcp-doc-file)) '
+                f'(write-line "{end}" mcp-doc-file) '
                 "(close mcp-doc-file))"
             )
             deadline = time.time() + self._timeout
             while time.time() < deadline:
                 if result.is_file():
-                    return [
-                        line.strip()
-                        for line in result.read_text(encoding="utf-8").splitlines()
-                        if line.strip()
-                    ]
+                    # Existence alone includes the writer's empty/partial file.
+                    # Only a complete response can prove that a target is absent.
+                    text = result.read_text(encoding="utf-8")
+                    lines = text.splitlines()
+                    if (text.endswith("\n") and len(lines) >= 2
+                            and lines[0] == begin and lines[-1] == end
+                            and all(not line.startswith(("BEGIN:", "END:"))
+                                    for line in lines[1:-1])):
+                        # Unsaved native documents have no FullName. As before,
+                        # omit those entries from this saved-path inventory.
+                        return [line.strip() for line in lines[1:-1] if line.strip()]
                 time.sleep(self._poll)
             raise MCPTimeoutError("Timeout waiting for AutoCAD open-document list")
         finally:
@@ -572,7 +684,6 @@ class FileIPCLiveMCPClient:
 
     def drawing_save_as_dxf(self, path: str) -> None:
         self._dispatch("drawing-save-as-dxf", {"path": path.replace("\\", "/")})
-        self._active_drawing_path = _normalized_autocad_path(path)
 
     def drawing_get_variables(self, names: List[str]) -> Dict[str, Any]:
         return self._dispatch("drawing-get-variables", {"names_str": ";".join(names)})

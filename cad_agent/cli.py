@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import importlib.metadata
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from .manifest import (
@@ -16,6 +19,7 @@ from .manifest import (
     STAGE_NAMES,
     ManifestError,
     completed_artifact,
+    is_valid_image_scale,
     new_manifest,
     read_manifest,
     sha256_file,
@@ -23,10 +27,207 @@ from .manifest import (
     write_manifest,
 )
 from .live import LiveSafetyError, load_build_evidence, review_dict, review_live, repair_live, write_build_evidence, write_live_report
+from . import mechanical_skills as _mechanical_skills
+from . import source_fusion as _source_fusion
+from . import source_integrity as _source_integrity
 
 
 class CommandError(ValueError):
     """A user-correctable command error."""
+
+
+_SOURCE_FACT_REQUEST_FIELDS = (
+    "source_sha256",
+    "source_locator",
+    "source_identity",
+    "linked_artifact_sha256",
+    "linked_artifact_locator",
+    "linked_artifact_identity",
+    "extraction_profile_id",
+    "extraction_spec",
+    "extraction_spec_sha256",
+    "proposed_facts",
+    "evidence_basis",
+)
+_P1_SOURCE_BINDING_FIELDS = (
+    "source_sha256",
+    "page_index",
+    "roi_bbox_px",
+    "source_render_sha256",
+    "calibration",
+    "profile_id",
+)
+
+
+def _source_fact_composition_fail() -> None:
+    raise CommandError("SOURCE_FACT_COMPOSITION_BINDING")
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _compose_source_bound_simple_shaft(
+    *,
+    acquisition_context: Mapping[str, object],
+    fact_request: Mapping[str, object],
+    proposal: Mapping[str, object],
+) -> dict[str, object]:
+    """Compose verified source facts through the existing P1 compile owner."""
+
+    if not (
+        isinstance(acquisition_context, Mapping)
+        and isinstance(fact_request, Mapping)
+        and isinstance(proposal, Mapping)
+    ):
+        _source_fact_composition_fail()
+
+    acquired = _source_integrity.inspect_source_bundle_media_bytes(
+        **dict(acquisition_context)
+    )
+    if (
+        not isinstance(acquired, tuple)
+        or len(acquired) != 2
+        or not isinstance(acquired[0], Mapping)
+        or not isinstance(acquired[1], Mapping)
+    ):
+        _source_fact_composition_fail()
+    custody, snapshots = acquired
+
+    source_id = fact_request.get("source_identity")
+    source_locator = fact_request.get("source_locator")
+    source_sha256 = fact_request.get("source_sha256")
+    linked_id = fact_request.get("linked_artifact_identity")
+    linked_locator = fact_request.get("linked_artifact_locator")
+    linked_sha256 = fact_request.get("linked_artifact_sha256")
+    if not (
+        type(source_id) is str
+        and type(source_locator) is str
+        and _is_sha256(source_sha256)
+        and type(linked_id) is str
+        and type(linked_locator) is str
+        and _is_sha256(linked_sha256)
+    ):
+        _source_fact_composition_fail()
+
+    def snapshot_bytes(
+        source_key: str,
+        locator: str,
+        expected_sha256: str,
+    ) -> tuple[bytes, str]:
+        snapshot = snapshots.get(source_key)
+        if not isinstance(snapshot, Mapping):
+            _source_fact_composition_fail()
+        if (
+            snapshot.get("source_id") != source_key
+            or snapshot.get("relative_path") != locator
+            or snapshot.get("observed_sha256") != expected_sha256
+            or not isinstance(snapshot.get("bytes"), bytes)
+            or hashlib.sha256(snapshot["bytes"]).hexdigest() != expected_sha256
+            or not isinstance(snapshot.get("file_object_identity_token"), str)
+            or not _is_sha256(snapshot.get("path_binding_sha256"))
+            or not _is_sha256(snapshot.get("source_custody_sha256"))
+        ):
+            _source_fact_composition_fail()
+        return snapshot["bytes"], snapshot["source_custody_sha256"]
+
+    source_bytes, custody_digest = snapshot_bytes(
+        source_id, source_locator, source_sha256
+    )
+    linked_artifact_bytes, linked_custody_digest = snapshot_bytes(
+        linked_id, linked_locator, linked_sha256
+    )
+    if custody_digest != linked_custody_digest:
+        _source_fact_composition_fail()
+
+    def replay() -> dict[str, object]:
+        return custody
+
+    try:
+        verifier_request = {
+            field: fact_request[field] for field in _SOURCE_FACT_REQUEST_FIELDS
+        }
+    except KeyError:
+        _source_fact_composition_fail()
+    verifier_request.update(
+        {
+            "source_bytes": source_bytes,
+            "linked_artifact_bytes": linked_artifact_bytes,
+            "source_custody": custody,
+            "source_acquisition_evidence": custody,
+            "source_acquisition_binding_sha256": custody_digest,
+            "source_acquisition_replay": replay,
+        }
+    )
+    verified = _source_fusion.verify_source_fact_evidence(**verifier_request)
+    if not isinstance(verified, Mapping):
+        _source_fact_composition_fail()
+    if any(
+        verified.get(field) != fact_request.get(field)
+        for field in (
+            "source_sha256",
+            "source_locator",
+            "source_identity",
+            "linked_artifact_sha256",
+            "linked_artifact_locator",
+            "linked_artifact_identity",
+        )
+    ):
+        _source_fact_composition_fail()
+    if (
+        verified.get("source_custody") != custody
+        or verified.get("source_acquisition_binding_sha256") != custody_digest
+        or not _is_sha256(verified.get("fact_evidence_sha256"))
+    ):
+        _source_fact_composition_fail()
+
+    compile_input = verified.get("compile_input")
+    if not isinstance(compile_input, Mapping):
+        _source_fact_composition_fail()
+    compile_profile = compile_input.get("profile_id")
+    dimensions = compile_input.get("dimensions_mm")
+    if not isinstance(compile_profile, str) or not isinstance(dimensions, Mapping):
+        _source_fact_composition_fail()
+    if (
+        proposal.get("source_sha256") != source_sha256
+        or proposal.get("profile_id") != compile_profile
+    ):
+        _source_fact_composition_fail()
+    evidence_refs = proposal.get("evidence_refs")
+    if (
+        not isinstance(evidence_refs, Mapping)
+        or evidence_refs.get("source_fact_evidence_sha256")
+        != verified["fact_evidence_sha256"]
+    ):
+        _source_fact_composition_fail()
+
+    # Source-fact verification does not establish the independent visual and
+    # calibration binding required by the P1 compile contract.  Do not copy
+    # caller-controlled fields into expected_binding and self-authenticate
+    # them through the downstream equality check.
+    _source_fact_composition_fail()
+
+    try:
+        expected_binding = {
+            field: copy.deepcopy(proposal[field])
+            for field in _P1_SOURCE_BINDING_FIELDS
+        }
+        compile_proposal = copy.deepcopy(dict(proposal))
+    except KeyError:
+        _source_fact_composition_fail()
+    compile_proposal["profile_id"] = compile_profile
+    compile_proposal["dimensions_mm"] = copy.deepcopy(dict(dimensions))
+    return _mechanical_skills.invoke_skill(
+        "geometry.simple_shaft_pilot",
+        parameters={
+            "proposal": compile_proposal,
+            "expected_binding": expected_binding,
+        },
+    )
 
 
 def _refuse_fidelity_dxf(dxf: Path) -> None:
@@ -72,7 +273,7 @@ def _write_stage(
     write_manifest(manifest_path, manifest)
 
 
-def _run_primitive(source: Path, output: Path, scale: float) -> None:
+def _run_primitive(source: Path, output: Path, scale: float, *, auto_ocr_roi: bool = False) -> None:
     from primitive_ir_lib.run_image import run
 
     run(
@@ -81,6 +282,7 @@ def _run_primitive(source: Path, output: Path, scale: float) -> None:
         scale_mm_per_px=scale,
         preset="real_scan_tuned_v1",
         merge_lines=True,
+        auto_ocr_roi=auto_ocr_roi,
     )
 
 
@@ -110,7 +312,9 @@ def _run_dxf(primitive_path: Path, semantic_path: Path, output: Path, evidence_p
         str(output),
         semantic_doc=semantic,
         solved_primitives=solved_primitives,
-        build_components=True,
+        # Keep staged reconstruction evidence-bounded: inferred parts remain in Semantic IR;
+        # additional component geometry stays opt-in at explicit builder callers.
+        build_components=False,
         build_dimensions=True,
     )
     review = review_dxf(built)
@@ -127,8 +331,8 @@ def run_stages(source: Path, output_dir: Path, manifest_path: Path, manifest: di
     verify_source(manifest, source)
     scale = manifest["configuration"].get("scale_mm_per_px")
     approval = manifest.get("approvals", {}).get("calibration", {})
-    if not isinstance(scale, (int, float)) or scale <= 0:
-        raise ManifestError("Run manifest has no valid positive manual scale.")
+    if not is_valid_image_scale(scale):
+        raise ManifestError("Run manifest has no valid finite positive manual scale.")
     if approval.get("approved") is not True or not isinstance(approval.get("reference"), str):
         raise ManifestError("Run manifest has no recorded calibration approval.")
 
@@ -182,8 +386,8 @@ def _run_command(args: argparse.Namespace) -> int:
         raise CommandError(f"Input image does not exist: {source}")
     if source.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
         raise CommandError("This slice accepts PNG/JPG input. Use primitive_ir_lib.run_pdf for PDF rendering.")
-    if args.scale_mm_per_px <= 0:
-        raise CommandError("--scale-mm-per-px must be positive.")
+    if not is_valid_image_scale(args.scale_mm_per_px):
+        raise CommandError("--scale-mm-per-px must be finite and positive.")
     if not args.calibration_approval.strip():
         raise CommandError("--calibration-approval must be a non-empty approval reference.")
     output_dir = args.output_dir.resolve()
@@ -207,7 +411,7 @@ def _resume_command(args: argparse.Namespace) -> int:
 
 
 def _run_pdf_command(args: argparse.Namespace) -> int:
-    from .pdf import PDF_MANIFEST_NAME, new_pdf_manifest, run_pdf_stages
+    from .pdf import PDF_MANIFEST_NAME, new_pdf_manifest, run_pdf_calibration_candidate, run_pdf_stages
 
     source = args.input.resolve()
     if not source.is_file():
@@ -218,6 +422,24 @@ def _run_pdf_command(args: argparse.Namespace) -> int:
     manifest_path = output_dir / PDF_MANIFEST_NAME
     if manifest_path.exists():
         raise CommandError(f"PDF run manifest already exists: {manifest_path}; use resume-pdf instead.")
+    if args.auto_calibrate:
+        if args.scale_mm_per_px is not None or args.calibration_approval is not None:
+            raise CommandError(
+                "run-pdf --auto-calibrate cannot be combined with manual scale or calibration approval."
+            )
+        candidate_manifest = run_pdf_calibration_candidate(
+            source,
+            output_dir,
+            manifest_path,
+            args.dpi,
+            auto_ocr_roi=args.auto_ocr_roi,
+        )
+        print(f"{candidate_manifest['result']}: {manifest_path}")
+        return 0 if candidate_manifest["result"] == "CALIBRATION_NEEDS_VERIFICATION" else 2
+    if args.scale_mm_per_px is None or args.calibration_approval is None:
+        raise CommandError(
+            "run-pdf requires --scale-mm-per-px and --calibration-approval unless --auto-calibrate is selected."
+        )
     manifest = new_pdf_manifest(
         source,
         args.scale_mm_per_px,
@@ -286,7 +508,11 @@ def _drawing_setup_audit_command(args: argparse.Namespace) -> int:
             ipc_dir=args.ipc_dir,
             timeout_s=args.timeout_s,
             trigger=make_windows_dotnet_dispatch_trigger(args.hwnd),
-        ).drawing_setup_audit(drawing, drawing_sha256=before)
+        ).drawing_setup_audit(
+            drawing,
+            drawing_sha256=before,
+            include_model_space_inventory=args.include_model_space_inventory,
+        )
     except DotNetIPCError as exc:
         raise CommandError(f"drawing_setup_audit IPC failed: {exc}") from exc
     try:
@@ -328,6 +554,30 @@ def _drawing_setup_verify_command(args: argparse.Namespace) -> int:
     )
     print(f"cad_agent: drawing setup NEEDS_REVIEW: {summary}", file=sys.stderr)
     return 2
+
+
+def _layer_standard_check_command(args: argparse.Namespace) -> int:
+    from .drawing_setup import create_layer_standard_check
+
+    audit = args.audit.resolve()
+    rules_path = args.rules.resolve()
+    output = args.output.resolve()
+    if audit.suffix.lower() != ".json" or rules_path.suffix.lower() != ".json":
+        raise CommandError("layer-standard-check audit and rules inputs must be .json files")
+    if output.suffix.lower() != ".json":
+        raise CommandError("layer-standard-check output must be a .json file")
+    if output.exists():
+        raise CommandError(f"layer-standard-check output already exists: {output}")
+    try:
+        rules = json.loads(rules_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CommandError(f"cannot read layer-standard-check rules: {rules_path}") from exc
+    if not isinstance(rules, dict):
+        raise CommandError("layer-standard-check rules root must be a JSON object")
+    result = create_layer_standard_check(audit, rules)
+    write_manifest(output, result)
+    print(output)
+    return 0
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -673,6 +923,19 @@ def _fidelity_text_reconstruct_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fidelity_semantic_region_handoff_command(args: argparse.Namespace) -> int:
+    from .fidelity import read_fidelity_manifest, run_fidelity_semantic_region_handoff
+
+    manifest_path = args.manifest.resolve()
+    results = run_fidelity_semantic_region_handoff(
+        args.input.resolve(), manifest_path.parent, read_fidelity_manifest(manifest_path),
+        args.approval.resolve(), workspace_root=Path.cwd(),
+    )
+    for result in results:
+        print(result)
+    return 0
+
+
 def _fidelity_compose_command(args: argparse.Namespace) -> int:
     from .fidelity import read_fidelity_manifest, run_fidelity_compose
 
@@ -814,10 +1077,27 @@ def build_parser() -> argparse.ArgumentParser:
     run_pdf = subcommands.add_parser("run-pdf", help="Run every PDF page through staged DXF generation")
     run_pdf.add_argument("--input", type=Path, required=True)
     run_pdf.add_argument("--output-dir", type=Path, required=True)
-    run_pdf.add_argument("--scale-mm-per-px", type=float, required=True)
-    run_pdf.add_argument("--calibration-approval", required=True)
+    run_pdf.add_argument("--scale-mm-per-px", type=float)
+    run_pdf.add_argument("--calibration-approval")
+    run_pdf.add_argument(
+        "--auto-calibrate",
+        action="store_true",
+        help="Create only a needs_verification calibration candidate; stop before Semantic IR and DXF",
+    )
     run_pdf.add_argument("--dpi", type=int, default=144)
-    run_pdf.add_argument("--auto-ocr-roi", action="store_true", help="Detect OCR regions before PDF scale-label review")
+    run_pdf.add_argument(
+        "--auto-ocr-roi",
+        dest="auto_ocr_roi",
+        action="store_true",
+        help="Detect OCR regions (enabled by default)",
+    )
+    run_pdf.add_argument(
+        "--no-auto-ocr-roi",
+        dest="auto_ocr_roi",
+        action="store_false",
+        help="Skip OCR ROI detection and run geometry-only extraction",
+    )
+    run_pdf.set_defaults(auto_ocr_roi=True)
     resume_pdf = subcommands.add_parser("resume-pdf", help="Resume a validated staged PDF run")
     resume_pdf.add_argument("--manifest", type=Path, required=True)
     resume_pdf.add_argument("--input", type=Path, required=True)
@@ -839,6 +1119,11 @@ def build_parser() -> argparse.ArgumentParser:
     drawing_setup_audit.add_argument("--ipc-dir", type=Path, required=True)
     drawing_setup_audit.add_argument("--output", type=Path, required=True)
     drawing_setup_audit.add_argument("--timeout-s", type=float, default=10.0)
+    drawing_setup_audit.add_argument(
+        "--include-model-space-inventory",
+        action="store_true",
+        help="Opt in to a hash-bound read-only ModelSpace inventory (up to 50,000 entities)",
+    )
     drawing_setup_verify = subcommands.add_parser(
         "drawing-setup-verify", help="Verify Drawing Setup audit evidence"
     )
@@ -847,6 +1132,13 @@ def build_parser() -> argparse.ArgumentParser:
     drawing_setup_verify.add_argument("--verified-by", required=True)
     drawing_setup_verify.add_argument("--approval-reference", required=True)
     drawing_setup_verify.add_argument("--output", type=Path, required=True)
+    layer_standard_check = subcommands.add_parser(
+        "layer-standard-check",
+        help="Classify caller-supplied audit layer names; audit origin is not authenticated",
+    )
+    layer_standard_check.add_argument("--audit", type=Path, required=True)
+    layer_standard_check.add_argument("--rules", type=Path, required=True)
+    layer_standard_check.add_argument("--output", type=Path, required=True)
     dimension_pilot = subcommands.add_parser(
         "dimension-pilot-run",
         help="Build and measure a hash-bound offline linear-dimension candidate",
@@ -960,6 +1252,13 @@ def build_parser() -> argparse.ArgumentParser:
     fidelity_text_reconstruct.add_argument("--manifest", type=Path, required=True)
     fidelity_text_reconstruct.add_argument("--approval", type=Path, required=True)
     fidelity_text_reconstruct.add_argument("--base-dxf", type=Path)
+    fidelity_semantic_handoff = subcommands.add_parser(
+        "fidelity-semantic-region-handoff",
+        help="Transfer existing semantic-owner DXFs into approved local region candidates",
+    )
+    fidelity_semantic_handoff.add_argument("--input", type=Path, required=True)
+    fidelity_semantic_handoff.add_argument("--manifest", type=Path, required=True)
+    fidelity_semantic_handoff.add_argument("--approval", type=Path, required=True)
     fidelity_compose = subcommands.add_parser("fidelity-compose", help="Compose approved region geometry into a paper-coordinate review page")
     fidelity_compose.add_argument("--input", type=Path, required=True)
     fidelity_compose.add_argument("--manifest", type=Path, required=True)
@@ -1027,6 +1326,8 @@ def main(argv: list[str] | None = None) -> int:
             return _drawing_setup_audit_command(args)
         if args.command == "drawing-setup-verify":
             return _drawing_setup_verify_command(args)
+        if args.command == "layer-standard-check":
+            return _layer_standard_check_command(args)
         if args.command == "dimension-pilot-run":
             return _dimension_pilot_command(args)
         if args.command == "fidelity-pdf":
@@ -1071,6 +1372,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fidelity_text_approval_selection_command(args)
         if args.command == "fidelity-text-reconstruct":
             return _fidelity_text_reconstruct_command(args)
+        if args.command == "fidelity-semantic-region-handoff":
+            return _fidelity_semantic_region_handoff_command(args)
         if args.command == "fidelity-compose":
             return _fidelity_compose_command(args)
         if args.command == "fidelity-promote":

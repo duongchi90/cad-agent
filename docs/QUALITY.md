@@ -1,5 +1,9 @@
 # CAD Agent Quality Gates
 
+Fresh #305/#392/#429 defines current actor and independent review routing.
+#461 is accepted product evidence; it does not convert optional/private/live
+NOT RUN states into PASS. Historical reviewer examples do not override SOLO_CODEX.
+
 ## Supported release environment
 
 - Windows
@@ -17,7 +21,7 @@ $python311 = py -3.11 -c "import sys; print(sys.executable)"
 
 `scripts/verify.ps1` owns lock/environment validation, the zero-skip offline
 pytest selection, safe unavailable-state probes for both specialized markers,
-Ruff F401, Git whitespace checks, the content-hash side-effect check, and three
+Ruff F401, Git whitespace checks, the content-hash side-effect check, and
 JUnit outputs. CI calls the same scripts rather than copying the commands.
 
 ## Test classes

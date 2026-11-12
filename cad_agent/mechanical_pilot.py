@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from cad_agent.live import write_build_evidence
+from cad_agent.live import load_build_evidence, write_build_evidence
 from cad_agent.manifest import sha256_file
 from cad_agent.visual_evidence import _path_contains_windows_reparse_point
 from dxf_builder_lib.builder import BuildResult, build_dxf
@@ -363,7 +363,11 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
     for field in ("unit", "pixel_to_unit_scale", "origin_px", "method"):
         if field not in calibration:
             raise ValueError("PILOT_PRIMITIVE_CALIBRATION_INVALID")
-    if calibration.get("unit") != "mm" or calibration.get("method") != "manual_override":
+    calibration_method = calibration.get("method")
+    if calibration.get("unit") != "mm" or calibration_method not in (
+        "manual_override",
+        "title_block_scale",
+    ):
         raise ValueError("PILOT_PRIMITIVE_CALIBRATION_INVALID")
     if calibration.get("status") != "verified":
         raise ValueError("PILOT_PRIMITIVE_CALIBRATION_UNVERIFIED")
@@ -384,7 +388,7 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
             _number(origin[0], "PRIMITIVE_CALIBRATION_ORIGIN"),
             _number(origin[1], "PRIMITIVE_CALIBRATION_ORIGIN"),
         ),
-        method="manual_override",
+        method=calibration_method,
         reference_note=(
             calibration.get("reference_note")
             if calibration.get("reference_note") is None
@@ -403,7 +407,8 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
         primitive_type = primitive.get("type")
         if primitive_type not in ("line", "circle"):
             raise ValueError("PILOT_PRIMITIVE_KIND_UNSUPPORTED")
-        if primitive.get("source") != "geometry_opencv":
+        primitive_source = primitive.get("source")
+        if primitive_source not in ("geometry_opencv", "geometry_external_ai"):
             raise ValueError("PILOT_PRIMITIVE_SOURCE_UNSUPPORTED")
         trace = _mapping(primitive.get("trace"), "PRIMITIVE_TRACE")
         bbox = trace.get("bbox_px")
@@ -420,6 +425,22 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
                 trace.get("extracted_at")
                 if trace.get("extracted_at") is None
                 else _string(trace.get("extracted_at"), "PRIMITIVE_TRACE_TIME")
+            ),
+            verification_request_sha256=(
+                _hash(
+                    trace.get("verification_request_sha256"),
+                    "PRIMITIVE_TRACE_REQUEST_SHA256",
+                )
+                if primitive_source == "geometry_external_ai"
+                else None
+            ),
+            verification_result_sha256=(
+                _hash(
+                    trace.get("verification_result_sha256"),
+                    "PRIMITIVE_TRACE_RESULT_SHA256",
+                )
+                if primitive_source == "geometry_external_ai"
+                else None
             ),
         )
         validation = _mapping(primitive.get("validation"), "PRIMITIVE_VALIDATION")
@@ -449,7 +470,7 @@ def _load_primitive_document(source_input: Path) -> tuple[PrimitiveIRDocument, s
             Primitive(
                 id=_string(primitive.get("id"), "PRIMITIVE_ID"),
                 type=primitive_type,
-                source="geometry_opencv",
+                source=primitive_source,
                 confidence=_number(primitive.get("confidence"), "PRIMITIVE_CONFIDENCE"),
                 layer=_string(primitive.get("layer"), "PRIMITIVE_LAYER"),
                 handle=handle,
@@ -512,6 +533,17 @@ def _cluster_endpoints(
     return centers, labels
 
 
+def _phase4_tolerances_cad(
+    primitive_doc: PrimitiveIRDocument,
+) -> tuple[float, float]:
+    """Convert the Phase 4 pixel policy into the document's CAD unit domain."""
+    scale = primitive_doc.calibration.pixel_to_unit_scale
+    return (
+        _PHASE4_ENDPOINT_TOLERANCE_PX * scale,
+        _PHASE4_AXIS_TOLERANCE_PX * scale,
+    )
+
+
 def _phase4_profile_bindings(
     primitive_doc: PrimitiveIRDocument,
 ) -> tuple[list[str], str]:
@@ -519,23 +551,24 @@ def _phase4_profile_bindings(
     circles = [primitive for primitive in primitive_doc.primitives if primitive.type == "circle"]
     if len(lines) != 8 or len(circles) != 1:
         raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
+    endpoint_tolerance, axis_tolerance = _phase4_tolerances_cad(primitive_doc)
 
     endpoints: list[tuple[float, float]] = []
     for primitive in lines:
         assert isinstance(primitive.geometry, LineGeometry)
         start = (primitive.geometry.start.x, primitive.geometry.start.y)
         end = (primitive.geometry.end.x, primitive.geometry.end.y)
-        if math.hypot(end[0] - start[0], end[1] - start[1]) <= 2 * _PHASE4_ENDPOINT_TOLERANCE_PX:
+        if math.hypot(end[0] - start[0], end[1] - start[1]) <= 2 * endpoint_tolerance:
             raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
         dx, dy = abs(end[0] - start[0]), abs(end[1] - start[1])
         if not (
-            (dx > _PHASE4_AXIS_TOLERANCE_PX and dy <= _PHASE4_AXIS_TOLERANCE_PX)
-            or (dy > _PHASE4_AXIS_TOLERANCE_PX and dx <= _PHASE4_AXIS_TOLERANCE_PX)
+            (dx > axis_tolerance and dy <= axis_tolerance)
+            or (dy > axis_tolerance and dx <= axis_tolerance)
         ):
             raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
         endpoints.extend((start, end))
 
-    centers, labels = _cluster_endpoints(endpoints, _PHASE4_ENDPOINT_TOLERANCE_PX)
+    centers, labels = _cluster_endpoints(endpoints, endpoint_tolerance)
     if len(centers) != 8:
         raise ValueError("PILOT_SHAFT_PROFILE_INVALID")
     edge_clusters: list[tuple[int, int]] = []
@@ -579,12 +612,12 @@ def _phase4_profile_bindings(
             expected_x = [x0, x1, x1, x2, x2, x1, x1, x0]
             expected_y = [y0, y0, y1, y1, y2, y2, y3, y3]
             if not (
-                x0 + 2 * _PHASE4_ENDPOINT_TOLERANCE_PX < x1 < x2 - 2 * _PHASE4_ENDPOINT_TOLERANCE_PX
-                and y0 + 2 * _PHASE4_ENDPOINT_TOLERANCE_PX < y1 < y2 - 2 * _PHASE4_ENDPOINT_TOLERANCE_PX
-                and y2 + 2 * _PHASE4_ENDPOINT_TOLERANCE_PX < y3
+                x0 + 2 * endpoint_tolerance < x1 < x2 - 2 * endpoint_tolerance
+                and y0 + 2 * endpoint_tolerance < y1 < y2 - 2 * endpoint_tolerance
+                and y2 + 2 * endpoint_tolerance < y3
                 and all(
-                    abs(point[0] - expected_x[index]) <= _PHASE4_ENDPOINT_TOLERANCE_PX
-                    and abs(point[1] - expected_y[index]) <= _PHASE4_ENDPOINT_TOLERANCE_PX
+                    abs(point[0] - expected_x[index]) <= endpoint_tolerance
+                    and abs(point[1] - expected_y[index]) <= endpoint_tolerance
                     for index, point in enumerate(points)
                 )
             ):
@@ -603,8 +636,8 @@ def _phase4_profile_bindings(
     y_min = min(point[1] for point in points)
     y_max = max(point[1] for point in points)
     if not (
-        x_min + _PHASE4_ENDPOINT_TOLERANCE_PX < center.x < x_max - _PHASE4_ENDPOINT_TOLERANCE_PX
-        and y_min + _PHASE4_ENDPOINT_TOLERANCE_PX < center.y < y_max - _PHASE4_ENDPOINT_TOLERANCE_PX
+        x_min + endpoint_tolerance < center.x < x_max - endpoint_tolerance
+        and y_min + endpoint_tolerance < center.y < y_max - endpoint_tolerance
     ):
         raise ValueError("PILOT_HOLE_POSITION_INVALID")
     return [lines[index].id for index in edge_ids], circle.id
@@ -738,6 +771,157 @@ def _write_pilot_evidence(result: MechanicalPilotResult, path: Path) -> None:
     )
 
 
+def _external_primitive_security_view(primitive: Primitive) -> dict[str, object]:
+    payload = primitive.to_dict()
+    payload.pop("handle", None)
+    payload.pop("validation", None)
+    trace = payload.get("trace")
+    if isinstance(trace, dict):
+        trace.pop("extracted_at", None)
+    return payload
+
+
+def _validate_external_provenance(
+    primitive_doc: PrimitiveIRDocument,
+    *,
+    verification_request: object | None,
+    verification_result: object | None,
+    source_render_bytes: bytes | None,
+) -> None:
+    external_primitives = [
+        primitive
+        for primitive in primitive_doc.primitives
+        if primitive.source == "geometry_external_ai"
+    ]
+    if not external_primitives:
+        return
+    if (
+        verification_request is None
+        or verification_result is None
+        or source_render_bytes is None
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    from cad_agent.source_verified_geometry import (
+        materialize_verified_external_visual_lines,
+    )
+
+    try:
+        rematerialized = materialize_verified_external_visual_lines(
+            verification_request=verification_request,
+            verification_result=verification_result,
+            source_render_bytes=source_render_bytes,
+            calibration=primitive_doc.calibration,
+            source_file_name=primitive_doc.source_document.file_name,
+            image_width_px=primitive_doc.source_document.image_width_px,
+            image_height_px=primitive_doc.source_document.image_height_px,
+        )
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID") from error
+
+    if (
+        rematerialized.source_document.to_dict()
+        != primitive_doc.source_document.to_dict()
+        or rematerialized.calibration.to_dict()
+        != primitive_doc.calibration.to_dict()
+    ):
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+    expected = {
+        primitive.id: _external_primitive_security_view(primitive)
+        for primitive in external_primitives
+    }
+    actual = {
+        primitive.id: _external_primitive_security_view(primitive)
+        for primitive in rematerialized.primitives
+        if primitive.source == "geometry_external_ai"
+    }
+    if actual != expected:
+        raise ValueError("PILOT_EXTERNAL_GEOMETRY_PROVENANCE_INVALID")
+
+
+def validate_primitive_bound_candidate(
+    primitive_path: Path,
+    candidate_path: Path,
+    build_evidence_path: Path,
+    *,
+    verification_request: object | None = None,
+    verification_result: object | None = None,
+    source_render_bytes: bytes | None = None,
+) -> tuple[str, str]:
+    """Validate one primitive artifact against its actual built candidate."""
+
+    source_path = Path(primitive_path).resolve(strict=True)
+    candidate_path = Path(candidate_path).resolve(strict=True)
+    evidence_path = Path(build_evidence_path).resolve(strict=True)
+    primitive_doc, source_sha256 = _load_primitive_document(source_path)
+    _validate_external_provenance(
+        primitive_doc,
+        verification_request=verification_request,
+        verification_result=verification_result,
+        source_render_bytes=source_render_bytes,
+    )
+    build = load_build_evidence(evidence_path, candidate_path)
+
+    expected_geometry: dict[str, dict[str, object]] = {}
+    for primitive in primitive_doc.primitives:
+        if primitive.type == "line" and isinstance(primitive.geometry, LineGeometry):
+            expected_geometry[primitive.id] = {
+                "type": "line",
+                "start": [
+                    primitive.geometry.start.x,
+                    primitive.geometry.start.y,
+                ],
+                "end": [
+                    primitive.geometry.end.x,
+                    primitive.geometry.end.y,
+                ],
+            }
+        elif primitive.type == "circle" and isinstance(
+            primitive.geometry, CircleGeometry
+        ):
+            expected_geometry[primitive.id] = {
+                "type": "circle",
+                "center": [
+                    primitive.geometry.center.x,
+                    primitive.geometry.center.y,
+                ],
+                "radius": primitive.geometry.radius,
+            }
+        else:
+            raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_UNSUPPORTED")
+
+    primitive_ids = set(expected_geometry)
+    if (
+        set(build.handle_by_primitive_id) != primitive_ids
+        or set(build.layer_by_primitive_id) != primitive_ids
+        or set(build.written_geometry_by_primitive_id) != primitive_ids
+        or set(build.skipped_primitive_ids)
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
+    for primitive_id, expected in expected_geometry.items():
+        if build.written_geometry_by_primitive_id[primitive_id] != expected:
+            raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
+
+    if (
+        build.dimension_count != 0
+        or build.dimension_handle_by_cross_validation_id
+        or build.written_dimension_by_cross_validation_id
+        or build.component_count != 0
+        or build.component_handle_by_part_id
+        or build.component_type_by_part_id
+        or build.written_component_by_part_id
+        or build.skipped_part_ids
+        or build.skipped_part_reasons
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")
+
+    review = review_dxf(build, strict_primitive_inventory=True)
+    if not review.passed:
+        raise ValueError("PILOT_PRIMITIVE_BUILD_REVIEW_FAILED")
+    return source_sha256, sha256_file(candidate_path)
+
+
 def build_simple_shaft_pilot(source_path: Path, candidate_path: Path) -> MechanicalPilotResult:
     """Build one candidate for the selected two-feature synthetic pilot."""
 
@@ -846,7 +1030,7 @@ def bind_simple_shaft_pilot_from_primitive(
             matches.append(page)
         if len(matches) != 1:
             raise ValueError("PILOT_PDF_PRIMITIVE_BINDING_INVALID")
-    return _build_candidate_result(
+    result = _build_candidate_result(
         pilot_id=_PHASE4_PILOT_ID,
         source_path=source_path,
         candidate_path=candidate_path,
@@ -858,6 +1042,242 @@ def bind_simple_shaft_pilot_from_primitive(
         source_pdf_sha256=source_pdf_sha256,
         pdf_manifest_path=bound_manifest_path,
     )
+    bound_source_sha256, bound_candidate_sha256 = validate_primitive_bound_candidate(
+        result.source_path, result.candidate_path, result.build_evidence_path
+    )
+    if (
+        bound_source_sha256 != result.source_sha256
+        or bound_candidate_sha256 != result.candidate_sha256
+    ):
+        raise ValueError("PILOT_PRIMITIVE_BUILD_BINDING_MISMATCH")
+    return result
+
+
+_P1_SOURCE_BOUND_PROPOSAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "proposal_source",
+        "source_sha256",
+        "page_index",
+        "roi_bbox_px",
+        "source_render_sha256",
+        "calibration",
+        "profile_id",
+        "dimensions_mm",
+        "evidence_refs",
+    }
+)
+_P1_SOURCE_BINDING_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "page_index",
+        "roi_bbox_px",
+        "source_render_sha256",
+        "calibration",
+        "profile_id",
+    }
+)
+_P1_CALIBRATION_FIELDS = frozenset(
+    {
+        "unit",
+        "pixel_to_unit_scale",
+        "origin_px",
+        "method",
+        "reference_note",
+        "status",
+        "source_sha256",
+    }
+)
+_P1_DIMENSION_FIELDS = frozenset(
+    {
+        "shaft_diameter_a",
+        "shaft_diameter_b",
+        "segment_length_a",
+        "segment_length_b",
+        "hole_diameter",
+        "hole_axial_position",
+    }
+)
+_P1_PROFILE_ID = "simple-stepped-shaft-p1-v1"
+_P1_PROPOSAL_SCHEMA_VERSION = "p1-source-bound-proposal-1.0"
+_P1_COMPILE_PLAN_SCHEMA_VERSION = "p1-source-bound-compile-plan-1.0"
+
+
+def _p1_binding(payload: object, name: str) -> dict[str, object]:
+    binding = _mapping(payload, name)
+    _exact_fields(binding, _P1_SOURCE_BINDING_FIELDS, name)
+    source_sha256 = _hash(binding.get("source_sha256"), f"{name}_SOURCE_SHA256")
+    source_render_sha256 = _hash(
+        binding.get("source_render_sha256"), f"{name}_SOURCE_RENDER_SHA256"
+    )
+    page_index = _integer(binding.get("page_index"), f"{name}_PAGE_INDEX")
+    roi = binding.get("roi_bbox_px")
+    if (
+        not isinstance(roi, list)
+        or len(roi) != 4
+        or any(type(value) is not int or value < 0 for value in roi)
+        or roi[2] <= roi[0]
+        or roi[3] <= roi[1]
+    ):
+        raise ValueError(f"PILOT_{name}_ROI_INVALID")
+    calibration = _mapping(binding.get("calibration"), f"{name}_CALIBRATION")
+    _exact_fields(calibration, _P1_CALIBRATION_FIELDS, f"{name}_CALIBRATION")
+    if (
+        calibration.get("unit") != "mm"
+        or calibration.get("method") != "manual_override"
+        or calibration.get("status") != "verified"
+        or _hash(
+            calibration.get("source_sha256"),
+            f"{name}_CALIBRATION_SOURCE_SHA256",
+        )
+        != source_sha256
+    ):
+        raise ValueError(f"PILOT_{name}_CALIBRATION_INVALID")
+    scale = _number(
+        calibration.get("pixel_to_unit_scale"),
+        f"{name}_CALIBRATION_SCALE",
+        positive=True,
+    )
+    origin = _point(calibration.get("origin_px"), f"{name}_CALIBRATION_ORIGIN")
+    reference_note = _string(
+        calibration.get("reference_note"), f"{name}_CALIBRATION_REFERENCE"
+    )
+    profile_id = _string(binding.get("profile_id"), f"{name}_PROFILE_ID")
+    if profile_id != _P1_PROFILE_ID:
+        raise ValueError("PILOT_P1_PROFILE_UNSUPPORTED")
+    return {
+        "source_sha256": source_sha256,
+        "page_index": page_index,
+        "roi_bbox_px": list(roi),
+        "source_render_sha256": source_render_sha256,
+        "calibration": {
+            "unit": "mm",
+            "pixel_to_unit_scale": scale,
+            "origin_px": [origin[0], origin[1]],
+            "method": "manual_override",
+            "reference_note": reference_note,
+            "status": "verified",
+            "source_sha256": source_sha256,
+        },
+        "profile_id": profile_id,
+    }
+
+
+def compile_source_bound_simple_shaft_proposal(
+    proposal: Mapping[str, object],
+    *,
+    expected_binding: Mapping[str, object],
+) -> dict[str, object]:
+    """Compile one truthful external P1 proposal without materializing Primitive IR."""
+
+    root = _mapping(proposal, "P1_PROPOSAL")
+    _exact_fields(root, _P1_SOURCE_BOUND_PROPOSAL_FIELDS, "P1_PROPOSAL")
+    if root.get("schema_version") != _P1_PROPOSAL_SCHEMA_VERSION:
+        raise ValueError("PILOT_P1_PROPOSAL_SCHEMA_VERSION_INVALID")
+    if root.get("proposal_source") != "external_ai":
+        raise ValueError("PILOT_P1_PROPOSAL_SOURCE_UNSUPPORTED")
+
+    proposal_binding = _p1_binding(
+        {field: root[field] for field in _P1_SOURCE_BINDING_FIELDS},
+        "P1_PROPOSAL_BINDING",
+    )
+    normalized_expected = _p1_binding(expected_binding, "P1_EXPECTED_BINDING")
+    if proposal_binding != normalized_expected:
+        raise ValueError("PILOT_P1_SOURCE_BINDING_MISMATCH")
+
+    dimensions_raw = _mapping(root.get("dimensions_mm"), "P1_DIMENSIONS")
+    _exact_fields(dimensions_raw, _P1_DIMENSION_FIELDS, "P1_DIMENSIONS")
+    dimensions = {
+        field: _number(dimensions_raw[field], f"P1_{field.upper()}", positive=True)
+        for field in sorted(_P1_DIMENSION_FIELDS)
+    }
+    diameter_a = dimensions["shaft_diameter_a"]
+    diameter_b = dimensions["shaft_diameter_b"]
+    if diameter_a == diameter_b:
+        raise ValueError("PILOT_P1_SHAFT_STEP_REQUIRED")
+    length_a = dimensions["segment_length_a"]
+    length_b = dimensions["segment_length_b"]
+    total_length = length_a + length_b
+    hole_position = dimensions["hole_axial_position"]
+    if not 0.0 < hole_position < total_length:
+        raise ValueError("PILOT_P1_HOLE_POSITION_INVALID")
+    local_diameter = diameter_a if hole_position < length_a else diameter_b
+    if dimensions["hole_diameter"] >= local_diameter:
+        raise ValueError("PILOT_P1_HOLE_DIAMETER_INVALID")
+
+    evidence_refs_raw = _mapping(root.get("evidence_refs"), "P1_EVIDENCE_REFS")
+    if len(evidence_refs_raw) > 12:
+        raise ValueError("PILOT_P1_EVIDENCE_REFS_INVALID")
+    evidence_refs: dict[str, str] = {}
+    for key, value in sorted(evidence_refs_raw.items()):
+        evidence_refs[_string(key, "P1_EVIDENCE_REF_KEY")] = _string(
+            value, "P1_EVIDENCE_REF_VALUE"
+        )
+
+    x0 = 0.0
+    x1 = length_a
+    x2 = total_length
+    a = diameter_a / 2.0
+    b = diameter_b / 2.0
+    line_specs = [
+        ("shaft-profile-001:top-main", (x0, a), (x1, a)),
+        ("shaft-profile-001:step-rise", (x1, a), (x1, b)),
+        ("shaft-profile-001:top-step", (x1, b), (x2, b)),
+        ("shaft-profile-001:right-cap", (x2, b), (x2, -b)),
+        ("shaft-profile-001:bottom-step", (x2, -b), (x1, -b)),
+        ("shaft-profile-001:step-fall", (x1, -b), (x1, -a)),
+        ("shaft-profile-001:bottom-main", (x1, -a), (x0, -a)),
+        ("shaft-profile-001:left-cap", (x0, -a), (x0, a)),
+    ]
+    lines = [
+        {
+            "id": line_id,
+            "type": "line",
+            "start_mm": [start[0], start[1]],
+            "end_mm": [end[0], end[1]],
+        }
+        for line_id, start, end in line_specs
+    ]
+    circle = {
+        "id": "hole-axial-001",
+        "type": "circle",
+        "center_mm": [hole_position, 0.0],
+        "radius_mm": dimensions["hole_diameter"] / 2.0,
+    }
+    shaft_ids = [line["id"] for line in lines]
+    plan: dict[str, object] = {
+        "schema_version": _P1_COMPILE_PLAN_SCHEMA_VERSION,
+        "proposal_source": "external_ai",
+        "profile_id": _P1_PROFILE_ID,
+        "source_binding": proposal_binding,
+        "dimensions_mm": dimensions,
+        "geometry_contract": {
+            "line_count": 8,
+            "circle_count": 1,
+            "lines": lines,
+            "circle": circle,
+        },
+        "feature_contract": {
+            "shaft-profile-001": {
+                "kind": "shaft_step",
+                "primitive_ids": shaft_ids,
+            },
+            "hole-axial-001": {
+                "kind": "hole_feature",
+                "primitive_ids": ["hole-axial-001"],
+            },
+        },
+        "evidence_refs": evidence_refs,
+    }
+    encoded = json.dumps(
+        plan,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    plan["plan_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return plan
 
 
 __all__ = [
@@ -865,5 +1285,7 @@ __all__ = [
     "PILOT_SCHEMA_VERSION",
     "bind_simple_shaft_pilot_from_primitive",
     "build_simple_shaft_pilot",
+    "compile_source_bound_simple_shaft_proposal",
     "load_pilot_definition",
+    "validate_primitive_bound_candidate",
 ]
