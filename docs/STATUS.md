@@ -48,6 +48,29 @@ Hosted/offline success is separate from actual private `real_data` and native
 `autocad_mechanical` acceptance. Missing prerequisites are `SKIP` or `NOT RUN`.
 This documentation consolidation does not rerun live CAD or reinterpret old skips.
 
+## Unmerged CASE02 observation-root implementation evidence
+
+Local candidate commit `25ed38ab77b93eb0912ebb8370526e154139311e`, based on main
+`abfb60ea7d9cf2012e0ea30b68b9fef8b5fb0512`, adds a closed, typed
+`INITIAL_PDFIMPORT_OBSERVATION_ROOT` digest helper in the existing visual-evidence
+owner. It binds supplied source-PDF, import-script, completed-receipt, candidate
+path, and DWG SHA-256 identities. The helper validates packet shape only; it does
+not verify artifact bytes, receipt authenticity/completion, native custody, path
+aliases, current file identity, mutation, or product acceptance. This is an
+unmerged local implementation candidate, not canonical main status or CASE02
+native acceptance.
+
+Focused observation-root and legacy external-root tests passed (12); Ruff and
+`git diff --check` passed. The authoritative verifier passed on this commit using
+the existing Python 3.11 environment: .NET 261/261, offline IPC 128/128, Python
+3,743 passed / 24 deselected / 86 subtests. Its expected causal-RED negative
+oracle returned the intended failing assertion and the verifier classified that
+oracle correctly. The B041 real-data test separately passed once with the
+approved PDF whose SHA-256 matched the test constant; the verifier's own B041
+probe remained SKIP because the environment variable was not inherited by that
+run. Other private real-data gates were SKIP. AutoCAD/live/native readback,
+hosted CI, and exact-head Security/Integration review were NOT RUN.
+
 ## Historical evidence
 
 [Prior STATUS snapshot](history/status-before-bvtl-consolidation.md) preserves the
