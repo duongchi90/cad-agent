@@ -3705,6 +3705,61 @@ def test_fidelity_text_style_enforces_xdata_family_byte_limit(
     ]
 
 
+@pytest.mark.parametrize(("version", "dxf_format"), [("R12", "asc"), ("R2010", "bin")])
+def test_fidelity_style_snapshot_preserves_encoding_and_binds_repeated_records(
+    tmp_path: Path, version: str, dxf_format: str,
+) -> None:
+    from io import BytesIO
+
+    path = tmp_path / "style-input.dxf"
+    document = ezdxf.new(version)
+    document.encoding = "cp1252"
+    if version == "R12":
+        document.header["$HANDLING"] = 0
+    family = "Caf\u00e9 Final"
+    _style_transfer_add_text(document, "LegacyTest", "M\u00e9p", (5, 5), extended=True, family=family)
+    document.saveas(path, fmt=dxf_format)
+    original = path.read_bytes()
+
+    valid, duplicates = fidelity_module._read_fidelity_style_document(path)
+    style = valid.styles.get("LegacyTest")
+    assert not duplicates
+    assert [entity.dxf.text for entity in valid.modelspace().query("TEXT")] == ["M\u00e9p"]
+    assert list(style.get_xdata("ACAD")) == [(1000, family), (1071, 1048610)]
+    assert path.read_bytes() == original
+
+    if dxf_format == "bin":
+        encoded = BytesIO()
+        writer = ezdxf.lldxf.tagwriter.BinaryTagWriter(
+            encoded, dxfversion=document.dxfversion, encoding=document.output_encoding,
+        )
+        writer.write_tag2(1001, "ACAD")
+        writer.write_tag2(1000, family)
+        writer.write_tag2(1071, 1048610)
+        declaration = encoded.getvalue()
+    else:
+        declaration = f"1001\nACAD\n1000\n{family}\n1071\n1048610\n".encode(document.output_encoding)
+        if b"\r\n" in original:
+            declaration = declaration.replace(b"\n", b"\r\n")
+    assert original.count(declaration) == 1
+    updated = original.replace(
+        declaration, declaration.replace(b"Final", b"Other") + declaration,
+    )
+    path.write_bytes(updated)
+
+    snapshot, duplicates = fidelity_module._read_fidelity_style_document(path)
+    style = snapshot.styles.get("LegacyTest")
+    expected = ("name", "legacytest") if version == "R12" else ("handle", style.dxf.handle)
+    assert duplicates == {expected}
+    target = ezdxf.new("R2010")
+    with pytest.raises(FidelityError, match="Repeated ACAD.*STYLE"):
+        fidelity_module._copy_fidelity_text_style(
+            snapshot, target, "LEGACYTEST", source_repeated_styles=duplicates,
+        )
+    assert "LegacyTest" not in target.styles
+    assert path.read_bytes() == updated
+
+
 @pytest.mark.parametrize("location", ["handoff-owner", "handoff-target", "compose", "unused"])
 def test_fidelity_style_refuses_repeated_acad_before_publication(tmp_path: Path, location: str) -> None:
     source, output, manifest, approval = _style_transfer_page(tmp_path)
