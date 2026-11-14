@@ -776,6 +776,12 @@ def _fidelity_extended_style_definition(
         or any(char in filename for filename in (dxf.font, dxf.bigfont) for char in "\r\n\0")
     ):
         raise FidelityError("Unsupported render fields in extended Fidelity STYLE.")
+    try:
+        dxf.font.encode(output_encoding)
+        dxf.bigfont.encode(output_encoding)
+    except UnicodeEncodeError as exc:
+        raise FidelityError("Fidelity STYLE filenames cannot be preserved in the target DXF encoding.") from exc
+
     return {
         "font": dxf.font,
         "bigfont": dxf.bigfont,

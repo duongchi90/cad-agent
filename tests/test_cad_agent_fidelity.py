@@ -3532,7 +3532,9 @@ def _style_transfer_candidate(output: Path, region: str) -> Path:
     return output / "reconstruction_candidates" / "page_01" / region / "geometry.dxf"
 
 
-def _style_transfer_add_text(document, style, text, position, *, extended=False, family=".VnAvant"):
+def _style_transfer_add_text(
+    document, style, text, position, *, extended=False, family=".VnAvant", filenames=None,
+):
     if style and style not in document.styles:
         attributes = {
             "bigfont": "TEST_BIG.shx",
@@ -3544,17 +3546,20 @@ def _style_transfer_add_text(document, style, text, position, *, extended=False,
         record = document.styles.add(style, font="" if extended else "Arial.ttf", dxfattribs=attributes)
         if extended:
             record.set_xdata("ACAD", [(1000, family), (1071, 1048610)])
+            record.update_dxf_attribs(filenames or {})
     entity = document.modelspace().add_text(text, dxfattribs={"style": style, "height": 2.0})
     entity.dxf.insert = position
 
 
-def _style_transfer_owner(output, manifest, approval, style, *, extended, family=".VnAvant"):
+def _style_transfer_owner(output, manifest, approval, style, *, extended, family=".VnAvant", filenames=None):
     audit = json.loads(approval.read_text(encoding="utf-8"))
     scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
     x = 270 * scale + 5
     y = (audit["page"]["render_height_px"] - 150) * scale + 5
     document = ezdxf.new("R2010")
-    _style_transfer_add_text(document, style, "LEGACY-TEST", (x, y), extended=extended, family=family)
+    _style_transfer_add_text(
+        document, style, "LEGACY-TEST", (x, y), extended=extended, family=family, filenames=filenames,
+    )
     first_x = 20 * scale + 5
     _style_transfer_add_text(document, "FirstRegionStyle", "FIRST REGION", (first_x, y))
     _style_transfer_add_text(document, "VN_UNICODE", "Mép boong chính", (x + 5, y))
@@ -3613,6 +3618,52 @@ def test_fidelity_text_style_preserves_extended_font_after_reopen(tmp_path: Path
     assert style.dxf.width == pytest.approx(0.75)
     assert style.dxf.oblique == pytest.approx(12.0)
     assert style.dxf.generation_flags == 2
+
+
+@pytest.mark.parametrize("route", ["handoff", "compose"])
+@pytest.mark.parametrize("field", ["font", "bigfont"])
+@pytest.mark.parametrize("valid_utf8", [False, True], ids=["malformed", "unicode"])
+def test_fidelity_extended_style_requires_encodable_filenames(
+    tmp_path: Path, route: str, field: str, valid_utf8: bool,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, region) for region in ("first", "second"))
+    filename = "legacy-\u6f22.shx" if valid_utf8 else "legacy-\udcff.shx"
+    filenames = {field: filename}
+    if route == "handoff":
+        style_source = _style_transfer_owner(
+            output, manifest, approval, "LegacyTest", extended=True, filenames=filenames,
+        )
+        transfer = run_fidelity_semantic_region_handoff
+    else:
+        style_source = second
+        document = ezdxf.readfile(style_source)
+        _style_transfer_add_text(
+            document, "LegacyTest", "LEGACY-TEST", (5, 5), extended=True, filenames=filenames,
+        )
+        document.saveas(style_source)
+        transfer = run_fidelity_compose
+
+    source_style = ezdxf.readfile(style_source).styles.get("LegacyTest")
+    assert source_style.dxf.get(field) == filename
+    if not valid_utf8:
+        with pytest.raises(UnicodeDecodeError):
+            style_source.read_bytes().decode("utf-8")
+
+    inputs = (source, first, second, style_source) if route == "handoff" else (source, first, second)
+    before = [fidelity_module.sha256_file(path) for path in inputs]
+    if not valid_utf8:
+        with pytest.raises(FidelityError, match=r"(?i)STYLE.*encoding"):
+            transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert [fidelity_module.sha256_file(path) for path in inputs] == before
+        assert not list(output.glob("semantic_region_handoff*"))
+        assert not (output / "reconstruction_pages" / "page_01").exists()
+        return
+
+    result = transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+    published = second if route == "handoff" else result / "layout.dxf"
+    published.read_bytes().decode("utf-8")
+    assert ezdxf.readfile(published).styles.get("LegacyTest").dxf.get(field) == filename
 
 
 @pytest.mark.parametrize("route", ["handoff", "compose"])
