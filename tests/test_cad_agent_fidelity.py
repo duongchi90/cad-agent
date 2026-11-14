@@ -3705,6 +3705,54 @@ def test_fidelity_text_style_enforces_xdata_family_byte_limit(
     ]
 
 
+@pytest.mark.parametrize("location", ["handoff-owner", "handoff-target", "compose", "unused"])
+def test_fidelity_style_refuses_repeated_acad_before_publication(tmp_path: Path, location: str) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, name) for name in ("first", "second"))
+    inputs = [source, first, second]
+    family = "FixtureFinal"
+    if location.startswith("handoff"):
+        owner = _style_transfer_owner(output, manifest, approval, "LegacyTest", extended=True, family=family)
+        report = owner.parent / "report.json"
+        inputs.extend((owner, report))
+        transfer = run_fidelity_semantic_region_handoff
+    else:
+        transfer = run_fidelity_compose
+
+    style_source = owner if location == "handoff-owner" else second
+    if style_source == second:
+        document = ezdxf.readfile(second)
+        name = "LEGACYTEST" if location == "handoff-target" else "LegacyTest"
+        _style_transfer_add_text(document, name, "FIXTURE", (5, 5), extended=True, family=family)
+        if location == "unused":
+            model = document.modelspace()
+            model.delete_entity(model.query("TEXT")[-1])
+        document.saveas(second)
+
+    saved = style_source.read_bytes()
+    declaration = f"1001\nACAD\n1000\n{family}\n1071\n1048610\n".encode("ascii")
+    if b"\r\n" in saved:
+        declaration = declaration.replace(b"\n", b"\r\n")
+    assert saved.count(declaration) == 1
+    earlier = declaration.replace(family.encode("ascii"), b"FixtureEarlier")
+    style_source.write_bytes(saved.replace(declaration, earlier + declaration))
+    if location == "handoff-owner":
+        owner_report = json.loads(report.read_text(encoding="utf-8"))
+        owner_report["output_dxf_sha256"] = fidelity_module.sha256_file(owner)
+        report.write_text(json.dumps(owner_report), encoding="utf-8")
+
+    before = [fidelity_module.sha256_file(path) for path in inputs]
+    if location == "unused":
+        result = transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert "LegacyTest" not in ezdxf.readfile(result / "layout.dxf").styles
+    else:
+        with pytest.raises(FidelityError, match="Repeated ACAD.*STYLE"):
+            transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert not list(output.glob("semantic_region_handoff*"))
+        assert not (output / "reconstruction_pages" / "page_01").exists()
+    assert [fidelity_module.sha256_file(path) for path in inputs] == before
+
+
 @pytest.mark.parametrize("destination", ["plain", "extended", "malformed"])
 def test_fidelity_text_style_handoff_refuses_late_conflict_before_any_save(
     tmp_path: Path, destination: str,
