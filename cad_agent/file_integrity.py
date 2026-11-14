@@ -72,8 +72,10 @@ def open_bound_file(
 
 
 @contextmanager
-def pin_directory_chain(path: Path):
-    """Create/hold an absolute Windows directory chain without following reparses.
+def pin_directory_chain(path: Path, *, create: bool = True):
+    """Hold an absolute Windows directory chain without following reparses.
+
+    Missing components are created only when create is enabled.
 
     Each parent is held without delete sharing before a child is inspected or
     created, so a checked directory cannot be renamed underneath publication.
@@ -107,6 +109,8 @@ def pin_directory_chain(path: Path):
             try:
                 expected = os.stat(component, follow_symlinks=False)
             except FileNotFoundError:
+                if not create:
+                    raise
                 component.mkdir()
                 expected = os.stat(component, follow_symlinks=False)
             if not stat.S_ISDIR(expected.st_mode) or getattr(expected, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT:

@@ -2766,6 +2766,307 @@ def run_fidelity_dimension_reconstruct(
     return output
 
 
+def _verify_source_stroke_transform(
+    page: fitz.Page, paint_seq: int, start: fitz.Point, end: fitz.Point, dash: float, gap: float,
+) -> None:
+    if (getattr(fitz, "VersionBind", None), getattr(fitz, "VersionFitz", None)) != ("1.28.0", "1.29.0"):
+        raise FidelityError("Linetype source requires the qualified PyMuPDF/MuPDF binding.")
+
+    replay_error = "Linetype source stroke replay does not match the selected paint operation."
+    try:
+        mupdf = fitz.mupdf
+        paint_kinds = [kind for kind, _ in page.get_bboxlog()]
+
+        class SegmentWalker(mupdf.FzPathWalker2):
+            def __init__(self):
+                super().__init__()
+                self.points = []
+                self.valid = True
+                for command in ("moveto", "lineto", "curveto", "closepath", "quadto", "curvetov", "curvetoy", "rectto"):
+                    getattr(self, f"use_virtual_{command}")()
+
+            def moveto(self, _ctx, x, y):
+                if self.points:
+                    self.valid = False
+                else:
+                    self.points.append((x, y))
+
+            def lineto(self, _ctx, x, y):
+                if len(self.points) != 1:
+                    self.valid = False
+                else:
+                    self.points.append((x, y))
+
+            def reject(self, *_args):
+                self.valid = False
+
+            curveto = closepath = quadto = curvetov = curvetoy = rectto = reject
+
+        def record_paint(kind):
+            def record(self, *_args):
+                self.advance(kind)
+            return record
+
+        class PaintReplay(mupdf.FzDevice2):
+            def __init__(self):
+                super().__init__()
+                self.index = 0
+                self.matches = True
+                self.stroke = None
+                for method in (
+                    "fill_path", "stroke_path", "fill_text", "stroke_text", "ignore_text",
+                    "fill_shade", "fill_image", "fill_image_mask",
+                ):
+                    getattr(self, f"use_virtual_{method}")()
+
+            def advance(self, kind):
+                self.matches &= self.index < len(paint_kinds) and kind == paint_kinds[self.index]
+                self.index += 1
+
+            fill_path = record_paint("fill-path")
+            fill_text = record_paint("fill-text")
+            stroke_text = record_paint("stroke-text")
+            ignore_text = record_paint("ignore-text")
+            fill_shade = record_paint("fill-shade")
+            fill_image = fill_image_mask = record_paint("fill-image")
+
+            def stroke_path(self, _ctx, path, stroke, ctm, _colorspace, _color, _alpha, _color_params):
+                index = self.index
+                self.advance("stroke-path")
+                if index != paint_seq or not self.matches or stroke.dash_len != 2:
+                    return
+                walker = SegmentWalker()
+                retained_path = mupdf.FzPath(mupdf.ll_fz_keep_path(path))
+                mupdf.fz_walk_path(retained_path, walker, walker.m_internal)
+                if not walker.valid or len(walker.points) != 2:
+                    return
+                matrix = mupdf.FzMatrix(ctm)
+                endpoints = tuple(
+                    mupdf.fz_transform_point(mupdf.fz_make_point(x, y), matrix) for x, y in walker.points
+                )
+                self.stroke = (
+                    tuple(getattr(ctm, component) for component in "abcdef"),
+                    tuple((point.x, point.y) for point in endpoints),
+                    tuple(mupdf.floats_getitem(stroke.dash_list, i) for i in range(2)),
+                    stroke.dash_phase,
+                )
+
+        replay = PaintReplay()
+        cookie = mupdf.FzCookie()
+        mupdf.fz_run_page(page.this, replay, mupdf.FzMatrix(), cookie)
+        mupdf.fz_close_device(replay)
+        completed = (cookie.errors(), cookie.incomplete(), cookie.abort()) == (0, 0, 0)
+    except Exception as exc:
+        # The native callback binding must fully replay before a source pattern can be admitted.
+        raise FidelityError(replay_error) from exc
+
+    if (
+        not completed
+        or not replay.matches
+        or replay.index != len(paint_kinds)
+        or replay.stroke is None
+    ):
+        raise FidelityError(replay_error)
+    matrix, endpoints, raw_lengths, raw_phase = replay.stroke
+    a, b, c, d, _, _ = matrix
+    scale_x, scale_y = math.hypot(a, b), math.hypot(c, d)
+    if (
+        not all(math.isfinite(value) for value in matrix)
+        or scale_x <= 0 or scale_y <= 0
+        or not math.isclose(scale_x, scale_y, rel_tol=1e-6)
+        or abs((a / scale_x) * (c / scale_y) + (b / scale_x) * (d / scale_y)) > 1e-6
+    ):
+        raise FidelityError("Linetype source has an unsupported stroke transform.")
+
+    # MuPDF reports each component with the same area-derived scale for similarity transforms.
+    scale = math.sqrt(abs(a * d - b * c))
+    if (
+        endpoints != (tuple(start), tuple(end))
+        or raw_phase != 0
+        or not all(math.isclose(value * scale, expected, rel_tol=1e-6)
+                   for value, expected in zip(raw_lengths, (dash, gap)))
+    ):
+        raise FidelityError(replay_error)
+
+
+def _source_horizontal_dash(
+    source: Path, manifest: dict[str, Any], page: dict[str, Any], audit_page: dict[str, Any], paint_seq: object,
+) -> tuple[tuple[float, float], tuple[float, float], list[float]]:
+    if type(paint_seq) is not int or paint_seq < 0:
+        raise FidelityError("Linetype source paint sequence must be a nonnegative integer.")
+    configuration = manifest.get("configuration", {})
+    dpi = configuration.get("dpi")
+    width_px = audit_page.get("render_width_px")
+    height_px = audit_page.get("render_height_px")
+    if (
+        configuration.get("transform") != "displayed-page-box-v1"
+        or type(dpi) is not int or dpi <= 0
+        or type(width_px) is not int or width_px <= 0
+        or type(height_px) is not int or height_px <= 0
+        or audit_page.get("dpi") != dpi
+        or audit_page.get("page") != page["page"]
+        or audit_page.get("render_sha256") != page["artifacts"]["rendered_png"]["sha256"]
+    ):
+        raise FidelityError("Linetype source has an unsupported paper transform.")
+    source_bytes = source.read_bytes()
+    if hashlib.sha256(source_bytes).hexdigest() != manifest["source"]["sha256"]:
+        raise FidelityError("Linetype source no longer matches its manifest hash.")
+    zoom = dpi / 72.0
+    with fitz.open(stream=source_bytes, filetype="pdf") as pdf:
+        if not 1 <= page["page"] <= len(pdf):
+            raise FidelityError("Linetype source page is absent from the PDF.")
+        pdf_page = pdf[page["page"] - 1]
+        raster_rect = (pdf_page.rect * fitz.Matrix(zoom, zoom)).irect
+        width_mm, height_mm = _page_size_mm(pdf_page)
+        scale = (width_mm / width_px + height_mm / height_px) / 2.0
+        if (
+            pdf_page.rotation != 0 or pdf_page.cropbox != pdf_page.mediabox
+            or tuple(raster_rect) != (0, 0, width_px, height_px)
+            or not math.isclose(float(page["pixel_to_paper_mm"]["used"]), scale)
+        ):
+            raise FidelityError("Linetype source has an unsupported paper transform.")
+        drawings = [drawing for drawing in pdf_page.get_drawings() if drawing.get("seqno") == paint_seq]
+        if len(drawings) != 1:
+            raise FidelityError("Linetype source paint sequence does not identify one PDF stroke.")
+        drawing = drawings[0]
+        items = drawing["items"]
+        if drawing["type"] != "s" or drawing["closePath"] or len(items) != 1 or items[0][0] != "l":
+            raise FidelityError("Linetype source must be a single straight PDF stroke.")
+        _, start, end = items[0]
+        if not (
+            all(math.isfinite(value) for value in (*start, *end))
+            and start.y == end.y and start.x != end.x
+            and start in pdf_page.rect and end in pdf_page.rect
+        ):
+            raise FidelityError("Linetype source must be a finite horizontal stroke within the page.")
+        dash_pattern = re.fullmatch(r"\[\s*(\S+)\s+(\S+)\s*\]\s*(\S+)", drawing["dashes"])
+        pattern_error = "Linetype source requires one positive dash and gap and zero phase."
+        if dash_pattern is None:
+            raise FidelityError(pattern_error)
+        try:
+            dash, gap, phase = map(float, dash_pattern.groups())
+        except ValueError as exc:
+            raise FidelityError(pattern_error) from exc
+        if not (dash > 0 and gap > 0 and math.isfinite(dash + gap) and phase == 0):
+            raise FidelityError(pattern_error)
+        _verify_source_stroke_transform(pdf_page, paint_seq, start, end, dash, gap)
+    paper_mm_per_pt = zoom * scale
+    dash_mm, gap_mm = dash * paper_mm_per_pt, gap * paper_mm_per_pt
+    period_mm = dash_mm + gap_mm
+    if not (dash_mm > 0 and gap_mm > 0 and math.isfinite(period_mm) and phase == 0):
+        raise FidelityError(pattern_error)
+    return (
+        (start.x * paper_mm_per_pt, (height_px - start.y * zoom) * scale),
+        (end.x * paper_mm_per_pt, (height_px - end.y * zoom) * scale),
+        [period_mm, dash_mm, -gap_mm],
+    )
+
+
+def _apply_source_horizontal_dash(
+    document: Any, start: tuple[float, float], end: tuple[float, float], pattern: list[float], tolerance: float,
+) -> None:
+    if document.units != 4:
+        raise FidelityError("Linetype source requires a paper DXF in millimetres.")
+    matches = [
+        line for line in document.modelspace().query("LINE")
+        if _fidelity_line_matches(line.dxf.start, line.dxf.end, start, end, tolerance)
+    ]
+    if len(matches) != 1:
+        raise FidelityError("Linetype source requires exactly one matching LINE by both endpoints.")
+    line = matches[0]
+    first, last = line.dxf.start, line.dxf.end
+    if not (
+        first.z == last.z == 0 and first.y == last.y
+        and line.dxf.thickness == 0 and tuple(line.dxf.extrusion) == (0, 0, 1)
+        and (last.x - first.x) * (end[0] - start[0]) > 0
+    ):
+        raise FidelityError("Linetype source LINE has unsupported alignment or stroke direction.")
+    drawing_scale, line_scale = document.header["$LTSCALE"], line.dxf.ltscale
+    if not (drawing_scale > 0 and line_scale > 0 and math.isclose(drawing_scale * line_scale, 1.0)):
+        raise FidelityError("Linetype source requires a unit effective linetype scale.")
+
+    pattern_key = hashlib.sha256(repr(pattern).encode("ascii")).hexdigest()[:16].upper()
+    name = f"FIDELITY_SOURCE_DASHED_{pattern_key}"
+    if name in document.linetypes:
+        stored = document.linetypes.get(name).pattern_tags
+        tags = stored.tags
+        if (
+            stored.is_complex_type()
+            or tags.get_first_value(40, None) != pattern[0]
+            or tags.get_first_value(73, None) != 2
+            or [tag.value for tag in tags if tag.code == 49] != pattern[1:]
+        ):
+            raise FidelityError("Linetype source definition conflicts with an existing definition.")
+    else:
+        document.linetypes.add(name, pattern)
+    line.dxf.linetype = name
+
+
+def _write_fidelity_linetype_output(document: Any, root: Path, report: dict[str, Any]) -> str:
+    output = root / "layout.dxf"
+    document.saveas(output)
+    report["output_dxf_sha256"] = sha256_file(output)
+    report_text = json.dumps(report, indent=2) + "\n"
+    (root / "report.json").write_text(report_text, encoding="utf-8")
+    return report_text
+
+
+def _published_source_linetype_matches(
+    root: Path, identity: tuple[int, int], report_text: str, output_sha256: str,
+) -> bool:
+    """Verify the exact pair written by the current publication attempt."""
+    try:
+        published = root.lstat()
+        if (published.st_dev, published.st_ino) != identity:
+            return False
+        with pin_directory_chain(root, create=False):
+            pinned = root.lstat()
+            if (pinned.st_dev, pinned.st_ino) != identity:
+                return False
+            report_path = root / "report.json"
+            descriptor, report_stat = open_bound_file(
+                report_path, flags=os.O_RDONLY | os.O_BINARY, label="Linetype report",
+            )
+            with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+                if stream.read() != report_text:
+                    return False
+                output = root / "layout.dxf"
+                descriptor, output_stat = open_bound_file(
+                    output, flags=os.O_RDONLY | os.O_BINARY, label="Linetype DXF",
+                )
+                with os.fdopen(descriptor, "rb") as drawing:
+                    if hashlib.file_digest(drawing, "sha256").hexdigest() != output_sha256:
+                        return False
+                    assert_path_identity(output, output_stat, label="Linetype DXF")
+                    assert_path_identity(report_path, report_stat, label="Linetype report")
+            return True
+    except (FileIdentityError, OSError, UnicodeError):
+        return False
+
+
+def _publish_source_linetype_output(document: Any, root: Path, report: dict[str, Any]) -> None:
+    root = root.absolute()
+    try:
+        with pin_directory_chain(root.parent):
+            with tempfile.TemporaryDirectory(prefix=f".{root.name}.staging-", dir=root.parent) as directory:
+                staging = Path(directory)
+                with pin_directory_chain(staging):
+                    info = os.stat(staging, follow_symlinks=False)
+                    try:
+                        report_text = _write_fidelity_linetype_output(document, staging, report)
+                    except OSError as exc:
+                        raise FidelityError("Linetype candidate or report write failed.") from exc
+                identity = (info.st_dev, info.st_ino)
+                try:
+                    _publish_staging_directory(staging, root, identity)
+                    _remove_staging_reparse_alias(staging)
+                except FileIdentityError:
+                    if not _published_source_linetype_matches(root, identity, report_text, report["output_dxf_sha256"]):
+                        raise
+    except FileIdentityError as exc:
+        raise FidelityError("Linetype publication requires a stable private directory.") from exc
+
+
 def run_fidelity_linetype_reconstruct(
     source: Path,
     output_root: Path,
@@ -2784,23 +3085,80 @@ def run_fidelity_linetype_reconstruct(
     if not _is_within(base_dxf, output_root) or not base_dxf.is_file():
         raise FidelityError("Base layout DXF must reside inside the private fidelity output root.")
     try:
-        observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        observation_bytes = observation_path.read_bytes()
+        observation = json.loads(observation_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise FidelityError("Linetype observation is invalid JSON.") from exc
-    if observation.get("schema_version") != "fidelity-linetype-observation-1.0" or observation.get("private_artifact") is not True:
+    if (
+        not isinstance(observation, dict)
+        or observation.get("schema_version") != "fidelity-linetype-observation-1.0"
+        or observation.get("private_artifact") is not True
+    ):
         raise FidelityError("Linetype observation has an unsupported schema.")
     page_number = observation.get("page")
+    source_mode = "source_paint_seq" in observation
+    if source_mode and type(page_number) is not int:
+        raise FidelityError("Linetype source page must be an integer.")
     page = next((item for item in manifest.get("pages", []) if item.get("page") == page_number), None)
     if page is None:
         raise FidelityError("Linetype observation page is absent from the fidelity manifest.")
     rendered = _safe_artifact_path(output_root, page["artifacts"]["rendered_png"])
-    if observation.get("source_render_sha256") != sha256_file(rendered):
+    render_sha256 = sha256_file(rendered)
+    if observation.get("source_render_sha256") != render_sha256:
         raise FidelityError("Linetype observation does not match the rendered page.")
+    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    tolerance_mm = max(0.25, 3.0 * float(page["pixel_to_paper_mm"]["used"]))
+    if source_mode:
+        document, base_sha256 = _read_text_base_snapshot(base_dxf)
+        start, end, pattern = _source_horizontal_dash(
+            source, manifest, page, audit["source_page"], observation["source_paint_seq"],
+        )
+        _apply_source_horizontal_dash(document, start, end, pattern, tolerance_mm)
+        if sha256_file(base_dxf) != base_sha256:
+            raise FidelityError("Linetype base DXF changed during reconstruction.")
+        matched, changed = 1, 1
+    else:
+        import ezdxf
+
+        base_sha256 = sha256_file(base_dxf)
+        document = ezdxf.readfile(base_dxf)
+        matched, changed = _apply_legacy_linetype_rows(document, observation, page, audit, tolerance_mm)
+
+    base_root = output_root / "linetype_reconstruction"
+    revision = 2
+    while (base_root / f"page_{page_number:02d}").exists():
+        base_root = output_root / f"linetype_reconstruction-r{revision}"
+        revision += 1
+    root = base_root / f"page_{page_number:02d}"
+    report = {
+        "state": "needs_review",
+        "profile": "fidelity-layout-linetype",
+        "page": page_number,
+        "source_render_sha256": render_sha256,
+        "observation_sha256": hashlib.sha256(observation_bytes).hexdigest(),
+        "base_dxf_sha256": base_sha256,
+        "matched_horizontal_pattern_count": matched,
+        "changed_line_entities": changed,
+        "tolerance_mm": tolerance_mm,
+        "unresolved": ["non-default linetype mapping is a fidelity candidate and needs visual review", "no model export"],
+    }
+    if source_mode:
+        report["source_sha256"] = manifest["source"]["sha256"]
+        report["source_paint_seq"] = observation["source_paint_seq"]
+        _publish_source_linetype_output(document, root, report)
+    else:
+        root.mkdir(parents=True)
+        _write_fidelity_linetype_output(document, root, report)
+    return root / "layout.dxf"
+
+
+def _apply_legacy_linetype_rows(
+    document: Any, observation: dict[str, Any], page: dict[str, Any], audit: dict[str, Any], tolerance_mm: float,
+) -> tuple[int, int]:
     patterns = observation.get("patterns")
     if not isinstance(patterns, list):
         raise FidelityError("Linetype observation patterns are invalid.")
-    audit_path = _safe_artifact_path(output_root, page["artifacts"]["layout_audit"])
-    audit = json.loads(audit_path.read_text(encoding="utf-8"))
     height_px = int(audit["source_page"]["render_height_px"])
     scale = float(page["pixel_to_paper_mm"]["used"])
     linetype_specs = {
@@ -2815,14 +3173,10 @@ def run_fidelity_linetype_reconstruct(
         and isinstance(pattern.get("coordinate_px"), (int, float))
         and (linetype := str(pattern.get("suggested_linetype", "")).upper()) in linetype_specs
     ]
-    import ezdxf
-
-    document = ezdxf.readfile(base_dxf)
     required_linetype_names = {"FIDELITY_DASHED"} | {name for _, name in coordinates}
     for name, pattern in linetype_specs.values():
         if name in required_linetype_names and name not in document.linetypes:
             document.linetypes.add(name, pattern)
-    tolerance_mm = max(0.25, 3.0 * scale)
     changed = 0
     for entity in document.modelspace().query("LINE"):
         start, end = entity.dxf.start, entity.dxf.end
@@ -2835,30 +3189,7 @@ def run_fidelity_linetype_reconstruct(
         if linetype is not None:
             entity.dxf.linetype = linetype
             changed += 1
-    base_root = output_root / "linetype_reconstruction"
-    revision = 2
-    while (base_root / f"page_{page_number:02d}").exists():
-        base_root = output_root / f"linetype_reconstruction-r{revision}"
-        revision += 1
-    root = base_root / f"page_{page_number:02d}"
-    root.mkdir(parents=True)
-    output = root / "layout.dxf"
-    document.saveas(output)
-    report = {
-        "state": "needs_review",
-        "profile": "fidelity-layout-linetype",
-        "page": page_number,
-        "source_render_sha256": sha256_file(rendered),
-        "observation_sha256": sha256_file(observation_path),
-        "base_dxf_sha256": sha256_file(base_dxf),
-        "output_dxf_sha256": sha256_file(output),
-        "matched_horizontal_pattern_count": len(coordinates),
-        "changed_line_entities": changed,
-        "tolerance_mm": tolerance_mm,
-        "unresolved": ["non-default linetype mapping is a fidelity candidate and needs visual review", "no model export"],
-    }
-    (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    return output
+    return len(coordinates), changed
 
 
 def write_fidelity_dimension_review_index(source: Path, output_root: Path, manifest: dict[str, Any], *, workspace_root: Path) -> Path:
