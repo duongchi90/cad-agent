@@ -741,7 +741,9 @@ def _fidelity_point_in_region(
     )
 
 
-def _fidelity_extended_style_definition(style: Any) -> tuple[dict[str, Any], list[tuple[int, Any]]]:
+def _fidelity_extended_style_definition(
+    style: Any, *, output_encoding: str
+) -> tuple[dict[str, Any], list[tuple[int, Any]]]:
     tags = [(tag.code, tag.value) for tag in style.get_xdata("ACAD")]
     if (
         len(tags) != 2
@@ -754,6 +756,13 @@ def _fidelity_extended_style_definition(style: Any) -> tuple[dict[str, Any], lis
         or not -(2**31) <= tags[1][1] < 2**31
     ):
         raise FidelityError("Malformed extended font data in Fidelity STYLE.")
+
+    try:
+        family_bytes = tags[0][1].encode(output_encoding)
+    except UnicodeEncodeError as exc:
+        raise FidelityError("Fidelity STYLE font family cannot be preserved in the target DXF encoding.") from exc
+    if len(family_bytes) > 255:
+        raise FidelityError("Fidelity STYLE font family exceeds the DXF group-1000 limit of 255 encoded bytes.")
 
     dxf = style.dxf
     # STYLE flags 4 and 64 mean vertical text and referenced, respectively.
@@ -783,7 +792,7 @@ def _copy_fidelity_text_style(source_document: Any, target_document: Any, name: 
     target_style = target_document.styles.get(target_name) if target_name in target_document.styles else None
     target_definition = None
     if target_style is not None and target_style.has_extended_font_data:
-        target_definition = _fidelity_extended_style_definition(target_style)
+        target_definition = _fidelity_extended_style_definition(target_style, output_encoding=target_document.output_encoding)
     if not name:
         if target_definition is not None:
             raise FidelityError("Extended Fidelity STYLE conflicts with the Unicode text fallback.")
@@ -792,7 +801,7 @@ def _copy_fidelity_text_style(source_document: Any, target_document: Any, name: 
     source_style = source_document.styles.get(name) if name in source_document.styles else None
     source_definition = None
     if source_style is not None and source_style.has_extended_font_data:
-        source_definition = _fidelity_extended_style_definition(source_style)
+        source_definition = _fidelity_extended_style_definition(source_style, output_encoding=target_document.output_encoding)
     if target_style is not None:
         if source_definition != target_definition:
             raise FidelityError("Conflicting Fidelity STYLE definitions for the same name.")

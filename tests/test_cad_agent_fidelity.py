@@ -3532,7 +3532,7 @@ def _style_transfer_candidate(output: Path, region: str) -> Path:
     return output / "reconstruction_candidates" / "page_01" / region / "geometry.dxf"
 
 
-def _style_transfer_add_text(document, style, text, position, *, extended=False):
+def _style_transfer_add_text(document, style, text, position, *, extended=False, family=".VnAvant"):
     if style and style not in document.styles:
         attributes = {
             "bigfont": "TEST_BIG.shx",
@@ -3543,18 +3543,18 @@ def _style_transfer_add_text(document, style, text, position, *, extended=False)
         } if extended else {}
         record = document.styles.add(style, font="" if extended else "Arial.ttf", dxfattribs=attributes)
         if extended:
-            record.set_xdata("ACAD", [(1000, ".VnAvant"), (1071, 1048610)])
+            record.set_xdata("ACAD", [(1000, family), (1071, 1048610)])
     entity = document.modelspace().add_text(text, dxfattribs={"style": style, "height": 2.0})
     entity.dxf.insert = position
 
 
-def _style_transfer_owner(output, manifest, approval, style, *, extended):
+def _style_transfer_owner(output, manifest, approval, style, *, extended, family=".VnAvant"):
     audit = json.loads(approval.read_text(encoding="utf-8"))
     scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
     x = 270 * scale + 5
     y = (audit["page"]["render_height_px"] - 150) * scale + 5
     document = ezdxf.new("R2010")
-    _style_transfer_add_text(document, style, "LEGACY-TEST", (x, y), extended=extended)
+    _style_transfer_add_text(document, style, "LEGACY-TEST", (x, y), extended=extended, family=family)
     first_x = 20 * scale + 5
     _style_transfer_add_text(document, "FirstRegionStyle", "FIRST REGION", (first_x, y))
     _style_transfer_add_text(document, "VN_UNICODE", "Mép boong chính", (x + 5, y))
@@ -3613,6 +3613,45 @@ def test_fidelity_text_style_preserves_extended_font_after_reopen(tmp_path: Path
     assert style.dxf.width == pytest.approx(0.75)
     assert style.dxf.oblique == pytest.approx(12.0)
     assert style.dxf.generation_flags == 2
+
+
+@pytest.mark.parametrize("route", ["handoff", "compose"])
+@pytest.mark.parametrize("byte_length", [255, 256])
+def test_fidelity_text_style_enforces_xdata_family_byte_limit(
+    tmp_path: Path, route: str, byte_length: int,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, name) for name in ("first", "second"))
+    family = "\u00e9" * 127 + "A" * (byte_length - 254)
+    encoding = ezdxf.readfile(second).output_encoding
+    assert encoding == "utf-8"
+    assert len(family.encode(encoding)) == byte_length
+    inputs = [first, second]
+    if route == "handoff":
+        owner = _style_transfer_owner(output, manifest, approval, "LegacyTest", extended=True, family=family)
+        inputs.append(owner)
+        transfer = run_fidelity_semantic_region_handoff
+    else:
+        document = ezdxf.readfile(second)
+        _style_transfer_add_text(document, "LegacyTest", "LEGACY-TEST", (5, 5), extended=True, family=family)
+        document.saveas(second)
+        transfer = run_fidelity_compose
+
+    before = [fidelity_module.sha256_file(path) for path in inputs]
+    if byte_length == 256:
+        with pytest.raises(FidelityError, match=r"(?i)STYLE"):
+            transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert [fidelity_module.sha256_file(path) for path in inputs] == before
+        assert not list(output.glob("semantic_region_handoff*"))
+        assert not (output / "reconstruction_pages" / "page_01").exists()
+        return
+
+    result = transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+    published = second if route == "handoff" else result / "layout.dxf"
+    style = ezdxf.readfile(published).styles.get("LegacyTest")
+    assert [(tag.code, tag.value) for tag in style.get_xdata("ACAD")] == [
+        (1000, family), (1071, 1048610),
+    ]
 
 
 @pytest.mark.parametrize("destination", ["plain", "extended", "malformed"])
