@@ -3299,7 +3299,10 @@ def test_region_proposal_is_source_bound_non_overlapping_and_sidecar_only() -> N
             run_fidelity_reconstruct(source, output, manifest, foreign, workspace_root=Path.cwd())
 
 
-def test_fidelity_compose_preserves_semantic_entities_and_nondefault_linetype(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pattern_period", [0.0, 6.0])
+def test_fidelity_compose_preserves_semantic_entities_and_nondefault_linetype(
+    tmp_path: Path, pattern_period: float,
+) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
     _pdf(source)
@@ -3318,7 +3321,7 @@ def test_fidelity_compose_preserves_semantic_entities_and_nondefault_linetype(tm
     candidate = output / "reconstruction_candidates" / "page_01" / "main" / "geometry.dxf"
     candidate.parent.mkdir(parents=True)
     document = ezdxf.new("R2010")
-    document.linetypes.add("DASHED", [0.0, 4.0, -2.0])
+    document.linetypes.add("DASHED", [pattern_period, 4.0, -2.0])
     model = document.modelspace()
     model.add_line((10, 10), (100, 10), dxfattribs={"linetype": "DASHED"})
     model.add_circle((50, 50), 12)
@@ -3340,6 +3343,13 @@ def test_fidelity_compose_preserves_semantic_entities_and_nondefault_linetype(tm
     assert result.modelspace().query("DIMENSION")[0].get_measurement() == pytest.approx(90.0)
     assert result.modelspace().query("LINE")[0].dxf.linetype == "DASHED"
     assert "DASHED" in result.linetypes
+    tags = result.linetypes.get("DASHED").pattern_tags.tags
+    actual_pattern = (
+        tags.get_first_value(40),
+        tags.get_first_value(73),
+        [tag.value for tag in tags if tag.code == 49],
+    )
+    assert actual_pattern == (pattern_period, 2, [4.0, -2.0])
 
 
 def test_fidelity_compose_rejects_unsupported_dimension_type_before_linear_transfer(tmp_path: Path) -> None:
@@ -3501,7 +3511,10 @@ def test_semantic_owner_handoff_translates_owner_outputs_into_local_region_candi
     assert "semantic owner handoff remains review-only" in compose_report["unresolved"]
 
 
-def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pattern_period", [0.0, 6.0])
+def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(
+    tmp_path: Path, pattern_period: float,
+) -> None:
     """The measured page-1 @512 DASHED owner line must reach side."""
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
@@ -3546,7 +3559,7 @@ def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tm
     owner_root.mkdir(parents=True)
     owner_path = owner_root / "layout.dxf"
     owner_document = ezdxf.new("R2010")
-    owner_document.linetypes.add("FIDELITY_DASHED", [0.0, 4.0, -2.0])
+    owner_document.linetypes.add("FIDELITY_DASHED", [pattern_period, 4.0, -2.0])
     owner_document.modelspace().add_line(
         (offset_x + owner_local_start[0], offset_y + owner_local_start[1]),
         (offset_x + owner_local_end[0], offset_y + owner_local_end[1]),
@@ -3570,6 +3583,13 @@ def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tm
     assert lines[0].dxf.linetype == "FIDELITY_DASHED"
     assert (float(lines[0].dxf.start.x), float(lines[0].dxf.start.y)) == pytest.approx(local_target_start)
     assert (float(lines[0].dxf.end.x), float(lines[0].dxf.end.y)) == pytest.approx(local_target_end)
+    tags = candidate.linetypes.get("FIDELITY_DASHED").pattern_tags.tags
+    actual_pattern = (
+        tags.get_first_value(40),
+        tags.get_first_value(73),
+        [tag.value for tag in tags if tag.code == 49],
+    )
+    assert actual_pattern == (pattern_period, 2, [4.0, -2.0])
 
 
 def test_semantic_handoff_rejects_ambiguous_fuzzy_horizontal_matches(tmp_path: Path) -> None:
