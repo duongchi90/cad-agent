@@ -31,7 +31,7 @@ from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
 from primitive_ir_lib.table_extraction import build_cells, detect_grid
 from primitive_ir_lib.view_calibration import detect_view_candidates
-from dxf_builder_lib.builder import _ensure_unicode_text_style
+from dxf_builder_lib.builder import _UNICODE_TEXT_STYLE, _ensure_unicode_text_style
 
 from .file_integrity import FileIdentityError, assert_path_identity, open_bound_file, pin_directory_chain
 from .manifest import ManifestError, sha256_file, verify_source, write_manifest
@@ -741,11 +741,72 @@ def _fidelity_point_in_region(
     )
 
 
+def _fidelity_extended_style_definition(style: Any) -> tuple[dict[str, Any], list[tuple[int, Any]]]:
+    tags = [(tag.code, tag.value) for tag in style.get_xdata("ACAD")]
+    if (
+        len(tags) != 2
+        or tags[0][0] != 1000
+        or not isinstance(tags[0][1], str)
+        or not tags[0][1].strip()
+        or any(char in tags[0][1] for char in "\r\n\0")
+        or tags[1][0] != 1071
+        or type(tags[1][1]) is not int
+        or not -(2**31) <= tags[1][1] < 2**31
+    ):
+        raise FidelityError("Malformed extended font data in Fidelity STYLE.")
+
+    dxf = style.dxf
+    # STYLE flags 4 and 64 mean vertical text and referenced, respectively.
+    # Shape and xref records cannot be copied as standalone text styles.
+    if (
+        dxf.flags & ~(4 | 64)
+        or dxf.generation_flags & ~(2 | 4)
+        or not all(math.isfinite(value) for value in (dxf.height, dxf.width, dxf.oblique))
+        or dxf.height < 0
+        or dxf.width <= 0
+        or any(char in filename for filename in (dxf.font, dxf.bigfont) for char in "\r\n\0")
+    ):
+        raise FidelityError("Unsupported render fields in extended Fidelity STYLE.")
+    return {
+        "font": dxf.font,
+        "bigfont": dxf.bigfont,
+        "flags": dxf.flags & 4,
+        "height": dxf.height,
+        "width": dxf.width,
+        "oblique": dxf.oblique,
+        "generation_flags": dxf.generation_flags,
+    }, tags
+
+
 def _copy_fidelity_text_style(source_document: Any, target_document: Any, name: str) -> str:
-    if not name or name in target_document.styles:
-        return name or _ensure_unicode_text_style(target_document)
-    source_style = source_document.styles.get(name)
-    target_document.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
+    target_name = name or _UNICODE_TEXT_STYLE
+    target_style = target_document.styles.get(target_name) if target_name in target_document.styles else None
+    target_definition = None
+    if target_style is not None and target_style.has_extended_font_data:
+        target_definition = _fidelity_extended_style_definition(target_style)
+    if not name:
+        if target_definition is not None:
+            raise FidelityError("Extended Fidelity STYLE conflicts with the Unicode text fallback.")
+        return _ensure_unicode_text_style(target_document)
+
+    source_style = source_document.styles.get(name) if name in source_document.styles else None
+    source_definition = None
+    if source_style is not None and source_style.has_extended_font_data:
+        source_definition = _fidelity_extended_style_definition(source_style)
+    if target_style is not None:
+        if source_definition != target_definition:
+            raise FidelityError("Conflicting Fidelity STYLE definitions for the same name.")
+        return name
+
+    if source_definition is None:
+        source_style = source_document.styles.get(name)
+        target_document.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
+        return name
+
+    attributes, tags = source_definition
+    font = attributes.pop("font")
+    target_style = target_document.styles.add(name, font=font, dxfattribs=attributes)
+    target_style.set_xdata("ACAD", tags)
     return name
 
 
@@ -971,6 +1032,7 @@ def run_fidelity_semantic_region_handoff(
         raise FidelityError("No validated semantic owner output is available for handoff.")
     selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
     transferred: list[dict[str, Any]] = []
+    prepared_candidates = []
     for region in selected:
         candidate_path = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
         if not candidate_path.is_file():
@@ -982,8 +1044,12 @@ def run_fidelity_semantic_region_handoff(
                 document, ezdxf.readfile(owner_path), kind, region, page, height_px,
             )
             counts = {key: counts[key] + result[key] for key in counts}
-        document.saveas(candidate_path)
+        prepared_candidates.append((candidate_path, document))
         transferred.append({"region": region["id"], "candidate": str(candidate_path.relative_to(output_root)).replace("\\", "/"), "counts": counts})
+    # A later region may reject a STYLE collision. Resolve all transfers before
+    # saving any candidate or publishing the handoff report.
+    for candidate_path, document in prepared_candidates:
+        document.saveas(candidate_path)
     handoff_root = output_root / "semantic_region_handoff"
     revision = 1
     while (handoff_root / f"page_{page_number:02d}.json").exists():
@@ -3835,15 +3901,8 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
             length=length,
         )
 
-    def copy_text_style(source_document: Any, name: str) -> str:
-        if not name or name in composed.styles:
-            return name or _ensure_unicode_text_style(composed)
-        source_style = source_document.styles.get(name)
-        composed.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
-        return name
-
     def add_text_entity(source_document: Any, entity: Any, offset_x: float, offset_y: float) -> None:
-        style = copy_text_style(source_document, str(entity.dxf.get("style", "")))
+        style = _copy_fidelity_text_style(source_document, composed, str(entity.dxf.get("style", "")))
         if entity.dxftype() == "TEXT":
             attributes = {
                 "layer": "FIDELITY_TEXT",
