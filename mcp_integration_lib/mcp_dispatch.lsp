@@ -735,6 +735,19 @@
   (vlax-3d-point (list x y 0.0))
 )
 
+(defun mcp-validate-layer-if-present (params / layer layers)
+  (setq layer (mcp-param params "layer"))
+  (if (= (type layer) 'STR)
+    (progn
+      (setq layers
+        (vla-get-Layers (vla-get-ActiveDocument (vlax-get-acad-object)))
+      )
+      (vla-item layers layer)
+    )
+  )
+  T
+)
+
 (defun mcp-set-layer-if-present (object params / layer)
   (setq layer (mcp-param params "layer"))
   (if (= (type layer) 'STR)
@@ -1085,6 +1098,7 @@
 )
 
 (defun mcp-op-create-line (params / object model)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         object
           (vla-AddLine
@@ -1102,6 +1116,7 @@
 )
 
 (defun mcp-op-create-circle (params / object model)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         object
           (vla-AddCircle
@@ -1123,6 +1138,7 @@
 )
 
 (defun mcp-op-create-arc (params / object model)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         object
           (vla-AddArc
@@ -1142,6 +1158,7 @@
 )
 
 (defun mcp-op-create-text (params / object model height rotation)
+  (mcp-validate-layer-if-present params)
   (setq model (vla-get-ModelSpace (vla-get-ActiveDocument (vlax-get-acad-object)))
         height (mcp-param params "height")
         rotation (mcp-param params "rotation"))

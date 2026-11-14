@@ -196,6 +196,50 @@ def test_dispatcher_serializes_real_numbers_with_round_trip_precision() -> None:
     assert '(vl-princ-to-string value)' not in number_encoder
 
 
+@pytest.mark.parametrize(
+    ("handler", "native_create"),
+    (
+        ("mcp-op-create-line", "(vla-addline"),
+        ("mcp-op-create-circle", "(vla-addcircle"),
+        ("mcp-op-create-arc", "(vla-addarc"),
+        ("mcp-op-create-text", "(vla-addtext"),
+    ),
+)
+def test_create_entities_validate_requested_layer_before_native_creation(
+    handler: str,
+    native_create: str,
+) -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        rf"\(defun\s+{re.escape(handler)}\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    validation = body.find("(mcp-validate-layer-if-present params)")
+    native_create_index = body.find(native_create)
+    assert validation >= 0, "missing-layer validation must be explicit"
+    assert native_create_index >= 0, "creation owner must remain native COM"
+    assert validation < native_create_index, (
+        "requested layer must be validated before native creation so a bad layer "
+        "cannot leave an unsaved entity survivor"
+    )
+
+
+def test_layer_validation_uses_the_active_autocad_layer_collection() -> None:
+    source = _dispatcher_source().casefold()
+    match = re.search(
+        r"\(defun\s+mcp-validate-layer-if-present\b(?P<body>.*?)(?=\n\(defun\s+)",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    body = match.group("body")
+    assert "(vla-get-layers" in body
+    assert "(vla-item" in body
+
+
 def test_file_ipc_constructor_requires_an_explicit_root() -> None:
     with pytest.raises(TypeError):
         FileIPCLiveMCPClient()
