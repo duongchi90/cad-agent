@@ -102,12 +102,87 @@ import numpy as np
 
 from .geometry_extraction import RawLine
 from .models import new_id
+from .spatial_index import DEFAULT_INDEX_MIN_LINES, SpatialIndex2D
 from .tick_mark_detection import detect_tick_mark_at_point, split_raw_line_at_internal_witness_lines
 
 try:  # RawText chỉ cần cho type hint / truy cập bbox_px, tránh phụ thuộc vòng
     from .text_extraction import RawText
 except ImportError:  # pragma: no cover
     RawText = object  # type: ignore
+
+
+def _text_center_bbox(text: "RawText") -> Tuple[float, float, float, float]:
+    """Return a degenerate point AABB for the center of a blocking text box."""
+    cx, cy = _bbox_center(text.bbox_px)
+    return (cx, cy, cx, cy)
+
+
+def _iter_collinear_candidate_pairs(
+    angles: Sequence[Tuple[float, float, float]],
+    angle_tol: float,
+    perp_tol_px: float,
+):
+    """Yield `(i, j)` pairs passing exact collinearity angle and perp tolerances."""
+    n = len(angles)
+    if n < DEFAULT_INDEX_MIN_LINES or not (
+        math.isfinite(angle_tol) and math.isfinite(perp_tol_px)
+    ):
+        for i in range(n):
+            ai, x0i, y0i = angles[i]
+            for j in range(i + 1, n):
+                aj, x0j, y0j = angles[j]
+                if _angle_diff_mod_pi(ai, aj) > angle_tol:
+                    continue
+                if _perp_distance_point_to_line(x0j, y0j, x0i, y0i, ai) <= perp_tol_px:
+                    yield i, j
+        return
+
+    arr_a = np.fromiter((a for a, _, _ in angles), dtype=np.float64, count=n)
+    arr_x = np.fromiter((x for _, x, _ in angles), dtype=np.float64, count=n)
+    arr_y = np.fromiter((y for _, _, y in angles), dtype=np.float64, count=n)
+    cos_a = np.cos(arr_a)
+    sin_a = np.sin(arr_a)
+    angle_eps = angle_tol + 1e-12
+
+    for i in range(n - 1):
+        delta = np.abs(arr_a[i + 1:] - arr_a[i])
+        angle_diff = np.minimum(delta, math.pi - delta)
+        cand = np.flatnonzero(angle_diff <= angle_eps)
+        if cand.size == 0:
+            continue
+        js = cand + (i + 1)
+        dxv = arr_x[js] - arr_x[i]
+        dyv = arr_y[js] - arr_y[i]
+        perp = np.abs(dxv * sin_a[i] - dyv * cos_a[i])
+        perp_eps = perp_tol_px + 1e-6 * (1.0 + np.abs(dxv) + np.abs(dyv))
+        ai, x0i, y0i = angles[i]
+        for j in js[perp <= perp_eps].tolist():
+            aj, x0j, y0j = angles[j]
+            if _angle_diff_mod_pi(ai, aj) > angle_tol:
+                continue
+            if _perp_distance_point_to_line(x0j, y0j, x0i, y0i, ai) <= perp_tol_px:
+                yield i, j
+
+
+def _cluster_text_candidates(
+    text_index: SpatialIndex2D["RawText"],
+    ref_x0: float,
+    ref_y0: float,
+    ref_angle: float,
+    segs: Sequence[Tuple[float, float, RawLine, Tuple[float, float], Tuple[float, float]]],
+    text_block_lateral_px: float,
+    text_block_padding_px: float,
+) -> List["RawText"]:
+    """Return blocking texts whose center lies inside the cluster corridor AABB."""
+    pad_along = max(0.0, text_block_padding_px)
+    c_tmin = segs[0][0] - pad_along
+    c_tmax = max(seg[1] for seg in segs) + pad_along
+    dx, dy = math.cos(ref_angle), math.sin(ref_angle)
+    ax, ay = ref_x0 + dx * c_tmin, ref_y0 + dy * c_tmin
+    bx, by = ref_x0 + dx * c_tmax, ref_y0 + dy * c_tmax
+    corridor_bbox = (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+    lateral_pad = max(0.0, text_block_lateral_px) + 1.0
+    return text_index.query_bbox(corridor_bbox, pad=lateral_pad, preserve_order=False)
 
 
 def _angle_mod_pi(dx: float, dy: float) -> float:
@@ -540,21 +615,19 @@ def merge_collinear_lines(
         angle, x0, y0 = _line_angle_and_ref(line)
         angles.append((angle, x0, y0))
 
-    for i in range(n):
-        ai, x0i, y0i = angles[i]
-        for j in range(i + 1, n):
-            aj, x0j, y0j = angles[j]
-            if _angle_diff_mod_pi(ai, aj) > angle_tol:
-                continue
-            # dùng góc trung bình đơn giản (đủ dùng vì đã lọc theo angle_tol)
-            perp = _perp_distance_point_to_line(x0j, y0j, x0i, y0i, ai)
-            if perp <= perp_tol_px:
-                union(i, j)
+    for i, j in _iter_collinear_candidate_pairs(angles, angle_tol, perp_tol_px):
+        union(i, j)
 
     clusters: dict = {}
     for idx in range(n):
         clusters.setdefault(find(idx), []).append(idx)
 
+    has_multi_line_cluster = any(len(idxs) > 1 for idxs in clusters.values())
+    text_index: Optional[SpatialIndex2D["RawText"]] = (
+        SpatialIndex2D.from_items(blocking_texts, _text_center_bbox)
+        if has_multi_line_cluster and len(blocking_texts) >= DEFAULT_INDEX_MIN_LINES
+        else None
+    )
     result: List[RawLine] = []
 
     for _, idxs in clusters.items():
@@ -643,8 +716,21 @@ def merge_collinear_lines(
 
         # tính trước danh sách text "sát trục" (trong hành lang perp_tol lateral)
         # cùng toạ độ chiếu tâm bbox của chúng lên trục này
+        candidate_texts = (
+            _cluster_text_candidates(
+                text_index,
+                ref_x0,
+                ref_y0,
+                ref_angle,
+                segs,
+                text_block_lateral_px,
+                text_block_padding_px,
+            )
+            if text_index is not None and segs
+            else blocking_texts
+        )
         nearby_text_t: List[float] = []
-        for text in blocking_texts:
+        for text in candidate_texts:
             tcx, tcy = _bbox_center(text.bbox_px)
             perp = _perp_distance_point_to_line(tcx, tcy, ref_x0, ref_y0, ref_angle)
             if perp <= text_block_lateral_px:
