@@ -768,3 +768,95 @@ def test_exact_line_cleanup_rejects_nonfinite_confidence():
             assert "confidence must be finite" in str(error)
         else:
             raise AssertionError(f"nonfinite confidence was accepted: {confidence}")
+
+
+def test_merge_collinear_lines_uses_indexed_and_prefiltered_lookup(monkeypatch):
+    """Large batches must avoid O(N^2) Python perp scans and per-cluster text scans."""
+    raw_lines = []
+    blocking_texts = []
+    # 160 isolated parallel tracks x 2 segments = 320 lines (>= DEFAULT_INDEX_MIN_LINES)
+    # split into 3 angle buckets (0, 45, 90 deg) in disjoint coordinate quadrants,
+    # plus 160 blocking texts (>= DEFAULT_INDEX_MIN_LINES).
+    angles_rad = (0.0, float(np.pi / 4.0), float(np.pi / 2.0))
+    for track_idx in range(160):
+        bucket = track_idx % 3
+        angle = angles_rad[bucket]
+        dx = float(np.cos(angle))
+        dy = float(np.sin(angle))
+        ox = bucket * 100_000.0 + (track_idx * 120.0 if bucket == 2 else 0.0)
+        oy = 0.0 if bucket == 2 else track_idx * 120.0
+        raw_lines.append(_line((ox, oy), (ox + 40.0 * dx, oy + 40.0 * dy), f"s1-{track_idx}"))
+        raw_lines.append(_line((ox + 50.0 * dx, oy + 50.0 * dy), (ox + 95.0 * dx, oy + 95.0 * dy), f"s2-{track_idx}"))
+        # Place blocking text at track midpoint for even tracks only (offset along unit normal for odd tracks).
+        offset_n = 0.0 if track_idx % 2 == 0 else 45.0
+        tx = ox + 45.0 * dx - offset_n * dy
+        ty = oy + 45.0 * dy + offset_n * dx
+        blocking_texts.append(
+            _text("100", (tx - 4.0, ty - 4.0, tx + 4.0, ty + 4.0), f"t-{track_idx}")
+        )
+
+    orig_perp = line_merging_module._perp_distance_point_to_line
+    perp_calls = 0
+
+    def counting_perp(px, py, x0, y0, ang):
+        nonlocal perp_calls
+        perp_calls += 1
+        return orig_perp(px, py, x0, y0, ang)
+
+    monkeypatch.setattr(line_merging_module, "_perp_distance_point_to_line", counting_perp)
+
+    merged = merge_collinear_lines(raw_lines, blocking_texts=blocking_texts)
+
+    # Even tracks stay split (2 each -> 160); odd tracks merge (1 each -> 80) = 240.
+    assert len(merged) == 240
+    # Unoptimized nested Python loops invoke _perp_distance_point_to_line >25,000 times
+    # for blocking_texts alone (160 clusters * 160 texts) plus ~50k line-pair scans.
+    assert perp_calls <= 3000, f"expected prefiltered/indexed perp calls <= 3000, got {perp_calls}"
+
+
+def test_merge_collinear_lines_indexed_matches_small_input_at_oblique_large_coords():
+    """Indexed/vectorized path must be bit-identical to unindexed small-batch path."""
+    base_x, base_y = 1_000_000.0, -750_000.0
+    # Oblique 45-degree track spanning 50,000 units with nearby and boundary texts.
+    diag = float(np.sqrt(0.5))
+    seg1_end = (base_x + 40.0 * diag, base_y + 40.0 * diag)
+    seg2_start = (base_x + 55.0 * diag, base_y + 55.0 * diag)
+    seg2_end = (base_x + 50_000.0 * diag, base_y + 50_000.0 * diag)
+    seg3_start = (base_x + 50_012.0 * diag, base_y + 50_012.0 * diag)
+    seg3_end = (base_x + 50_100.0 * diag, base_y + 50_100.0 * diag)
+
+    core_lines = [
+        _line((base_x, base_y), seg1_end, "c1"),
+        _line(seg2_start, seg2_end, "c2"),
+        _line(seg3_start, seg3_end, "c3"),
+    ]
+    # Place text inside seg1..seg2 gap near lateral boundary (perp ~24px < 25px) and
+    # keep seg2..seg3 gap unblocked so only seg2+seg3 merge.
+    nx, ny = -diag, diag
+    gx = base_x + 47.0 * diag + 24.0 * nx
+    gy = base_y + 47.0 * diag + 24.0 * ny
+    core_texts = [_text("500", (gx - 2.0, gy - 2.0, gx + 2.0, gy + 2.0), "t-block")]
+
+    small_out = merge_collinear_lines(core_lines, blocking_texts=core_texts)
+
+    # Pad with >= 80 faraway isolated lines & texts to engage SpatialIndex2D + numpy path.
+    padded_lines = list(core_lines) + [
+        _line((100.0 * k, -100_000.0 - 50.0 * k), (100.0 * k + 15.0, -100_000.0 - 50.0 * k + 7.0 * (k % 5)), f"pad-{k}")
+        for k in range(1, 90)
+    ]
+    padded_texts = list(core_texts) + [
+        _text("X", (-50_000.0 - 30.0 * k, -50_000.0, -50_000.0 - 30.0 * k + 4.0, -49_996.0), f"pt-{k}")
+        for k in range(1, 90)
+    ]
+
+    large_out = merge_collinear_lines(padded_lines, blocking_texts=padded_texts)
+
+    small_core_geom = sorted((tuple(round(v, 9) for v in ln.p1_px), tuple(round(v, 9) for v in ln.p2_px)) for ln in small_out)
+    large_ids = {ln.id for ln in padded_lines[len(core_lines):]}
+    large_core_geom = sorted(
+        (tuple(round(v, 9) for v in ln.p1_px), tuple(round(v, 9) for v in ln.p2_px))
+        for ln in large_out
+        if ln.id not in large_ids
+    )
+    assert len(small_out) == 2
+    assert small_core_geom == large_core_geom
