@@ -178,6 +178,93 @@ public sealed class ReviewEngineTests
         Assert.Equal(1, gateway.ReadEntitiesCallCount);
     }
 
+    [Fact]
+    public void DefaultFiveTypeReviewStillWarnsOnExtendedEntities()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\Sample.dwg",
+            Entities = new[]
+            {
+                Entity("L1", "LINE"),
+                Entity("S1", "SPLINE"),
+                Entity("H1", "HATCH")
+            }
+        };
+
+        var result = new ReviewEngine(gateway).Review(new ReviewRequest(
+            @"C:\drawings\Sample.dwg",
+            new[] { "L1", "S1", "H1" }));
+
+        Assert.True(result.Success);
+        Assert.False(result.Changed);
+        Assert.Equal("L1", Assert.Single(result.Entities).Handle);
+        Assert.False(result.Payload.ContainsKey("census"));
+        Assert.Contains(result.Warnings, warning => warning.Contains("SPLINE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Warnings, warning => warning.Contains("HATCH", StringComparison.OrdinalIgnoreCase));
+        Assert.False(ReviewEntityTypes.TryNormalize("SPLINE", out _));
+    }
+
+    [Fact]
+    public void OptInExtendedEntitiesReviewNormalizesMarineTypesAndEmitsBoundedCensus()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\Sample.dwg",
+            Entities = new[]
+            {
+                Entity("L1", "LINE"),
+                Entity("S1", "SPLINE", ("degree", 3), ("control_point_count", 18)),
+                Entity("P1", "LWPOLYLINE", ("vertex_count", 12)),
+                Entity("P2", "POLYLINE", ("closed", true)),
+                Entity("E1", "ELLIPSE", ("radius_ratio", 0.5)),
+                Entity("M1", "MTEXT", ("text", "THÉP GÓC")),
+                Entity("B1", "BlockReference", ("name", "FRAME_MARK")),
+                Entity("H1", "HATCH")
+            }
+        };
+
+        var result = new ReviewEngine(gateway).Review(new ReviewRequest(
+            @"C:\drawings\Sample.dwg",
+            new[] { "L1", "S1", "P1", "P2", "E1", "M1", "B1", "H1" },
+            IncludeExtendedEntities: true));
+
+        Assert.True(result.Success, string.Join("; ", result.Errors));
+        Assert.False(result.Changed);
+        Assert.Equal(new[] { "L1", "S1", "P1", "P2", "E1", "M1", "B1" }, result.EntityHandles);
+        Assert.Equal("INSERT", result.Entities.Last().Type);
+        Assert.Contains(result.Warnings, warning => warning.Contains("HATCH", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Payload.TryGetValue("census", out var census));
+        Assert.Equal(8, census.GetProperty("requested_count").GetInt32());
+        Assert.Equal(7, census.GetProperty("accepted_count").GetInt32());
+        Assert.Equal(1, census.GetProperty("dropped_count").GetInt32());
+        Assert.Equal(1, census.GetProperty("counts_by_type").GetProperty("SPLINE").GetInt32());
+        Assert.Equal(1, census.GetProperty("counts_by_type").GetProperty("INSERT").GetInt32());
+        Assert.Equal(1, census.GetProperty("dropped_by_type").GetProperty("HATCH").GetInt32());
+    }
+
+    [Fact]
+    public void OptInExtendedEntitiesRejectsHandlesExceedingBound()
+    {
+        var gateway = new StubDrawingGateway
+        {
+            ActiveDocumentFullPath = @"C:\drawings\Sample.dwg"
+        };
+        var oversized = Enumerable.Range(1, ReviewEntityTypes.MaxReviewEntityCount + 1)
+            .Select(i => i.ToString("X"))
+            .ToArray();
+
+        var result = new ReviewEngine(gateway).Review(new ReviewRequest(
+            @"C:\drawings\Sample.dwg",
+            oversized,
+            IncludeExtendedEntities: true));
+
+        Assert.False(result.Success);
+        Assert.False(result.Changed);
+        Assert.Contains(result.Errors, error => error.Contains("limit", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, gateway.ReadEntitiesCallCount);
+    }
+
     private static EntitySnapshot Entity(
         string? handle,
         string? type,
