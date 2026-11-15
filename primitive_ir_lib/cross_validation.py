@@ -29,6 +29,7 @@ from .calibration import find_nearest_line
 from .geometry_extraction import RawLine
 from .line_merging import merge_collinear_lines
 from .models import Calibration, CrossValidation
+from .spatial_index import DEFAULT_INDEX_MIN_LINES, SpatialIndex2D
 from .text_extraction import RawText
 
 
@@ -69,6 +70,12 @@ def cross_validate(
             gap_tol_px=merge_gap_tol_px,
         )
 
+    line_index = (
+        SpatialIndex2D.from_midpoints(raw_lines)
+        if len(raw_lines) >= DEFAULT_INDEX_MIN_LINES
+        else None
+    )
+
     for text in raw_texts:
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
@@ -83,7 +90,12 @@ def cross_validate(
             ))
             continue
 
-        line = find_nearest_line(text, raw_lines, max_distance_px=max_distance_px)
+        if line_index is not None:
+            line = find_nearest_line(
+                text, raw_lines, max_distance_px=max_distance_px, line_index=line_index,
+            )
+        else:
+            line = find_nearest_line(text, raw_lines, max_distance_px=max_distance_px)
 
         if line is None:
             results.append(CrossValidation(

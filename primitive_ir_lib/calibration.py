@@ -14,6 +14,7 @@ import numpy as np
 
 from .geometry_extraction import RawLine
 from .models import Calibration
+from .spatial_index import DEFAULT_INDEX_MIN_LINES, SpatialIndex2D
 from .text_extraction import RawText
 from .tick_mark_detection import detect_tick_mark_at_point
 
@@ -78,6 +79,7 @@ def find_nearest_line(
     image_bgr: Optional[np.ndarray] = None,
     tick_mark_window_px: float = 20.0,
     tick_mark_proximity_px: float = 6.0,
+    line_index: Optional[SpatialIndex2D[RawLine]] = None,
 ) -> Optional[RawLine]:
     """Tìm RawLine gần 1 RawText nhất — heuristic cho witness-line/
     dimension-line, dùng khoảng cách tâm bbox làm tín hiệu chính, có 2 lớp
@@ -115,7 +117,16 @@ def find_nearest_line(
     text_angle = text.rotation_deg % 180.0
 
     candidates: List[Tuple[RawLine, float]] = []
-    for line in lines:
+    search_lines = (
+        line_index.query_bbox(
+            (tx - max_distance_px, ty - max_distance_px, tx + max_distance_px, ty + max_distance_px),
+            pad=1e-9,
+            preserve_order=True,
+        )
+        if line_index is not None
+        else lines
+    )
+    for line in search_lines:
         if apply_angle_filter:
             if _angular_diff_deg(_line_angle_deg(line), text_angle) > angle_tolerance_deg:
                 continue
@@ -247,16 +258,28 @@ def auto_estimate_calibration(
     Không dùng kết quả hàm này cho DXF sản xuất mà không xác minh — xem
     `calibration_registry.py` (`needs_verification`).
     """
+    line_index = (
+        SpatialIndex2D.from_midpoints(raw_lines)
+        if require_consensus and len(raw_lines) >= DEFAULT_INDEX_MIN_LINES
+        else None
+    )
     candidates: List[Tuple[RawText, RawLine, float]] = []
     for text in raw_texts:
         if text.semantic_role != "dimension_value" or text.parsed_value is None:
             continue
         if text.parsed_value <= 0:
             continue
-        line = find_nearest_line(
-            text, raw_lines, max_distance_px=max_distance_px,
-            angle_tolerance_deg=angle_tolerance_deg, image_bgr=image_bgr,
-        )
+        if line_index is not None:
+            line = find_nearest_line(
+                text, raw_lines, max_distance_px=max_distance_px,
+                angle_tolerance_deg=angle_tolerance_deg, image_bgr=image_bgr,
+                line_index=line_index,
+            )
+        else:
+            line = find_nearest_line(
+                text, raw_lines, max_distance_px=max_distance_px,
+                angle_tolerance_deg=angle_tolerance_deg, image_bgr=image_bgr,
+            )
         if line is None:
             continue
         pixel_length = line.length_px()
