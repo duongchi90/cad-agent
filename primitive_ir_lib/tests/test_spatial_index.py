@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import random
 
+import pytest
+
 from primitive_ir_lib.calibration import Calibration, auto_estimate_calibration, find_nearest_line
 from primitive_ir_lib.cross_validation import cross_validate
 from primitive_ir_lib.geometry_extraction import RawLine
@@ -155,6 +157,80 @@ def test_spatial_index_query_nearest_matches_brute_force_with_view_and_score_hoo
             assert got[3] is exp[3]
             assert math.isclose(got[0], exp[0], rel_tol=1e-12, abs_tol=1e-12)
             assert math.isclose(got[1], exp[1], rel_tol=1e-12, abs_tol=1e-12)
+
+
+@pytest.mark.parametrize("leaf_size", [1, 16])
+@pytest.mark.parametrize("limit, expected", [
+    (1, ["first"]),
+    (2, ["first", "second"]),
+    (3, ["first", "second", "third"]),
+])
+def test_query_nearest_retains_original_order_when_equal_distances_have_different_bounds(
+    leaf_size: int, limit: int, expected: list[str],
+) -> None:
+    segments = [
+        ("first", (-2.0, math.sqrt(2.0), 2.0, math.sqrt(2.0))),
+        ("second", (0.0, 2.0, 2.0, 0.0)),
+        ("third", (0.0, -2.0, 2.0, 0.0)),
+    ]
+    index = SpatialIndex2D.from_items(
+        segments,
+        bbox_fn=lambda item: (
+            min(item[1][0], item[1][2]), min(item[1][1], item[1][3]),
+            max(item[1][0], item[1][2]), max(item[1][1], item[1][3]),
+        ),
+        leaf_size=leaf_size,
+    )
+
+    def distance(x: float, y: float, item: tuple) -> float:
+        return point_to_segment_distance(x, y, *item[1])
+
+    # Exact distances tie; bbox distance must not decide which item survives top-k.
+    assert [distance(0.0, 0.0, item) for item in segments] == [math.sqrt(2.0)] * 3
+    hits = index.query_nearest(0.0, 0.0, dist_fn=distance, limit=limit)
+    assert [item[0] for _, _, item, _ in hits] == expected
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("sign", [-1.0, 1.0])
+@pytest.mark.parametrize("radius, offset", [(1e8, 2e-9), (2.0 ** 80, 2.0 ** 25)])
+def test_indexed_witness_keeps_scalar_boundary_match_after_coordinate_cancellation(
+    axis: int, sign: float, radius: float, offset: float,
+) -> None:
+    center = [0.0, 0.0]
+    center[axis] = sign * radius
+    midpoint = [0.0, 0.0]
+    midpoint[axis] = -sign * offset
+    boundary = _line(midpoint[0] - 1.0, midpoint[1],
+                     midpoint[0] + 1.0, midpoint[1], "boundary")
+    lines = [boundary] + [
+        _line((5 + i) * radius, 0.0, (5 + i) * radius + 1.0, 0.0, f"far-{i}")
+        for i in range(63)
+    ]
+    text = RawText(
+        id="boundary-text", content="2", parsed_value=2.0,
+        bbox_px=(center[0], center[1], center[0], center[1]),
+        rotation_deg=0.0, confidence=1.0, source="synthetic",
+        semantic_role="dimension_value",
+    )
+    scalar = find_nearest_line(text, lines, max_distance_px=radius)
+    assert scalar is boundary
+    indexed = find_nearest_line(
+        text, lines, max_distance_px=radius,
+        line_index=SpatialIndex2D.from_midpoints(lines),
+    )
+    assert indexed is boundary
+
+    # The existing public caller automatically uses the index at 64 lines.
+    results = cross_validate(
+        [text], lines,
+        Calibration(unit="mm", pixel_to_unit_scale=1.0, origin_px=(0.0, 0.0),
+                    method="manual_override"),
+        max_distance_px=radius, merge_collinear=False, require_dimension_geometry=True,
+    )
+    assert len(results) == 1
+    assert results[0].geometry_primitive_id == "boundary"
+    assert results[0].status == "unverified"
 
 
 def test_find_nearest_line_indexed_parity_and_sublinear_work() -> None:

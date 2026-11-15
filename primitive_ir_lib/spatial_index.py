@@ -271,7 +271,7 @@ class SpatialIndex2D(Generic[T]):
 
         counter = 0
         pq: list[Tuple[float, int, _BvhNode[T]]] = [(_node_lb(self._root), counter, self._root)]
-        top_heap: list[Tuple[float, float, int, float, T, bool]] = []
+        top_heap: list[Tuple[float, int, float, T, bool]] = []
         cutoff = float("inf")
         checked = 0
 
@@ -303,7 +303,7 @@ class SpatialIndex2D(Generic[T]):
                         else 1.0
                     )
                     eff_dist = (raw_d + (0.0 if same_view else cross_view_penalty)) * mult
-                    entry = (-eff_dist, -lb_eff, -rec.orig_idx, raw_d, rec.item, same_view)
+                    entry = (-eff_dist, -rec.orig_idx, raw_d, rec.item, same_view)
                     if len(top_heap) < limit:
                         heapq.heappush(top_heap, entry)
                         if len(top_heap) == limit:
@@ -326,7 +326,7 @@ class SpatialIndex2D(Generic[T]):
         self.last_leaf_items_checked = checked
         best = [
             (-neg_eff, raw_d, item, same_view, -neg_orig)
-            for neg_eff, _, neg_orig, raw_d, item, same_view in top_heap
+            for neg_eff, neg_orig, raw_d, item, same_view in top_heap
         ]
         best.sort(key=lambda row: (row[0], row[4]))
         return [(eff, raw_d, item, sv) for eff, raw_d, item, sv, _ in best]

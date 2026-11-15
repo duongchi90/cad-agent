@@ -117,15 +117,18 @@ def find_nearest_line(
     text_angle = text.rotation_deg % 180.0
 
     candidates: List[Tuple[RawLine, float]] = []
-    search_lines = (
-        line_index.query_bbox(
-            (tx - max_distance_px, ty - max_distance_px, tx + max_distance_px, ty + max_distance_px),
-            pad=1e-9,
+    search_lines = lines
+    if line_index is not None and all(math.isfinite(v) for v in (tx, ty, max_distance_px)):
+        # Widen the radius before adding the center: a fixed pad after cancellation
+        # can omit a midpoint accepted by the rounded scalar distance predicate.
+        radius = math.nextafter(max_distance_px, math.inf)
+        search_lines = line_index.query_bbox(
+            (math.nextafter(tx - radius, -math.inf),
+             math.nextafter(ty - radius, -math.inf),
+             math.nextafter(tx + radius, math.inf),
+             math.nextafter(ty + radius, math.inf)),
             preserve_order=True,
         )
-        if line_index is not None
-        else lines
-    )
     for line in search_lines:
         if apply_angle_filter:
             if _angular_diff_deg(_line_angle_deg(line), text_angle) > angle_tolerance_deg:
