@@ -21,7 +21,8 @@ def _observe_repeated_style_records(
 ) -> Iterator[DXFTag]:
     in_tables = in_style_table = False
     for group in group_tags(tags):
-        marker = group[0].value
+        # Match Drawing.load's tag_compiler before it normalizes code-0 values.
+        marker = group[0].value.strip()
         if marker == "SECTION":
             in_tables = len(group) > 1 and group[1] == (2, "TABLES")
             in_style_table = False

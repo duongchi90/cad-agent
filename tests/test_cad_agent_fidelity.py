@@ -3706,8 +3706,9 @@ def test_fidelity_text_style_enforces_xdata_family_byte_limit(
 
 
 @pytest.mark.parametrize(("version", "dxf_format"), [("R12", "asc"), ("R2010", "bin")])
+@pytest.mark.parametrize("padded_style_marker", [False, True])
 def test_fidelity_style_snapshot_preserves_encoding_and_binds_repeated_records(
-    tmp_path: Path, version: str, dxf_format: str,
+    tmp_path: Path, version: str, dxf_format: str, padded_style_marker: bool,
 ) -> None:
     from io import BytesIO
 
@@ -3745,6 +3746,15 @@ def test_fidelity_style_snapshot_preserves_encoding_and_binds_repeated_records(
     updated = original.replace(
         declaration, declaration.replace(b"Final", b"Other") + declaration,
     )
+    if padded_style_marker:
+        if dxf_format == "bin":
+            marker, padded = b"\x00\x00STYLE\x00", b"\x00\x00\tSTYLE \x00"
+        else:
+            newline = b"\r\n" if b"\r\n" in original else b"\n"
+            marker = b"  0" + newline + b"STYLE" + newline
+            padded = b"  0" + newline + b"\tSTYLE " + newline
+        assert marker in updated
+        updated = updated.replace(marker, padded)
     path.write_bytes(updated)
 
     snapshot, duplicates = fidelity_module._read_fidelity_style_document(path)
@@ -3761,7 +3771,13 @@ def test_fidelity_style_snapshot_preserves_encoding_and_binds_repeated_records(
 
 
 @pytest.mark.parametrize("location", ["handoff-owner", "handoff-target", "compose", "unused"])
-def test_fidelity_style_refuses_repeated_acad_before_publication(tmp_path: Path, location: str) -> None:
+@pytest.mark.parametrize(("padded_marker", "whitespace"), [
+    ("", ""), ("STYLE", " "), ("STYLE", "\t"),
+    ("SECTION", " "), ("SECTION", "\t"), ("TABLE", " "), ("TABLE", "\t"),
+])
+def test_fidelity_style_refuses_repeated_acad_before_publication(
+    tmp_path: Path, location: str, padded_marker: str, whitespace: str,
+) -> None:
     source, output, manifest, approval = _style_transfer_page(tmp_path)
     first, second = (_style_transfer_candidate(output, name) for name in ("first", "second"))
     inputs = [source, first, second]
@@ -3790,7 +3806,19 @@ def test_fidelity_style_refuses_repeated_acad_before_publication(tmp_path: Path,
         declaration = declaration.replace(b"\n", b"\r\n")
     assert saved.count(declaration) == 1
     earlier = declaration.replace(family.encode("ascii"), b"FixtureEarlier")
-    style_source.write_bytes(saved.replace(declaration, earlier + declaration))
+    updated = saved.replace(declaration, earlier + declaration)
+    if padded_marker:
+        newline = b"\r\n" if b"\r\n" in saved else b"\n"
+        marker = b"  0" + newline + padded_marker.encode("ascii") + newline
+        padded = b"  0" + newline + (whitespace + padded_marker + whitespace).encode("ascii") + newline
+        if padded_marker == "SECTION":
+            # Keep the first HEADER marker valid for ezdxf's file-type probe.
+            tables = b"  2" + newline + b"TABLES" + newline
+            marker += tables
+            padded += tables
+        assert marker in updated
+        updated = updated.replace(marker, padded)
+    style_source.write_bytes(updated)
     if location == "handoff-owner":
         owner_report = json.loads(report.read_text(encoding="utf-8"))
         owner_report["output_dxf_sha256"] = fidelity_module.sha256_file(owner)
