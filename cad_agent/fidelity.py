@@ -14,6 +14,7 @@ import os
 import re
 import tempfile
 from collections import Counter
+from collections.abc import Collection
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,8 @@ from primitive_ir_lib.run_image import _configure_tesseract
 from primitive_ir_lib.text_extraction import detect_text_candidate_rois, extract_text_tesseract
 from primitive_ir_lib.table_extraction import build_cells, detect_grid
 from primitive_ir_lib.view_calibration import detect_view_candidates
-from dxf_builder_lib.builder import _ensure_unicode_text_style
+from dxf_builder_lib._dxf_snapshot import StyleRecordKey, read_dxf_snapshot
+from dxf_builder_lib.builder import _UNICODE_TEXT_STYLE, _ensure_unicode_text_style
 
 from .file_integrity import FileIdentityError, assert_path_identity, open_bound_file, pin_directory_chain
 from .manifest import ManifestError, sha256_file, verify_source, write_manifest
@@ -264,35 +266,40 @@ def _remove_staging_reparse_alias(staging: Path) -> None:
         raise FileIdentityError("Substituted staging alias could not be safely unlinked.") from exc
 
 
-def _read_text_base_snapshot(path: Path) -> tuple[Any, str]:
-    """Parse and hash the same immutable bytes with the existing ezdxf readers."""
-    from io import BytesIO, TextIOWrapper
-
-    import ezdxf
-
+def _read_fidelity_dxf_bytes(path: Path, *, label: str) -> bytes:
     try:
         descriptor, opened_stat = open_bound_file(
-            path, flags=os.O_RDONLY | getattr(os, "O_BINARY", 0), label="Base layout DXF",
+            path, flags=os.O_RDONLY | getattr(os, "O_BINARY", 0), label=label,
         )
         with os.fdopen(descriptor, "rb") as stream:
             data = stream.read()
             after = os.fstat(stream.fileno())
-            assert_path_identity(path, opened_stat, label="Base layout DXF")
+            assert_path_identity(path, opened_stat, label=label)
             if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
                 opened_stat.st_size, opened_stat.st_mtime_ns, opened_stat.st_ctime_ns,
             ):
-                raise FileIdentityError("Base layout DXF changed during snapshot read.")
+                raise FileIdentityError(f"{label} changed during snapshot read.")
     except (FileIdentityError, OSError) as exc:
-        raise FidelityError("Base layout DXF must remain a stable non-reparse file during snapshot read.") from exc
-    digest = hashlib.sha256(data).hexdigest()
-    if data.startswith(b"AutoCAD Binary DXF\r\n\x1a\x00"):
-        document = ezdxf.document.Drawing.load(ezdxf.lldxf.tagger.binary_tags_loader(data, errors="surrogateescape"))
-    else:
-        with TextIOWrapper(BytesIO(data), encoding="utf-8", errors="ignore") as header_stream:
-            info = ezdxf.filemanagement.dxf_stream_info(header_stream)
-        with TextIOWrapper(BytesIO(data), encoding=info.encoding, errors="surrogateescape") as text_stream:
-            document = ezdxf.read(text_stream)
-    return document, digest
+        raise FidelityError(f"{label} must remain a stable non-reparse file during snapshot read.") from exc
+    return data
+
+
+def _read_text_base_snapshot(path: Path) -> tuple[Any, str]:
+    """Parse and hash the same immutable bytes with the existing ezdxf readers."""
+    data = _read_fidelity_dxf_bytes(path, label="Base layout DXF")
+    document, _ = read_dxf_snapshot(data)
+    return document, hashlib.sha256(data).hexdigest()
+
+
+def _read_fidelity_style_document(
+    path: Path, *, expected_sha256: str | None = None,
+) -> tuple[Any, set[StyleRecordKey]]:
+    data = _read_fidelity_dxf_bytes(path, label="Fidelity STYLE input DXF")
+    if expected_sha256 is not None and hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise FidelityError("Text owner output hash does not match its report.")
+    document, repeated_style_records = read_dxf_snapshot(data, observe_styles=True)
+    document.filename = str(path)
+    return document, repeated_style_records
 
 
 def _published_text_reconstruction_matches(
@@ -741,11 +748,105 @@ def _fidelity_point_in_region(
     )
 
 
-def _copy_fidelity_text_style(source_document: Any, target_document: Any, name: str) -> str:
-    if not name or name in target_document.styles:
-        return name or _ensure_unicode_text_style(target_document)
-    source_style = source_document.styles.get(name)
-    target_document.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
+def _fidelity_extended_style_definition(
+    style: Any, *, output_encoding: str, repeated_style_records: Collection[StyleRecordKey],
+) -> tuple[dict[str, Any], list[tuple[int, Any]]] | None:
+    if style is None:
+        return None
+    style_key = style.doc.styles.key(style.dxf.name)
+    if ("handle", style.dxf.handle) in repeated_style_records or ("name", style_key) in repeated_style_records:
+        raise FidelityError("Repeated ACAD font declarations in Fidelity STYLE.")
+    if not style.has_extended_font_data:
+        return None
+    tags = [(tag.code, tag.value) for tag in style.get_xdata("ACAD")]
+    if (
+        len(tags) != 2
+        or tags[0][0] != 1000
+        or not isinstance(tags[0][1], str)
+        or not tags[0][1].strip()
+        or any(char in tags[0][1] for char in "\r\n\0")
+        or tags[1][0] != 1071
+        or type(tags[1][1]) is not int
+        or not -(2**31) <= tags[1][1] < 2**31
+    ):
+        raise FidelityError("Malformed extended font data in Fidelity STYLE.")
+
+    try:
+        family_bytes = tags[0][1].encode(output_encoding)
+    except UnicodeEncodeError as exc:
+        raise FidelityError("Fidelity STYLE font family cannot be preserved in the target DXF encoding.") from exc
+    if len(family_bytes) > 255:
+        raise FidelityError("Fidelity STYLE font family exceeds the DXF group-1000 limit of 255 encoded bytes.")
+
+    dxf = style.dxf
+    # STYLE flags 4 and 64 mean vertical text and referenced, respectively.
+    # Shape and xref records cannot be copied as standalone text styles.
+    if (
+        dxf.flags & ~(4 | 64)
+        or dxf.generation_flags & ~(2 | 4)
+        or not all(math.isfinite(value) for value in (dxf.height, dxf.width, dxf.oblique))
+        or dxf.height < 0
+        or dxf.width <= 0
+        or any(char in filename for filename in (dxf.font, dxf.bigfont) for char in "\r\n\0")
+    ):
+        raise FidelityError("Unsupported render fields in extended Fidelity STYLE.")
+    try:
+        dxf.font.encode(output_encoding)
+        dxf.bigfont.encode(output_encoding)
+    except UnicodeEncodeError as exc:
+        raise FidelityError("Fidelity STYLE filenames cannot be preserved in the target DXF encoding.") from exc
+
+    return {
+        "font": dxf.font,
+        "bigfont": dxf.bigfont,
+        "flags": dxf.flags & 4,
+        "height": dxf.height,
+        "width": dxf.width,
+        "oblique": dxf.oblique,
+        "generation_flags": dxf.generation_flags,
+    }, tags
+
+
+def _copy_fidelity_text_style(
+    source_document: Any,
+    target_document: Any,
+    name: str,
+    *,
+    source_repeated_styles: Collection[StyleRecordKey],
+    target_repeated_styles: Collection[StyleRecordKey] = (),
+) -> str:
+    target_name = name or _UNICODE_TEXT_STYLE
+    target_style = target_document.styles.get(target_name) if target_name in target_document.styles else None
+    target_definition = _fidelity_extended_style_definition(
+        target_style,
+        output_encoding=target_document.output_encoding,
+        repeated_style_records=target_repeated_styles,
+    )
+    if not name:
+        if target_definition is not None:
+            raise FidelityError("Extended Fidelity STYLE conflicts with the Unicode text fallback.")
+        return _ensure_unicode_text_style(target_document)
+
+    source_style = source_document.styles.get(name) if name in source_document.styles else None
+    source_definition = _fidelity_extended_style_definition(
+        source_style,
+        output_encoding=target_document.output_encoding,
+        repeated_style_records=source_repeated_styles,
+    )
+    if target_style is not None:
+        if source_definition != target_definition:
+            raise FidelityError("Conflicting Fidelity STYLE definitions for the same name.")
+        return name
+
+    if source_definition is None:
+        source_style = source_document.styles.get(name)
+        target_document.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
+        return name
+
+    attributes, tags = source_definition
+    font = attributes.pop("font")
+    target_style = target_document.styles.add(name, font=font, dxfattribs=attributes)
+    target_style.set_xdata("ACAD", tags)
     return name
 
 
@@ -821,6 +922,9 @@ def _merge_fidelity_owner_output_into_region(
     region: dict[str, Any],
     page: dict[str, Any],
     height_px: float,
+    *,
+    source_repeated_styles: Collection[StyleRecordKey] = (),
+    target_repeated_styles: Collection[StyleRecordKey] = (),
 ) -> dict[str, int]:
     offset_x, offset_y, tolerance = _fidelity_region_offsets(region, page, height_px)
     target_model = target_document.modelspace()
@@ -832,7 +936,11 @@ def _merge_fidelity_owner_output_into_region(
             insert = entity.dxf.insert
             if not _fidelity_point_in_region(insert, offset_x, offset_y, region, page, height_px, tolerance):
                 continue
-            style = _copy_fidelity_text_style(source_document, target_document, str(entity.dxf.get("style", "")))
+            style = _copy_fidelity_text_style(
+                source_document, target_document, str(entity.dxf.get("style", "")),
+                source_repeated_styles=source_repeated_styles,
+                target_repeated_styles=target_repeated_styles,
+            )
             if entity.dxftype() == "TEXT":
                 attributes = {"layer": "FIDELITY_TEXT", "height": float(entity.dxf.get("height", 1.0)), "style": style}
                 for name in ("rotation", "oblique", "width", "text_generation_flag", "thickness"):
@@ -961,29 +1069,47 @@ def run_fidelity_semantic_region_handoff(
     if image is None:
         raise FidelityError("Cannot read approved rendered page.")
     height_px = float(image.shape[0])
-    owner_outputs: dict[str, Path] = {}
+    owner_outputs: dict[str, tuple[Path, str]] = {}
     for kind, prefix in (("text", "text_reconstruction"), ("dimension", "dimension_reconstruction"), ("linetype", "linetype_reconstruction")):
         path = _latest_fidelity_owner_output(output_root, prefix, page_number)
         if path is not None:
-            _validate_fidelity_owner_output(output_root, path, kind, page, manifest)
-            owner_outputs[kind] = path
+            report = _validate_fidelity_owner_output(output_root, path, kind, page, manifest)
+            owner_outputs[kind] = (path, report["output_dxf_sha256"])
     if not owner_outputs:
         raise FidelityError("No validated semantic owner output is available for handoff.")
     selected = [item for item in proposal["regions"] if item["id"] in approval["approved_region_ids"]]
     transferred: list[dict[str, Any]] = []
+    prepared_candidates = []
     for region in selected:
         candidate_path = output_root / "reconstruction_candidates" / f"page_{page_number:02d}" / region["id"] / "geometry.dxf"
         if not candidate_path.is_file():
             raise FidelityError(f"Missing approved region candidate: {candidate_path}")
-        document = ezdxf.readfile(candidate_path)
+        target_repeated_styles: set[StyleRecordKey] = set()
+        if "text" in owner_outputs:
+            document, target_repeated_styles = _read_fidelity_style_document(candidate_path)
+        else:
+            document = ezdxf.readfile(candidate_path)
         counts = {"TEXT": 0, "MTEXT": 0, "DIMENSION": 0, "LINETYPE": 0}
-        for kind, owner_path in owner_outputs.items():
+        for kind, (owner_path, owner_sha256) in owner_outputs.items():
+            source_repeated_styles: set[StyleRecordKey] = set()
+            if kind == "text":
+                source_document, source_repeated_styles = _read_fidelity_style_document(
+                    owner_path, expected_sha256=owner_sha256,
+                )
+            else:
+                source_document = ezdxf.readfile(owner_path)
             result = _merge_fidelity_owner_output_into_region(
-                document, ezdxf.readfile(owner_path), kind, region, page, height_px,
+                document, source_document, kind, region, page, height_px,
+                source_repeated_styles=source_repeated_styles,
+                target_repeated_styles=target_repeated_styles,
             )
             counts = {key: counts[key] + result[key] for key in counts}
-        document.saveas(candidate_path)
+        prepared_candidates.append((candidate_path, document))
         transferred.append({"region": region["id"], "candidate": str(candidate_path.relative_to(output_root)).replace("\\", "/"), "counts": counts})
+    # A later region may reject a STYLE collision. Resolve all transfers before
+    # saving any candidate or publishing the handoff report.
+    for candidate_path, document in prepared_candidates:
+        document.saveas(candidate_path)
     handoff_root = output_root / "semantic_region_handoff"
     revision = 1
     while (handoff_root / f"page_{page_number:02d}.json").exists():
@@ -997,7 +1123,10 @@ def run_fidelity_semantic_region_handoff(
         "source": manifest["source"],
         "page": page_number,
         "render_sha256": sha256_file(rendered),
-        "owner_outputs": {kind: {"path": str(path.relative_to(output_root)).replace("\\", "/"), "sha256": sha256_file(path)} for kind, path in owner_outputs.items()},
+        "owner_outputs": {
+            kind: {"path": path.relative_to(output_root).as_posix(), "sha256": sha256_file(path)}
+            for kind, (path, _) in owner_outputs.items()
+        },
         "transferred": transferred,
         "unresolved": ["semantic placement and visual fidelity require review", "no model export or production AutoCAD mutation"],
     }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -3835,15 +3964,14 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
             length=length,
         )
 
-    def copy_text_style(source_document: Any, name: str) -> str:
-        if not name or name in composed.styles:
-            return name or _ensure_unicode_text_style(composed)
-        source_style = source_document.styles.get(name)
-        composed.styles.add(name, font=str(source_style.dxf.get("font", "Arial.ttf")))
-        return name
-
-    def add_text_entity(source_document: Any, entity: Any, offset_x: float, offset_y: float) -> None:
-        style = copy_text_style(source_document, str(entity.dxf.get("style", "")))
+    def add_text_entity(
+        source_document: Any, entity: Any, offset_x: float, offset_y: float,
+        source_repeated_styles: set[StyleRecordKey],
+    ) -> None:
+        style = _copy_fidelity_text_style(
+            source_document, composed, str(entity.dxf.get("style", "")),
+            source_repeated_styles=source_repeated_styles,
+        )
         if entity.dxftype() == "TEXT":
             attributes = {
                 "layer": "FIDELITY_TEXT",
@@ -3902,7 +4030,7 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
             raise FidelityError(f"Missing approved region candidate: {candidate}")
         x0, _, _, y1 = region["bbox_px"]
         offset_x, offset_y = x0 * scale, (height_px - y1) * scale
-        source_document = ezdxf.readfile(candidate)
+        source_document, source_repeated_styles = _read_fidelity_style_document(candidate)
         for entity in source_document.modelspace():
             if entity.dxftype() == "LINE":
                 a, b = entity.dxf.start, entity.dxf.end
@@ -3918,7 +4046,7 @@ def run_fidelity_compose(source: Path, output_root: Path, manifest: dict[str, An
                 copy_linetype(source_document, line_type)
                 model.add_circle(offset_point(c, offset_x, offset_y), entity.dxf.radius, dxfattribs={"layer": "FIDELITY_GEOMETRY", "linetype": line_type})
             elif entity.dxftype() in {"TEXT", "MTEXT"}:
-                add_text_entity(source_document, entity, offset_x, offset_y)
+                add_text_entity(source_document, entity, offset_x, offset_y, source_repeated_styles)
             elif entity.dxftype() == "DIMENSION":
                 add_dimension_entity(source_document, entity, offset_x, offset_y)
     root.mkdir(parents=True)

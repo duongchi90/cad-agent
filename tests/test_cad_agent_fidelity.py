@@ -3501,6 +3501,424 @@ def test_semantic_owner_handoff_translates_owner_outputs_into_local_region_candi
     assert "semantic owner handoff remains review-only" in compose_report["unresolved"]
 
 
+def _style_transfer_page(tmp_path: Path):
+    source = tmp_path / "drawing.pdf"
+    output = tmp_path / "private-staging"
+    _pdf(source)
+    manifest_path = output / "fidelity-run-manifest.json"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    regions = [
+        {"id": "first", "bbox_px": [20, 20, 250, 150], "purpose": "layout-reconstruction"},
+        {"id": "second", "bbox_px": [270, 20, 500, 150], "purpose": "layout-reconstruction"},
+    ]
+    write_region_proposal(
+        source, output, manifest_path, manifest, 1,
+        {"regions": regions, "excluded_regions": [
+            {"id": "outside", "bbox_px": [300, 200, 390, 290], "purpose": "exclude"},
+        ]},
+        workspace_root=Path.cwd(),
+    )
+    write_region_approval(
+        source, output, manifest, 1, 1, ["first", "second"], "approved-style-test",
+        workspace_root=Path.cwd(),
+    )
+    approval = output / "region_approvals" / "page_01.json"
+    run_fidelity_reconstruct(source, output, manifest, approval, workspace_root=Path.cwd())
+    return source, output, manifest, approval
+
+
+def _style_transfer_candidate(output: Path, region: str) -> Path:
+    return output / "reconstruction_candidates" / "page_01" / region / "geometry.dxf"
+
+
+def _style_transfer_add_text(
+    document, style, text, position, *, extended=False, family=".VnAvant", filenames=None,
+):
+    if style and style not in document.styles:
+        attributes = {
+            "bigfont": "TEST_BIG.shx",
+            "height": 2.0,
+            "width": 0.75,
+            "oblique": 12.0,
+            "generation_flags": 2,
+        } if extended else {}
+        record = document.styles.add(style, font="" if extended else "Arial.ttf", dxfattribs=attributes)
+        if extended:
+            record.set_xdata("ACAD", [(1000, family), (1071, 1048610)])
+            record.update_dxf_attribs(filenames or {})
+    entity = document.modelspace().add_text(text, dxfattribs={"style": style, "height": 2.0})
+    entity.dxf.insert = position
+
+
+def _style_transfer_owner(output, manifest, approval, style, *, extended, family=".VnAvant", filenames=None):
+    audit = json.loads(approval.read_text(encoding="utf-8"))
+    scale = float(manifest["pages"][0]["pixel_to_paper_mm"]["used"])
+    x = 270 * scale + 5
+    y = (audit["page"]["render_height_px"] - 150) * scale + 5
+    document = ezdxf.new("R2010")
+    _style_transfer_add_text(
+        document, style, "LEGACY-TEST", (x, y), extended=extended, family=family, filenames=filenames,
+    )
+    first_x = 20 * scale + 5
+    _style_transfer_add_text(document, "FirstRegionStyle", "FIRST REGION", (first_x, y))
+    _style_transfer_add_text(document, "VN_UNICODE", "Mép boong chính", (x + 5, y))
+    owner = output / "text_reconstruction" / "page_01" / "layout.dxf"
+    owner.parent.mkdir(parents=True)
+    document.saveas(owner)
+    text_approval = output / "fidelity_text_approvals" / "page_01.json"
+    text_approval.parent.mkdir()
+    text_approval.write_text(json.dumps({
+        "schema_version": "fidelity-text-approval-1.0",
+        "private_artifact": True,
+        "state": "approved-text-candidates-only",
+        "source": manifest["source"],
+        "page": 1,
+    }), encoding="utf-8")
+    (owner.parent / "report.json").write_text(json.dumps({
+        "state": "needs_review",
+        "text_approval_sha256": fidelity_module.sha256_file(text_approval),
+        "output_dxf_sha256": fidelity_module.sha256_file(owner),
+    }), encoding="utf-8")
+    return owner
+
+
+@pytest.mark.parametrize("route", ["handoff", "compose"])
+def test_fidelity_text_style_preserves_extended_font_after_reopen(tmp_path: Path, route: str) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    candidate = _style_transfer_candidate(output, "second")
+    if route == "handoff":
+        owner = _style_transfer_owner(output, manifest, approval, "LegacyTest", extended=True)
+        source_hash = fidelity_module.sha256_file(owner)
+        run_fidelity_semantic_region_handoff(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert fidelity_module.sha256_file(owner) == source_hash
+        published = candidate
+    else:
+        document = ezdxf.readfile(candidate)
+        _style_transfer_add_text(document, "LegacyTest", "LEGACY-TEST", (5, 5), extended=True)
+        _style_transfer_add_text(document, "VN_UNICODE", "Mép boong chính", (10, 5))
+        document.saveas(candidate)
+        source_hash = fidelity_module.sha256_file(candidate)
+        composed = run_fidelity_compose(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert fidelity_module.sha256_file(candidate) == source_hash
+        published = composed / "layout.dxf"
+
+    result = ezdxf.readfile(published)
+    records = {entity.dxf.text: entity.dxf.style for entity in result.modelspace().query("TEXT")}
+    assert records == {"LEGACY-TEST": "LegacyTest", "Mép boong chính": "VN_UNICODE"}
+    assert result.styles.get("VN_UNICODE").dxf.font == "Arial.ttf"
+    style = result.styles.get("LegacyTest")
+    assert style.has_extended_font_data, "Fidelity dropped source STYLE extended font data"
+    assert [(tag.code, tag.value) for tag in style.get_xdata("ACAD")] == [
+        (1000, ".VnAvant"), (1071, 1048610),
+    ]
+    assert style.dxf.font == ""
+    assert style.dxf.bigfont == "TEST_BIG.shx"
+    assert style.dxf.height == pytest.approx(2.0)
+    assert style.dxf.width == pytest.approx(0.75)
+    assert style.dxf.oblique == pytest.approx(12.0)
+    assert style.dxf.generation_flags == 2
+
+
+@pytest.mark.parametrize("route", ["handoff", "compose"])
+@pytest.mark.parametrize("field", ["font", "bigfont"])
+@pytest.mark.parametrize("valid_utf8", [False, True], ids=["malformed", "unicode"])
+def test_fidelity_extended_style_requires_encodable_filenames(
+    tmp_path: Path, route: str, field: str, valid_utf8: bool,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, region) for region in ("first", "second"))
+    filename = "legacy-\u6f22.shx" if valid_utf8 else "legacy-\udcff.shx"
+    filenames = {field: filename}
+    if route == "handoff":
+        style_source = _style_transfer_owner(
+            output, manifest, approval, "LegacyTest", extended=True, filenames=filenames,
+        )
+        transfer = run_fidelity_semantic_region_handoff
+    else:
+        style_source = second
+        document = ezdxf.readfile(style_source)
+        _style_transfer_add_text(
+            document, "LegacyTest", "LEGACY-TEST", (5, 5), extended=True, filenames=filenames,
+        )
+        document.saveas(style_source)
+        transfer = run_fidelity_compose
+
+    source_style = ezdxf.readfile(style_source).styles.get("LegacyTest")
+    assert source_style.dxf.get(field) == filename
+    if not valid_utf8:
+        with pytest.raises(UnicodeDecodeError):
+            style_source.read_bytes().decode("utf-8")
+
+    inputs = (source, first, second, style_source) if route == "handoff" else (source, first, second)
+    before = [fidelity_module.sha256_file(path) for path in inputs]
+    if not valid_utf8:
+        with pytest.raises(FidelityError, match=r"(?i)STYLE.*encoding"):
+            transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert [fidelity_module.sha256_file(path) for path in inputs] == before
+        assert not list(output.glob("semantic_region_handoff*"))
+        assert not (output / "reconstruction_pages" / "page_01").exists()
+        return
+
+    result = transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+    published = second if route == "handoff" else result / "layout.dxf"
+    published.read_bytes().decode("utf-8")
+    assert ezdxf.readfile(published).styles.get("LegacyTest").dxf.get(field) == filename
+
+
+@pytest.mark.parametrize("route", ["handoff", "compose"])
+@pytest.mark.parametrize("byte_length", [255, 256])
+def test_fidelity_text_style_enforces_xdata_family_byte_limit(
+    tmp_path: Path, route: str, byte_length: int,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, name) for name in ("first", "second"))
+    family = "\u00e9" * 127 + "A" * (byte_length - 254)
+    encoding = ezdxf.readfile(second).output_encoding
+    assert encoding == "utf-8"
+    assert len(family.encode(encoding)) == byte_length
+    inputs = [first, second]
+    if route == "handoff":
+        owner = _style_transfer_owner(output, manifest, approval, "LegacyTest", extended=True, family=family)
+        inputs.append(owner)
+        transfer = run_fidelity_semantic_region_handoff
+    else:
+        document = ezdxf.readfile(second)
+        _style_transfer_add_text(document, "LegacyTest", "LEGACY-TEST", (5, 5), extended=True, family=family)
+        document.saveas(second)
+        transfer = run_fidelity_compose
+
+    before = [fidelity_module.sha256_file(path) for path in inputs]
+    if byte_length == 256:
+        with pytest.raises(FidelityError, match=r"(?i)STYLE"):
+            transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert [fidelity_module.sha256_file(path) for path in inputs] == before
+        assert not list(output.glob("semantic_region_handoff*"))
+        assert not (output / "reconstruction_pages" / "page_01").exists()
+        return
+
+    result = transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+    published = second if route == "handoff" else result / "layout.dxf"
+    style = ezdxf.readfile(published).styles.get("LegacyTest")
+    assert [(tag.code, tag.value) for tag in style.get_xdata("ACAD")] == [
+        (1000, family), (1071, 1048610),
+    ]
+
+
+@pytest.mark.parametrize(("version", "dxf_format"), [("R12", "asc"), ("R2010", "bin")])
+@pytest.mark.parametrize("padded_style_marker", [False, True])
+def test_fidelity_style_snapshot_preserves_encoding_and_binds_repeated_records(
+    tmp_path: Path, version: str, dxf_format: str, padded_style_marker: bool,
+) -> None:
+    from io import BytesIO
+
+    path = tmp_path / "style-input.dxf"
+    document = ezdxf.new(version)
+    document.encoding = "cp1252"
+    if version == "R12":
+        document.header["$HANDLING"] = 0
+    family = "Caf\u00e9 Final"
+    _style_transfer_add_text(document, "LegacyTest", "M\u00e9p", (5, 5), extended=True, family=family)
+    document.saveas(path, fmt=dxf_format)
+    original = path.read_bytes()
+
+    valid, duplicates = fidelity_module._read_fidelity_style_document(path)
+    style = valid.styles.get("LegacyTest")
+    assert not duplicates
+    assert [entity.dxf.text for entity in valid.modelspace().query("TEXT")] == ["M\u00e9p"]
+    assert list(style.get_xdata("ACAD")) == [(1000, family), (1071, 1048610)]
+    assert path.read_bytes() == original
+
+    if dxf_format == "bin":
+        encoded = BytesIO()
+        writer = ezdxf.lldxf.tagwriter.BinaryTagWriter(
+            encoded, dxfversion=document.dxfversion, encoding=document.output_encoding,
+        )
+        writer.write_tag2(1001, "ACAD")
+        writer.write_tag2(1000, family)
+        writer.write_tag2(1071, 1048610)
+        declaration = encoded.getvalue()
+    else:
+        declaration = f"1001\nACAD\n1000\n{family}\n1071\n1048610\n".encode(document.output_encoding)
+        if b"\r\n" in original:
+            declaration = declaration.replace(b"\n", b"\r\n")
+    assert original.count(declaration) == 1
+    updated = original.replace(
+        declaration, declaration.replace(b"Final", b"Other") + declaration,
+    )
+    if padded_style_marker:
+        if dxf_format == "bin":
+            marker, padded = b"\x00\x00STYLE\x00", b"\x00\x00\tSTYLE \x00"
+        else:
+            newline = b"\r\n" if b"\r\n" in original else b"\n"
+            marker = b"  0" + newline + b"STYLE" + newline
+            padded = b"  0" + newline + b"\tSTYLE " + newline
+        assert marker in updated
+        updated = updated.replace(marker, padded)
+    path.write_bytes(updated)
+
+    snapshot, duplicates = fidelity_module._read_fidelity_style_document(path)
+    style = snapshot.styles.get("LegacyTest")
+    expected = ("name", "legacytest") if version == "R12" else ("handle", style.dxf.handle)
+    assert duplicates == {expected}
+    target = ezdxf.new("R2010")
+    with pytest.raises(FidelityError, match="Repeated ACAD.*STYLE"):
+        fidelity_module._copy_fidelity_text_style(
+            snapshot, target, "LEGACYTEST", source_repeated_styles=duplicates,
+        )
+    assert "LegacyTest" not in target.styles
+    assert path.read_bytes() == updated
+
+
+@pytest.mark.parametrize("location", ["handoff-owner", "handoff-target", "compose", "unused"])
+@pytest.mark.parametrize(("padded_marker", "whitespace"), [
+    ("", ""), ("STYLE", " "), ("STYLE", "\t"),
+    ("SECTION", " "), ("SECTION", "\t"), ("TABLE", " "), ("TABLE", "\t"),
+])
+def test_fidelity_style_refuses_repeated_acad_before_publication(
+    tmp_path: Path, location: str, padded_marker: str, whitespace: str,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, name) for name in ("first", "second"))
+    inputs = [source, first, second]
+    family = "FixtureFinal"
+    if location.startswith("handoff"):
+        owner = _style_transfer_owner(output, manifest, approval, "LegacyTest", extended=True, family=family)
+        report = owner.parent / "report.json"
+        inputs.extend((owner, report))
+        transfer = run_fidelity_semantic_region_handoff
+    else:
+        transfer = run_fidelity_compose
+
+    style_source = owner if location == "handoff-owner" else second
+    if style_source == second:
+        document = ezdxf.readfile(second)
+        name = "LEGACYTEST" if location == "handoff-target" else "LegacyTest"
+        _style_transfer_add_text(document, name, "FIXTURE", (5, 5), extended=True, family=family)
+        if location == "unused":
+            model = document.modelspace()
+            model.delete_entity(model.query("TEXT")[-1])
+        document.saveas(second)
+
+    saved = style_source.read_bytes()
+    declaration = f"1001\nACAD\n1000\n{family}\n1071\n1048610\n".encode("ascii")
+    if b"\r\n" in saved:
+        declaration = declaration.replace(b"\n", b"\r\n")
+    assert saved.count(declaration) == 1
+    earlier = declaration.replace(family.encode("ascii"), b"FixtureEarlier")
+    updated = saved.replace(declaration, earlier + declaration)
+    if padded_marker:
+        newline = b"\r\n" if b"\r\n" in saved else b"\n"
+        marker = b"  0" + newline + padded_marker.encode("ascii") + newline
+        padded = b"  0" + newline + (whitespace + padded_marker + whitespace).encode("ascii") + newline
+        if padded_marker == "SECTION":
+            # Keep the first HEADER marker valid for ezdxf's file-type probe.
+            tables = b"  2" + newline + b"TABLES" + newline
+            marker += tables
+            padded += tables
+        assert marker in updated
+        updated = updated.replace(marker, padded)
+    style_source.write_bytes(updated)
+    if location == "handoff-owner":
+        owner_report = json.loads(report.read_text(encoding="utf-8"))
+        owner_report["output_dxf_sha256"] = fidelity_module.sha256_file(owner)
+        report.write_text(json.dumps(owner_report), encoding="utf-8")
+
+    before = [fidelity_module.sha256_file(path) for path in inputs]
+    if location == "unused":
+        result = transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert "LegacyTest" not in ezdxf.readfile(result / "layout.dxf").styles
+    else:
+        with pytest.raises(FidelityError, match="Repeated ACAD.*STYLE"):
+            transfer(source, output, manifest, approval, workspace_root=Path.cwd())
+        assert not list(output.glob("semantic_region_handoff*"))
+        assert not (output / "reconstruction_pages" / "page_01").exists()
+    assert [fidelity_module.sha256_file(path) for path in inputs] == before
+
+
+@pytest.mark.parametrize("destination", ["plain", "extended", "malformed"])
+def test_fidelity_text_style_handoff_refuses_late_conflict_before_any_save(
+    tmp_path: Path, destination: str,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    first, second = (_style_transfer_candidate(output, name) for name in ("first", "second"))
+    document = ezdxf.readfile(second)
+    _style_transfer_add_text(document, "LEGACYTEST", "EXISTING", (2, 2), extended=destination != "plain")
+    if destination == "malformed":
+        document.styles.get("LEGACYTEST").set_xdata("ACAD", [(1000, ".VnAvant")])
+    document.saveas(second)
+    owner = _style_transfer_owner(output, manifest, approval, "LegacyTest", extended=destination != "extended")
+
+    def snapshot():
+        return tuple(fidelity_module.sha256_file(path) for path in (first, second, owner))
+
+    before = snapshot()
+    with pytest.raises(FidelityError, match=r"(?i)style"):
+        run_fidelity_semantic_region_handoff(source, output, manifest, approval, workspace_root=Path.cwd())
+    assert snapshot() == before
+    assert not list(output.glob("semantic_region_handoff*"))
+
+
+@pytest.mark.parametrize("legacy_first", [False, True])
+def test_fidelity_text_style_compose_refuses_unicode_fallback_collision(
+    tmp_path: Path, legacy_first: bool,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    candidates = [_style_transfer_candidate(output, name) for name in ("first", "second")]
+    styles = [("vn_unicode", True), ("", False)]
+    if not legacy_first:
+        styles.reverse()
+    for index, (candidate, (style, extended)) in enumerate(zip(candidates, styles)):
+        document = ezdxf.readfile(candidate)
+        _style_transfer_add_text(document, style, f"ROW {index}", (5, 5), extended=extended)
+        document.saveas(candidate)
+
+    before = [fidelity_module.sha256_file(path) for path in candidates]
+    with pytest.raises(FidelityError, match=r"(?i)style"):
+        run_fidelity_compose(source, output, manifest, approval, workspace_root=Path.cwd())
+    assert [fidelity_module.sha256_file(path) for path in candidates] == before
+    assert not (output / "reconstruction_pages" / "page_01").exists()
+
+
+@pytest.mark.parametrize("variant", ["equal", "different-width", "malformed-first", "malformed-second", "plain"])
+def test_fidelity_text_style_compose_checks_matching_style_definitions(
+    tmp_path: Path, variant: str,
+) -> None:
+    source, output, manifest, approval = _style_transfer_page(tmp_path)
+    candidates = [_style_transfer_candidate(output, name) for name in ("first", "second")]
+    for index, (candidate, name) in enumerate(zip(candidates, ("LegacyTest", "LEGACYTEST"))):
+        document = ezdxf.readfile(candidate)
+        _style_transfer_add_text(document, name, f"ROW {index}", (5, 5), extended=variant != "plain")
+        style = document.styles.get(name)
+        if index == 1 and variant == "different-width":
+            style.dxf.width = 1.0
+        if (index == 0 and variant == "malformed-first") or (index == 1 and variant == "malformed-second"):
+            style.set_xdata("ACAD", [(1000, ".VnAvant")])
+        if index == 1 and variant == "plain":
+            style.dxf.font = "other.shx"
+        document.saveas(candidate)
+
+    if variant in {"equal", "plain"}:
+        composed = run_fidelity_compose(source, output, manifest, approval, workspace_root=Path.cwd())
+        result = ezdxf.readfile(composed / "layout.dxf")
+        assert len([style for style in result.styles if style.dxf.name.lower() == "legacytest"]) == 1
+        assert {entity.dxf.style for entity in result.modelspace().query("TEXT")} == {"LegacyTest", "LEGACYTEST"}
+        style = result.styles.get("LegacyTest")
+        if variant == "equal":
+            assert [(tag.code, tag.value) for tag in style.get_xdata("ACAD")] == [
+                (1000, ".VnAvant"), (1071, 1048610),
+            ]
+        else:
+            assert style.dxf.font == "Arial.ttf"
+        return
+
+    before = [fidelity_module.sha256_file(path) for path in candidates]
+    with pytest.raises(FidelityError, match="STYLE"):
+        run_fidelity_compose(source, output, manifest, approval, workspace_root=Path.cwd())
+    assert [fidelity_module.sha256_file(path) for path in candidates] == before
+    assert not (output / "reconstruction_pages" / "page_01").exists()
+
+
 def test_semantic_handoff_transfers_measured_page1_horizontal_512_dashed_line(tmp_path: Path) -> None:
     """The measured page-1 @512 DASHED owner line must reach side."""
     source = tmp_path / "drawing.pdf"
