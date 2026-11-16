@@ -9,8 +9,10 @@ the permanent mandatory review route is two independent Codex reviewers;
 ChatGPT Web reviews are optional and never a merge dependency. This policy remains
 in force until Human changes it. At most two subagents may be active per session,
 including PO_SOL. The two reviewers may run concurrently; no reviewer may create
-descendants. Luna remains the sole production executor, PO_SOL stays Sol/high,
-and the five scheduled Web SOL watchdogs remain unchanged.
+descendants. Under the Hybrid Dual-Coder Pilot, Antigravity (Coder A) executes
+bounded non-native coding via Draft PRs while Luna (Coder B + Integrator) owns
+critical native-CAD coding, the single live AutoCAD/FileIPC lane, integration, and
+merge; PO_SOL stays Sol/high, and the five scheduled Web SOL watchdogs remain unchanged.
 The accepted BVTL product run is #461, not an active historical control sequence.
 
 ```text
@@ -32,7 +34,7 @@ Authority order:
 ```text
 Human Owner
   > accepted repository contracts and evidence
-  > Luna Max Solo / SOL Web within their delegated scopes
+  > Antigravity (Coder A) / Luna (Coder B + Integrator) / SOL Web within delegated scopes
 ```
 
 The Human Owner is final product and engineering authority.
@@ -64,29 +66,28 @@ Human involvement must be minimized. Agents must exhaust safe GitHub/offline wor
 
 No agent may fabricate owner approval, measurements, source identity, provider consent, or live AutoCAD evidence.
 
-## 3. Luna Max Solo — primary execution owner
+## 3. Hybrid Dual-Coder Pilot — Antigravity (Coder A) & Luna (Coder B + Integrator)
 
-Luna Max Solo is the primary local PO/executor for the active product frontier.
+During the Hybrid Dual-Coder Pilot (evaluate KEEP / MODIFY / ROLLBACK on real `#491` cycle metrics, PR rework rate, integration overhead, and native acceptance; no added bridge, daemon, queue, scheduler, or control plane):
 
-Luna may:
+### Antigravity (Coder A) — non-native implementation lane
 
-- fresh-read GitHub and continue autonomously across bounded tasks;
-- edit repository files on owned branches;
-- run focused, canonical, hosted, Windows, AutoCAD, COM/ROT, FileIPC, .NET IPC, NETLOAD, and live evidence work when authorized by the active contract;
-- diagnose routine failures, write causal REDs, implement minimal GREEN repairs, regress, commit, push, open/merge bounded PRs, and continue without Human relay;
-- consume SOL advisories directly from GitHub;
-- reuse accepted evidence unless a touched owner or contradictory runtime evidence creates concrete drift.
+Antigravity handles bounded non-native implementation tasks on disjoint files/modules (`max 1 active coding task per coder`, preferring OCR, geometry, DXF, utilities, and unit/regression tests):
 
-Luna must:
+- fresh-read GitHub and work in an independent worktree/branch (`WIP=1`);
+- use strict TDD (`Causal RED -> GREEN`), existing owners first, isolated benchmarks, and `scripts/verify.ps1`;
+- push feature branches and open Draft PRs with complete self-contained review packets bound to exact `BASE`, `HEAD`, and `TREE`, recording `SKIP`/`NOT_RUN` honestly without fake `PASS`;
+- address PR review findings directly without creating unrequested PR sprawl;
+- never self-merge, write directly to `main`, mutate customer/source/accepted drawings, occupy the live AutoCAD/FileIPC lane, or invent a new control plane.
 
-- use TDD for production behavior changes;
-- keep branch/write ownership disjoint from SOL Web writes;
-- use existing owners before creating adapters or capabilities;
-- keep `SKIP`, `NOT_RUN`, missing evidence, submission-only evidence, timeout, and ambiguous execution as non-PASS;
-- preserve source/accepted drawings and use disposable candidates/fixtures for mutation tests;
-- stop blind retries after uncertain mutation or transport execution;
-- avoid process control, UI impersonation, destructive cleanup, or customer drawing saves unless explicitly authorized;
-- consolidate genuinely unavoidable Human actions instead of asking for repeated NETLOAD/restart/click confirmations.
+### Luna (Coder B + Integrator) — native CAD, review, and merge owner
+
+Luna continues critical native-CAD coding, remains sole owner of the single exclusive mutable AutoCAD/FileIPC live lane, and owns review/integration/merge onto `main`:
+
+- fresh-read GitHub, Draft PRs, self-contained review packets, hosted CI, and exact `BASE`/`HEAD`/`TREE` (keeping `max 1 active coding task per coder` on disjoint files/modules);
+- run focused, canonical, hosted, Windows, AutoCAD, COM/ROT, FileIPC, .NET IPC, NETLOAD, and live acceptance evidence as sole owner of the live CAD lane (`KEEP`, `SKIP`, `NOT_RUN`, and rollback custody preserved);
+- dispatch and consume mandatory independent `SECURITY_REDTEAM` + `INTEGRATION_CI` (`gpt-6.1-sol/high`, fresh contexts, `#392` V7 when applicable) and optional Web SOL advisories;
+- review diffs/architecture/false-PASS risks, return feedback to Antigravity or diagnose routine integration checks, act alone on frozen exact-head receipts, and execute final integration/merge decisions without Human relay.
 
 Luna is not required to stop after every PR and wait for manual PO relay. It continues to the furthest safe completed state allowed by current GitHub contracts.
 
@@ -130,7 +131,7 @@ These roles are advisory/lookahead, not a second execution control plane.
 
 Every applicable material PR uses two Codex reviewer invocations: `SECURITY_REDTEAM` and `INTEGRATION_CI`, each explicitly requested as `gpt-6.1-sol` with reasoning `high`. They use separate fresh contexts, independently read the current main and exact BASE/HEAD/TREE, relevant changed owners/tests, and the same compact immutable evidence manifest. Each freezes its initial role-specific verdict before either reviewer receives the other's conclusions. Neither may edit production files, operate AutoCAD/native CAD, approve its own work, or merge. This route remains mandatory until Human changes this policy; Web reviews are optional and never a merge dependency.
 
-Use no more than two active subagents per session, including PO_SOL. The two reviewers may run simultaneously. A PO call consumes one of those same slots; do not start it while both reviewers are active. No nested agents or reviewer-created workers. Routine work does not call PO. PO remains `gpt-6.1-sol/high` and advisory to execution; Luna remains the sole executor.
+Use no more than two active subagents per session, including PO_SOL. The two reviewers may run simultaneously. A PO call consumes one of those same slots; do not start it while both reviewers are active. No nested agents or reviewer-created workers. Routine work does not call PO. PO remains `gpt-6.1-sol/high` and advisory to execution; Antigravity (Coder A) prepares bounded Draft PRs and Luna remains the sole review, integration, and merge owner alongside native-CAD Coder B work.
 
 Verify the effective model and effort from each fresh invocation's runtime record, not its role label or self-report. A mismatch, missing runtime record, or stale identity is `NOT_VERIFIED`; do not silently fall back. Bind each result and GitHub receipt to role, request ID, controlling attempt ID, current main, BASE, HEAD, and TREE. Any identity change makes the affected review stale. Reuse one shared immutable evidence manifest and objective test/CI receipts; reviewers independently inspect their scoped source and do not rerun full suites or native CAD tests without a distinct needed oracle. Web reviews remain optional and never a merge dependency; do not add redundant Web review rounds.
 
@@ -331,8 +332,8 @@ Accepted prior evidence should be reused when owners and decision-relevant bytes
 
 ## 12. Parallel work and merge discipline
 
-- One writer owns each overlapping file set.
-- Luna owns the active product/local execution lane unless GitHub says otherwise.
+- One writer owns each overlapping file set (no simultaneous edits to the same file or module across Coder A and Coder B).
+- During the Hybrid Dual-Coder Pilot, cap WIP at `max 1 active coding task per coder`; Antigravity owns bounded non-native Draft PR worktrees while Luna owns native-CAD coding, the single live AutoCAD/FileIPC lane, integration, and merge unless GitHub says otherwise.
 - SOL Web may work on disjoint docs/security/audit lanes.
 - Hosted CI may run in parallel.
 - Merge only after fresh exact-head/current-main reconciliation.
@@ -356,17 +357,15 @@ Do not idle at a Human gate while safe disjoint work exists.
 ```text
 Fresh GitHub state
       ↓
-SOL lookahead / Luna current frontier
+SOL lookahead / current frontier
       ↓
 reuse existing owner and define causal oracle
       ↓
-Luna implements/verifies on bounded branch
+Coder A (non-native worktree) or Coder B (native CAD) implements & verifies (WIP<=1 each)
       ↓
-GitHub diff + exact-head CI + applicable live evidence
+GitHub Draft PR + exact-head CI + mandatory gpt-6.1-sol/high reviews + applicable native evidence
       ↓
-SOL/Luna reconciliation
-      ↓
-merge / next smallest evidence-driven boundary
+Luna reconciles receipts and decides merge / next boundary
 ```
 
 The objective is not maximum ceremony. The objective is the shortest safe path to a verified editable Mechanical CAD product while preserving provenance, authority, and truthful evidence.

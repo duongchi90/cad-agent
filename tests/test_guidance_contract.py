@@ -322,6 +322,31 @@ class GuidanceContractTests(unittest.TestCase):
             with self.subTest(term=term):
                 self.assertIn(term, model)
 
+    def test_hybrid_dual_coder_pilot_preserves_single_cad_lane_and_merge_gates(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        model = (ROOT / "docs/AI_OPERATING_MODEL.md").read_text(encoding="utf-8")
+        for term in (
+            "Hybrid Dual-Coder Pilot",
+            "Antigravity (Coder A)",
+            "Luna Medium (Coder B and Integrator)",
+            "single exclusive mutable AutoCAD/FileIPC live lane",
+            "WIP=1 active coding task per coder on disjoint files",
+            "must not self-merge, write directly to `main`, mutate customer/source/accepted drawings, concurrently use the live mutable AutoCAD/FileIPC lane, or add any bridge, daemon, queue, or control plane",
+        ):
+            with self.subTest(agents_term=term):
+                self.assertIn(term, agents)
+        for term in (
+            "Hybrid Dual-Coder Pilot",
+            "Antigravity (Coder A)",
+            "Luna (Coder B + Integrator)",
+            "sole owner of the single exclusive mutable AutoCAD/FileIPC live lane",
+            "max 1 active coding task per coder",
+            "never self-merge, write directly to `main`, mutate customer/source/accepted drawings, occupy the live AutoCAD/FileIPC lane, or invent a new control plane",
+            "Luna remains the sole review, integration, and merge owner",
+        ):
+            with self.subTest(model_term=term):
+                self.assertIn(term, model)
+
 
 if __name__ == "__main__":
     unittest.main()
