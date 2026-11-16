@@ -52,7 +52,13 @@ class DrawingOpenFallbackTests(unittest.TestCase):
             return {"DWGPREFIX":"C:/work/", "DWGNAME":"slow-open.dwg"}
 
         client._dispatch = dispatch
-        self.assertEqual({"path":target}, client.drawing_open(target))
+        # Test acknowledgement ordering independently of host timer granularity.
+        clock = SimpleNamespace(
+            monotonic=count(step=0.001).__next__, time=count(step=0.001).__next__,
+            sleep=lambda _seconds: None,
+        )
+        with patch("mcp_integration_lib.mcp_client.time", clock):
+            self.assertEqual({"path":target}, client.drawing_open(target))
         self.assertEqual(1, len(loaded))
         self.assertEqual(2, len(probes))
         self.assertEqual([], list(Path(self._ipc_dir).iterdir()))
