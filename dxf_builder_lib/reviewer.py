@@ -302,11 +302,14 @@ def review_dxf(
     tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
     *,
     strict_primitive_inventory: bool = False,
+    verify_dimension_truth: bool = False,
 ) -> ReviewResult:
     """Đọc lại `build_result.output_path` và đối chiếu từng primitive đã
     build (theo handle) với `written_geometry_by_primitive_id`. Raise
     ImportError nếu chưa cài `ezdxf` (cùng chiến lược lazy-import khác
     trong dự án)."""
+    if type(verify_dimension_truth) is not bool:
+        raise ValueError("verify_dimension_truth must be a bool")
     if isinstance(tolerance_mm, bool) or type(tolerance_mm) not in (int, float):
         raise ValueError("tolerance_mm must be a finite non-negative int or float")
     try:
@@ -330,6 +333,7 @@ def review_dxf(
     return _review_dxf_loaded(
         build_result, doc, tolerance_mm,
         strict_primitive_inventory=strict_primitive_inventory,
+        verify_dimension_truth=verify_dimension_truth,
     )
 
 
@@ -339,6 +343,7 @@ def _review_dxf_loaded(
     tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
     *,
     strict_primitive_inventory: bool = False,
+    verify_dimension_truth: bool = False,
 ) -> ReviewResult:
     """Run the legacy semantic/graphics review on an already loaded document."""
     db = doc.entitydb
@@ -565,6 +570,17 @@ def _review_dxf_loaded(
                 dimension_mismatches.append(
                     f"{validation_id}: DIMENSION feature binding unavailable or differs from LINE {feature_id!r}"
                 )
+        if verify_dimension_truth:
+            from ._dimension_truth import audit_dimension_truth
+
+            for truth_issue in audit_dimension_truth(
+                doc,
+                entity,
+                expected_measurement=float(expected["measurement"]),
+                approved_value_mm=approved,
+                tolerance_mm=tolerance_mm,
+            ):
+                dimension_mismatches.append(f"{validation_id}: {truth_issue}")
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
         written = build_result.written_component_by_part_id.get(part_id)
@@ -765,8 +781,12 @@ def _has_complete_line_matching(expected, actual, tolerance_mm: float) -> bool:
 def review_dxf_with_dimension_line_integrity(
     build_result: BuildResult,
     tolerance_mm: float = _DEFAULT_TOLERANCE_MM,
+    *,
+    verify_dimension_truth: bool = True,
 ) -> DimensionLineIntegrityResult:
-    """Combine the unchanged review with captured anonymous-block LINE integrity."""
+    """Combine the semantic/dimension-truth review with anonymous-block LINE integrity."""
+    if type(verify_dimension_truth) is not bool:
+        return DimensionLineIntegrityResult("UNKNOWN", None, ("verify_dimension_truth must be a bool",))
     expectations = getattr(build_result, "dimension_line_expectations", None)
     if (
         type(build_result) is not BuildResult
@@ -815,7 +835,12 @@ def review_dxf_with_dimension_line_integrity(
         ) from exc
 
     doc = ezdxf.readfile(build_result.output_path)
-    semantic_review = _review_dxf_loaded(build_result, doc, tolerance_mm)
+    semantic_review = _review_dxf_loaded(
+        build_result,
+        doc,
+        tolerance_mm,
+        verify_dimension_truth=verify_dimension_truth,
+    )
     db = doc.entitydb
     line_mismatches: list[str] = []
     for expectation in expectations:
