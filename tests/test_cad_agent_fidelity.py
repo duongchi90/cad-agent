@@ -676,6 +676,324 @@ def test_linetype_reconstruction_is_hash_bound_and_changes_only_matching_horizon
     assert revision.parent.parent.name == "linetype_reconstruction-r2"
 
 
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("missing-stroke", "paint sequence"),
+        ("nonzero-phase", "zero phase"),
+        ("ambiguous", "one matching LINE"),
+        ("scale", "linetype scale"),
+        ("publication", "report write failed"),
+    ],
+)
+def test_source_linetype_reconstruction_refuses_without_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, error: str,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=200, height=100)
+        dashes = "[4 2] 1" if case == "nonzero-phase" else "[4 2] 0"
+        page.draw_line((20, 20), (180, 20), dashes=dashes)
+        pdf.save(source)
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    scale = page["pixel_to_paper_mm"]["used"]
+    base = output / "base.dxf"
+    document = ezdxf.new("R2010")
+    document.header["$INSUNITS"] = 4
+    start, end = (40 * scale, 160 * scale), (360 * scale, 160 * scale)
+    line = document.modelspace().add_line(start, end)
+    if case == "ambiguous":
+        document.modelspace().add_line(end, start)
+    if case == "scale":
+        line.dxf.ltscale = 2.0
+    document.saveas(base)
+    observation = output / "observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": page["artifacts"]["rendered_png"]["sha256"],
+        "source_paint_seq": 99 if case == "missing-stroke" else 0,
+        "patterns": [{"axis": "horizontal", "coordinate_px": 40, "suggested_linetype": "DASHED"}],
+    }), encoding="utf-8")
+    if case == "publication":
+        original_write = Path.write_text
+
+        def fail_report(path: Path, *args, **kwargs):
+            if path.name == "report.json":
+                raise OSError("report write failed")
+            return original_write(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fail_report)
+    base_sha256 = fidelity_module.sha256_file(base)
+    with pytest.raises((FidelityError, OSError), match=error):
+        run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+    assert fidelity_module.sha256_file(base) == base_sha256
+    assert not list(output.glob("linetype_reconstruction*/page_01"))
+    assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+
+
+def test_source_linetype_reconstruction_refuses_stretched_stroke_and_preserves_prior_output(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    with fitz.open() as pdf:
+        pdf_page = pdf.new_page(width=250, height=100)
+        pdf_page.draw_line((20, 20), (110, 20), dashes="[4 2] 0")
+        pdf_page.draw_line((20, 40), (110, 40), dashes="[4 2] 0")
+        xref = pdf_page.get_contents()[-1]
+        contents = pdf.xref_stream(xref)
+        pdf.update_stream(xref, b"q 2 0 0 1 0 0 cm\n" + contents + b"\nQ")
+        pdf.save(source)
+
+    output = tmp_path / "private-staging"
+    manifest_path = output / "fidelity-run-manifest.json"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, manifest_path, manifest)
+    page = manifest["pages"][0]
+    scale = page["pixel_to_paper_mm"]["used"]
+    document = ezdxf.new("R2010")
+    document.header["$INSUNITS"] = 4
+    document.modelspace().add_line((40 * scale, 160 * scale), (220 * scale, 160 * scale))
+    document.modelspace().add_line((80 * scale, 120 * scale), (440 * scale, 120 * scale))
+    base = output / "base.dxf"
+    document.saveas(base)
+
+    observation = output / "observation.json"
+    payload = {
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": page["artifacts"]["rendered_png"]["sha256"],
+        "source_paint_seq": 0,
+    }
+    observation.write_text(json.dumps(payload), encoding="utf-8")
+    prior = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+    prior_report = prior.with_name("report.json")
+    assert json.loads(prior_report.read_text(encoding="utf-8"))["source_paint_seq"] == 0
+    inputs_and_prior = {
+        path: fidelity_module.sha256_file(path) for path in (source, base, prior, prior_report)
+    }
+
+    payload["source_paint_seq"] = 1
+    observation.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(FidelityError, match="unsupported stroke transform"):
+        run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+
+    assert all(fidelity_module.sha256_file(path) == digest for path, digest in inputs_and_prior.items())
+    assert list(output.glob("linetype_reconstruction*/page_01")) == [prior.parent]
+    assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "identity", "uniform", "bound-base", "replay-error-status", "late-cleanup-status",
+        "missing-callback", "wrong-dash-split", "unqualified",
+    ],
+)
+def test_source_linetype_reconstruction_binds_coincident_strokes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
+) -> None:
+    source = tmp_path / "drawing.pdf"
+    factor = 2 if case == "uniform" else 1
+    with fitz.open() as pdf:
+        pdf_page = pdf.new_page(width=250, height=150)
+        pdf_page.insert_text((10, 10), "Paint index control")
+        pdf_page.draw_line((20 * factor, 150 - 70 * factor), (110 * factor, 150 - 70 * factor), dashes="[3 3] 0")
+        pdf_page.draw_line((20, 80), (110, 80), dashes="[4 2] 0")
+        xref = pdf_page.get_contents()[-1]
+        contents = pdf.xref_stream(xref)
+        pdf.update_stream(xref, f"q {factor} 0 0 {factor} 0 0 cm\n".encode() + contents + b"\nQ")
+        pdf.save(source)
+
+    output = tmp_path / "private-staging"
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    page = manifest["pages"][0]
+    scale = page["pixel_to_paper_mm"]["used"]
+    document = ezdxf.new("R2010")
+    document.header["$INSUNITS"] = 4
+    start, end = (40 * factor * scale, 140 * factor * scale), (220 * factor * scale, 140 * factor * scale)
+    target = document.modelspace().add_line(start, end)
+    decoy = document.modelspace().add_line((start[0], start[1] - 10), (end[0], end[1] - 10))
+    base = output / "base.dxf"
+    document.saveas(base)
+    observation = output / "observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": page["artifacts"]["rendered_png"]["sha256"],
+        "source_paint_seq": 2,
+    }), encoding="utf-8")
+
+    base_reads = []
+    if case == "bound-base":
+        read_base_snapshot = fidelity_module._read_text_base_snapshot
+
+        def record_base_snapshot(path: Path):
+            snapshot, digest = read_base_snapshot(path)
+            base_reads.append((path, snapshot, digest))
+            return snapshot, digest
+
+        monkeypatch.setattr(fidelity_module, "_read_text_base_snapshot", record_base_snapshot)
+    if case == "missing-callback":
+        monkeypatch.setattr(fitz.mupdf, "fz_run_page", lambda *_: None)
+    if case == "wrong-dash-split":
+        get_drawings = fitz.Page.get_drawings
+
+        def return_decoy_pattern(pdf_page, *args, **kwargs):
+            drawings = get_drawings(pdf_page, *args, **kwargs)
+            selected = next(stroke for stroke in drawings if stroke["seqno"] == 2)
+            selected["dashes"] = "[3 3] 0"
+            return drawings
+
+        monkeypatch.setattr(fitz.Page, "get_drawings", return_decoy_pattern)
+    if case == "unqualified":
+        monkeypatch.setattr(fitz, "VersionFitz", "0.0.0")
+
+    originals = {path: fidelity_module.sha256_file(path) for path in (source, base, observation)}
+    if case in {"replay-error-status", "late-cleanup-status"}:
+        prior = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        prior_report = prior.with_name("report.json")
+        originals.update({path: fidelity_module.sha256_file(path) for path in (prior, prior_report)})
+    if case == "late-cleanup-status":
+        remove_staging_alias = fidelity_module._remove_staging_reparse_alias
+
+        def report_late_cleanup_status(staging: Path) -> None:
+            remove_staging_alias(staging)
+            raise fidelity_module.FileIdentityError("simulated late cleanup status")
+
+        monkeypatch.setattr(fidelity_module, "_remove_staging_reparse_alias", report_late_cleanup_status)
+        result = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        assert result == output / "linetype_reconstruction-r2" / "page_01" / "layout.dxf"
+        report = json.loads(result.with_name("report.json").read_text(encoding="utf-8"))
+        assert report["state"] == "needs_review"
+        assert report["observation_sha256"] == originals[observation]
+        assert report["output_dxf_sha256"] == fidelity_module.sha256_file(result)
+        assert set(output.glob("linetype_reconstruction*/page_01")) == {prior.parent, result.parent}
+        assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+    elif case == "replay-error-status":
+        monkeypatch.setattr(fitz.mupdf.FzCookie, "errors", lambda _cookie: 1)
+        with pytest.raises(FidelityError, match="stroke replay"):
+            run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        assert list(output.glob("linetype_reconstruction*/page_01")) == [prior.parent]
+        assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+    elif case in {"identity", "uniform", "bound-base"}:
+        result = run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        if case == "bound-base":
+            report = json.loads(result.with_name("report.json").read_text(encoding="utf-8"))
+            assert report["base_dxf_sha256"] == originals[base]
+            assert len(base_reads) == 1, "source mode must parse the bound base snapshot"
+            read_path, snapshot, digest = base_reads[0]
+            assert read_path == base and digest == report["base_dxf_sha256"]
+        saved = ezdxf.readfile(result)
+        saved_target = saved.entitydb[target.dxf.handle]
+        if case == "bound-base":
+            assert snapshot.entitydb[target.dxf.handle].dxf.linetype == saved_target.dxf.linetype
+        assert (tuple(saved_target.dxf.start)[:2], tuple(saved_target.dxf.end)[:2]) == (start, end)
+        assert saved.entitydb[decoy.dxf.handle].dxf.linetype == "BYLAYER"
+        tags = saved.linetypes.get(saved_target.dxf.linetype).pattern_tags.tags
+        pt_to_mm = 2 * scale * factor
+        assert tags.get_first_value(40) == pytest.approx(6 * pt_to_mm)
+        assert tags.get_first_value(73) == 2
+        assert [tag.value for tag in tags if tag.code == 49] == pytest.approx([4 * pt_to_mm, -2 * pt_to_mm])
+    else:
+        with pytest.raises(FidelityError, match="stroke replay|MuPDF binding"):
+            run_fidelity_linetype_reconstruct(source, output, manifest, observation, base, workspace_root=Path.cwd())
+        assert not list(output.glob("linetype_reconstruction*/page_01"))
+        assert not list(output.glob("linetype_reconstruction*/.page_01.staging-*"))
+    assert all(fidelity_module.sha256_file(path) == digest for path, digest in originals.items())
+
+
+@pytest.mark.real_data
+def test_case01_source_linetype_changes_only_the_measured_span(tmp_path: Path) -> None:
+    import shutil
+
+    from cad_agent.manifest import sha256_file
+
+    source_value = os.environ.get("CAD_AGENT_CASE01_ASTERITI_PDF")
+    manifest_value = os.environ.get("CAD_AGENT_CASE01_ASTERITI_LAYOUT_MANIFEST")
+    if not source_value or not manifest_value:
+        pytest.skip("set CAD_AGENT_CASE01_ASTERITI_PDF and CAD_AGENT_CASE01_ASTERITI_LAYOUT_MANIFEST")
+    source = Path(source_value)
+    manifest_path = Path(manifest_value)
+    source_sha256 = "1970e92e81d888437f55369c4605d0a5f71127177898fb6d5012084ae22fe162"
+    assert sha256_file(source) == source_sha256
+    assert sha256_file(manifest_path) == "36f5e3dd27acd8bc9f84076ba7da7897ab4e74845e251bf429581201d11c4fd9"
+    manifest = fidelity_module.read_fidelity_manifest(manifest_path)
+    assert manifest["source"]["sha256"] == source_sha256
+    page, = manifest["pages"]
+
+    originals = {}
+    for key in ("rendered_png", "layout_audit", "layout_dxf"):
+        record = page["artifacts"][key]
+        archived = manifest_path.parent / record["artifact"]
+        originals[archived] = record["sha256"]
+        assert sha256_file(archived) == record["sha256"]
+        clone = tmp_path / record["artifact"]
+        clone.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(archived, clone)
+        assert sha256_file(clone) == record["sha256"]
+    base = tmp_path / page["artifacts"]["layout_dxf"]["artifact"]
+    observation = tmp_path / "seq-60-linetype-observation.json"
+    observation.write_text(json.dumps({
+        "schema_version": "fidelity-linetype-observation-1.0",
+        "private_artifact": True,
+        "state": "needs_review",
+        "page": 1,
+        "source_render_sha256": page["artifacts"]["rendered_png"]["sha256"],
+        "source_paint_seq": 60,
+        # The legacy row remains present to detect accidental fallback to it.
+        "patterns": [{"axis": "horizontal", "coordinate_px": 955.993408203125, "suggested_linetype": "DASHED"}],
+    }), encoding="utf-8")
+
+    result = run_fidelity_linetype_reconstruct(source, tmp_path, manifest, observation, base, workspace_root=Path.cwd())
+    report = json.loads(result.with_name("report.json").read_text(encoding="utf-8"))
+    assert report["state"] == "needs_review"
+    assert report["observation_sha256"] == sha256_file(observation)
+    assert report["base_dxf_sha256"] == sha256_file(base) == page["artifacts"]["layout_dxf"]["sha256"]
+    assert report["output_dxf_sha256"] == sha256_file(result)
+    assert all(sha256_file(path) == digest for path, digest in originals.items())
+    assert sha256_file(source) == source_sha256
+
+    original = ezdxf.readfile(base)
+    saved = ezdxf.readfile(result)
+    original_lines = {line.dxf.handle: line for line in original.modelspace().query("LINE")}
+    saved_lines = {line.dxf.handle: line for line in saved.modelspace().query("LINE")}
+    assert original_lines.keys() == saved_lines.keys()
+    changed = []
+    for handle, before in original_lines.items():
+        after = saved_lines[handle]
+        assert (after.dxf.start, after.dxf.end, after.dxf.layer) == (before.dxf.start, before.dxf.end, before.dxf.layer)
+        if after.dxf.linetype != before.dxf.linetype:
+            changed.append(handle)
+
+    target = saved_lines["4A6"]
+    tags = saved.linetypes.get(target.dxf.linetype).pattern_tags.tags
+    actual = {
+        "assigned_handles": sorted(changed),
+        "reported_changes": report["changed_line_entities"],
+        "period_mm": round(tags.get_first_value(40), 9),
+        "segment_count": tags.get_first_value(73),
+        "signed_lengths_mm": [round(tag.value, 9) for tag in tags if tag.code == 49],
+    }
+    assert actual == {
+        "assigned_handles": ["4A6"],
+        "reported_changes": 1,
+        "period_mm": 0.353439061,
+        "segment_count": 2,
+        "signed_lengths_mm": [0.211992890, -0.141446171],
+    }
+
+
 def test_linetype_reconstruction_cli_writes_private_candidate(tmp_path: Path) -> None:
     source = tmp_path / "drawing.pdf"
     output = tmp_path / "private-staging"
