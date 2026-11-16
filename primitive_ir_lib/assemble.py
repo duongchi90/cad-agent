@@ -106,14 +106,35 @@ def pdf_vector_line_to_primitive(raw: RawPdfLine, calibration: Calibration) -> P
     )
 
 
+def _text_baseline_origin_and_height_px(
+    bbox_px: tuple[int | float, int | float, int | float, int | float],
+    rotation_deg: float,
+    fallback_height_px: float,
+) -> tuple[tuple[float, float], float]:
+    """Map an image-space axis-aligned text bbox to DXF left-baseline origin & height.
+
+    DXF TEXT uses (halign=0, valign=0) bottom-left baseline insertion in CAD
+    Y-up coordinates, whereas `bbox_px=(x0, y0, x1, y1)` is image Y-down.
+    """
+    if isinstance(rotation_deg, bool) or not isinstance(rotation_deg, (int, float)) or not math.isfinite(rotation_deg):
+        raise ValueError(f"Unsupported non-finite text rotation_deg: {rotation_deg!r}")
+    x0, y0, x1, y1 = bbox_px
+    quadrant = int(((float(rotation_deg) + 45.0) % 360.0) // 90.0) % 4
+    corners = ((x0, y1), (x1, y1), (x1, y0), (x0, y0))
+    spans = (y1 - y0, x1 - x0, y1 - y0, x1 - x0)
+    span_px = spans[quadrant]
+    return corners[quadrant], float(span_px if span_px > 0 else fallback_height_px)
+
+
 def text_to_primitive(raw: RawText, calibration: Calibration, height_px: float = 20.0) -> Primitive:
-    """height_px: chiều cao chữ ước lượng bằng pixel (mặc định lấy chiều cao
-    bbox nếu không truyền riêng) -> quy đổi ra đơn vị CAD bằng scale."""
+    """Convert `RawText` (image pixel bbox) into a CAD `Primitive` aligned on DXF baseline."""
     from .models import TextData
 
-    position = calibration.pixel_to_cad(raw.bbox_px[0], raw.bbox_px[1])
-    bbox_height_px = raw.bbox_px[3] - raw.bbox_px[1]
-    height_cad = (bbox_height_px if bbox_height_px > 0 else height_px) * calibration.pixel_to_unit_scale
+    origin_px, effective_height_px = _text_baseline_origin_and_height_px(
+        raw.bbox_px, raw.rotation_deg, height_px
+    )
+    position = calibration.pixel_to_cad(*origin_px)
+    height_cad = effective_height_px * calibration.pixel_to_unit_scale
 
     tools = {
         "text_tesseract": "tesseract-5.3",

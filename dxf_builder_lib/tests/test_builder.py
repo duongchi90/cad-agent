@@ -471,6 +471,35 @@ def test_semantic_layer_precedence_is_logged_for_source_classification(caplog, t
     ]
 
 
+def test_build_dxf_text_insert_stays_aligned_with_calibrated_bbox_corners(tmp_path):
+    if not _HAS_EZDXF:
+        pytest.skip("ezdxf prerequisite unavailable")
+    from primitive_ir_lib.assemble import build_document
+    from primitive_ir_lib.text_extraction import RawText
+
+    cal = Calibration(unit="mm", pixel_to_unit_scale=0.1, origin_px=(0.0, 1000.0), method="manual_override")
+    cases = [
+        ("t0", 0.0, (200, 100, 260, 130), (200, 130), 3.0),
+        ("t90", 90.0, (200, 100, 230, 160), (230, 160), 3.0),
+        ("t180", 180.0, (200, 100, 260, 130), (260, 100), 3.0),
+        ("t270", 270.0, (200, 100, 230, 160), (200, 100), 3.0),
+    ]
+    raw_texts = [RawText(tid, "57.50", bbox, rot, 0.95, "text_pdfvector") for tid, rot, bbox, _, _ in cases]
+    doc_ir = build_document("s.png", 0, 1000, 1000, cal, [], [], raw_texts)
+    built = build_dxf(doc_ir, str(tmp_path / "aligned_texts.dxf"))
+    assert review_dxf(built).passed
+
+    reopened = ezdxf.readfile(built.output_path)
+    for tid, _rot, _bbox, exp_px, exp_h in cases:
+        ent = reopened.entitydb[built.handle_by_primitive_id[tid]]
+        exp_cad = cal.pixel_to_cad(*exp_px)
+        assert (ent.dxf.halign, ent.dxf.valign) == (0, 0)
+        assert ent.dxf.insert.x == pytest.approx(exp_cad.x, abs=1e-6)
+        assert ent.dxf.insert.y == pytest.approx(exp_cad.y, abs=1e-6)
+        assert ent.dxf.height == pytest.approx(exp_h, abs=1e-3)
+
+
+
 _TESTS = [
     test_missing_ezdxf_raises_clear_import_error,
     test_build_line_circle_text_assigns_handles_and_writes_file,
