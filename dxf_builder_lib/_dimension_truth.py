@@ -236,6 +236,45 @@ def _has_unsafe_dimpost(dimpost: str) -> bool:
     return bool(dimpost and dimpost[0] in _UNSAFE_PLACEHOLDER_NEIGHBORS)
 
 
+class _UnverifiedClaim(ValueError):
+    """The complete claim contains unsupported unit or annotation semantics."""
+
+
+def _claim_in_reference_units(value: float, suffix: str, *, angular: bool, angle_unit: int) -> float:
+    """Reuse ezdxf's unit catalog; references remain millimetres or degrees."""
+    tokens = suffix.split()
+    if tokens and tokens[-1] in {"REF", "TYP"}:
+        if len(tokens) == 1 and suffix and not suffix[0].isspace():
+            raise _UnverifiedClaim("concatenated annotation suffix")
+        tokens.pop()
+    if len(tokens) > 1:
+        raise _UnverifiedClaim("ambiguous unit/annotation suffix")
+    unit = tokens[0] if tokens else ""
+    if angular:
+        # Inverse of the existing _format_measured DIMAUNIT output, not a new
+        # angle-expression parser. Linear units never convert angular claims.
+        expected = {0: "°", 1: "°", 2: "g", 3: "r", 4: "°"}.get(angle_unit)
+        if expected is None or unit not in {"", expected}:
+            raise _UnverifiedClaim("unsupported angular unit/annotation suffix")
+        if angle_unit == 2:
+            return value * 360.0 / 400.0
+        if angle_unit == 3:
+            return math.degrees(value)
+        return value
+    if not unit:
+        return value
+    from ezdxf import units
+
+    for candidate in units.InsertUnits:
+        abbreviation = units.decode(candidate)
+        if abbreviation is not None and unit == abbreviation:
+            try:
+                return value * units.conversion_factor(candidate, units.MM)
+            except (TypeError, ValueError, IndexError) as exc:
+                raise _UnverifiedClaim("unsupported linear conversion") from exc
+    raise _UnverifiedClaim("unsupported linear unit/annotation suffix")
+
+
 def _extract_primary_numeric_claim(
     plain_text: str,
     *,
@@ -252,7 +291,7 @@ def _extract_primary_numeric_claim(
             deg = int(dms.group(1))
             mins = int(dms.group(2))
             secs = float((dms.group(3) or "0").replace(",", "."))
-            sign = -1.0 if deg < 0 else 1.0
+            sign = -1.0 if dms.group(1).startswith("-") else 1.0
             val = sign * (abs(deg) + mins / 60.0 + secs / 3600.0)
             return val if math.isfinite(val) else None
 
@@ -265,24 +304,27 @@ def _extract_primary_numeric_claim(
     if len(matches) != 1:
         return None
     match = matches[0]
-    # Parse the complete claim: an unknown prefix cannot discard a sign, and
-    # a suffix may contain unit/label letters or degrees, never more syntax.
+    # An unknown prefix cannot discard a sign. A complete suffix must resolve
+    # through supported units/qualifiers rather than being treated as harmless.
     if match.start() != 0:
         return None
     suffix = cleaned[match.end():]
-    if any(not (char.isspace() or char.isalpha() or char == "\u00b0") for char in suffix):
-        return None
     token = match.group()
     if "e" in token or "E" in token:
         return None
     next_ch = cleaned[match.end()] if match.end() < len(cleaned) else ""
     if next_ch and next_ch in ".,%eE":
         return None
+    if suffix and not any(char.isalpha() or char == "°" for char in suffix):
+        return None
     try:
         parsed = float(token.replace(",", "."))
     except ValueError:
         return None
-    return parsed if math.isfinite(parsed) else None
+    if not math.isfinite(parsed):
+        return None
+    converted = _claim_in_reference_units(parsed, suffix, angular=angular, angle_unit=angle_unit)
+    return converted if math.isfinite(converted) else None
 
 
 def _is_finite_number(value: object) -> bool:
@@ -533,7 +575,10 @@ def resolve_dimension_display(
         return DimensionDisplay("", None, scaled, 0.0, "suppressed")
     if override and override != "<>" and "<>" not in override:
         plain = normalize_dim_text(plain_cad_text(override)) or ""
-        parsed = _extract_primary_numeric_claim(plain, angular=angular, angle_unit=angle_unit)
+        try:
+            parsed = _extract_primary_numeric_claim(plain, angular=angular, angle_unit=angle_unit)
+        except _UnverifiedClaim:
+            return DimensionDisplay(plain, None, scaled, 0.0, "unverified_claim")
         return DimensionDisplay(plain, parsed, scaled, 0.0, "override")
 
     if style is None:
@@ -555,7 +600,10 @@ def resolve_dimension_display(
     tol = max(0.5 * 10.0 ** (-places), rounding / 2.0) if rounding > 0 else 0.5 * 10.0 ** (-places)
     raw_text = override.replace("<>", formatted, 1) if override and override != "<>" else formatted
     shown_text = normalize_dim_text(plain_cad_text(raw_text))
-    claim = _extract_primary_numeric_claim(shown_text or "", angular=angular, angle_unit=angle_unit)
+    try:
+        claim = _extract_primary_numeric_claim(shown_text or "", angular=angular, angle_unit=angle_unit)
+    except _UnverifiedClaim:
+        return DimensionDisplay(shown_text, None, scaled, tol, "unverified_claim")
     return DimensionDisplay(shown_text, claim, scaled, tol, "measurement")
 
 
@@ -637,6 +685,8 @@ def audit_dimension_truth(
         reasons.append("dim_value_suppressed")
     elif disp.source == "unsafe_placeholder":
         reasons.append("dim_placeholder_mutates_number")
+    elif disp.source == "unverified_claim":
+        reasons.append(f"dim_unverified_display_claim(shown={disp.text!r})")
     elif disp.source == "override":
         if disp.value is None or not math.isfinite(disp.value):
             reasons.append(f"dim_override_non_numeric(shown={disp.text!r})")

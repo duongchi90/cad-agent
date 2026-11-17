@@ -663,3 +663,139 @@ def test_known_zero_height_is_suppression_not_unverified(tmp_path: Path, text: s
     doc.saveas(built.output_path)
     result = review_dxf_with_dimension_line_integrity(built)
     assert result.qualification == "FAILED"
+
+
+@pytest.mark.parametrize("label", ["100 cm", "100 in", "100m", "100 mm"])
+def test_explicit_unit_claim_cannot_hide_physical_disagreement(tmp_path: Path, label: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    assert doc.units == 4  # The existing builder declares native millimetres.
+    dim.dxf.text = label
+    _set_rendered_block_text(dim, label)
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert result.qualification == ("QUALIFIED" if label == "100 mm" else "FAILED")
+
+
+@pytest.mark.parametrize("length,label", [(100.0, "10 cm"), (25.4, "1 in"), (100.0, "100 REF"), (100.0, "100 mm TYP")])
+def test_known_unit_conversion_and_literal_qualifiers_are_supported(tmp_path: Path, length: float, label: str) -> None:
+    built = _build_seed(tmp_path, length_mm=length)
+    doc = ezdxf.readfile(built.output_path)
+    dim = doc.entitydb[built.dimension_handle_by_cross_validation_id["cv-1"]]
+    dim.dxf.text = label
+    _set_rendered_block_text(dim, label)
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+@pytest.mark.parametrize("mode", ["override", "placeholder", "dimpost"])
+def test_units_are_checked_for_every_display_source(tmp_path: Path, mode: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    if mode == "override":
+        dim.dxf.text = "100 cm"
+    elif mode == "placeholder":
+        dim.dxf.text = "<> cm"
+    else:
+        override = DimStyleOverride(dim)
+        override["dimpost"] = "<> cm"
+        override.commit()
+    _set_rendered_block_text(dim, "100 cm")
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "FAILED"
+
+
+@pytest.mark.parametrize("label", ["100 widgets", "100 mmREF", "100 cm/in", "100REF"])
+def test_unsupported_unit_or_annotation_semantics_are_unknown(tmp_path: Path, label: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = label
+    _set_rendered_block_text(dim, label)
+    doc.saveas(built.output_path)
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "UNKNOWN"
+    assert any("dim_unverified" in reason for reason in result.semantic_review.dimension_mismatches)
+
+
+def test_explicit_unit_conversion_does_not_expand_numeric_error_allowance(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = "10.000001 cm"
+    _set_rendered_block_text(dim, "10.000001 cm")
+    doc.saveas(built.output_path)
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "FAILED"
+
+
+def test_physical_contradiction_is_not_downgraded_by_unknown_rendering(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = "100 cm"
+    _set_rendered_block_text(dim, "100 cm")
+    for text in dim.get_geometry_block().query("MTEXT"):
+        text.dxf.char_height = math.nan
+    doc.saveas(built.output_path)
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "FAILED"
+
+
+@pytest.mark.parametrize("label", ["0°30'", "-0°30'", "−0°30'"])
+def test_angular_dms_claim_preserves_sign_when_degrees_are_zero(tmp_path: Path, label: str) -> None:
+    from dxf_builder_lib._dimension_truth import audit_dimension_truth
+
+    doc = ezdxf.new("R2010", setup=True)
+    angle = math.radians(0.5)
+    override = doc.modelspace().add_angular_dim_2l(
+        base=(10, 0.05), line1=((0, 0), (10, 0)),
+        line2=((0, 0), (10 * math.cos(angle), 10 * math.sin(angle))),
+        override={"dimtxt": 1.0, "dimaunit": 1, "dimadec": 2}, text=label,
+    )
+    override.render()
+    dim = override.dimension
+    _set_rendered_block_text(dim, label)
+    path = tmp_path / "angular.dxf"
+    doc.saveas(path)
+    before = path.read_bytes()
+    reopened = ezdxf.readfile(path)
+    entity = reopened.entitydb[dim.dxf.handle]
+    assert entity.get_measurement() == pytest.approx(0.5)
+    reasons = audit_dimension_truth(reopened, entity)
+    assert path.read_bytes() == before
+    if label == "0°30'":
+        assert reasons == []
+    else:
+        assert any("dim_override_disagrees" in reason for reason in reasons)
+
+
+def test_linear_unit_on_angular_claim_remains_unverified(tmp_path: Path) -> None:
+    from dxf_builder_lib._dimension_truth import audit_dimension_truth
+
+    doc = ezdxf.new("R2010", setup=True)
+    override = doc.modelspace().add_angular_dim_2l(
+        base=(5, 5), line1=((0, 0), (10, 0)), line2=((0, 0), (0, 10)),
+        override={"dimtxt": 1.0}, text="90 mm",
+    )
+    override.render()
+    dim = override.dimension
+    _set_rendered_block_text(dim, "90 mm")
+    path = tmp_path / "angular-unit.dxf"
+    doc.saveas(path)
+    reopened = ezdxf.readfile(path)
+    reasons = audit_dimension_truth(reopened, reopened.entitydb[dim.dxf.handle])
+    assert any("dim_unverified" in reason for reason in reasons)
+
+
+@pytest.mark.parametrize("unit,label,want_pass", [(2, "100g", True), (2, "90g", False), (3, "1.5707963267948966r", True)])
+def test_existing_angular_unit_interpretation_is_preserved(tmp_path: Path, unit: int, label: str, want_pass: bool) -> None:
+    from dxf_builder_lib._dimension_truth import audit_dimension_truth
+
+    doc = ezdxf.new("R2010", setup=True)
+    override = doc.modelspace().add_angular_dim_2l(
+        base=(5, 5), line1=((0, 0), (10, 0)), line2=((0, 0), (0, 10)),
+        override={"dimtxt": 1.0, "dimaunit": unit}, text=label,
+    )
+    override.render()
+    dim = override.dimension
+    _set_rendered_block_text(dim, label)
+    path = tmp_path / "angular-style.dxf"
+    doc.saveas(path)
+    reopened = ezdxf.readfile(path)
+    reasons = audit_dimension_truth(reopened, reopened.entitydb[dim.dxf.handle])
+    assert (not reasons) is want_pass
