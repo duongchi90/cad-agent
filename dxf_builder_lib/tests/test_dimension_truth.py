@@ -892,3 +892,60 @@ def test_converted_tolerance_context_is_explicitly_unverified(tmp_path: Path) ->
     result = review_dxf_with_dimension_line_integrity(built)
     assert result.qualification == "UNKNOWN"
     assert any("dim_unverified_tolerance_units" in reason for reason in result.semantic_review.dimension_mismatches)
+
+
+@pytest.mark.parametrize("halign,distance,height_matches,want_pass", [
+    (5, 0.0, True, False),
+    (3, 0.0, True, False),
+    (5, 10.0, True, True),
+    (3, 10.0, True, True),
+    (3, 10.0, False, False),
+    (0, 0.0, True, True),
+])
+def test_native_text_stretch_is_checked_after_save_reopen(
+    tmp_path: Path, halign: int, distance: float, height_matches: bool, want_pass: bool,
+) -> None:
+    from ezdxf.addons.drawing.properties import RenderContext
+    from ezdxf.addons.drawing.text import _get_extra_transform
+    from ezdxf.addons.drawing.unified_text_renderer import UnifiedTextRenderer
+
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    block = dim.get_geometry_block()
+    for cached in list(block.query("TEXT MTEXT")):
+        block.delete_entity(cached)
+    text = block.add_text("100", dxfattribs={
+        "height": 1.0, "insert": (0, 0, 0),
+        "align_point": (distance, 0, 0), "halign": halign,
+    })
+    if halign == 3 and distance and height_matches:
+        # A legitimate ALIGNED label scales height too; declare that source
+        # height rather than using raw DXF height as a visibility oracle.
+        face = RenderContext(doc).resolve_font(text)
+        width = UnifiedTextRenderer().get_text_line_width("100", face, 1.0)
+        height = _get_extra_transform(text, width).transform_direction((0, 1, 0)).magnitude
+        override = DimStyleOverride(dim)
+        override["dimtxt"] = height
+        override.commit()
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    reopened = ezdxf.readfile(built.output_path)
+    assert reopened.entitydb[text.dxf.handle].dxftype() == "TEXT"
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert result.passed is want_pass
+    assert result.qualification == ("QUALIFIED" if want_pass else "FAILED")
+    assert review_dxf_with_dimension_line_integrity(built, verify_dimension_truth=False).passed
+
+
+def test_native_text_unresolved_stretch_font_is_not_qualified(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    block = dim.get_geometry_block()
+    for cached in list(block.query("TEXT MTEXT")):
+        block.delete_entity(cached)
+    block.add_text("100", dxfattribs={
+        "height": 1.0, "insert": (0, 0, 0), "align_point": (10, 0, 0),
+        "halign": 5, "style": "MISSING_SOURCE_STYLE",
+    })
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "UNKNOWN"
+    assert review_dxf_with_dimension_line_integrity(built, verify_dimension_truth=False).passed

@@ -434,6 +434,34 @@ def _render_alpha(context, entity) -> int:
     return 255 if len(color) == 7 else int(color[7:9], 16)
 
 
+def _text_height_profile(item, context, plain: str, base_height: float) -> list[tuple[str, float]]:
+    """Resolve native TEXT stretching through the existing drawing owner."""
+    from ezdxf.addons.drawing.text import _get_extra_transform
+    from ezdxf.addons.drawing.unified_text_renderer import UnifiedTextRenderer
+    from ezdxf.enums import TextEntityAlignment
+
+    line_width = 0.0  # The owner needs glyph width only for FIT/ALIGNED.
+    if item.get_align_enum() in (TextEntityAlignment.FIT, TextEntityAlignment.ALIGNED):
+        face = context.resolve_font(item)
+        if face is None:
+            # Do not invent font metrics when this context cannot resolve them.
+            raise ValueError("unverified native TEXT stretch font")
+        line_width = UnifiedTextRenderer().get_text_line_width(item.plain_text(), face, base_height)
+        if not math.isfinite(line_width) or line_width <= 0.0:
+            raise ValueError("unverified native TEXT line width")
+    transform = _get_extra_transform(item, line_width)
+    x_scale = transform.transform_direction((1, 0, 0)).magnitude
+    y_scale = transform.transform_direction((0, 1, 0)).magnitude
+    if not math.isfinite(x_scale) or not math.isfinite(y_scale):
+        raise ValueError("unverified native TEXT transform")
+    if plain.strip() and (x_scale == 0.0 or y_scale == 0.0):
+        raise _SuppressedText("collapsed native TEXT")
+    height = base_height * y_scale
+    if not math.isfinite(height) or height <= 0.0:
+        raise ValueError("invalid native TEXT effective height")
+    return [(char, height) for char in plain if not char.isspace()]
+
+
 @dataclass(frozen=True)
 class _RenderedBlockRead:
     text: str | None
@@ -492,7 +520,7 @@ def _read_rendered_block(
             if kind == "MTEXT":
                 profile.extend(_mtext_height_profile(raw_content, float(raw_h)))
             else:
-                profile.extend((char, float(raw_h)) for char in plain if not char.isspace())
+                profile.extend(_text_height_profile(item, context, plain, float(raw_h)))
         except _SuppressedText:
             hidden_count += 1
         except (ValueError, TypeError, AttributeError, IndexError):
