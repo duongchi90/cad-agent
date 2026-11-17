@@ -214,10 +214,11 @@ def _verify_observation_fact_envelope(obs: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def verify_package_comparability(obs_list: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Verify whether supplied drawings belong to the same vessel and comparable revision."""
+    """Verify whether supplied drawings belong to the same vessel and comparable revision/configuration."""
     validated_obs = [_verify_observation_fact_envelope(raw_obs) for raw_obs in obs_list]
 
     eligible_obs = [o for o in validated_obs if not o.get("ocr_only")]
+    eligible_ids = [str(o["drawing_id"]) for o in eligible_obs]
     ocr_ids = [str(o["drawing_id"]) for o in validated_obs if o.get("ocr_only")]
 
     hulls_by_drawing: dict[str, list[str]] = {}
@@ -225,6 +226,7 @@ def verify_package_comparability(obs_list: Sequence[Mapping[str, Any]]) -> dict[
     revisions_by_drawing: dict[str, str | None] = {}
     issue_dates_by_drawing: dict[str, list[str]] = {}
     design_variants_by_drawing: dict[str, list[str]] = {}
+    ship_types_by_drawing: dict[str, list[str]] = {}
 
     for obs in eligible_obs:
         did = str(obs["drawing_id"])
@@ -233,33 +235,48 @@ def verify_package_comparability(obs_list: Sequence[Mapping[str, Any]]) -> dict[
         revisions_by_drawing[did] = (
             raw_rev.strip().upper() if isinstance(raw_rev, str) and raw_rev.strip() else None
         )
-        issue_dates_by_drawing[did] = list(ev.get("issue_dates", []))
-        design_variants_by_drawing[did] = list(ev.get("design_variants", []))
+        issue_dates_by_drawing[did] = [
+            str(dt).strip() for dt in ev.get("issue_dates", []) if str(dt).strip()
+        ]
+        norm_variants: list[str] = []
+        for raw_var in ev.get("design_variants", []):
+            v_tok = re.sub(r"\s+", " ", str(raw_var or "").strip()).upper()
+            if v_tok and v_tok not in norm_variants:
+                norm_variants.append(v_tok)
+        design_variants_by_drawing[did] = sorted(norm_variants)
         project_codes_by_drawing[did] = _extract_project_codes(obs)
 
         sheet_hulls: list[str] = []
+        sheet_stypes: list[str] = []
         for f in obs["engineering_facts"]:
-            if (
-                f["fact_key"] == "hull_no"
-                and f["verification_state"] in _TRUSTED_FACT_STATES
-                and f["normalized_value"] is not None
-            ):
+            if f["verification_state"] not in _TRUSTED_FACT_STATES or f["normalized_value"] is None:
+                continue
+            if f["fact_key"] == "hull_no":
                 h_val = str(f["normalized_value"]).strip().upper()
                 if h_val and h_val not in sheet_hulls:
                     sheet_hulls.append(h_val)
+            elif f["fact_key"] == "ship_type" and isinstance(f["normalized_value"], str):
+                st_val = f["normalized_value"].strip().upper()
+                if st_val and st_val not in sheet_stypes:
+                    sheet_stypes.append(st_val)
         hulls_by_drawing[did] = sheet_hulls
+        ship_types_by_drawing[did] = sorted(sheet_stypes)
 
     if len(eligible_obs) < 2:
         return {
             "status": "INSUFFICIENT_ELIGIBLE_SHEETS",
             "comparable": False,
-            "eligible_drawing_ids": [str(o["drawing_id"]) for o in eligible_obs],
+            "advisory_comparison_allowed": False,
+            "same_revision_proven": False,
+            "same_configuration_proven": False,
+            "eligible_drawing_ids": eligible_ids,
             "ocr_excluded_drawing_ids": ocr_ids,
             "hull_nos_by_drawing": hulls_by_drawing,
             "project_codes_by_drawing": project_codes_by_drawing,
             "revisions_by_drawing": revisions_by_drawing,
             "issue_dates_by_drawing": issue_dates_by_drawing,
             "design_variants_by_drawing": design_variants_by_drawing,
+            "ship_types_by_drawing": ship_types_by_drawing,
             "reason": "At least two non-OCR drawings are required for verified cross-drawing comparison.",
         }
 
@@ -268,35 +285,43 @@ def verify_package_comparability(obs_list: Sequence[Mapping[str, Any]]) -> dict[
         return {
             "status": "DIFFERENT_VESSEL",
             "comparable": False,
-            "eligible_drawing_ids": [str(o["drawing_id"]) for o in eligible_obs],
+            "advisory_comparison_allowed": False,
+            "same_revision_proven": False,
+            "same_configuration_proven": False,
+            "eligible_drawing_ids": eligible_ids,
             "ocr_excluded_drawing_ids": ocr_ids,
             "hull_nos_by_drawing": hulls_by_drawing,
             "project_codes_by_drawing": project_codes_by_drawing,
             "revisions_by_drawing": revisions_by_drawing,
             "issue_dates_by_drawing": issue_dates_by_drawing,
             "design_variants_by_drawing": design_variants_by_drawing,
+            "ship_types_by_drawing": ship_types_by_drawing,
             "reason": f"Drawings declare distinct vessel hull/yard numbers ({distinct_hulls}); cross-sheet equality is not applicable.",
         }
 
     all_sheets_share_hull = (
         len(distinct_hulls) == 1
-        and all(distinct_hulls[0] in hulls_by_drawing[str(o["drawing_id"])] for o in eligible_obs)
+        and all(distinct_hulls[0] in hulls_by_drawing[did] for did in eligible_ids)
     )
-    common_project_codes = set(project_codes_by_drawing[str(eligible_obs[0]["drawing_id"])])
-    for o in eligible_obs[1:]:
-        common_project_codes &= set(project_codes_by_drawing[str(o["drawing_id"])])
+    common_project_codes = set(project_codes_by_drawing[eligible_ids[0]])
+    for did in eligible_ids[1:]:
+        common_project_codes &= set(project_codes_by_drawing[did])
 
     if not all_sheets_share_hull and not common_project_codes:
         return {
             "status": "UNVERIFIED_SAME_VESSEL",
             "comparable": False,
-            "eligible_drawing_ids": [str(o["drawing_id"]) for o in eligible_obs],
+            "advisory_comparison_allowed": False,
+            "same_revision_proven": False,
+            "same_configuration_proven": False,
+            "eligible_drawing_ids": eligible_ids,
             "ocr_excluded_drawing_ids": ocr_ids,
             "hull_nos_by_drawing": hulls_by_drawing,
             "project_codes_by_drawing": project_codes_by_drawing,
             "revisions_by_drawing": revisions_by_drawing,
             "issue_dates_by_drawing": issue_dates_by_drawing,
             "design_variants_by_drawing": design_variants_by_drawing,
+            "ship_types_by_drawing": ship_types_by_drawing,
             "reason": "Drawings lack a shared explicit Hull/Yard No or shared project design code across all sheets.",
         }
 
@@ -306,13 +331,17 @@ def verify_package_comparability(obs_list: Sequence[Mapping[str, Any]]) -> dict[
         return {
             "status": "DIFFERENT_REVISION",
             "comparable": False,
-            "eligible_drawing_ids": [str(o["drawing_id"]) for o in eligible_obs],
+            "advisory_comparison_allowed": False,
+            "same_revision_proven": False,
+            "same_configuration_proven": False,
+            "eligible_drawing_ids": eligible_ids,
             "ocr_excluded_drawing_ids": ocr_ids,
             "hull_nos_by_drawing": hulls_by_drawing,
             "project_codes_by_drawing": project_codes_by_drawing,
             "revisions_by_drawing": revisions_by_drawing,
             "issue_dates_by_drawing": issue_dates_by_drawing,
             "design_variants_by_drawing": design_variants_by_drawing,
+            "ship_types_by_drawing": ship_types_by_drawing,
             "reason": (
                 f"Explicit revision skew across sheets ({revisions_by_drawing}); "
                 "cannot treat cross-revision differences as same-revision engineering conflicts."
@@ -324,23 +353,76 @@ def verify_package_comparability(obs_list: Sequence[Mapping[str, Any]]) -> dict[
         if all_sheets_share_hull
         else f"PROJECT_CODE:{sorted(common_project_codes)[0]}"
     )
+    same_revision_proven = bool(present_revs) and len(present_revs) == 1 and not any_missing_rev
     rev_basis = (
         f"MATCHING_REVISION:{present_revs[0]}"
-        if present_revs
+        if same_revision_proven
         else "UNDECLARED_ON_ALL_SHEETS"
     )
+
+    non_empty_variants = [
+        tuple(design_variants_by_drawing[d]) for d in eligible_ids if design_variants_by_drawing[d]
+    ]
+    variant_skew = bool(non_empty_variants) and (
+        len(set(non_empty_variants)) > 1 or len(non_empty_variants) != len(eligible_ids)
+    )
+    distinct_ship_types = sorted({st for sts in ship_types_by_drawing.values() for st in sts})
+    vessel_description_divergence = (not all_sheets_share_hull) and len(distinct_ship_types) > 1
+    same_configuration_proven = not (variant_skew or vessel_description_divergence)
+
+    distinct_issue_dates = sorted({dt for dts in issue_dates_by_drawing.values() for dt in dts})
+    drift_signals: list[str] = []
+    if not same_revision_proven:
+        drift_signals.append("UNDECLARED_REVISIONS")
+    if variant_skew:
+        drift_signals.append("DESIGN_VARIANT_DIVERGENCE")
+    if len(distinct_issue_dates) > 1:
+        drift_signals.append("ISSUE_DATE_SPREAD")
+    if vessel_description_divergence:
+        drift_signals.append("VESSEL_DESCRIPTION_DIVERGENCE")
+
+    if (not same_revision_proven) or variant_skew or vessel_description_divergence:
+        return {
+            "status": "UNVERIFIED_REVISION_OR_CONFIGURATION",
+            "comparable": False,
+            "advisory_comparison_allowed": True,
+            "same_revision_proven": same_revision_proven,
+            "same_configuration_proven": same_configuration_proven,
+            "configuration_drift_signals": drift_signals,
+            "identity_basis": identity_basis,
+            "revision_basis": rev_basis,
+            "eligible_drawing_ids": eligible_ids,
+            "ocr_excluded_drawing_ids": ocr_ids,
+            "hull_nos_by_drawing": hulls_by_drawing,
+            "project_codes_by_drawing": project_codes_by_drawing,
+            "revisions_by_drawing": revisions_by_drawing,
+            "issue_dates_by_drawing": issue_dates_by_drawing,
+            "design_variants_by_drawing": design_variants_by_drawing,
+            "ship_types_by_drawing": ship_types_by_drawing,
+            "reason": (
+                f"Sheets share {identity_basis} ({rev_basis}), but same revision/configuration "
+                f"equivalence is unverified ({drift_signals}); cross-sheet differences are "
+                "reported strictly as advisory INSUFFICIENT_EVIDENCE."
+            ),
+        }
+
     return {
         "status": "COMPARABLE_VERIFIED",
         "comparable": True,
+        "advisory_comparison_allowed": True,
+        "same_revision_proven": True,
+        "same_configuration_proven": True,
+        "configuration_drift_signals": drift_signals,
         "identity_basis": identity_basis,
         "revision_basis": rev_basis,
-        "eligible_drawing_ids": [str(o["drawing_id"]) for o in eligible_obs],
+        "eligible_drawing_ids": eligible_ids,
         "ocr_excluded_drawing_ids": ocr_ids,
         "hull_nos_by_drawing": hulls_by_drawing,
         "project_codes_by_drawing": project_codes_by_drawing,
         "revisions_by_drawing": revisions_by_drawing,
         "issue_dates_by_drawing": issue_dates_by_drawing,
         "design_variants_by_drawing": design_variants_by_drawing,
+        "ship_types_by_drawing": ship_types_by_drawing,
         "reason": f"Sheets verified comparable via {identity_basis} ({rev_basis}).",
     }
 
@@ -364,6 +446,54 @@ def _trusted_numeric_facts(
             elif f["verification_state"] == "PROVISIONAL_APPROXIMATE":
                 approx.append((did, val, deepcopy(f)))
     return exact, approx
+
+
+def _compute_length_violations(
+    *,
+    loa_vals: Sequence[float],
+    loa_approx_vals: Sequence[float],
+    lwl_vals: Sequence[float],
+    l_vals: Sequence[float],
+    lpp_vals: Sequence[float],
+) -> list[str]:
+    violations: list[str] = []
+    if lpp_vals and loa_vals and max(lpp_vals) > min(loa_vals) + 0.05:
+        violations.append(f"Lpp ({max(lpp_vals):.2f} m) > Loa ({min(loa_vals):.2f} m)")
+    elif lpp_vals and loa_approx_vals and max(lpp_vals) > min(loa_approx_vals) * 1.02 + 0.5:
+        violations.append(f"Lpp ({max(lpp_vals):.2f} m) > ABT. Loa ({min(loa_approx_vals):.2f} m)")
+    if lwl_vals and loa_vals and max(lwl_vals) > min(loa_vals) + 0.05:
+        violations.append(f"Lwl ({max(lwl_vals):.2f} m) > Loa ({min(loa_vals):.2f} m)")
+    if l_vals and loa_vals and max(l_vals) > min(loa_vals) + 0.05:
+        violations.append(f"L ({max(l_vals):.2f} m) > Loa ({min(loa_vals):.2f} m)")
+    if l_vals and lwl_vals:
+        if max(l_vals) > min(lwl_vals) + 0.05:
+            violations.append(
+                f"Design length L ({max(l_vals):.2f} m) > Lwl ({min(lwl_vals):.2f} m) violates QCVN 72 Clause 1.4.43-1"
+            )
+        if min(l_vals) < 0.96 * max(lwl_vals) - 0.05:
+            violations.append(
+                f"Design length L ({min(l_vals):.2f} m) < 0.96 * Lwl ({0.96 * max(lwl_vals):.2f} m) violates QCVN 72 Clause 1.4.43-1"
+            )
+    return violations
+
+
+def _has_engine_conflict(entries: Sequence[tuple[str, dict[str, Any], dict[str, Any]]]) -> bool:
+    counts_seen = sorted({p["count"] for _, p, _ in entries if p["count"] is not None})
+    models_seen = sorted({p["model_code"] for _, p, _ in entries if p["model_code"] is not None})
+    powers_seen = [float(p["power_kw"]) for _, p, _ in entries if p["power_kw"] is not None]
+    unparsed_seen = sorted(
+        {
+            p["raw"].upper()
+            for _, p, _ in entries
+            if p["count"] is None and p["model_code"] is None and p["power_kw"] is None and p["raw"]
+        }
+    )
+    power_conflict = (
+        len(powers_seen) >= 2
+        and (max(powers_seen) - min(powers_seen)) > 5.0
+        and ((max(powers_seen) - min(powers_seen)) / max(max(powers_seen), 1e-6)) > 0.05
+    )
+    return len(counts_seen) > 1 or len(models_seen) > 1 or power_conflict or len(unparsed_seen) > 1
 
 
 def evaluate_particulars_consistency(
@@ -456,7 +586,8 @@ def evaluate_particulars_consistency(
             )
 
     comparability = verify_package_comparability(obs_list)
-    if not comparability["comparable"]:
+    advisory_mode = comparability["status"] == "UNVERIFIED_REVISION_OR_CONFIGURATION"
+    if not comparability["comparable"] and not advisory_mode:
         c_status = comparability["status"]
         if c_status == "DIFFERENT_VESSEL":
             fid = "F_NOT_COMPARABLE_DIFFERENT_VESSEL"
@@ -504,7 +635,20 @@ def evaluate_particulars_consistency(
             }
         )
 
+    if advisory_mode:
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id="F_COMPARABILITY_UNVERIFIED_REVISION_OR_CONFIG",
+                verdict="INSUFFICIENT_EVIDENCE",
+                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                evidence=comparability,
+                reason=comparability["reason"],
+            )
+        )
+
     eligible_obs = [o for o in obs_list if not o.get("ocr_only")]
+    eligible_ids = [str(o["drawing_id"]) for o in eligible_obs]
     drawing_types_by_id = {
         str(o["drawing_id"]): _classify_observation(o)["predicted_drawing_type"]
         for o in eligible_obs
@@ -564,42 +708,74 @@ def evaluate_particulars_consistency(
             d: sorted({round(v, 4) for dd, v, _ in approx_rows if dd == d})
             for d in sorted({dd for dd, _, _ in approx_rows})
         }
+        intra_sheet_dim_conflict = any(
+            (max(vs) - min(vs)) > 0.05
+            for d in sheets_exact
+            for vs in [[v for dd, v, _ in exact_rows if dd == d]]
+            if len(vs) >= 2
+        )
 
         if len(vals_exact) >= 2 and (max(vals_exact) - min(vals_exact)) > 0.05:
-            dim_status = "CONFLICT"
             bound_facts = [f for _, _, f in exact_rows]
-            reason_dim = (
-                f"Principal particular '{dim_key}' conflicts across comparable sheets: {by_drawing} "
-                f"(delta={max(vals_exact) - min(vals_exact):.3f} m > 0.05 m tolerance)."
-            )
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id=f"F_PARTICULAR_CONFLICT_{dim_key.upper()}",
-                    verdict="CONFLICT",
-                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
-                    evidence={
-                        "fact_key": dim_key,
-                        "values_by_drawing": by_drawing,
-                        "bound_facts": bound_facts,
-                    },
-                    reason=reason_dim,
+            observed_units_note: list[str] = []
+            if not advisory_mode or intra_sheet_dim_conflict:
+                dim_status = "CONFLICT"
+                reason_dim = (
+                    f"Principal particular '{dim_key}' conflicts: {by_drawing} "
+                    f"(delta={max(vals_exact) - min(vals_exact):.3f} m > 0.05 m tolerance)."
                 )
-            )
-            proposals.append(
-                build_marine_core_proposal(
-                    target_drawing_id=primary_target_id,
-                    action_kind=_DIM_PROPOSAL_ACTION[dim_key],
-                    evidence={"fact_key": dim_key, "values_by_drawing": by_drawing},
-                    reason=f"Proposal only: reconcile conflicting {dim_key} values {by_drawing}.",
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id=f"F_PARTICULAR_CONFLICT_{dim_key.upper()}",
+                        verdict="CONFLICT",
+                        rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                        evidence={
+                            "fact_key": dim_key,
+                            "values_by_drawing": by_drawing,
+                            "intra_sheet_conflict": intra_sheet_dim_conflict,
+                            "bound_facts": bound_facts,
+                        },
+                        reason=reason_dim,
+                    )
                 )
-            )
+                proposals.append(
+                    build_marine_core_proposal(
+                        target_drawing_id=primary_target_id,
+                        action_kind=_DIM_PROPOSAL_ACTION[dim_key],
+                        evidence={"fact_key": dim_key, "values_by_drawing": by_drawing},
+                        reason=f"Proposal only: reconcile conflicting {dim_key} values {by_drawing}.",
+                    )
+                )
+            else:
+                dim_status = "ADVISORY_DIFFERENCE"
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id=f"F_ADVISORY_DIFFERENCE_{dim_key.upper()}",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                        evidence={
+                            "advisory_only": True,
+                            "fact_key": dim_key,
+                            "values_by_drawing": by_drawing,
+                            "comparability_status": comparability["status"],
+                            "configuration_drift_signals": comparability["configuration_drift_signals"],
+                            "bound_facts": bound_facts,
+                        },
+                        reason=(
+                            f"Advisory cross-sheet difference for '{dim_key}' ({by_drawing}, "
+                            f"delta={max(vals_exact) - min(vals_exact):.3f} m > 0.05 m); "
+                            f"revision/configuration equivalence is unverified ({comparability['configuration_drift_signals']}), "
+                            "so hard CONFLICT is withheld."
+                        ),
+                    )
+                )
         elif len(sheets_exact) >= 2:
             observed_units = sorted(
                 {str(f["observed_unit"] or "insunits_derived") for _, _, f in exact_rows}
             )
-            dim_status = "CONSISTENT"
-            by_drawing = by_drawing
+            dim_status = "OBSERVED_MATCH_UNVERIFIED_COMPARABILITY" if advisory_mode else "CONSISTENT"
             observed_units_note = observed_units
         elif len(sheets_exact) == 1:
             dim_status = "SINGLE_SHEET_OBSERVED"
@@ -619,30 +795,25 @@ def evaluate_particulars_consistency(
         }
 
     # Cross-concept length ordering check (Loa >= Lwl >= L >= 0.96*Lwl, Loa >= Lpp)
-    loa_vals = [v for _, v, _ in exact_by_key["loa_m"]]
-    loa_approx_vals = [v for _, v, _ in approx_by_key["loa_m"]]
-    lwl_vals = [v for _, v, _ in exact_by_key["lwl_m"]]
-    l_vals = [v for _, v, _ in exact_by_key["design_length_l_m"]]
-    lpp_vals = [v for _, v, _ in exact_by_key["lpp_m"]]
-
-    length_violations: list[str] = []
-    if lpp_vals and loa_vals and max(lpp_vals) > min(loa_vals) + 0.05:
-        length_violations.append(f"Lpp ({max(lpp_vals):.2f} m) > Loa ({min(loa_vals):.2f} m)")
-    elif lpp_vals and loa_approx_vals and max(lpp_vals) > min(loa_approx_vals) * 1.02 + 0.5:
-        length_violations.append(f"Lpp ({max(lpp_vals):.2f} m) > ABT. Loa ({min(loa_approx_vals):.2f} m)")
-    if lwl_vals and loa_vals and max(lwl_vals) > min(loa_vals) + 0.05:
-        length_violations.append(f"Lwl ({max(lwl_vals):.2f} m) > Loa ({min(loa_vals):.2f} m)")
-    if l_vals and loa_vals and max(l_vals) > min(loa_vals) + 0.05:
-        length_violations.append(f"L ({max(l_vals):.2f} m) > Loa ({min(loa_vals):.2f} m)")
-    if l_vals and lwl_vals:
-        if max(l_vals) > min(lwl_vals) + 0.05:
-            length_violations.append(
-                f"Design length L ({max(l_vals):.2f} m) > Lwl ({min(lwl_vals):.2f} m) violates QCVN 72 Clause 1.4.43-1"
+    length_violations = _compute_length_violations(
+        loa_vals=[v for _, v, _ in exact_by_key["loa_m"]],
+        loa_approx_vals=[v for _, v, _ in approx_by_key["loa_m"]],
+        lwl_vals=[v for _, v, _ in exact_by_key["lwl_m"]],
+        l_vals=[v for _, v, _ in exact_by_key["design_length_l_m"]],
+        lpp_vals=[v for _, v, _ in exact_by_key["lpp_m"]],
+    )
+    intra_sheet_len_conflict = any(
+        bool(
+            _compute_length_violations(
+                loa_vals=[v for d, v, _ in exact_by_key["loa_m"] if d == did],
+                loa_approx_vals=[v for d, v, _ in approx_by_key["loa_m"] if d == did],
+                lwl_vals=[v for d, v, _ in exact_by_key["lwl_m"] if d == did],
+                l_vals=[v for d, v, _ in exact_by_key["design_length_l_m"] if d == did],
+                lpp_vals=[v for d, v, _ in exact_by_key["lpp_m"] if d == did],
             )
-        if min(l_vals) < 0.96 * max(lwl_vals) - 0.05:
-            length_violations.append(
-                f"Design length L ({min(l_vals):.2f} m) < 0.96 * Lwl ({0.96 * max(lwl_vals):.2f} m) violates QCVN 72 Clause 1.4.43-1"
-            )
+        )
+        for did in eligible_ids
+    )
 
     len_subkeys = ("loa_m", "lwl_m", "design_length_l_m", "lpp_m")
     observed_len_concepts = [
@@ -652,42 +823,72 @@ def evaluate_particulars_consistency(
         d for k in len_subkeys for d, _, _ in exact_by_key[k]
     }
     any_same_len_conflict = any(matrix[k]["status"] == "CONFLICT" for k in len_subkeys)
+    any_same_len_advisory = any(matrix[k]["status"] == "ADVISORY_DIFFERENCE" for k in len_subkeys)
     if length_violations:
         len_bound_facts = [
             f
             for k in len_subkeys
             for _, _, f in (exact_by_key[k] + approx_by_key[k])
         ]
-        reason_len_ord = (
-            "Implausible naval-architecture length ordering across comparable sheets: "
-            + "; ".join(length_violations)
-            + "."
-        )
-        findings.append(
-            _make_finding(
-                rules_by_id,
-                finding_id="F_LENGTH_CONCEPT_ORDER_CONFLICT",
-                verdict="CONFLICT",
-                rule_id="RULE_MK_01_QCVN72_SCOPE",
-                evidence={
-                    "violations": length_violations,
-                    "observed_concepts": observed_len_concepts,
-                    "bound_facts": len_bound_facts,
-                },
-                reason=reason_len_ord,
+        if not advisory_mode or intra_sheet_len_conflict:
+            reason_len_ord = (
+                "Implausible naval-architecture length ordering: "
+                + "; ".join(length_violations)
+                + "."
             )
-        )
-        proposals.append(
-            build_marine_core_proposal(
-                target_drawing_id=primary_target_id,
-                action_kind="RECONCILE_L_PARTICULAR",
-                evidence={"violations": length_violations},
-                reason="Proposal only: reconcile physically contradictory vessel length definitions (Loa/Lwl/L/Lpp).",
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_LENGTH_CONCEPT_ORDER_CONFLICT",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_01_QCVN72_SCOPE",
+                    evidence={
+                        "violations": length_violations,
+                        "observed_concepts": observed_len_concepts,
+                        "intra_sheet_conflict": intra_sheet_len_conflict,
+                        "bound_facts": len_bound_facts,
+                    },
+                    reason=reason_len_ord,
+                )
             )
-        )
-        lg_status = "CONFLICT"
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=primary_target_id,
+                    action_kind="RECONCILE_L_PARTICULAR",
+                    evidence={"violations": length_violations},
+                    reason="Proposal only: reconcile physically contradictory vessel length definitions (Loa/Lwl/L/Lpp).",
+                )
+            )
+            lg_status = "CONFLICT"
+        else:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_ADVISORY_DIFFERENCE_LENGTH_ORDER",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_01_QCVN72_SCOPE",
+                    evidence={
+                        "advisory_only": True,
+                        "violations": length_violations,
+                        "observed_concepts": observed_len_concepts,
+                        "comparability_status": comparability["status"],
+                        "configuration_drift_signals": comparability["configuration_drift_signals"],
+                        "bound_facts": len_bound_facts,
+                    },
+                    reason=(
+                        "Advisory cross-sheet length ordering difference ("
+                        + "; ".join(length_violations)
+                        + f") across sheets with unverified comparability ({comparability['configuration_drift_signals']})."
+                    ),
+                )
+            )
+            lg_status = "ADVISORY_DIFFERENCE"
     elif any_same_len_conflict:
         lg_status = "CONFLICT"
+    elif any_same_len_advisory:
+        lg_status = "ADVISORY_DIFFERENCE"
+    elif advisory_mode and len(sheets_with_exact_len) >= 2:
+        lg_status = "OBSERVED_MATCH_UNVERIFIED_COMPARABILITY"
     elif any(matrix[k]["status"] == "CONSISTENT" for k in len_subkeys) and len(observed_len_concepts) == 1:
         lg_status = "CONSISTENT"
     elif len(sheets_with_exact_len) >= 2 and len(observed_len_concepts) >= 2:
@@ -710,25 +911,57 @@ def evaluate_particulars_consistency(
     # Draft vs Depth physical invariant (T <= D)
     depth_vals = [v for _, v, _ in exact_by_key["depth_m"]]
     draft_vals = [v for _, v, _ in exact_by_key["draft_m"]]
+    intra_sheet_td_conflict = any(
+        bool(d_depths and d_drafts and max(d_drafts) > min(d_depths) + 0.05)
+        for did in eligible_ids
+        for d_depths in [[v for d, v, _ in exact_by_key["depth_m"] if d == did]]
+        for d_drafts in [[v for d, v, _ in exact_by_key["draft_m"] if d == did]]
+    )
     if depth_vals and draft_vals and max(draft_vals) > min(depth_vals) + 0.05:
-        matrix["draft_m"]["status"] = "CONFLICT"
-        findings.append(
-            _make_finding(
-                rules_by_id,
-                finding_id="F_DRAFT_EXCEEDS_DEPTH_CONFLICT",
-                verdict="CONFLICT",
-                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
-                evidence={
-                    "max_draft_m": max(draft_vals),
-                    "min_depth_m": min(depth_vals),
-                    "bound_facts": [f for _, _, f in exact_by_key["draft_m"] + exact_by_key["depth_m"]],
-                },
-                reason=(
-                    f"Design draft T ({max(draft_vals):.2f} m) exceeds molded depth D "
-                    f"({min(depth_vals):.2f} m) across comparable sheets."
-                ),
+        td_bound_facts = [f for _, _, f in exact_by_key["draft_m"] + exact_by_key["depth_m"]]
+        if not advisory_mode or intra_sheet_td_conflict:
+            matrix["draft_m"]["status"] = "CONFLICT"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_DRAFT_EXCEEDS_DEPTH_CONFLICT",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "max_draft_m": max(draft_vals),
+                        "min_depth_m": min(depth_vals),
+                        "intra_sheet_conflict": intra_sheet_td_conflict,
+                        "bound_facts": td_bound_facts,
+                    },
+                    reason=(
+                        f"Design draft T ({max(draft_vals):.2f} m) exceeds molded depth D "
+                        f"({min(depth_vals):.2f} m)."
+                    ),
+                )
             )
-        )
+        else:
+            matrix["draft_m"]["status"] = "ADVISORY_DIFFERENCE"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_ADVISORY_DIFFERENCE_DRAFT_DEPTH",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "advisory_only": True,
+                        "max_draft_m": max(draft_vals),
+                        "min_depth_m": min(depth_vals),
+                        "comparability_status": comparability["status"],
+                        "configuration_drift_signals": comparability["configuration_drift_signals"],
+                        "bound_facts": td_bound_facts,
+                    },
+                    reason=(
+                        f"Advisory cross-sheet draft/depth difference: draft T ({max(draft_vals):.2f} m) "
+                        f"exceeds molded depth D ({min(depth_vals):.2f} m) across sheets with unverified "
+                        f"comparability ({comparability['configuration_drift_signals']})."
+                    ),
+                )
+            )
 
     # Ship type consistency
     ship_type_facts: list[tuple[str, str, dict[str, Any]]] = []
@@ -748,37 +981,65 @@ def evaluate_particulars_consistency(
         d: sorted({v for dd, v, _ in ship_type_facts if dd == d})
         for d in stype_sheets
     }
+    intra_sheet_stype_conflict = any(len(vs) > 1 for vs in stype_by_drawing.values())
     if len(distinct_stypes) > 1:
-        st_status = "CONFLICT"
-        findings.append(
-            _make_finding(
-                rules_by_id,
-                finding_id="F_PARTICULAR_CONFLICT_SHIP_TYPE",
-                verdict="CONFLICT",
-                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
-                evidence={
-                    "ship_types_by_drawing": stype_by_drawing,
-                    "issue_dates_by_drawing": comparability["issue_dates_by_drawing"],
-                    "design_variants_by_drawing": comparability["design_variants_by_drawing"],
-                    "bound_facts": [f for _, _, f in ship_type_facts],
-                },
-                reason=(
-                    f"Vessel type / configuration diverges across sheets sharing {comparability['identity_basis']}: "
-                    f"{stype_by_drawing} (dates={comparability['issue_dates_by_drawing']}, "
-                    f"variants={comparability['design_variants_by_drawing']})."
-                ),
+        if not advisory_mode or intra_sheet_stype_conflict:
+            st_status = "CONFLICT"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_PARTICULAR_CONFLICT_SHIP_TYPE",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "ship_types_by_drawing": stype_by_drawing,
+                        "issue_dates_by_drawing": comparability["issue_dates_by_drawing"],
+                        "design_variants_by_drawing": comparability["design_variants_by_drawing"],
+                        "intra_sheet_conflict": intra_sheet_stype_conflict,
+                        "bound_facts": [f for _, _, f in ship_type_facts],
+                    },
+                    reason=(
+                        f"Vessel type / configuration diverges across sheets sharing {comparability['identity_basis']}: "
+                        f"{stype_by_drawing} (dates={comparability['issue_dates_by_drawing']}, "
+                        f"variants={comparability['design_variants_by_drawing']})."
+                    ),
+                )
             )
-        )
-        proposals.append(
-            build_marine_core_proposal(
-                target_drawing_id=primary_target_id,
-                action_kind="RECONCILE_SHIP_TYPE_AND_HULL_ID",
-                evidence={"ship_types_by_drawing": stype_by_drawing},
-                reason="Proposal only: reconcile divergent vessel type / design variant declarations across sheets.",
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=primary_target_id,
+                    action_kind="RECONCILE_SHIP_TYPE_AND_HULL_ID",
+                    evidence={"ship_types_by_drawing": stype_by_drawing},
+                    reason="Proposal only: reconcile divergent vessel type / design variant declarations across sheets.",
+                )
             )
-        )
+        else:
+            st_status = "ADVISORY_DIFFERENCE"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_ADVISORY_DIFFERENCE_SHIP_TYPE",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "advisory_only": True,
+                        "ship_types_by_drawing": stype_by_drawing,
+                        "issue_dates_by_drawing": comparability["issue_dates_by_drawing"],
+                        "design_variants_by_drawing": comparability["design_variants_by_drawing"],
+                        "comparability_status": comparability["status"],
+                        "configuration_drift_signals": comparability["configuration_drift_signals"],
+                        "bound_facts": [f for _, _, f in ship_type_facts],
+                    },
+                    reason=(
+                        f"Advisory cross-sheet vessel type / configuration difference across sheets sharing "
+                        f"{comparability['identity_basis']}: {stype_by_drawing} "
+                        f"(dates={comparability['issue_dates_by_drawing']}, variants={comparability['design_variants_by_drawing']}); "
+                        "comparability is unverified, so hard CONFLICT is withheld."
+                    ),
+                )
+            )
     elif len(stype_sheets) >= 2:
-        st_status = "CONSISTENT"
+        st_status = "OBSERVED_MATCH_UNVERIFIED_COMPARABILITY" if advisory_mode else "CONSISTENT"
     elif len(stype_sheets) == 1:
         st_status = "SINGLE_SHEET_OBSERVED"
     else:
@@ -802,35 +1063,63 @@ def evaluate_particulars_consistency(
     svc_cls_sheets = sorted({d for d, _, _ in (svc_facts + cls_facts)})
     svc_by_drawing = {d: sorted({v for dd, v, _ in svc_facts if dd == d}) for d in sorted({dd for dd, _, _ in svc_facts})}
     cls_by_drawing = {d: sorted({v for dd, v, _ in cls_facts if dd == d}) for d in sorted({dd for dd, _, _ in cls_facts})}
+    intra_sheet_sc_conflict = any(len(vs) > 1 for vs in svc_by_drawing.values()) or any(
+        len(vs) > 1 for vs in cls_by_drawing.values()
+    )
     if len(distinct_svc) > 1 or len(distinct_cls) > 1:
-        sc_status = "CONFLICT"
-        findings.append(
-            _make_finding(
-                rules_by_id,
-                finding_id="F_PARTICULAR_CONFLICT_SERVICE_CLASS",
-                verdict="CONFLICT",
-                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
-                evidence={
-                    "service_areas_by_drawing": svc_by_drawing,
-                    "class_notations_by_drawing": cls_by_drawing,
-                    "bound_facts": [f for _, _, f in (svc_facts + cls_facts)],
-                },
-                reason=(
-                    f"Service area or class notation conflicts across sheets: "
-                    f"service={svc_by_drawing}, class={cls_by_drawing}."
-                ),
+        if not advisory_mode or intra_sheet_sc_conflict:
+            sc_status = "CONFLICT"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_PARTICULAR_CONFLICT_SERVICE_CLASS",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "service_areas_by_drawing": svc_by_drawing,
+                        "class_notations_by_drawing": cls_by_drawing,
+                        "intra_sheet_conflict": intra_sheet_sc_conflict,
+                        "bound_facts": [f for _, _, f in (svc_facts + cls_facts)],
+                    },
+                    reason=(
+                        f"Service area or class notation conflicts across sheets: "
+                        f"service={svc_by_drawing}, class={cls_by_drawing}."
+                    ),
+                )
             )
-        )
-        proposals.append(
-            build_marine_core_proposal(
-                target_drawing_id=primary_target_id,
-                action_kind="RECONCILE_SERVICE_AREA_SCOPE",
-                evidence={"service_areas_by_drawing": svc_by_drawing, "class_notations_by_drawing": cls_by_drawing},
-                reason="Proposal only: reconcile conflicting service area / class notation across sheets.",
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=primary_target_id,
+                    action_kind="RECONCILE_SERVICE_AREA_SCOPE",
+                    evidence={"service_areas_by_drawing": svc_by_drawing, "class_notations_by_drawing": cls_by_drawing},
+                    reason="Proposal only: reconcile conflicting service area / class notation across sheets.",
+                )
             )
-        )
+        else:
+            sc_status = "ADVISORY_DIFFERENCE"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_ADVISORY_DIFFERENCE_SERVICE_CLASS",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "advisory_only": True,
+                        "service_areas_by_drawing": svc_by_drawing,
+                        "class_notations_by_drawing": cls_by_drawing,
+                        "comparability_status": comparability["status"],
+                        "configuration_drift_signals": comparability["configuration_drift_signals"],
+                        "bound_facts": [f for _, _, f in (svc_facts + cls_facts)],
+                    },
+                    reason=(
+                        f"Advisory cross-sheet service/class difference (service={svc_by_drawing}, "
+                        f"class={cls_by_drawing}); comparability is unverified ({comparability['configuration_drift_signals']}), "
+                        "so hard CONFLICT is withheld."
+                    ),
+                )
+            )
     elif len({d for d, _, _ in svc_facts}) >= 2 or len({d for d, _, _ in cls_facts}) >= 2:
-        sc_status = "CONSISTENT"
+        sc_status = "OBSERVED_MATCH_UNVERIFIED_COMPARABILITY" if advisory_mode else "CONSISTENT"
     elif len(svc_cls_sheets) == 1:
         sc_status = "SINGLE_SHEET_OBSERVED"
     else:
@@ -861,32 +1150,58 @@ def evaluate_particulars_consistency(
     distinct_bh = sorted({v for _, v, _ in bh_eligible})
     bh_sheets = sorted({d for d, _, _ in bh_eligible})
     bh_by_drawing = {d: sorted({v for dd, v, _ in bh_eligible if dd == d}) for d in bh_sheets}
+    intra_sheet_bh_conflict = any(len(vs) > 1 for vs in bh_by_drawing.values())
     if len(distinct_bh) > 1:
-        bh_status = "CONFLICT"
-        findings.append(
-            _make_finding(
-                rules_by_id,
-                finding_id="F_PARTICULAR_CONFLICT_BULKHEAD_COUNT",
-                verdict="CONFLICT",
-                rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                evidence={
-                    "bulkhead_count_by_drawing": bh_by_drawing,
-                    "excluded_ineligible_sheets": bh_ineligible_ids,
-                    "bound_facts": [f for _, _, f in bh_eligible],
-                },
-                reason=f"Transverse watertight bulkhead count conflicts across GA/KCCB sheets: {bh_by_drawing}.",
+        if not advisory_mode or intra_sheet_bh_conflict:
+            bh_status = "CONFLICT"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_PARTICULAR_CONFLICT_BULKHEAD_COUNT",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                    evidence={
+                        "bulkhead_count_by_drawing": bh_by_drawing,
+                        "excluded_ineligible_sheets": bh_ineligible_ids,
+                        "intra_sheet_conflict": intra_sheet_bh_conflict,
+                        "bound_facts": [f for _, _, f in bh_eligible],
+                    },
+                    reason=f"Transverse watertight bulkhead count conflicts across GA/KCCB sheets: {bh_by_drawing}.",
+                )
             )
-        )
-        proposals.append(
-            build_marine_core_proposal(
-                target_drawing_id=primary_target_id,
-                action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
-                evidence={"bulkhead_count_by_drawing": bh_by_drawing},
-                reason="Proposal only: reconcile watertight bulkhead count between GA and Basic Structural sheets.",
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=primary_target_id,
+                    action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                    evidence={"bulkhead_count_by_drawing": bh_by_drawing},
+                    reason="Proposal only: reconcile watertight bulkhead count between GA and Basic Structural sheets.",
+                )
             )
-        )
+        else:
+            bh_status = "ADVISORY_DIFFERENCE"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_ADVISORY_DIFFERENCE_BULKHEAD_COUNT",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                    evidence={
+                        "advisory_only": True,
+                        "bulkhead_count_by_drawing": bh_by_drawing,
+                        "excluded_ineligible_sheets": bh_ineligible_ids,
+                        "comparability_status": comparability["status"],
+                        "configuration_drift_signals": comparability["configuration_drift_signals"],
+                        "bound_facts": [f for _, _, f in bh_eligible],
+                    },
+                    reason=(
+                        f"Advisory cross-sheet watertight bulkhead count difference ({bh_by_drawing}); "
+                        f"comparability is unverified ({comparability['configuration_drift_signals']}), "
+                        "so hard CONFLICT is withheld."
+                    ),
+                )
+            )
     elif len(bh_sheets) >= 2:
-        bh_status = "CONSISTENT"
+        bh_status = "OBSERVED_MATCH_UNVERIFIED_COMPARABILITY" if advisory_mode else "CONSISTENT"
     elif len(bh_sheets) == 1:
         bh_status = "SINGLE_SHEET_OBSERVED"
     else:
@@ -915,45 +1230,57 @@ def evaluate_particulars_consistency(
         d: [p for dd, p, _ in eng_entries if dd == d]
         for d in eng_sheets
     }
-    counts_seen = sorted({p["count"] for _, p, _ in eng_entries if p["count"] is not None})
-    models_seen = sorted({p["model_code"] for _, p, _ in eng_entries if p["model_code"] is not None})
-    powers_seen = [float(p["power_kw"]) for _, p, _ in eng_entries if p["power_kw"] is not None]
-    unparsed_seen = sorted(
-        {
-            p["raw"].upper()
-            for _, p, _ in eng_entries
-            if p["count"] is None and p["model_code"] is None and p["power_kw"] is None and p["raw"]
-        }
+    intra_sheet_eng_conflict = any(
+        _has_engine_conflict([row for row in eng_entries if row[0] == d])
+        for d in eng_sheets
     )
-
-    power_conflict = (
-        len(powers_seen) >= 2
-        and (max(powers_seen) - min(powers_seen)) > 5.0
-        and ((max(powers_seen) - min(powers_seen)) / max(max(powers_seen), 1e-6)) > 0.05
-    )
-    if len(counts_seen) > 1 or len(models_seen) > 1 or power_conflict or len(unparsed_seen) > 1:
-        eng_status = "CONFLICT"
-        findings.append(
-            _make_finding(
-                rules_by_id,
-                finding_id="F_PARTICULAR_CONFLICT_MAIN_ENGINE",
-                verdict="CONFLICT",
-                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
-                evidence={
-                    "parsed_by_drawing": parsed_by_drawing,
-                    "bound_facts": [f for _, _, f in eng_entries],
-                },
-                reason=f"Main engine specification conflicts across comparable sheets: {parsed_by_drawing}.",
+    if _has_engine_conflict(eng_entries):
+        if not advisory_mode or intra_sheet_eng_conflict:
+            eng_status = "CONFLICT"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_PARTICULAR_CONFLICT_MAIN_ENGINE",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "parsed_by_drawing": parsed_by_drawing,
+                        "intra_sheet_conflict": intra_sheet_eng_conflict,
+                        "bound_facts": [f for _, _, f in eng_entries],
+                    },
+                    reason=f"Main engine specification conflicts across sheets: {parsed_by_drawing}.",
+                )
             )
-        )
-        proposals.append(
-            build_marine_core_proposal(
-                target_drawing_id=primary_target_id,
-                action_kind="RECONCILE_MAIN_ENGINE_SPECIFICATION",
-                evidence={"parsed_by_drawing": parsed_by_drawing},
-                reason="Proposal only: reconcile contradictory main engine count, model, or power across sheets.",
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=primary_target_id,
+                    action_kind="RECONCILE_MAIN_ENGINE_SPECIFICATION",
+                    evidence={"parsed_by_drawing": parsed_by_drawing},
+                    reason="Proposal only: reconcile contradictory main engine count, model, or power across sheets.",
+                )
             )
-        )
+        else:
+            eng_status = "ADVISORY_DIFFERENCE"
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_ADVISORY_DIFFERENCE_MAIN_ENGINE",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={
+                        "advisory_only": True,
+                        "parsed_by_drawing": parsed_by_drawing,
+                        "comparability_status": comparability["status"],
+                        "configuration_drift_signals": comparability["configuration_drift_signals"],
+                        "bound_facts": [f for _, _, f in eng_entries],
+                    },
+                    reason=(
+                        f"Advisory cross-sheet main engine difference ({parsed_by_drawing}); "
+                        f"comparability is unverified ({comparability['configuration_drift_signals']}), "
+                        "so hard CONFLICT is withheld."
+                    ),
+                )
+            )
     elif len(eng_sheets) >= 2:
         sheets_with_model = {d for d, p, _ in eng_entries if p["model_code"] is not None}
         sheets_with_power = {d for d, p, _ in eng_entries if p["power_kw"] is not None}
@@ -979,7 +1306,7 @@ def evaluate_particulars_consistency(
                 )
             )
         elif len(sheets_with_model) >= 2 or len(sheets_with_power) >= 2:
-            eng_status = "CONSISTENT"
+            eng_status = "OBSERVED_MATCH_UNVERIFIED_COMPARABILITY" if advisory_mode else "CONSISTENT"
         else:
             eng_status = "AMBIGUOUS_SCHEMA"
             findings.append(
@@ -1008,21 +1335,38 @@ def evaluate_particulars_consistency(
     consistent_groups = [
         k for k, v in matrix.items() if v.get("status") in {"CONSISTENT", "COMPATIBLE_CONCEPTS"}
     ]
+    advisory_difference_groups = [
+        k for k, v in matrix.items() if v.get("status") == "ADVISORY_DIFFERENCE"
+    ]
     conflict_findings = [f for f in findings if f["verdict"] == "CONFLICT"]
     insuff_findings = [f for f in findings if f["verdict"] == "INSUFFICIENT_EVIDENCE"]
 
     if conflict_findings:
         status = "CONFLICT"
-        summary = (
-            f"Detected {len(conflict_findings)} cross-drawing engineering particular conflict(s) "
-            f"across {len(eligible_obs)} comparable sheet(s) ({comparability['identity_basis']})."
-        )
+        if advisory_mode:
+            summary = (
+                f"Detected {len(conflict_findings)} intra-sheet engineering particular conflict(s) "
+                f"across {len(eligible_obs)} sheet(s) ({comparability['identity_basis']}; "
+                "cross-sheet comparability unverified)."
+            )
+        else:
+            summary = (
+                f"Detected {len(conflict_findings)} cross-drawing engineering particular conflict(s) "
+                f"across {len(eligible_obs)} comparable sheet(s) ({comparability['identity_basis']})."
+            )
     elif insuff_findings:
         status = "INSUFFICIENT_EVIDENCE"
-        summary = (
-            f"Cross-drawing particulars check returned INSUFFICIENT_EVIDENCE ({len(insuff_findings)} "
-            f"ambiguity/unverified finding(s)) across {len(eligible_obs)} comparable sheet(s)."
-        )
+        if advisory_mode:
+            summary = (
+                f"Cross-drawing particulars check returned INSUFFICIENT_EVIDENCE: revision/configuration "
+                f"comparability is unverified ({comparability['configuration_drift_signals']}; "
+                f"advisory differences={advisory_difference_groups})."
+            )
+        else:
+            summary = (
+                f"Cross-drawing particulars check returned INSUFFICIENT_EVIDENCE ({len(insuff_findings)} "
+                f"ambiguity/unverified finding(s)) across {len(eligible_obs)} comparable sheet(s)."
+            )
     elif consistent_groups:
         status = "PASS"
         summary = (
@@ -1077,6 +1421,7 @@ def evaluate_particulars_consistency(
                 "comparability": comparability,
                 "consistency_matrix": matrix,
                 "consistent_groups": consistent_groups,
+                "advisory_difference_groups": advisory_difference_groups,
             },
             "applicable_regulation_scope": {
                 "checked": False,
@@ -1085,7 +1430,7 @@ def evaluate_particulars_consistency(
             "partial_package": bool(partial_package),
             "findings": findings,
             "checks_executed": [
-                "Same-vessel and revision comparability gate",
+                "Same-vessel, revision, and configuration comparability gate",
                 "Unit-normalized scalar principal particulars comparison (Loa, Lwl, L, Lpp, B, D, T)",
                 "Cross-concept naval-architecture length ordering & Draft <= Depth check",
                 "Ship type, service area, class notation, and eligible-sheet watertight bulkhead coherence",
@@ -1097,7 +1442,7 @@ def evaluate_particulars_consistency(
                 "Cross-view geometric curve projection (V2-A)",
             ],
             "limitations": [
-                "Compares bound CAD particular facts across verified comparable sheets only; never mutates CAD entities.",
+                "Compares bound CAD particular facts across verified comparable sheets (and surfaces advisory differences when revision/configuration equivalence is unverified); never mutates CAD entities.",
             ],
             "proposal_only_actions": proposals,
         }
