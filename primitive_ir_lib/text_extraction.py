@@ -219,7 +219,11 @@ def extract_text_tesseract(
         if crop.size == 0:
             continue
         data, hocr = _tesseract_data_and_hocr(crop, lang=lang, psm=psm)
-        baselines = _hocr_baseline_by_line(data, hocr, crop.shape[1], crop.shape[0])
+        baselines = (
+            _hocr_baseline_by_line(data, hocr, crop.shape[1], crop.shape[0])
+            if 0 <= x0 < x1 <= image_bgr.shape[1] and 0 <= y0 < y1 <= image_bgr.shape[0]
+            else {}
+        )
         n = len(data["text"])
         # Gộp các từ trên cùng 1 dòng (block_num, par_num, line_num giống nhau)
         lines: dict = {}

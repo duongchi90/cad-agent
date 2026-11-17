@@ -47,7 +47,7 @@ _EMPTY_TESSERACT_DATA = {
 }
 
 
-def _baseline_observations(monkeypatch, words=None, title="bbox 2 3 38 22; baseline 0 -2", extra=""):
+def _baseline_observations(monkeypatch, words=None, title="bbox 2 3 38 22; baseline 0 -2", extra="", roi=(10, 20, 80, 80)):
     words = words or [("KEEP", 95, (2, 3, 20, 12)), ("yp", 10, (22, 3, 38, 22))]
     data = {k: [] for k in _EMPTY_TESSERACT_DATA}
     spans = []
@@ -60,7 +60,7 @@ def _baseline_observations(monkeypatch, words=None, title="bbox 2 3 38 22; basel
     line = f'<span class="ocr_line" title="{title}">{"".join(spans)}</span>'
     hocr = f'<html><body>{line}{extra.replace("LINE", line)}</body></html>'
     monkeypatch.setattr("primitive_ir_lib.text_extraction._tesseract_data_and_hocr", lambda *a, **k: (data, hocr), raising=False)
-    return extract_text_tesseract(np.full((100, 100, 3), 255, dtype=np.uint8), [(10, 20, 80, 80)])
+    return extract_text_tesseract(np.full((100, 100, 3), 255, dtype=np.uint8), [roi])
 
 
 def test_ocr_baseline_uses_unfiltered_line_and_roi_offset_once(monkeypatch):
@@ -91,6 +91,12 @@ def test_duplicate_hocr_correspondence_does_not_choose_a_line(monkeypatch):
     result = _baseline_observations(monkeypatch, extra="LINE")
     assert result[0].content == "KEEP"
     assert getattr(result[0], "baseline_y_px", None) is None
+
+
+def test_out_of_frame_roi_keeps_text_without_baseline_authority(monkeypatch):
+    result = _baseline_observations(monkeypatch, roi=(10, -80, 80, 80))
+    assert result[0].content == "KEEP"
+    assert result[0].baseline_y_px is None
 
 
 def test_repeated_text_lines_bind_by_complete_word_geometry(monkeypatch):
