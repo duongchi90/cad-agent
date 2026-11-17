@@ -53,7 +53,10 @@ def _clean_doc(length_mm: float = 100.0) -> PrimitiveIRDocument:
     )
 
 
-def _build_seed(tmp_path: Path, length_mm: float = 100.0, approved: float | None = None):
+def _build_seed(
+    tmp_path: Path, length_mm: float = 100.0, approved: float | None = None,
+    *, explicit_height: bool = True,
+):
     tmp_path.mkdir(parents=True, exist_ok=True)
     specs = None
     if approved is not None:
@@ -65,13 +68,23 @@ def _build_seed(tmp_path: Path, length_mm: float = 100.0, approved: float | None
                 source_ref="t-1",
             )
         ]
-    return build_dxf(
+    built = build_dxf(
         _clean_doc(length_mm),
         str(tmp_path / "candidate.dxf"),
         build_dimensions=True,
         dimension_specs=specs,
         capture_dimension_line_integrity=True,
     )
+    if explicit_height:
+        # Positive controls declare the intended rendered size, rather than
+        # relying on the known implicit-style save/reopen discrepancy.
+        doc = ezdxf.readfile(built.output_path)
+        dim = doc.entitydb[built.dimension_handle_by_cross_validation_id["cv-1"]]
+        override = DimStyleOverride(dim)
+        override["dimtxt"] = 1.0
+        override.commit()
+        doc.saveas(built.output_path)
+    return built
 
 
 def test_integrity_review_rejects_override_lie_stale_block_dimlfac_and_hidden_dim(tmp_path: Path) -> None:
@@ -505,3 +518,99 @@ def test_truth_audit_accepts_valid_leading_decimal_and_rejects_tiny_tolerance_su
     ov_ns.commit()
     doc_ns.saveas(built_negscale.output_path)
     assert review_dxf_with_dimension_line_integrity(built_negscale).qualification == "FAILED"
+
+
+def _explicit_truth_control(tmp_path: Path, **style_values):
+    """Keep the real builder geometry, with an explicit source for rendered size."""
+    built = _build_seed(tmp_path)
+    doc = ezdxf.readfile(built.output_path)
+    dim = doc.entitydb[built.dimension_handle_by_cross_validation_id["cv-1"]]
+    override = DimStyleOverride(dim)
+    values = {"dimtxt": 1.0, "dimscale": 1.0, "dimdsep": ord(".")}
+    values.update(style_values)
+    for key, value in values.items():
+        override[key] = value
+    override.commit()
+    return built, doc, dim
+
+
+def test_role_escape_primary_word_cannot_borrow_tolerance_height(tmp_path: Path) -> None:
+    # The nominal 100 must retain DIMTXT=1 even when tolerance text uses 0.1.
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimtol=1, dimtp=0.1, dimtm=0.1,
+        dimtfac=0.1, dimtdec=2, dimtzin=0,
+    )
+    _set_rendered_block_text(dim, r"{\H0.1x;100}{\H0.1x;±0.10}")
+    doc.saveas(built.output_path)
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert not result.passed
+    assert result.qualification == "FAILED"
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_small_dimtfac_uses_active_role_instead_of_readability_cutoff(tmp_path: Path, active: bool) -> None:
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimtol=int(active), dimtp=0.1, dimtm=0.1,
+        dimtfac=0.05, dimtdec=2, dimtzin=0,
+    )
+    # A supported tolerance follows the actual style; inactive DIMTFAC is irrelevant.
+    _set_rendered_block_text(dim, r"100{\H0.05x;±0.10}" if active else "100")
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+def test_implicit_height_persistence_discrepancy_is_unknown(tmp_path: Path) -> None:
+    built = _build_seed(tmp_path, explicit_height=False)
+    doc = ezdxf.readfile(built.output_path)
+    dim = doc.entitydb[built.dimension_handle_by_cross_validation_id["cv-1"]]
+    style = DimStyleOverride(dim)
+    text = next(e for e in dim.get_geometry_block() if e.dxftype() == "MTEXT")
+    assert style.get("dimtxt") == 2.5
+    assert text.dxf.char_height == 1.0
+    # This mismatch supplies no historical render authority from the style's name.
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert not result.passed
+    assert result.qualification == "UNKNOWN"
+    assert any("unverified" in reason for reason in result.semantic_review.dimension_mismatches)
+
+
+@pytest.mark.parametrize("fixed_text_style", [False, True])
+def test_explicit_style_height_and_dimscale_control(tmp_path: Path, fixed_text_style: bool) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path, dimtxt=2.5, dimscale=3.0)
+    height = 7.5
+    if fixed_text_style:
+        doc.styles.new("SOURCE_FIXED_HEIGHT", dxfattribs={"height": 2.0})
+        override = DimStyleOverride(dim)
+        override["dimtxsty"] = "SOURCE_FIXED_HEIGHT"
+        override.commit()
+        height = 6.0
+    for text in dim.get_geometry_block():
+        if text.dxftype() == "MTEXT":
+            text.dxf.char_height = height
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+@pytest.mark.parametrize("scope", ["entity", "layer", "byblock"])
+@pytest.mark.parametrize("transparency", [0.25, 1.0])
+def test_supported_transparency_distinguishes_partial_from_suppression(
+    tmp_path: Path, scope: str, transparency: float,
+) -> None:
+    from ezdxf.lldxf.const import TRANSPARENCY_BYBLOCK
+
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    text = next(e for e in dim.get_geometry_block() if e.dxftype() == "MTEXT")
+    if scope == "entity":
+        text.transparency = transparency
+    elif scope == "layer":
+        layer = doc.layers.new("SOURCE_LABELS")
+        layer.transparency = transparency
+        text.dxf.layer = layer.dxf.name
+    else:
+        dim.transparency = transparency
+        text.dxf.transparency = TRANSPARENCY_BYBLOCK
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert result.qualification == ("QUALIFIED" if transparency == 0.25 else "FAILED")

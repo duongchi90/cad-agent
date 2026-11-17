@@ -911,6 +911,13 @@ def review_dxf_with_dimension_line_integrity(
     if line_mismatches:
         return DimensionLineIntegrityResult("FAILED", semantic_review, tuple(line_mismatches))
     if not semantic_review.passed:
+        if (semantic_review.dimension_mismatches
+                and all(": dim_unverified_" in issue for issue in semantic_review.dimension_mismatches)
+                and not semantic_review.mismatches
+                and not semantic_review.component_mismatches
+                and not semantic_review.contour_mismatches):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("dimension rendering remains unverified",))
         return DimensionLineIntegrityResult("FAILED", semantic_review,
                                             ("existing semantic/graphics review did not pass",))
     return DimensionLineIntegrityResult("QUALIFIED", semantic_review)

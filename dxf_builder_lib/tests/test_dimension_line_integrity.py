@@ -47,11 +47,24 @@ def _two_dimension_document() -> PrimitiveIRDocument:
     return document
 
 
+def _declare_fixture_text_height(built) -> None:
+    """Give geometry controls an explicit, unchanged 1mm rendered-text source."""
+    from ezdxf.entities import DimStyleOverride
+
+    doc = ezdxf.readfile(built.output_path)
+    for handle in built.dimension_handle_by_cross_validation_id.values():
+        override = DimStyleOverride(doc.entitydb[handle])
+        override["dimtxt"] = 1.0
+        override.commit()
+    doc.saveas(built.output_path)
+
+
 def test_opt_in_capture_detects_deleted_dimension_definition_line(tmp_path):
     built = build_dxf(
         _document(), str(tmp_path / "candidate.dxf"), build_dimensions=True,
         capture_dimension_line_integrity=True,
     )
+    _declare_fixture_text_height(built)
     assert built.dimension_line_expectations
     assert len(built.dimension_line_expectations) == 1
     assert review_dxf_with_dimension_line_integrity(built).passed
@@ -80,6 +93,7 @@ def test_integrity_review_classifies_line_and_frame_changes(tmp_path, change, qu
         _document(), str(tmp_path / f"{change}.dxf"), build_dimensions=True,
         capture_dimension_line_integrity=True,
     )
+    _declare_fixture_text_height(built)
     expectation = built.dimension_line_expectations[0]
     doc = ezdxf.readfile(built.output_path)
     dimension = doc.entitydb[expectation.dimension_handle]
@@ -171,6 +185,7 @@ def test_missing_ephemeral_expectation_is_unknown_and_legacy_review_stays_passed
         _document(), str(tmp_path / "legacy.dxf"), build_dimensions=True,
         capture_dimension_line_integrity=True,
     )
+    _declare_fixture_text_height(built)
     assert review_dxf_with_dimension_line_integrity(built).passed
     built.dimension_line_expectations = None
     assert review_dxf_with_dimension_line_integrity(built).qualification == "UNKNOWN"

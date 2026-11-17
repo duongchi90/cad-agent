@@ -54,8 +54,6 @@ _NUMERIC_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+
 _DMS_RE = re.compile(r"^\s*([-+]?\d+)\u00b0\s*(\d+)'(?:\s*(\d+(?:[.,]\d+)?)\")?\s*$")
 _COUNT_PREFIX_RE = re.compile(rf"^\s*\d+\s*[xX\u00d7](?:\s*(?=[{DIAMETER_SIGNS}MR])|\s+(?=\d|[.,]\d))")
 _UNSAFE_PLACEHOLDER_NEIGHBORS = frozenset("0123456789.,+-eE")
-_MIN_STYLE_HEIGHT_FACTOR = 0.5
-_MIN_DIMTFAC = 0.1
 
 _DEFAULTS: dict[str, object] = {
     "dimdec": 2,
@@ -315,15 +313,9 @@ def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object]
         ts_height = float(ts_height_raw)
         if ts_height > 0.0:
             nominal_h = ts_height * eff_scale
-        elif (
-            str(entity.dxf.get("dimstyle", "Standard")) == "Standard"
-            and "dimtxt" not in override.dimstyle_attribs
-            and abs(float(dimtxt_raw) - 2.5) <= 1e-9  # type: ignore[arg-type]
-        ):
-            # ezdxf renders R2010 `Standard` at height 1.0 before saveas emits dimtxt=2.5.
-            nominal_h = 1.0 * eff_scale
         else:
             nominal_h = float(dimtxt_raw) * eff_scale  # type: ignore[arg-type]
+        vars_dict["height_authoritative"] = ts_height > 0.0 or "dimtxt" in override.dimstyle_attribs
         return override, vars_dict, nominal_h
     except Exception:
         return None, None, None
@@ -340,79 +332,36 @@ def _is_layer_visible_and_plotted(doc, layer_name: str) -> bool:
     return bool(layer.is_on() and not layer.is_frozen() and int(layer.dxf.get("plot", 1)))
 
 
-def _layer_transparency(doc, layer_name: str) -> float | None:
-    try:
-        layer = doc.layers.get(layer_name)
-    except Exception:
-        return 0.0
-    if layer is None or not layer.has_xdata("AcCmTransparency"):
-        return 0.0
-    try:
-        for code, val in layer.get_xdata("AcCmTransparency"):
-            if code == 1071 and isinstance(val, int) and not isinstance(val, bool):
-                if (val & 0xFF000000) == 0x02000000:
-                    return 1.0 - float(val & 0xFF) / 255.0
-                return 0.0
-    except Exception:
-        return None
-    return 0.0
-
-
-def _resolve_entity_transparency(doc, entity, inherited: float = 0.0) -> tuple[float | None, bool]:
-    """Return `(transparency_float, valid)`; `None` signals malformed group 440."""
-    from ezdxf.lldxf import const, validator
-
-    if entity.dxf.hasattr("transparency"):
-        raw = entity.dxf.get("transparency")
-        if not validator.is_transparency(raw):
-            return None, False
-        if raw & const.TRANSPARENCY_BYBLOCK:
-            return inherited, True
-        return float(entity.transparency), True
-    layer_tr = _layer_transparency(doc, str(entity.dxf.get("layer", "0")))
-    if layer_tr is None:
-        return None, False
-    return layer_tr, True
-
-
-def _mtext_inline_height_too_small(
-    raw_mtext: str,
-    entity_height: float,
-    nominal_base_height: float,
-    *,
-    allow_tol_scale: bool,
-    dimtfac: float,
-) -> tuple[bool, bool]:
-    """Return `(too_small, parse_failed)` via `ezdxf.tools.text.MTextParser`."""
+def _mtext_height_profile(raw_text: str, base_height: float) -> list[tuple[str, float]]:
+    """Use the existing parser's token contexts, never infer roles from size."""
     from ezdxf.tools.text import MTextContext, MTextParser
 
-    try:
-        ctx = MTextContext()
-        ctx.cap_height = entity_height
-        parser = MTextParser(raw_mtext, ctx=ctx)
-        min_primary = _MIN_STYLE_HEIGHT_FACTOR * min(entity_height, nominal_base_height)
-        tol_scale = min(dimtfac, 0.5)
-        min_tol = 0.9 * tol_scale * min(entity_height, nominal_base_height)
-        for token in parser:
-            tname = token.type.name
-            if tname == "WORD":
-                if not str(token.data or "").strip():
-                    continue
-            elif tname == "STACK":
-                parts = token.data if isinstance(token.data, tuple) else ()
-                if not any(str(part).strip() for part in parts[:2]):
-                    continue
-            else:
-                continue
-            cap_h = float(parser.ctx.cap_height)
-            if not math.isfinite(cap_h) or cap_h <= 0.0:
-                return True, False
-            required = min_tol if (tname == "STACK" or (allow_tol_scale and cap_h < entity_height * 0.99)) else min_primary
-            if cap_h < required:
-                return True, False
-        return False, False
-    except Exception:
-        return False, True
+    context = MTextContext()
+    context.cap_height = base_height
+    profile: list[tuple[str, float]] = []
+    for token in MTextParser(raw_text, ctx=context):
+        if token.type.name == "WORD":
+            text = plain_cad_text(str(token.data))
+        elif token.type.name == "STACK":
+            upper, lower, _divider = token.data
+            text = plain_cad_text(str(upper)) + "/" + plain_cad_text(str(lower))
+        else:
+            continue
+        height = float(token.ctx.cap_height)
+        if not math.isfinite(height) or height <= 0.0:
+            raise ValueError("invalid effective text height")
+        profile.extend((char, height) for char in text if not char.isspace())
+    return profile
+
+
+def _render_alpha(context, entity) -> int:
+    """Resolve supported ByLayer/ByBlock properties through ezdxf's owner."""
+    from ezdxf.lldxf import validator
+
+    if entity.dxf.hasattr("transparency") and not validator.is_transparency(entity.dxf.transparency):
+        raise ValueError("invalid transparency")
+    color = context.resolve_color(entity)
+    return 255 if len(color) == 7 else int(color[7:9], 16)
 
 
 @dataclass(frozen=True)
@@ -430,10 +379,9 @@ def _read_rendered_block(
     doc,
     entity,
     *,
-    parent_transparency: float,
+    context,
     nominal_base_height: float,
-    dimtfac: float,
-    allow_tol_scale: bool,
+    expected_mtext: str | None,
 ) -> _RenderedBlockRead:
     raw_g42 = entity.dxf.get("actual_measurement")
     try:
@@ -447,75 +395,49 @@ def _read_rendered_block(
     if block is None:
         return _RenderedBlockRead(None, group42, 0, 0, 0, 0, True)
 
-    visible_parts: list[str] = []
-    hidden_count = 0
-    too_small_count = 0
-    transparent_count = 0
-    unreadable_count = 0
-    min_entity_height = _MIN_STYLE_HEIGHT_FACTOR * nominal_base_height
-
+    parts: list[str] = []
+    profile: list[tuple[str, float]] = []
+    hidden_count = transparent_count = unreadable_count = height_mismatch = 0
     for item in block:
         kind = item.dxftype()
-        if kind == "MTEXT":
-            raw_content = item.text
-            plain = plain_cad_text(raw_content)
-            raw_h = item.dxf.get("char_height")
-        elif kind == "TEXT":
-            raw_content = item.dxf.get("text", "")
-            plain = plain_cad_text(raw_content)
-            raw_h = item.dxf.get("height")
-        else:
+        if kind not in {"TEXT", "MTEXT"}:
             continue
-
-        item_layer = str(item.dxf.get("layer", "0"))
-        item_hidden = bool(int(item.dxf.get("invisible", 0) or 0))
-        if not item_hidden and item_layer != "0":
-            item_hidden = not _is_layer_visible_and_plotted(doc, item_layer)
-        if item_hidden:
+        raw_content = item.text if kind == "MTEXT" else item.dxf.get("text", "")
+        plain = plain_cad_text(raw_content)
+        if plain:
+            parts.append(plain)
+        layer = context.resolve_layer(item)
+        if bool(int(item.dxf.get("invisible", 0) or 0)) or not _is_layer_visible_and_plotted(doc, layer):
             hidden_count += 1
-            continue
-
-        eff_tr, tr_ok = _resolve_entity_transparency(doc, item, parent_transparency)
-        if not tr_ok or eff_tr is None or not math.isfinite(eff_tr):
+        try:
+            if _render_alpha(context, item) == 0:
+                transparent_count += 1
+        except (ValueError, TypeError, AttributeError):
+            unreadable_count += 1
+        raw_h = item.dxf.get("char_height" if kind == "MTEXT" else "height")
+        if not _is_finite_number(raw_h) or float(raw_h) <= 0.0:
             unreadable_count += 1
             continue
-        if eff_tr > 1e-6 or parent_transparency > 1e-6:
-            transparent_count += 1
-            continue
-
-        if not _is_finite_number(raw_h) or float(raw_h) < min_entity_height:
-            too_small_count += 1
-            continue
-        entity_height = float(raw_h)
-
-        if kind == "MTEXT":
-            small_inline, parse_err = _mtext_inline_height_too_small(
-                raw_content,
-                entity_height,
-                nominal_base_height,
-                allow_tol_scale=allow_tol_scale,
-                dimtfac=dimtfac,
-            )
-            if parse_err:
+        try:
+            if kind == "MTEXT":
+                profile.extend(_mtext_height_profile(raw_content, float(raw_h)))
+            else:
+                profile.extend((char, float(raw_h)) for char in plain if not char.isspace())
+        except (ValueError, TypeError, AttributeError, IndexError):
+            unreadable_count += 1
+    if expected_mtext is not None:
+        try:
+            expected = _mtext_height_profile(expected_mtext, nominal_base_height)
+            if [c for c, _h in expected] != [c for c, _h in profile]:
                 unreadable_count += 1
-                continue
-            if small_inline:
-                too_small_count += 1
-                continue
-
-        if plain:
-            visible_parts.append(plain)
-
-    text = " ".join(visible_parts)
-    return _RenderedBlockRead(
-        (text or None),
-        group42,
-        hidden_count,
-        too_small_count,
-        transparent_count,
-        unreadable_count,
-        False,
-    )
+            elif any(not math.isclose(a[1], b[1], rel_tol=1e-9, abs_tol=1e-12)
+                     for a, b in zip(expected, profile)):
+                height_mismatch += 1
+        except (ValueError, TypeError, AttributeError, IndexError):
+            unreadable_count += 1
+    text = " ".join(parts)
+    return _RenderedBlockRead(text or None, group42, hidden_count,
+                              height_mismatch, transparent_count, unreadable_count, False)
 
 
 def _format_measured(value: float, dimtype: int, style: Mapping[str, object]) -> str:
@@ -647,28 +569,29 @@ def audit_dimension_truth(
         reasons.append("dim_style_height_or_scale_invalid")
         nominal_base_height = max(float(style.get("dimtxt") or 1.0), 1e-6) if _is_finite_number(style.get("dimtxt")) else 1.0  # type: ignore[arg-type]
 
-    raw_dimtfac = style.get("dimtfac")
-    if not _is_finite_number(raw_dimtfac) or float(raw_dimtfac) < _MIN_DIMTFAC:  # type: ignore[arg-type]
-        reasons.append(f"dim_dimtfac_invalid({raw_dimtfac!r})")
-        dimtfac = 0.5
-    else:
-        dimtfac = float(raw_dimtfac)  # type: ignore[arg-type]
-
-    for tol_key in ("dimtp", "dimtm"):
-        if not _is_finite_number(style.get(tol_key)):
-            reasons.append(f"dim_{tol_key}_non_finite")
+    dimtol_enabled = bool(int(style["dimtol"]))
+    dimlim_enabled = bool(int(style["dimlim"]))
+    if dimtol_enabled or dimlim_enabled:
+        raw_dimtfac = style.get("dimtfac")
+        if not _is_finite_number(raw_dimtfac) or float(raw_dimtfac) <= 0.0:
+            reasons.append(f"dim_dimtfac_invalid({raw_dimtfac!r})")
+        for tol_key in ("dimtp", "dimtm"):
+            if not _is_finite_number(style.get(tol_key)):
+                reasons.append(f"dim_{tol_key}_non_finite")
 
     if int(dxf.get("invisible", 0) or 0):
         reasons.append("dim_entity_invisible")
 
-    dim_tr, dim_tr_ok = _resolve_entity_transparency(doc, entity, 0.0)
-    if not dim_tr_ok or dim_tr is None or not math.isfinite(dim_tr):
-        reasons.append("dim_entity_transparency_invalid")
-        parent_transparency = 1.0
-    else:
-        parent_transparency = dim_tr
-        if dim_tr > 1e-6:
-            reasons.append(f"dim_entity_transparent({dim_tr:.3g})")
+    from ezdxf.addons.drawing.properties import RenderContext
+
+    context = RenderContext(doc)
+    try:
+        parent_properties = context.resolve_all(entity)
+        if _render_alpha(context, entity) == 0:
+            reasons.append("dim_entity_transparent")
+        context.push_state(parent_properties)
+    except (ValueError, TypeError, AttributeError):
+        reasons.append("dim_unverified_transparency")
 
     layer_name = str(dxf.get("layer", "0"))
     if not _is_layer_visible_and_plotted(doc, layer_name):
@@ -708,24 +631,30 @@ def audit_dimension_truth(
                 if abs(disp.value - float(ref_value)) > allowed_tol:
                     reasons.append(f"dim_displayed_disagrees(shown={disp.text!r}, expected={ref_value})")
 
-    dimtol_enabled = bool(int(style["dimtol"]))  # type: ignore[arg-type]
-    dimlim_enabled = bool(int(style["dimlim"]))  # type: ignore[arg-type]
+    expected_mtext = disp.text
+    if dimtol_enabled and disp.text is not None:
+        from ezdxf.render.dim_base import Tolerance
+
+        try:
+            expected_mtext = Tolerance(override_obj).compile_mtext(disp.text)
+        except (ValueError, TypeError, AttributeError):
+            reasons.append("dim_unverified_tolerance_rendering")
+            expected_mtext = None
     rendered = _read_rendered_block(
-        doc,
-        entity,
-        parent_transparency=parent_transparency,
-        nominal_base_height=nominal_base_height,
-        dimtfac=dimtfac,
-        allow_tol_scale=(dimtol_enabled or dimlim_enabled),
+        doc, entity, context=context, nominal_base_height=nominal_base_height,
+        expected_mtext=expected_mtext,
     )
     if rendered.hidden_text_count > 0:
         reasons.append("dim_rendered_text_hidden")
     if rendered.too_small_count > 0:
-        reasons.append("dim_rendered_text_too_small")
+        if style.get("height_authoritative"):
+            reasons.append("dim_rendered_height_mismatch")
+        else:
+            reasons.append("dim_unverified_render_height")
     if rendered.transparent_count > 0:
         reasons.append("dim_rendered_text_transparent")
     if rendered.unreadable_count > 0:
-        reasons.append("dim_rendered_text_unreadable")
+        reasons.append("dim_unverified_rendered_structure")
 
     rendered_text, group42 = rendered.text, rendered.group42
     if disp.source not in {"suppressed", "unsafe_placeholder"}:
