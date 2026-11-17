@@ -614,3 +614,22 @@ def test_supported_transparency_distinguishes_partial_from_suppression(
     result = review_dxf_with_dimension_line_integrity(built)
     assert Path(built.output_path).read_bytes() == before
     assert result.qualification == ("QUALIFIED" if transparency == 0.25 else "FAILED")
+
+
+@pytest.mark.parametrize("text", [r"{\W0;100}", r"{\W0;1}00"])
+def test_zero_width_primary_digits_cannot_qualify(tmp_path: Path, text: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    _set_rendered_block_text(dim, text)
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert result.qualification == "FAILED"
+    assert not result.passed
+
+
+def test_supported_nonzero_width_is_not_a_readability_threshold(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    _set_rendered_block_text(dim, r"{\W0.5;100}")
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"

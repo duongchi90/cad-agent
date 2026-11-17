@@ -332,6 +332,10 @@ def _is_layer_visible_and_plotted(doc, layer_name: str) -> bool:
     return bool(layer.is_on() and not layer.is_frozen() and int(layer.dxf.get("plot", 1)))
 
 
+class _SuppressedText(ValueError):
+    """The existing text owner resolves a degenerate rendered token."""
+
+
 def _mtext_height_profile(raw_text: str, base_height: float) -> list[tuple[str, float]]:
     """Use the existing parser's token contexts, never infer roles from size."""
     from ezdxf.tools.text import MTextContext, MTextParser
@@ -347,6 +351,11 @@ def _mtext_height_profile(raw_text: str, base_height: float) -> list[tuple[str, 
             text = plain_cad_text(str(upper)) + "/" + plain_cad_text(str(lower))
         else:
             continue
+        width = float(token.ctx.width_factor)
+        if text.strip() and width == 0.0:
+            raise _SuppressedText("zero horizontal extent")
+        if not math.isfinite(width):
+            raise ValueError("unverified effective text width")
         height = float(token.ctx.cap_height)
         if not math.isfinite(height) or height <= 0.0:
             raise ValueError("invalid effective text height")
@@ -423,6 +432,8 @@ def _read_rendered_block(
                 profile.extend(_mtext_height_profile(raw_content, float(raw_h)))
             else:
                 profile.extend((char, float(raw_h)) for char in plain if not char.isspace())
+        except _SuppressedText:
+            hidden_count += 1
         except (ValueError, TypeError, AttributeError, IndexError):
             unreadable_count += 1
     if expected_mtext is not None:
