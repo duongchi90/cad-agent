@@ -26,10 +26,10 @@ import re
 import warnings
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
+from xml.etree import ElementTree
 
 import cv2
 import numpy as np
-import pytesseract
 
 from .models import new_id, SemanticRole, SourceType
 
@@ -46,6 +46,7 @@ class RawText:
     source: SourceType  # text_tesseract | text_vision | text_pdfvector
     parsed_value: Optional[float] = None
     semantic_role: SemanticRole = "unknown"
+    baseline_y_px: Optional[float] = None  # OCR estimate, never a font/cap-height claim
 
 
 # ---------------------------------------------------------- semantic role --
@@ -81,6 +82,102 @@ def classify_semantic_role(content: str) -> Tuple[SemanticRole, Optional[float]]
 
 
 # -------------------------------------------------------------- tier 1: --
+def _tesseract_data_and_hocr(crop: np.ndarray, lang: str, psm: int) -> tuple[dict, str]:
+    """Reuse one configured Tesseract recognition for TSV and optional hOCR."""
+    from pytesseract import pytesseract as engine
+
+    if engine.get_tesseract_version(cached=True) < engine.TESSERACT_MIN_VERSION:
+        raise engine.TSVNotSupported()
+    with engine.save(crop) as (base, input_filename):
+        engine.run_tesseract(
+            input_filename=input_filename, output_filename_base=base,
+            extension="tsv hocr", lang=lang,
+            config=f"-c tessedit_create_tsv=1 --psm {psm}",
+        )
+        data = engine.file_to_dict(engine._read_output(base + ".tsv", False), "\t", -1)
+        try:
+            hocr = engine._read_output(base + ".hocr", False)
+        except (OSError, UnicodeError):
+            hocr = ""  # Missing optional geometry must not discard recognized text.
+        return data, hocr
+
+
+def _hocr_baseline_by_line(data: dict, hocr: str, width: int, height: int) -> dict:
+    """Bind a zero-slope baseline to a unique complete, unfiltered TSV line."""
+    def properties(title):
+        result = {}
+        for entry in title.split(";"):
+            tokens = entry.split()
+            if not tokens or tokens[0] not in {"bbox", "baseline", "textangle"}:
+                continue
+            if tokens[0] in result:
+                raise ValueError("duplicate hOCR property")
+            result[tokens[0]] = tokens[1:]
+        return result
+
+    def box(values):
+        if len(values) != 4:
+            raise ValueError("invalid hOCR bbox")
+        x0, y0, x1, y1 = map(int, values)
+        if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+            raise ValueError("out-of-frame hOCR bbox")
+        return x0, y0, x1, y1
+
+    try:
+        root = ElementTree.fromstring(hocr)
+        groups = {}
+        for i, word in enumerate(data["text"]):
+            word = word.strip()
+            if not word:
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            x, y = data["left"][i], data["top"][i]
+            bounds = box((x, y, x + data["width"][i], y + data["height"][i]))
+            groups.setdefault(key, []).append((word, bounds))
+    except (ElementTree.ParseError, ValueError, TypeError, KeyError, IndexError):
+        return {}
+
+    matches = {}
+    for line in root.iter():
+        if not set(line.get("class", "").split()) & {"ocr_line", "ocr_header", "ocr_caption", "ocr_textfloat"}:
+            continue
+        try:
+            words = []
+            for word in line.iter():
+                if "ocrx_word" in word.get("class", "").split():
+                    props = properties(word.get("title", ""))
+                    words.append(("".join(word.itertext()).strip(), box(props["bbox"])))
+            signature = tuple(words)
+            if not signature:
+                continue
+        except (ValueError, TypeError, KeyError):
+            continue
+        estimate = None
+        try:
+            props = properties(line.get("title", ""))
+            bounds = box(props["bbox"])
+            if any(not (bounds[0] <= b[0] < b[2] <= bounds[2] and bounds[1] <= b[1] < b[3] <= bounds[3]) for _, b in words):
+                raise ValueError("word outside its line")
+            slope, intercept = map(float, props["baseline"])
+            angle, = map(float, props.get("textangle", ["0"]))
+            baseline = bounds[3] + intercept
+            if all(math.isfinite(v) for v in (slope, intercept, angle, baseline)) and slope == 0 and angle == 0 and 0 <= baseline <= height:
+                estimate = baseline
+        except (ValueError, TypeError, KeyError):
+            pass
+        # Count ambiguous correspondences even when one candidate is malformed.
+        matches.setdefault(signature, []).append(estimate)
+
+    signatures = [tuple(words) for words in groups.values()]
+    result = {}
+    for key, words in groups.items():
+        signature = tuple(words)
+        candidates = matches.get(signature, [])
+        if signatures.count(signature) == 1 and len(candidates) == 1 and candidates[0] is not None:
+            result[key] = candidates[0]
+    return result
+
+
 def extract_text_tesseract(
     image_bgr: np.ndarray,
     roi_boxes: Optional[List[Bbox]] = None,
@@ -121,10 +218,8 @@ def extract_text_tesseract(
         crop = image_bgr[y0:y1, x0:x1]
         if crop.size == 0:
             continue
-        data = pytesseract.image_to_data(
-            crop, lang=lang, output_type=pytesseract.Output.DICT,
-            config=f"--psm {psm}",
-        )
+        data, hocr = _tesseract_data_and_hocr(crop, lang=lang, psm=psm)
+        baselines = _hocr_baseline_by_line(data, hocr, crop.shape[1], crop.shape[0])
         n = len(data["text"])
         # Gộp các từ trên cùng 1 dòng (block_num, par_num, line_num giống nhau)
         lines: dict = {}
@@ -159,6 +254,7 @@ def extract_text_tesseract(
                 source="text_tesseract",
                 parsed_value=value,
                 semantic_role=role,
+                baseline_y_px=(baselines[key] + y0) if key in baselines else None,
             ))
     return results
 

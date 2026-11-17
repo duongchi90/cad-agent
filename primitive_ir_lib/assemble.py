@@ -106,34 +106,31 @@ def pdf_vector_line_to_primitive(raw: RawPdfLine, calibration: Calibration) -> P
     )
 
 
-def _text_baseline_origin_and_height_px(
-    bbox_px: tuple[int | float, int | float, int | float, int | float],
-    rotation_deg: float,
-    fallback_height_px: float,
-) -> tuple[tuple[float, float], float]:
-    """Map an image-space axis-aligned text bbox to DXF left-baseline origin & height.
-
-    DXF TEXT uses (halign=0, valign=0) bottom-left baseline insertion in CAD
-    Y-up coordinates, whereas `bbox_px=(x0, y0, x1, y1)` is image Y-down.
-    """
-    if isinstance(rotation_deg, bool) or not isinstance(rotation_deg, (int, float)) or not math.isfinite(rotation_deg):
-        raise ValueError(f"Unsupported non-finite text rotation_deg: {rotation_deg!r}")
-    x0, y0, x1, y1 = bbox_px
-    quadrant = int(((float(rotation_deg) + 45.0) % 360.0) // 90.0) % 4
-    corners = ((x0, y1), (x1, y1), (x1, y0), (x0, y0))
-    spans = (y1 - y0, x1 - x0, y1 - y0, x1 - x0)
-    span_px = spans[quadrant]
-    return corners[quadrant], float(span_px if span_px > 0 else fallback_height_px)
-
-
 def text_to_primitive(raw: RawText, calibration: Calibration, height_px: float = 20.0) -> Primitive:
-    """Convert `RawText` (image pixel bbox) into a CAD `Primitive` aligned on DXF baseline."""
+    """Map text, using an eligible OCR baseline-y estimate when available.
+
+    Metadata-free observations retain canonical bbox-origin geometry. Neither
+    that fallback nor the unchanged ink-height sizing claims font fidelity.
+    """
     from .models import TextData
 
-    origin_px, effective_height_px = _text_baseline_origin_and_height_px(
-        raw.bbox_px, raw.rotation_deg, height_px
-    )
-    position = calibration.pixel_to_cad(*origin_px)
+    rotation = raw.rotation_deg
+    if isinstance(rotation, bool) or not isinstance(rotation, (int, float)) or not math.isfinite(rotation):
+        raise ValueError(f"Unsupported non-finite text rotation_deg: {rotation!r}")
+    x0, y0, _x1, y1 = raw.bbox_px
+    baseline = raw.baseline_y_px
+    if baseline is not None:
+        if (
+            raw.source != "text_tesseract" or rotation % 360 != 0
+            or isinstance(baseline, bool) or not isinstance(baseline, (int, float))
+            or not math.isfinite(baseline) or baseline < 0
+        ):
+            raise ValueError("Invalid or ineligible OCR baseline_y_px")
+        origin_y = baseline
+    else:
+        origin_y = y0
+    effective_height_px = (y1 - y0) if y1 > y0 else height_px
+    position = calibration.pixel_to_cad(x0, origin_y)
     height_cad = effective_height_px * calibration.pixel_to_unit_scale
 
     tools = {

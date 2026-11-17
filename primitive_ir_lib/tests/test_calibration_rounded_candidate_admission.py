@@ -110,8 +110,8 @@ def test_run_image_skips_rounded_zero_candidate_before_registry_admission(tmp_pa
             return_value=RawGeometry(lines=[tiny_line, valid_line], circles=[]),
         ),
         patch(
-            "primitive_ir_lib.text_extraction.pytesseract.image_to_data",
-            return_value=ocr_data,
+            "primitive_ir_lib.text_extraction._tesseract_data_and_hocr",
+            return_value=(ocr_data, ""),
         ),
     ):
         run(

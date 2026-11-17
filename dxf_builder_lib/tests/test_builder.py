@@ -471,7 +471,23 @@ def test_semantic_layer_precedence_is_logged_for_source_classification(caplog, t
     ]
 
 
-def test_build_dxf_text_insert_stays_aligned_with_calibrated_bbox_corners(tmp_path):
+def test_build_dxf_uses_observed_ocr_baseline_without_changing_size(tmp_path):
+    from primitive_ir_lib.assemble import build_document
+    from primitive_ir_lib.text_extraction import RawText
+
+    raw = RawText("gyp", "Gyp100", (242, 374, 364, 408), 0.0, 0.92, "text_tesseract")
+    # Dynamic assignment lets the old owner run and fail on its real geometry.
+    raw.baseline_y_px = 400.0
+    cal = Calibration(unit="mm", pixel_to_unit_scale=0.5, origin_px=(0, 800), method="manual_override")
+    doc = build_document("source.png", 0, 1200, 800, cal, [], [], [raw])
+    built = build_dxf(doc, str(tmp_path / "baseline.dxf"))
+    text = ezdxf.readfile(built.output_path).entitydb[built.handle_by_primitive_id["gyp"]]
+    assert (text.dxf.insert.x, text.dxf.insert.y) == pytest.approx((121.0, 200.0))
+    assert text.dxf.height == 17.0
+    assert text.dxf.text == "Gyp100"
+
+
+def test_build_dxf_metadata_free_text_preserves_canonical_main_geometry(tmp_path):
     if not _HAS_EZDXF:
         pytest.skip("ezdxf prerequisite unavailable")
     from primitive_ir_lib.assemble import build_document
@@ -479,10 +495,10 @@ def test_build_dxf_text_insert_stays_aligned_with_calibrated_bbox_corners(tmp_pa
 
     cal = Calibration(unit="mm", pixel_to_unit_scale=0.1, origin_px=(0.0, 1000.0), method="manual_override")
     cases = [
-        ("t0", 0.0, (200, 100, 260, 130), (200, 130), 3.0),
-        ("t90", 90.0, (200, 100, 230, 160), (230, 160), 3.0),
-        ("t180", 180.0, (200, 100, 260, 130), (260, 100), 3.0),
-        ("t270", 270.0, (200, 100, 230, 160), (200, 100), 3.0),
+        ("t0", 0.0, (200, 100, 260, 130), (200, 100), 3.0),
+        ("t90", 90.0, (200, 100, 230, 160), (200, 100), 6.0),
+        ("t180", 180.0, (200, 100, 260, 130), (200, 100), 3.0),
+        ("t270", 270.0, (200, 100, 230, 160), (200, 100), 6.0),
     ]
     raw_texts = [RawText(tid, "57.50", bbox, rot, 0.95, "text_pdfvector") for tid, rot, bbox, _, _ in cases]
     doc_ir = build_document("s.png", 0, 1000, 1000, cal, [], [], raw_texts)
