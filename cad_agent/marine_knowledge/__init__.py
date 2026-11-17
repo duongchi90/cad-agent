@@ -31,6 +31,11 @@ from .pack import (
     lookup_term,
     query_rules,
 )
+from .particulars_consistency import (
+    evaluate_particulars_consistency,
+    parse_structured_main_engine,
+    verify_package_comparability,
+)
 from .skills import (
     audit_engineering_evidence_binding,
     build_marine_core_proposal,
@@ -55,6 +60,7 @@ __all__ = [
     "classify_marine_drawing",
     "detect_drawing_gaps_and_conflicts",
     "evaluate_dimension_fact",
+    "evaluate_particulars_consistency",
     "evaluate_regulation_applicability_and_submittal",
     "explain_fact_traceability",
     "fold_marine_search_text",
@@ -67,6 +73,7 @@ __all__ = [
     "normalize_observation",
     "observe_dxf_bytes",
     "observe_dxf_file",
+    "parse_structured_main_engine",
     "query_rules",
     "rebind_observation_dimensions",
     "strip_mtext_formatting",
@@ -74,5 +81,6 @@ __all__ = [
     "validate_engineering_fact",
     "validate_knowledge_pack",
     "validate_source_manifest",
+    "verify_package_comparability",
     "verify_source_citation",
 ]
