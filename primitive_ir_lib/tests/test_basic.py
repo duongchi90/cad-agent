@@ -394,3 +394,59 @@ def test_extract_raw_geometry_rejects_unknown_preset():
         assert False, "phải raise ValueError với preset không hợp lệ"
     except ValueError:
         pass
+
+
+def test_text_to_primitive_metadata_free_geometry_matches_canonical_main():
+    cal = Calibration(unit="mm", pixel_to_unit_scale=0.1, origin_px=(0.0, 1000.0), method="manual_override")
+    cases = [
+        # (rotation_deg, bbox_px, expected_corner_px, expected_height_mm)
+        (0.0, (200, 100, 260, 130), (200, 100), 3.0),
+        (360.0, (200, 100, 260, 130), (200, 100), 3.0),
+        (1.5, (200, 100, 260, 130), (200, 100), 3.0),
+        (90.0, (200, 100, 230, 160), (200, 100), 6.0),
+        (180.0, (200, 100, 260, 130), (200, 100), 3.0),
+        (270.0, (200, 100, 230, 160), (200, 100), 6.0),
+        (-90.0, (200, 100, 230, 160), (200, 100), 6.0),
+    ]
+    for rot, bbox, exp_px, exp_h in cases:
+        raw = RawText("t", "57.50", bbox, rot, 0.95, "text_pdfvector")
+        prim = text_to_primitive(raw, cal)
+        exp_cad = cal.pixel_to_cad(*exp_px)
+        assert abs(prim.text_data.position.x - exp_cad.x) <= 1e-9
+        assert abs(prim.text_data.position.y - exp_cad.y) <= 1e-9
+        assert abs(prim.text_data.height - exp_h) <= 1e-3
+
+    # Zero-span bbox preserves the default height_px fallback cleanly.
+    deg_raw = RawText("t-fallback", "NOTE", (200, 130, 260, 130), 0.0, 0.9, "text_tesseract")
+    deg_prim = text_to_primitive(deg_raw, cal, height_px=25.0)
+    assert abs(deg_prim.text_data.height - 2.5) <= 1e-3
+
+    for bad_rot in (math.nan, math.inf, -math.inf):
+        bad = RawText("t-bad", "X", (200, 100, 260, 130), bad_rot, 0.9, "text_pdfvector")
+        try:
+            text_to_primitive(bad, cal)
+            assert False, f"expected ValueError for rotation_deg={bad_rot!r}"
+        except ValueError:
+            pass
+
+
+def test_text_baseline_only_accepts_eligible_finite_ocr_metadata():
+    cal = Calibration(unit="mm", pixel_to_unit_scale=0.5, origin_px=(0, 800), method="manual_override")
+    for rotation in (0.0, 360.0, -360.0):
+        raw = RawText("gyp", "Gyp100", (242, 374, 364, 408), rotation, 0.92, "text_tesseract")
+        raw.baseline_y_px = 400.0
+        td = text_to_primitive(raw, cal).text_data
+        assert (td.position.x, td.position.y, td.height) == (121.0, 200.0, 17.0)
+    for source, rotation, value in [
+        ("text_pdfvector", 0.0, 400), ("text_vision", 0.0, 400),
+        ("text_tesseract", 90.0, 400), ("text_tesseract", 0.01, 400),
+        *[("text_tesseract", 0.0, v) for v in (True, "400", math.nan, math.inf, -1)],
+    ]:
+        raw = RawText("bad", "X", (242, 374, 364, 408), rotation, 0.9, source)
+        raw.baseline_y_px = value
+        try:
+            text_to_primitive(raw, cal)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid explicit baseline accepted: {source}, {rotation}, {value}")

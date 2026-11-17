@@ -107,13 +107,31 @@ def pdf_vector_line_to_primitive(raw: RawPdfLine, calibration: Calibration) -> P
 
 
 def text_to_primitive(raw: RawText, calibration: Calibration, height_px: float = 20.0) -> Primitive:
-    """height_px: chiều cao chữ ước lượng bằng pixel (mặc định lấy chiều cao
-    bbox nếu không truyền riêng) -> quy đổi ra đơn vị CAD bằng scale."""
+    """Map text, using an eligible OCR baseline-y estimate when available.
+
+    Metadata-free observations retain canonical bbox-origin geometry. Neither
+    that fallback nor the unchanged ink-height sizing claims font fidelity.
+    """
     from .models import TextData
 
-    position = calibration.pixel_to_cad(raw.bbox_px[0], raw.bbox_px[1])
-    bbox_height_px = raw.bbox_px[3] - raw.bbox_px[1]
-    height_cad = (bbox_height_px if bbox_height_px > 0 else height_px) * calibration.pixel_to_unit_scale
+    rotation = raw.rotation_deg
+    if isinstance(rotation, bool) or not isinstance(rotation, (int, float)) or not math.isfinite(rotation):
+        raise ValueError(f"Unsupported non-finite text rotation_deg: {rotation!r}")
+    x0, y0, _x1, y1 = raw.bbox_px
+    baseline = raw.baseline_y_px
+    if baseline is not None:
+        if (
+            raw.source != "text_tesseract" or rotation % 360 != 0
+            or isinstance(baseline, bool) or not isinstance(baseline, (int, float))
+            or not math.isfinite(baseline) or baseline < 0
+        ):
+            raise ValueError("Invalid or ineligible OCR baseline_y_px")
+        origin_y = baseline
+    else:
+        origin_y = y0
+    effective_height_px = (y1 - y0) if y1 > y0 else height_px
+    position = calibration.pixel_to_cad(x0, origin_y)
+    height_cad = effective_height_px * calibration.pixel_to_unit_scale
 
     tools = {
         "text_tesseract": "tesseract-5.3",
