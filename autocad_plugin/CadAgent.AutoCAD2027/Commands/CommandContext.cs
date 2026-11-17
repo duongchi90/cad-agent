@@ -1309,6 +1309,12 @@ public sealed class CommandContext
                 Arc => ReviewEntityTypes.Arc,
                 DBText => ReviewEntityTypes.Text,
                 Dimension => ReviewEntityTypes.Dimension,
+                Spline => ReviewEntityTypes.Spline,
+                Polyline => ReviewEntityTypes.LwPolyline,
+                Polyline2d or Polyline3d => ReviewEntityTypes.Polyline,
+                Ellipse => ReviewEntityTypes.Ellipse,
+                MText => ReviewEntityTypes.MText,
+                BlockReference => ReviewEntityTypes.Insert,
                 _ => entity.GetType().Name.ToUpperInvariant()
             };
 
@@ -1336,6 +1342,65 @@ public sealed class CommandContext
                 case Dimension dimension:
                     geometry["measurement"] = JsonSerializer.SerializeToElement(dimension.Measurement);
                     break;
+                case Spline spline:
+                    geometry["degree"] = JsonSerializer.SerializeToElement(spline.Degree);
+                    geometry["closed"] = JsonSerializer.SerializeToElement(spline.Closed);
+                    geometry["control_point_count"] = JsonSerializer.SerializeToElement(spline.NumControlPoints);
+                    geometry["fit_point_count"] = JsonSerializer.SerializeToElement(spline.NumFitPoints);
+                    var sampledControls = new List<double[]>(Math.Min(spline.NumControlPoints, ReviewEntityTypes.MaxReviewSampledPoints));
+                    for (var idx = 0; idx < spline.NumControlPoints && sampledControls.Count < ReviewEntityTypes.MaxReviewSampledPoints; idx++)
+                    {
+                        var ctrl = spline.GetControlPointAt(idx);
+                        if (double.IsFinite(ctrl.X) && double.IsFinite(ctrl.Y))
+                        {
+                            sampledControls.Add(new[] { ctrl.X, ctrl.Y });
+                        }
+                    }
+                    geometry["sampled_control_points"] = JsonSerializer.SerializeToElement(sampledControls);
+                    break;
+                case Polyline lwPolyline:
+                    geometry["closed"] = JsonSerializer.SerializeToElement(lwPolyline.Closed);
+                    geometry["vertex_count"] = JsonSerializer.SerializeToElement(lwPolyline.NumberOfVertices);
+                    var sampledVertices = new List<double[]>(Math.Min(lwPolyline.NumberOfVertices, ReviewEntityTypes.MaxReviewSampledPoints));
+                    for (var idx = 0; idx < lwPolyline.NumberOfVertices && sampledVertices.Count < ReviewEntityTypes.MaxReviewSampledPoints; idx++)
+                    {
+                        var vertex = lwPolyline.GetPoint2dAt(idx);
+                        if (double.IsFinite(vertex.X) && double.IsFinite(vertex.Y))
+                        {
+                            sampledVertices.Add(new[] { vertex.X, vertex.Y });
+                        }
+                    }
+                    geometry["sampled_vertices"] = JsonSerializer.SerializeToElement(sampledVertices);
+                    break;
+                case Polyline2d poly2d:
+                    geometry["closed"] = JsonSerializer.SerializeToElement(poly2d.Closed);
+                    break;
+                case Polyline3d poly3d:
+                    geometry["closed"] = JsonSerializer.SerializeToElement(poly3d.Closed);
+                    break;
+                case Ellipse ellipse:
+                    AddPoint(geometry, "center", ellipse.Center);
+                    TryAddFinite(geometry, "major_axis_x", ellipse.MajorAxis.X);
+                    TryAddFinite(geometry, "major_axis_y", ellipse.MajorAxis.Y);
+                    TryAddFinite(geometry, "radius_ratio", ellipse.RadiusRatio);
+                    TryAddFinite(geometry, "start_angle", ellipse.StartAngle);
+                    TryAddFinite(geometry, "end_angle", ellipse.EndAngle);
+                    geometry["closed"] = JsonSerializer.SerializeToElement(ellipse.Closed);
+                    break;
+                case MText mtext:
+                    AddPoint(geometry, "position", mtext.Location);
+                    TryAddFinite(geometry, "height", mtext.TextHeight);
+                    TryAddFinite(geometry, "rotation", mtext.Rotation);
+                    geometry["text"] = JsonSerializer.SerializeToElement(mtext.Contents ?? mtext.Text ?? string.Empty);
+                    break;
+                case BlockReference insert:
+                    geometry["name"] = JsonSerializer.SerializeToElement(insert.Name ?? string.Empty);
+                    AddPoint(geometry, "position", insert.Position);
+                    TryAddFinite(geometry, "rotation", insert.Rotation);
+                    TryAddFinite(geometry, "scale_x", insert.ScaleFactors.X);
+                    TryAddFinite(geometry, "scale_y", insert.ScaleFactors.Y);
+                    TryAddFinite(geometry, "scale_z", insert.ScaleFactors.Z);
+                    break;
             }
 
             return new EntitySnapshot(
@@ -1343,6 +1408,17 @@ public sealed class CommandContext
                 type,
                 entity.Layer,
                 geometry);
+        }
+
+        private static void TryAddFinite(
+            IDictionary<string, JsonElement> geometry,
+            string key,
+            double value)
+        {
+            if (double.IsFinite(value))
+            {
+                geometry[key] = JsonSerializer.SerializeToElement(value);
+            }
         }
 
         private static void AddPoint(

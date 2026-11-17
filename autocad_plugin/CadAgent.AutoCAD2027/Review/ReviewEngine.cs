@@ -47,6 +47,14 @@ public sealed class ReviewEngine
         }
 
         var requestedHandles = NormalizeHandles(request.Handles, warnings);
+        if (requestedHandles.Count > ReviewEntityTypes.MaxReviewEntityCount)
+        {
+            return Failure(
+                activePath,
+                warnings,
+                new[] { $"The review handles count exceeds the maximum limit of {ReviewEntityTypes.MaxReviewEntityCount}." });
+        }
+
         IReadOnlyList<EntitySnapshot> snapshots;
         try
         {
@@ -59,26 +67,50 @@ public sealed class ReviewEngine
 
         var entitiesByHandle = IndexSnapshots(snapshots, warnings);
         var entities = new List<ReviewEntity>();
+        var countsByType = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var droppedByType = new SortedDictionary<string, int>(StringComparer.Ordinal);
         foreach (var handle in requestedHandles)
         {
             if (!entitiesByHandle.TryGetValue(handle, out var snapshot))
             {
                 warnings.Add($"Entity handle '{handle}' was not found.");
+                IncrementCount(droppedByType, "MISSING");
                 continue;
             }
 
-            if (!ReviewEntityTypes.TryNormalize(snapshot.Type, out var normalizedType))
+            var accepted = request.IncludeExtendedEntities
+                ? ReviewEntityTypes.TryNormalizeExtended(snapshot.Type, out var normalizedType)
+                : ReviewEntityTypes.TryNormalize(snapshot.Type, out normalizedType);
+            if (!accepted)
             {
                 var displayType = string.IsNullOrWhiteSpace(snapshot.Type) ? "<missing>" : snapshot.Type.Trim();
                 warnings.Add($"Entity handle '{handle}' has unsupported type '{displayType}'.");
+                IncrementCount(droppedByType, displayType.ToUpperInvariant());
                 continue;
             }
 
+            IncrementCount(countsByType, normalizedType);
             entities.Add(new ReviewEntity(
                 handle,
                 normalizedType,
                 snapshot.Layer?.Trim() ?? string.Empty,
                 CopyGeometry(snapshot.Geometry)));
+        }
+
+        var payload = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["entities"] = JsonSerializer.SerializeToElement(entities)
+        };
+        if (request.IncludeExtendedEntities)
+        {
+            payload["census"] = JsonSerializer.SerializeToElement(new
+            {
+                requested_count = requestedHandles.Count,
+                accepted_count = entities.Count,
+                dropped_count = requestedHandles.Count - entities.Count,
+                counts_by_type = countsByType,
+                dropped_by_type = droppedByType
+            });
         }
 
         return new ReviewResult
@@ -90,12 +122,13 @@ public sealed class ReviewEngine
             Entities = entities.ToArray(),
             Warnings = warnings.ToArray(),
             Errors = Array.Empty<string>(),
-            Payload = new ReadOnlyDictionary<string, JsonElement>(
-                new Dictionary<string, JsonElement>(StringComparer.Ordinal)
-                {
-                    ["entities"] = JsonSerializer.SerializeToElement(entities)
-                })
+            Payload = new ReadOnlyDictionary<string, JsonElement>(payload)
         };
+    }
+
+    private static void IncrementCount(IDictionary<string, int> counts, string key)
+    {
+        counts[key] = counts.TryGetValue(key, out var existing) ? existing + 1 : 1;
     }
 
     public static string NormalizeFullPath(string path)
