@@ -499,38 +499,52 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _length_ambiguity_band(lpp_m: float) -> float | None:
-    """Return the QCVN 72 threshold when Lpp without explicit L/Lwl lies in an L-vs-Lpp transition zone."""
-    bands: tuple[tuple[float, float, float], ...] = (
-        (20.0, 19.0, 20.5),
-        (40.0, 38.0, 40.5),
-        (60.0, 57.0, 60.5),
-        (80.0, 76.0, 80.5),
-        (120.0, 114.0, 120.5),
-        (140.0, 133.0, 140.5),
-    )
-    for threshold, lo, hi in bands:
-        if lo <= lpp_m <= hi:
-            return threshold
-    return None
+_CLAUSE_1_1_1_MAP: dict[str, str] = {
+    "STATUTORY_QCVN_21_SEA_SHIP": "QCVN 21:2015/BGTVT",
+    "STATUTORY_SEA_CLASS_NOTATION": "QCVN 21:2015/BGTVT",
+    "STATUTORY_CLAUSE_1_1_1_QCVN_25_SMALL_CRAFT": "QCVN 25:2015/BGTVT",
+    "STATUTORY_CLAUSE_1_1_1_EXCLUSION": "QCVN 21:2015/BGTVT",
+}
+
+_CLAUSE_1_1_2_MAP: dict[str, str] = {
+    "STATUTORY_CLAUSE_1_1_2_QCVN_50_LEISURE": "QCVN 50:2012/BGTVT",
+    "STATUTORY_CLAUSE_1_1_2_QCVN_51_FERROCEMENT": "QCVN 51:2012/BGTVT",
+    "STATUTORY_CLAUSE_1_1_2_QCVN_56_FRP": "QCVN 56:2013/BGTVT",
+    "STATUTORY_QCVN_56_FRP_CRAFT": "QCVN 56:2013/BGTVT",
+    "STATUTORY_CLAUSE_1_1_2_QCVN_84_WOOD": "QCVN 84:2014/BGTVT",
+    "STATUTORY_QCVN_84_WOODEN_CRAFT": "QCVN 84:2014/BGTVT",
+    "STATUTORY_CLAUSE_1_1_2_QCVN_54_HSC": "QCVN 54:2013/BGTVT",
+    "STATUTORY_CLAUSE_1_1_2_QCVN_55_DOCK": "QCVN 55:2013/BGTVT",
+}
+
+_CLAUSE_1_1_4_TAGS: frozenset[str] = frozenset(
+    {
+        "STATUTORY_CLAUSE_1_1_4_DEFENSE_SECURITY",
+        "STATUTORY_CLAUSE_1_1_4_FISHING_VESSEL",
+    }
+)
 
 
-def _referred_regulation_for_exclusion(
+def _classify_exclusion_basis(
     explicit_exclusions: Sequence[str],
     *,
     length_excluded: bool,
-) -> str | None:
-    if length_excluded or any(
-        tag in {"STATUTORY_QCVN_21_SEA_SHIP", "STATUTORY_SEA_CLASS_NOTATION"}
-        for tag in explicit_exclusions
-    ):
-        return "QCVN 21:2015/BGTVT"
-    if "STATUTORY_QCVN_56_FRP_CRAFT" in explicit_exclusions:
-        return "QCVN 56:2013/BGTVT"
-    if "STATUTORY_QCVN_84_WOODEN_CRAFT" in explicit_exclusions:
-        return "QCVN 84:2014/BGTVT"
-    if "STATUTORY_QCVN_54_HSC" in explicit_exclusions:
-        return "QCVN 54:2013/BGTVT"
+) -> tuple[str, str, str, str | None] | None:
+    """Return (clause_basis, finding_id, detected_scope, referred_regulation) for QCVN 72 Clause 1.1.1 / 1.1.2 / 1.1.4."""
+    tags_111 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_1_MAP]
+    if length_excluded or tags_111:
+        detected = tags_111[0] if tags_111 else "L_GT_140M"
+        referred = _CLAUSE_1_1_1_MAP.get(detected, "QCVN 21:2015/BGTVT")
+        return ("1.1.1", "F_SCOPE_OUT_OF_QCVN72", detected, referred)
+    tags_112 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_2_MAP]
+    if tags_112:
+        detected = tags_112[0]
+        return ("1.1.2", "F_SCOPE_SPECIAL_REGULATION_CLAUSE_1_1_2", detected, _CLAUSE_1_1_2_MAP[detected])
+    tags_114 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_4_TAGS]
+    if tags_114:
+        return ("1.1.4", "F_SCOPE_NON_MANDATORY_CLAUSE_1_1_4", tags_114[0], None)
+    if explicit_exclusions:
+        return ("1.1.1", "F_SCOPE_OUT_OF_QCVN72", explicit_exclusions[0], None)
     return None
 
 
@@ -831,8 +845,11 @@ def evaluate_regulation_applicability_and_submittal(
     cross_s2 = _collect_cross_sheet_values(obs_list, drawing_types=scope["drawing_types_by_id"])
     pkg_conflicts = _cross_package_conflicts(cross_s2)
     implausible_issues = _has_implausible_particulars(scope, obs_list)
+    exclusions_111 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_1_MAP]
+    exclusions_112 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_2_MAP]
+    exclusions_114 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_4_TAGS]
     fatal_scope_conflict = (
-        ("INLAND_WATERWAY" in service_areas and ("OCEAN_GOING" in service_areas or bool(explicit_exclusions)))
+        ("INLAND_WATERWAY" in service_areas and ("OCEAN_GOING" in service_areas or bool(exclusions_111)))
         or "class_notations" in pkg_conflicts
         or "L" in pkg_conflicts
         or "Lpp" in pkg_conflicts
@@ -904,26 +921,109 @@ def evaluate_regulation_applicability_and_submittal(
             )
         )
 
+    lwl_all = scope["lwl_m_all"]
+    # Clause 1.4.43-1 bounds regulatory design length L strictly inside [0.96 * Lwl, Lwl].
+    # Bare Lpp without explicit L or Lwl cannot prove L > 140 m or L <= 140 m.
     length_excluded = (bool(design_l_all) and max(design_l_all) > 140.0) or (
-        not design_l_all and bool(lpp_all) and min(lpp_all) > 140.5
+        not design_l_all and bool(lwl_all) and (0.96 * min(lwl_all)) > 140.0
     )
-    if explicit_exclusions or length_excluded:
-        detected = explicit_exclusions[0] if explicit_exclusions else "L_GT_140M"
-        referred_reg = _referred_regulation_for_exclusion(explicit_exclusions, length_excluded=length_excluded)
-        out_reason = (
-            f"Target regulation {target_regulation} is NOT_APPLICABLE based on verified Clause 1.1.1 exclusion "
-            f"({detected}, Lpp={lpp_m}); candidate governing regulation={referred_reg}."
+
+    if (
+        exclusions_114
+        and "INLAND_WATERWAY" in service_areas
+        and not exclusions_111
+        and not exclusions_112
+        and not length_excluded
+    ):
+        mixed_114_reason = (
+            f"Insufficient evidence under Clause 1.1.4 ({exclusions_114[0]}): defense, security, and fishing "
+            "vessels are not mandatorily governed by QCVN 72:2025/BGTVT, yet inland waterway/class markers appear "
+            "on the package; confirm whether voluntary QCVN 72 classification applies."
         )
         findings.append(
             _make_finding(
                 rules_by_id,
-                finding_id="F_SCOPE_OUT_OF_QCVN72",
+                finding_id="F_SCOPE_CLAUSE_1_1_4_VOLUNTARY_CONFIRMATION_REQUIRED",
+                verdict="INSUFFICIENT_EVIDENCE",
+                rule_id="RULE_MK_01_QCVN72_SCOPE",
+                evidence={
+                    "clause_basis": "1.1.4",
+                    "service_areas": service_areas,
+                    "class_notations": class_notations,
+                    "explicit_exclusion_evidences": exclusions_114,
+                },
+                reason=mixed_114_reason,
+            )
+        )
+        proposals.append(
+            build_marine_core_proposal(
+                target_drawing_id=obs_list[0]["drawing_id"],
+                action_kind="CONFIRM_REGULATORY_SERVICE_AREA",
+                evidence={"clause_basis": "1.1.4", "explicit_exclusion_evidences": exclusions_114},
+            )
+        )
+        return validate_check_result(
+            {
+                "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+                "skill_id": skill_id,
+                "pack_id": pack["id"],
+                "pack_sha256": pack["pack_sha256"],
+                "pack_status": pack["status"],
+                "cad_mutation": False,
+                "regulatory_compliance_proven": False,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "summary": mixed_114_reason,
+                "observed_scope": scope,
+                "applicable_regulation_scope": {
+                    "target_regulation": target_regulation,
+                    "supported_regulation": True,
+                    "in_scope": None,
+                    "clause_basis": "1.1.4",
+                    "detected_scope": exclusions_114[0],
+                    "referred_regulation": None,
+                },
+                "partial_package": bool(partial_package),
+                "findings": findings,
+                "checks_executed": checks_executed,
+                "checks_not_executed": [
+                    "QCVN 72 structural rule compliance pending Clause 1.1.4 voluntary/non-mandatory confirmation",
+                ],
+                "limitations": limitations,
+                "proposal_only_actions": proposals,
+            }
+        )
+
+    excl_info = _classify_exclusion_basis(explicit_exclusions, length_excluded=length_excluded)
+    if excl_info is not None:
+        clause_basis, excl_finding_id, detected, referred_reg = excl_info
+        if clause_basis == "1.1.1":
+            out_reason = (
+                f"Target regulation {target_regulation} is NOT_APPLICABLE under Clause 1.1.1 "
+                f"({detected}, L={design_l_all or None}, Lwl={lwl_all or None}, Lpp={lpp_m}); "
+                f"governing regulation={referred_reg}."
+            )
+        elif clause_basis == "1.1.2":
+            out_reason = (
+                f"Target regulation {target_regulation} structural rules are NOT_APPLICABLE under Clause 1.1.2 "
+                f"({detected}); specialized replacement regulation={referred_reg}."
+            )
+        else:
+            out_reason = (
+                f"Target regulation {target_regulation} is NOT_APPLICABLE by default under Clause 1.1.4 "
+                f"({detected}: defense, security, and fishing vessels are not mandatorily governed by QCVN 72)."
+            )
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id=excl_finding_id,
                 verdict="NOT_APPLICABLE",
                 rule_id="RULE_MK_01_QCVN72_SCOPE",
                 evidence={
+                    "clause_basis": clause_basis,
                     "service_areas": service_areas,
                     "explicit_exclusion_evidences": explicit_exclusions,
                     "design_length_l_m_all": design_l_all,
+                    "lwl_m_all": lwl_all,
                     "lpp_m": lpp_m,
                     "referred_regulation": referred_reg,
                 },
@@ -946,13 +1046,14 @@ def evaluate_regulation_applicability_and_submittal(
                     "target_regulation": target_regulation,
                     "supported_regulation": True,
                     "in_scope": False,
+                    "clause_basis": clause_basis,
                     "detected_scope": detected,
                     "referred_regulation": referred_reg,
                 },
                 "partial_package": bool(partial_package),
                 "findings": findings,
                 "checks_executed": checks_executed,
-                "checks_not_executed": ["All QCVN 72 inland structural rules (explicit statutory exclusion)"],
+                "checks_not_executed": [f"All QCVN 72 inland structural rules (excluded per Clause {clause_basis})"],
                 "limitations": limitations,
                 "proposal_only_actions": proposals,
             }
@@ -1020,6 +1121,68 @@ def evaluate_regulation_applicability_and_submittal(
                 "checks_executed": checks_executed,
                 "checks_not_executed": [
                     "QCVN 72 structural rule checks pending verified classification / service area notation",
+                ],
+                "limitations": limitations,
+                "proposal_only_actions": proposals,
+            }
+        )
+
+    unproven_gt_140 = (
+        not length_excluded
+        and not design_l_all
+        and ((bool(lwl_all) and max(lwl_all) > 140.0) or (not lwl_all and bool(lpp_all) and max(lpp_all) > 140.0))
+    )
+    if unproven_gt_140:
+        unproven_reason = (
+            "Insufficient evidence to confirm Clause 1.1.1 140 m design-length limit under Clause 1.4.43-1: "
+            f"Lwl={lwl_all or None}, Lpp={lpp_all or None} without explicit regulatory length L "
+            "(bare Lpp > 140 m or Lwl straddling [0.96*Lwl, Lwl] across 140 m cannot prove NOT_APPLICABLE)."
+        )
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id="F_LENGTH_L_UNPROVEN_FOR_140M_LIMIT",
+                verdict="INSUFFICIENT_EVIDENCE",
+                rule_id="RULE_MK_01_QCVN72_SCOPE",
+                evidence={
+                    "clause_basis": "1.4.43-1",
+                    "lwl_m_all": lwl_all,
+                    "lpp_m_all": lpp_all,
+                },
+                reason=unproven_reason,
+            )
+        )
+        proposals.append(
+            build_marine_core_proposal(
+                target_drawing_id=obs_list[0]["drawing_id"],
+                action_kind="CONFIRM_REGULATORY_SERVICE_AREA",
+                evidence={"clause_basis": "1.4.43-1", "lwl_m_all": lwl_all, "lpp_m_all": lpp_all},
+            )
+        )
+        return validate_check_result(
+            {
+                "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+                "skill_id": skill_id,
+                "pack_id": pack["id"],
+                "pack_sha256": pack["pack_sha256"],
+                "pack_status": pack["status"],
+                "cad_mutation": False,
+                "regulatory_compliance_proven": False,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "summary": unproven_reason,
+                "observed_scope": scope,
+                "applicable_regulation_scope": {
+                    "target_regulation": target_regulation,
+                    "supported_regulation": True,
+                    "in_scope": None,
+                    "clause_basis": "1.4.43-1",
+                    "detected_scope": "UNPROVEN_140M_BOUNDARY",
+                },
+                "partial_package": bool(partial_package),
+                "findings": findings,
+                "checks_executed": checks_executed,
+                "checks_not_executed": [
+                    "QCVN 72 applicability and structural checks pending proven Clause 1.4.43-1 design length L",
                 ],
                 "limitations": limitations,
                 "proposal_only_actions": proposals,
@@ -1103,28 +1266,30 @@ def evaluate_regulation_applicability_and_submittal(
 
     lwl_all = scope["lwl_m_all"]
     effective_l_m: float | None = None
+    l_lo: float | None = None
+    l_hi: float | None = None
     length_basis = "UNAVAILABLE"
-    ambig_threshold: float | None = None
     if design_l_all:
-        effective_l_m = design_l_all[0]
+        l_lo = round(design_l_all[0], 4)
+        l_hi = l_lo
+        effective_l_m = l_lo
         length_basis = "EXPLICIT_DESIGN_LENGTH_L"
-    elif lpp_all and lwl_all:
-        effective_l_m = round(max(lpp_all[0], 0.96 * lwl_all[0]), 4)
-        length_basis = "MAX_LPP_OR_96PCT_LWL"
     elif lwl_all:
-        effective_l_m = round(0.96 * lwl_all[0], 4)
-        length_basis = "ESTIMATED_96PCT_LWL"
+        l_lo = round(0.96 * lwl_all[0], 4)
+        l_hi = round(lwl_all[0], 4)
+        effective_l_m = l_lo
+        length_basis = "PROVEN_LWL_INTERVAL_1_4_43"
     elif lpp_all:
-        ambig_threshold = _length_ambiguity_band(lpp_all[0])
-        if ambig_threshold is None:
-            effective_l_m = lpp_all[0]
-            length_basis = "LPP_FAR_FROM_RULE_THRESHOLD"
-        else:
-            length_basis = f"LPP_IN_THRESHOLD_BAND_{ambig_threshold:.0f}M"
+        length_basis = "UNPROVEN_LPP_ONLY_NO_REGULATORY_L"
 
-    dims_blocked = False
+    input_gates_blocked = bool(
+        has_ocr_only
+        or corrupted_tokens
+        or unverified_unitless
+        or bad_geom_ids
+        or not units_ok
+    )
     if has_ocr_only:
-        dims_blocked = True
         findings.append(
             _make_finding(
                 rules_by_id,
@@ -1136,7 +1301,6 @@ def evaluate_regulation_applicability_and_submittal(
             )
         )
     if corrupted_tokens:
-        dims_blocked = True
         findings.append(
             _make_finding(
                 rules_by_id,
@@ -1148,7 +1312,6 @@ def evaluate_regulation_applicability_and_submittal(
             )
         )
     if unverified_unitless:
-        dims_blocked = True
         findings.append(
             _make_finding(
                 rules_by_id,
@@ -1160,7 +1323,6 @@ def evaluate_regulation_applicability_and_submittal(
             )
         )
     if bad_geom_ids:
-        dims_blocked = True
         findings.append(
             _make_finding(
                 rules_by_id,
@@ -1172,7 +1334,6 @@ def evaluate_regulation_applicability_and_submittal(
             )
         )
     if not units_ok:
-        dims_blocked = True
         findings.append(
             _make_finding(
                 rules_by_id,
@@ -1197,37 +1358,41 @@ def evaluate_regulation_applicability_and_submittal(
                 evidence={"unitless_drawing_ids": unitless_ids},
             )
         )
-    if ambig_threshold is not None:
-        dims_blocked = True
+
+    length_unproven = l_lo is None or l_hi is None
+    if lpp_all and length_unproven:
         findings.append(
             _make_finding(
                 rules_by_id,
                 finding_id="F_LENGTH_L_VS_LPP_AMBIGUOUS",
                 verdict="INSUFFICIENT_EVIDENCE",
                 rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                evidence={"lpp_m": lpp_all[0], "rule_threshold_m": ambig_threshold, "length_basis": length_basis},
+                evidence={
+                    "clause_basis": "1.4.43-1",
+                    "lpp_m": lpp_all[0],
+                    "length_basis": length_basis,
+                },
                 reason=(
-                    f"Lpp={lpp_all[0]:.2f}m lies near QCVN 72 rule threshold {ambig_threshold:.0f}m without explicit "
-                    "rule length L or Lwl; L vs Lpp ambiguity blocks threshold determination."
+                    f"Bare Lpp={lpp_all[0]:.2f}m without explicit Clause 1.4.43-1 rule length L or Lwl "
+                    "does not prove regulatory length L; length-dependent PASS blocked (length-invariant conflicts still checked)."
                 ),
             )
         )
-    elif effective_l_m is None:
-        dims_blocked = True
+    elif length_unproven:
         findings.append(
             _make_finding(
                 rules_by_id,
                 finding_id="F_MISSING_VESSEL_LENGTH",
                 verdict="INSUFFICIENT_EVIDENCE",
                 rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                evidence={"drawing_ids": [o["drawing_id"] for o in obs_list]},
-                reason="Vessel rule length L / Lpp / Lwl is missing; dimensional QCVN 72 rules cannot be verified.",
+                evidence={"drawing_ids": [o["drawing_id"] for o in obs_list], "length_basis": length_basis},
+                reason="Vessel rule length L and Lwl are missing; length-dependent QCVN 72 rules cannot produce PASS.",
             )
         )
 
     structural_checks_ran = 0
-    if dims_blocked or effective_l_m is None:
-        checks_not_executed.append("Dimensional QCVN 72 scantling/bulkhead rules blocked by input/unit/length gate")
+    if input_gates_blocked:
+        checks_not_executed.append("Dimensional QCVN 72 scantling/bulkhead rules blocked by input/OCR/unit/geometry gate")
     else:
         # Check RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (dry-cargo GENERAL_ARRANGEMENT / BASIC_STRUCTURAL only)
         bh_pairs, bh_wrong, bh_ocr = _extract_strict_metric(
@@ -1270,39 +1435,117 @@ def evaluate_regulation_applicability_and_submittal(
                 )
             )
         elif bh_pairs:
-            checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
-            structural_checks_ran += 1
             worst_did, min_bh = min(bh_pairs, key=lambda pair: pair[1])
-            req_bh = _required_inland_bulkheads(effective_l_m)
-            bh_verdict = "PASS" if int(min_bh) >= req_bh else "CONFLICT"
-            bh_reason = (
-                f"Effective L={effective_l_m:.2f}m ({length_basis}) requires >= {req_bh} transverse "
-                f"watertight bulkheads; observed {int(min_bh)} on {worst_did}."
-            )
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
-                    verdict=bh_verdict,
-                    rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                    evidence={
-                        "drawing_id": worst_did,
-                        "effective_l_m": effective_l_m,
-                        "length_basis": length_basis,
-                        "observed_bulkheads": int(min_bh),
-                        "required_min": req_bh,
-                    },
-                    reason=bh_reason,
-                )
-            )
-            if bh_verdict == "CONFLICT":
-                proposals.append(
-                    build_marine_core_proposal(
-                        target_drawing_id=worst_did,
-                        action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
-                        evidence={"observed": int(min_bh), "required_min": req_bh, "effective_l_m": effective_l_m},
+            if length_unproven:
+                if int(min_bh) < 2:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (length-invariant minimum)")
+                    structural_checks_ran += 1
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                            verdict="CONFLICT",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "length_basis": length_basis,
+                                "observed_bulkheads": int(min_bh),
+                                "required_min": 2,
+                                "invariant_minimum": True,
+                            },
+                            reason=(
+                                f"Observed {int(min_bh)} transverse watertight bulkhead(s) on {worst_did} violates "
+                                "QCVN 72 invariant minimum (>= 2 bulkheads for all ship lengths)."
+                            ),
+                        )
                     )
-                )
+                    proposals.append(
+                        build_marine_core_proposal(
+                            target_drawing_id=worst_did,
+                            action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                            evidence={"observed": int(min_bh), "required_min": 2, "length_basis": length_basis},
+                        )
+                    )
+                else:
+                    checks_not_executed.append("RULE_MK_08 bulkhead table threshold check deferred (proven regulatory L required)")
+            else:
+                assert l_lo is not None and l_hi is not None
+                req_lo = _required_inland_bulkheads(l_lo)
+                req_hi = _required_inland_bulkheads(l_hi)
+                if int(min_bh) < req_lo:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+                    structural_checks_ran += 1
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                            verdict="CONFLICT",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "effective_l_m": effective_l_m,
+                                "l_interval_m": [l_lo, l_hi],
+                                "length_basis": length_basis,
+                                "observed_bulkheads": int(min_bh),
+                                "required_min": req_lo,
+                            },
+                            reason=(
+                                f"Interval L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires at least {req_lo} "
+                                f"transverse watertight bulkheads; observed {int(min_bh)} on {worst_did}."
+                            ),
+                        )
+                    )
+                    proposals.append(
+                        build_marine_core_proposal(
+                            target_drawing_id=worst_did,
+                            action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                            evidence={"observed": int(min_bh), "required_min": req_lo, "l_interval_m": [l_lo, l_hi]},
+                        )
+                    )
+                elif req_lo != req_hi:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (threshold interval check)")
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_LENGTH_LWL_INTERVAL_STRADDLES_THRESHOLD",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "l_interval_m": [l_lo, l_hi],
+                                "req_lo": req_lo,
+                                "req_hi": req_hi,
+                                "length_basis": length_basis,
+                            },
+                            reason=(
+                                f"Clause 1.4.43-1 interval [{l_lo:.2f}, {l_hi:.2f}]m straddles QCVN 72 bulkhead "
+                                f"threshold (required {req_lo}..{req_hi}); explicit regulatory L required."
+                            ),
+                        )
+                    )
+                else:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+                    structural_checks_ran += 1
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                            verdict="PASS",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "effective_l_m": effective_l_m,
+                                "l_interval_m": [l_lo, l_hi],
+                                "length_basis": length_basis,
+                                "observed_bulkheads": int(min_bh),
+                                "required_min": req_hi,
+                            },
+                            reason=(
+                                f"L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires >= {req_hi} transverse "
+                                f"watertight bulkheads; observed {int(min_bh)} on {worst_did}."
+                            ),
+                        )
+                    )
         elif "GENERAL_ARRANGEMENT" in observed_types or "BASIC_STRUCTURAL" in observed_types:
             checks_not_executed.append("Watertight bulkhead count (transverse_watertight_bulkhead_count not annotated/extracted)")
 
@@ -1341,47 +1584,107 @@ def evaluate_regulation_applicability_and_submittal(
                 )
             )
         elif db_pairs:
-            checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT")
-            structural_checks_ran += 1
             worst_db_id, min_db_mm = min(db_pairs, key=lambda pair: pair[1])
-            req_db_mm = 700.0 if effective_l_m <= 120.0 else 900.0
             max_girder_pair = max(girder_pairs, key=lambda pair: pair[1]) if girder_pairs else None
             max_floor_pair = max(floor_pairs, key=lambda pair: pair[1]) if floor_pairs else None
             girder_fail = max_girder_pair is not None and max_girder_pair[1] > 3000.0
             floor_fail = max_floor_pair is not None and max_floor_pair[1] > 2400.0
-            db_verdict = "CONFLICT" if (min_db_mm < req_db_mm or girder_fail or floor_fail) else "PASS"
-            db_reason = (
-                f"Double bottom at CL observed {min_db_mm:.1f} mm on {worst_db_id} "
-                f"(min required {req_db_mm:.1f} mm for L={effective_l_m:.2f}m)"
-            )
-            if max_girder_pair is not None:
-                db_reason += f"; max girder spacing {max_girder_pair[1]:.1f} mm (limit <= 3000.0 mm)"
-            if max_floor_pair is not None:
-                db_reason += f"; max floor spacing {max_floor_pair[1]:.1f} mm (upper limit <= 2400.0 mm)"
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id="F_DOUBLE_BOTTOM_HEIGHT",
-                    verdict=db_verdict,
-                    rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
-                    evidence={
-                        "drawing_id": worst_db_id,
-                        "observed_db_height_mm": min_db_mm,
-                        "required_min_db_height_mm": req_db_mm,
-                        "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
-                        "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
-                    },
-                    reason=db_reason,
-                )
-            )
-            if db_verdict == "CONFLICT":
-                proposals.append(
-                    build_marine_core_proposal(
-                        target_drawing_id=worst_db_id,
-                        action_kind="REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
-                        evidence={"observed_db_height_mm": min_db_mm, "required_min_mm": req_db_mm},
+            if length_unproven:
+                if min_db_mm < 700.0 or girder_fail or floor_fail:
+                    checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT (length-invariant floor)")
+                    structural_checks_ran += 1
+                    db_reason = (
+                        f"Double bottom at CL observed {min_db_mm:.1f} mm on {worst_db_id} violates "
+                        "QCVN 72 length-invariant minimum requirements (700.0 mm floor / girder <= 3000.0 / floor <= 2400.0)"
                     )
-                )
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_DOUBLE_BOTTOM_HEIGHT",
+                            verdict="CONFLICT",
+                            rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
+                            evidence={
+                                "drawing_id": worst_db_id,
+                                "observed_db_height_mm": min_db_mm,
+                                "required_min_db_height_mm": 700.0,
+                                "invariant_minimum": True,
+                                "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
+                                "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
+                            },
+                            reason=db_reason,
+                        )
+                    )
+                    proposals.append(
+                        build_marine_core_proposal(
+                            target_drawing_id=worst_db_id,
+                            action_kind="REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
+                            evidence={"observed_db_height_mm": min_db_mm, "required_min_mm": 700.0},
+                        )
+                    )
+                else:
+                    checks_not_executed.append("RULE_MK_09 double-bottom L > 120m check deferred (proven regulatory L required)")
+            else:
+                assert l_lo is not None and l_hi is not None
+                straddles_120 = l_lo <= 120.0 < l_hi
+                invariant_db_fail = min_db_mm < 700.0 or girder_fail or floor_fail
+                if straddles_120 and not invariant_db_fail:
+                    checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT (threshold interval check)")
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_LENGTH_LWL_INTERVAL_STRADDLES_THRESHOLD",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
+                            evidence={
+                                "drawing_id": worst_db_id,
+                                "l_interval_m": [l_lo, l_hi],
+                                "rule_threshold_m": 120.0,
+                                "observed_db_height_mm": min_db_mm,
+                            },
+                            reason=(
+                                f"Clause 1.4.43-1 interval [{l_lo:.2f}, {l_hi:.2f}]m straddles 120 m double-bottom "
+                                "height threshold (700 mm vs 900 mm); explicit regulatory L required."
+                            ),
+                        )
+                    )
+                else:
+                    checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT")
+                    structural_checks_ran += 1
+                    req_db_mm = 700.0 if l_hi <= 120.0 else 900.0
+                    db_verdict = "CONFLICT" if (min_db_mm < req_db_mm or girder_fail or floor_fail) else "PASS"
+                    db_reason = (
+                        f"Double bottom at CL observed {min_db_mm:.1f} mm on {worst_db_id} "
+                        f"(min required {req_db_mm:.1f} mm for L in [{l_lo:.2f}, {l_hi:.2f}]m)"
+                    )
+                    if max_girder_pair is not None:
+                        db_reason += f"; max girder spacing {max_girder_pair[1]:.1f} mm (limit <= 3000.0 mm)"
+                    if max_floor_pair is not None:
+                        db_reason += f"; max floor spacing {max_floor_pair[1]:.1f} mm (upper limit <= 2400.0 mm)"
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_DOUBLE_BOTTOM_HEIGHT",
+                            verdict=db_verdict,
+                            rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
+                            evidence={
+                                "drawing_id": worst_db_id,
+                                "l_interval_m": [l_lo, l_hi],
+                                "observed_db_height_mm": min_db_mm,
+                                "required_min_db_height_mm": req_db_mm,
+                                "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
+                                "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
+                            },
+                            reason=db_reason,
+                        )
+                    )
+                    if db_verdict == "CONFLICT":
+                        proposals.append(
+                            build_marine_core_proposal(
+                                target_drawing_id=worst_db_id,
+                                action_kind="REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
+                                evidence={"observed_db_height_mm": min_db_mm, "required_min_mm": req_db_mm},
+                            )
+                        )
 
         # Check RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (only L < 20 m on MIDSHIP/BASIC)
         plate_pairs, pl_wrong, pl_ocr = _extract_strict_metric(
@@ -1412,78 +1715,101 @@ def evaluate_regulation_applicability_and_submittal(
             if obs.get("min_plate_from_unbound_text")
             and scope["drawing_types_by_id"].get(obs["drawing_id"]) in {"MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"}
         ]
-        if unbound_pl_ids and effective_l_m < 20.0:
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id="F_UNBOUND_PLATE_THICKNESS_TEXT",
-                    verdict="INSUFFICIENT_EVIDENCE",
-                    rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
-                    evidence={"drawing_ids": unbound_pl_ids},
-                    reason=(
-                        "Unbound plate thickness text without bottom/bilge/hull structural label cannot verify "
-                        "RULE_MK_10."
-                    ),
+        if length_unproven:
+            if plate_pairs or unbound_pl_ids:
+                checks_not_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL deferred (proven L < 20m required)")
+        else:
+            assert l_lo is not None and l_hi is not None
+            straddles_20 = l_lo < 20.0 <= l_hi
+            if straddles_20 and (plate_pairs or unbound_pl_ids):
+                checks_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (threshold interval check)")
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_LENGTH_LWL_INTERVAL_STRADDLES_THRESHOLD",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                        evidence={"l_interval_m": [l_lo, l_hi], "rule_threshold_m": 20.0},
+                        reason=(
+                            f"Clause 1.4.43-1 interval [{l_lo:.2f}, {l_hi:.2f}]m straddles 20 m Ch.3 applicability "
+                            "boundary; explicit regulatory L required."
+                        ),
+                    )
                 )
-            )
-        if plate_pairs and pl_ocr:
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id="F_OCR_METRIC_PLATE",
-                    verdict="INSUFFICIENT_EVIDENCE",
-                    rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
-                    evidence={"ocr_drawing_ids": pl_ocr},
-                    reason="Plate thickness values from unverified OCR text cannot produce PASS.",
-                )
-            )
-        elif plate_pairs and effective_l_m < 20.0:
-            checks_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL")
-            structural_checks_ran += 1
-            worst_pl_id, min_pl_mm = min(plate_pairs, key=lambda pair: pair[1])
-            min_bot = min(bot_pairs, key=lambda pair: pair[1])[1] if bot_pairs else None
-            min_bilge = min(bilge_pairs, key=lambda pair: pair[1])[1] if bilge_pairs else None
-            pl_fail = (
-                min_pl_mm < 2.5
-                or (min_bot is not None and min_bot < 3.0)
-                or (min_bilge is not None and min_bilge < 4.0)
-            )
-            pl_incomplete = (
-                not pl_fail
-                and min_pl_mm < 4.0
-                and (min_bot is None or min_bilge is None)
-            )
-            if pl_fail:
-                pl_verdict = "CONFLICT"
-            elif pl_incomplete:
-                pl_verdict = "INSUFFICIENT_EVIDENCE"
             else:
-                pl_verdict = "PASS"
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id="F_SMALL_HULL_MIN_PLATE",
-                    verdict=pl_verdict,
-                    rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
-                    evidence={
-                        "drawing_id": worst_pl_id,
-                        "min_plate_thickness_mm": min_pl_mm,
-                        "min_bottom_plate_mm": min_bot,
-                        "min_bilge_plate_mm": min_bilge,
-                        "floor_mm": 2.5,
-                        "bottom_floor_mm": 3.0,
-                        "bilge_floor_mm": 4.0,
-                    },
-                    reason=(
-                        f"L < 20m small-hull plating min={min_pl_mm:.2f} mm (3.7.2 floor 2.5 mm; "
-                        "3.7.3 bottom>=3.0 mm and bilge>=4.0 mm required unless all hull plates >= 4.0 mm)."
-                    ),
-                )
-            )
-        elif effective_l_m >= 20.0:
-            checks_not_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (L >= 20m outside Ch.3 <20m floor rule)")
+                if unbound_pl_ids and l_hi < 20.0:
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_UNBOUND_PLATE_THICKNESS_TEXT",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                            evidence={"drawing_ids": unbound_pl_ids},
+                            reason=(
+                                "Unbound plate thickness text without bottom/bilge/hull structural label cannot verify "
+                                "RULE_MK_10."
+                            ),
+                        )
+                    )
+                if plate_pairs and pl_ocr and l_hi < 20.0:
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_OCR_METRIC_PLATE",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                            evidence={"ocr_drawing_ids": pl_ocr},
+                            reason="Plate thickness values from unverified OCR text cannot produce PASS.",
+                        )
+                    )
+                elif plate_pairs and l_hi < 20.0:
+                    checks_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL")
+                    structural_checks_ran += 1
+                    worst_pl_id, min_pl_mm = min(plate_pairs, key=lambda pair: pair[1])
+                    min_bot = min(bot_pairs, key=lambda pair: pair[1])[1] if bot_pairs else None
+                    min_bilge = min(bilge_pairs, key=lambda pair: pair[1])[1] if bilge_pairs else None
+                    pl_fail = (
+                        min_pl_mm < 2.5
+                        or (min_bot is not None and min_bot < 3.0)
+                        or (min_bilge is not None and min_bilge < 4.0)
+                    )
+                    pl_incomplete = (
+                        not pl_fail
+                        and min_pl_mm < 4.0
+                        and (min_bot is None or min_bilge is None)
+                    )
+                    if pl_fail:
+                        pl_verdict = "CONFLICT"
+                    elif pl_incomplete:
+                        pl_verdict = "INSUFFICIENT_EVIDENCE"
+                    else:
+                        pl_verdict = "PASS"
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_SMALL_HULL_MIN_PLATE",
+                            verdict=pl_verdict,
+                            rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                            evidence={
+                                "drawing_id": worst_pl_id,
+                                "l_interval_m": [l_lo, l_hi],
+                                "min_plate_thickness_mm": min_pl_mm,
+                                "min_bottom_plate_mm": min_bot,
+                                "min_bilge_plate_mm": min_bilge,
+                                "floor_mm": 2.5,
+                                "bottom_floor_mm": 3.0,
+                                "bilge_floor_mm": 4.0,
+                            },
+                            reason=(
+                                f"L in [{l_lo:.2f}, {l_hi:.2f}]m (<20m) plating min={min_pl_mm:.2f} mm "
+                                "(3.7.2 floor 2.5 mm; 3.7.3 bottom>=3.0 mm and bilge>=4.0 mm required unless all hull plates >= 4.0 mm)."
+                            ),
+                        )
+                    )
+                elif l_lo >= 20.0:
+                    checks_not_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (L >= 20m outside Ch.3 <20m floor rule)")
 
-        if structural_checks_ran == 0:
+        if structural_checks_ran == 0 and not length_unproven:
             findings.append(
                 _make_finding(
                     rules_by_id,
@@ -1501,7 +1827,7 @@ def evaluate_regulation_applicability_and_submittal(
     verdicts = [f["verdict"] for f in findings]
     if "CONFLICT" in verdicts:
         overall = "CONFLICT"
-    elif "INSUFFICIENT_EVIDENCE" in verdicts or dims_blocked or structural_checks_ran == 0:
+    elif "INSUFFICIENT_EVIDENCE" in verdicts or input_gates_blocked or length_unproven or structural_checks_ran == 0:
         overall = "INSUFFICIENT_EVIDENCE"
     else:
         overall = "PASS"
@@ -1528,8 +1854,10 @@ def evaluate_regulation_applicability_and_submittal(
             "applicable_regulation_scope": {
                 "target_regulation": target_regulation,
                 "in_scope": True,
+                "clause_basis": "1.1.1",
                 "class_notations": scope["class_notations"],
                 "effective_l_m": effective_l_m,
+                "l_interval_m": [l_lo, l_hi] if l_lo is not None and l_hi is not None else None,
                 "length_basis": length_basis,
                 "lpp_m": lpp_m,
             },

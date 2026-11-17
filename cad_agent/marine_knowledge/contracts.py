@@ -10,10 +10,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import hashlib
+from io import BytesIO
 from pathlib import Path
 import re
 from typing import Any
 import unicodedata
+
+from pypdf import PdfReader
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 
@@ -548,6 +551,52 @@ def _normalize_ws(text: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip().casefold()
 
 
+_PDF_OUTLINE_CACHE: dict[str, dict[int, tuple[str, ...]]] = {}
+
+
+def _walk_pdf_outline(reader: PdfReader, items: Any, acc: dict[int, list[str]]) -> None:
+    for item in items:
+        if isinstance(item, list):
+            _walk_pdf_outline(reader, item, acc)
+        else:
+            try:
+                pno = int(reader.get_destination_page_number(item)) + 1
+                title = str(getattr(item, "title", "") or "").strip()
+                if title:
+                    acc.setdefault(pno, []).append(title)
+            except Exception:
+                continue
+
+
+def _get_pdf_outline_by_page(reader: PdfReader, source_sha256: str) -> dict[int, tuple[str, ...]]:
+    cached = _PDF_OUTLINE_CACHE.get(source_sha256)
+    if cached is not None:
+        return cached
+    acc: dict[int, list[str]] = {}
+    try:
+        outline = reader.outline
+    except Exception:
+        outline = []
+    if outline:
+        _walk_pdf_outline(reader, outline, acc)
+    frozen = {pno: tuple(titles) for pno, titles in acc.items()}
+    if len(_PDF_OUTLINE_CACHE) >= 8:
+        _PDF_OUTLINE_CACHE.clear()
+    _PDF_OUTLINE_CACHE[source_sha256] = frozen
+    return frozen
+
+
+def _extract_clause_anchors(clause: str, *, document_kind: str) -> tuple[list[str], list[str]]:
+    head = clause.split(";", 1)[0] if document_kind == "TEXTBOOK" else clause
+    head_no_parens = re.sub(r"\([^)]*\)", " ", head)
+    dotted = list(dict.fromkeys(re.findall(r"\b\d+\.\d+(?:\.\d+)?\b", head_no_parens)))
+    chapters = [
+        m.group(1)
+        for m in re.finditer(r"(?:\bchương|\bch\.)\s*(\d+)\b", head_no_parens, re.IGNORECASE)
+    ]
+    return dotted, list(dict.fromkeys(chapters))
+
+
 def verify_source_citation(
     citation: Mapping[str, object],
     manifest: Mapping[str, object],
@@ -557,7 +606,7 @@ def verify_source_citation(
     source_bytes: bytes | None = None,
     page_texts: Mapping[int, str] | Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fail-closed citation verification distinguishing metadata match from verified source content."""
+    """Fail-closed citation verification binding bytes, page, clause, and excerpt strictly to SHA-256."""
     valid_manifest = validate_source_manifest(manifest)
     sources = {src["source_id"]: src for src in valid_manifest["sources"]}
     record = _require_mapping(citation, "CITATION_INVALID")
@@ -616,47 +665,70 @@ def verify_source_citation(
         if fpath.is_file():
             raw_bytes = fpath.read_bytes()
 
-    if raw_bytes is not None:
+    if raw_bytes is None:
+        states.extend(["METADATA_ONLY", "SOURCE_UNAVAILABLE"])
+        if page_texts is not None:
+            # Caller-supplied page_texts without SHA-256 source bytes are never trusted or promoted.
+            states.append("UNVERIFIED_CALLER_PAGE_TEXTS")
+    else:
         actual_sha = hashlib.sha256(raw_bytes).hexdigest()
         if actual_sha != source_entry["sha256"]:
             _fail("CITATION_SHA_STALE_OR_MISMATCH")
         states.append("SOURCE_BYTES_VERIFIED")
-    elif page_texts is None:
-        states.extend(["METADATA_ONLY", "SOURCE_UNAVAILABLE"])
 
-    if page_texts is not None:
-        pages_dict: dict[int, str]
-        if isinstance(page_texts, Mapping):
-            pages_dict = {int(k): str(v) for k, v in page_texts.items()}
-        else:
-            pages_dict = {idx + 1: str(txt) for idx, txt in enumerate(page_texts)}
-        combined_pages: list[str] = []
-        for idx_pos, pdf_p in enumerate(pdf_pages):
-            if pdf_p not in pages_dict:
-                _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
-            page_txt = pages_dict[pdf_p]
-            combined_pages.append(page_txt)
-            if idx_pos < len(reg_pages):
-                if str(reg_pages[idx_pos]) not in page_txt[:300]:
-                    _fail("CITATION_PAGE_MISMATCH")
-        states.append("PAGE_VERIFIED")
-        excerpt = record.get("verbatim_excerpt")
-        if isinstance(excerpt, str) and excerpt.strip():
-            merged_norm = _normalize_ws(" ".join(combined_pages))
-            segments = [
-                _normalize_ws(seg)
-                for seg in excerpt.split("...")
-                if len(_normalize_ws(seg)) >= 10
-            ]
-            if not segments or not all(seg in merged_norm for seg in segments):
-                _fail("CITATION_EXCERPT_CONTENT_MISMATCH")
-            states.append("CLAUSE_CONTENT_VERIFIED")
+        if raw_bytes.lstrip().startswith(b"%PDF") and pdf_pages:
+            reader = PdfReader(BytesIO(raw_bytes))
+            total_pdf_pages = len(reader.pages)
+            outline_by_page = _get_pdf_outline_by_page(reader, actual_sha)
+            extracted_pages: list[str] = []
+            clause_corpus_parts: list[str] = []
+            for idx_pos, pdf_p in enumerate(pdf_pages):
+                if pdf_p < 1 or pdf_p > total_pdf_pages:
+                    _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
+                page_txt = reader.pages[pdf_p - 1].extract_text() or ""
+                extracted_pages.append(page_txt)
+                toc_txt = " ".join(outline_by_page.get(pdf_p, ()))
+                clause_corpus_parts.append(f"{page_txt} {toc_txt}")
+                if idx_pos < len(reg_pages):
+                    if str(reg_pages[idx_pos]) not in page_txt[:300]:
+                        _fail("CITATION_PAGE_MISMATCH")
+
+            dotted_anchors, ch_anchors = _extract_clause_anchors(
+                clause,
+                document_kind=str(source_entry["document_kind"]),
+            )
+            clause_corpus_norm = _normalize_ws(" ".join(clause_corpus_parts))
+            for anchor in dotted_anchors:
+                if not re.search(rf"(?<!\d\.){re.escape(anchor)}(?![.\d])", clause_corpus_norm):
+                    _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+            if not dotted_anchors and ch_anchors:
+                if not any(f"chương {ch}" in clause_corpus_norm for ch in ch_anchors):
+                    _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+
+            states.append("PAGE_VERIFIED")
+
+            excerpt = record.get("verbatim_excerpt")
+            if isinstance(excerpt, str) and excerpt.strip():
+                merged_norm = _normalize_ws(" ".join(extracted_pages))
+                segments = [
+                    _normalize_ws(seg)
+                    for seg in excerpt.split("...")
+                    if len(_normalize_ws(seg)) >= 10
+                ]
+                if not segments or not all(seg in merged_norm for seg in segments):
+                    _fail("CITATION_EXCERPT_CONTENT_MISMATCH")
+                states.append("CLAUSE_CONTENT_VERIFIED")
+
+    if "CLAUSE_CONTENT_VERIFIED" in states and "PAGE_VERIFIED" in states and "SOURCE_BYTES_VERIFIED" in states:
+        verification_level = "SOURCE_CONTENT_VERIFIED"
+    elif "PAGE_VERIFIED" in states and "SOURCE_BYTES_VERIFIED" in states:
+        verification_level = "SOURCE_PAGE_VERIFIED"
+    elif "SOURCE_BYTES_VERIFIED" in states:
+        verification_level = "SOURCE_BYTES_VERIFIED"
+    else:
+        verification_level = "MANIFEST_METADATA_ONLY"
 
     out = deepcopy(dict(record))
     out["verification_states"] = states
-    out["verification_level"] = (
-        "SOURCE_CONTENT_VERIFIED"
-        if "CLAUSE_CONTENT_VERIFIED" in states or "SOURCE_BYTES_VERIFIED" in states
-        else "MANIFEST_METADATA_ONLY"
-    )
+    out["verification_level"] = verification_level
     return out

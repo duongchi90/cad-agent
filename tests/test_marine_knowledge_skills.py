@@ -9,7 +9,7 @@ def _inland_vrsb_ga_obs(*, bulkheads: int = 4, lpp_mm: float = 52000.0, insunits
         {"handle": "T4", "text": "BUỒNG MÁY", "layer": "PV", "x": 12000.0, "y": 3000.0, "height": 260.0},
         {"handle": "T5", "text": "VÁCH CHỐNG VA", "layer": "PV", "x": 49000.0, "y": 3000.0, "height": 260.0},
         {"handle": "T6", "text": "CẤP TÀU : VR-SB", "layer": "0", "x": 60000.0, "y": 1000.0, "height": 250.0},
-        {"handle": "T7", "text": f"Lpp = {lpp_mm / 1000.0:.2f} m", "layer": "0", "x": 60000.0, "y": 1500.0, "height": 250.0},
+        {"handle": "T7", "text": f"Chiều dài tàu L = {lpp_mm / 1000.0:.2f} m", "layer": "0", "x": 60000.0, "y": 1500.0, "height": 250.0},
         {"handle": "T8", "text": "B = 9.60 m", "layer": "0", "x": 60000.0, "y": 2000.0, "height": 250.0},
         {"handle": "T9", "text": "D = 4.20 m", "layer": "0", "x": 60000.0, "y": 2500.0, "height": 250.0},
         {"handle": "T10", "text": "MAIN ENGINE : 2x550 HP", "layer": "0", "x": 60000.0, "y": 3000.0, "height": 250.0},
@@ -58,7 +58,7 @@ def _inland_midship_obs(*, double_bottom_height_mm: float = 750.0, min_plate_mm:
         "texts": [
             {"handle": "M1", "text": "MẶT CẮT NGANG SƯỜN GIỮA", "layer": "TEXT", "x": 500.0, "y": 500.0, "height": 200.0},
             {"handle": "M2", "text": "ĐÁY ĐÔI - ĐÀ NGANG ĐẶC", "layer": "TEXT", "x": 1500.0, "y": 600.0, "height": 150.0},
-            {"handle": "M3", "text": "Lpp = 52.00 m", "layer": "0", "x": 5000.0, "y": 500.0, "height": 150.0},
+            {"handle": "M3", "text": "Chiều dài tàu L = 52.00 m", "layer": "0", "x": 5000.0, "y": 500.0, "height": 150.0},
             {"handle": "M4", "text": "B = 9.60 m", "layer": "0", "x": 5000.0, "y": 750.0, "height": 150.0},
             {"handle": "M5", "text": "D = 4.20 m", "layer": "0", "x": 5000.0, "y": 1000.0, "height": 150.0},
             {"handle": "M6", "text": "CẤP TÀU : VR-SB", "layer": "0", "x": 5000.0, "y": 1250.0, "height": 150.0},

@@ -602,25 +602,25 @@ def _extract_particulars(
                 _append_unique(explicit_exclusion_evidences, "STATUTORY_SEA_CLASS_NOTATION")
 
             is_lifeboat_item = "xuong cuu sinh" in clause_clean or "lifeboat" in clause_clean
-            if not is_lifeboat_item and re.search(
-                r"\b(?:qcvn\s*(?:25|50|51|54|55|56|84)|ferrocement|xi\s+mang\s+luoi\s+thep|"
-                r"chat\s+deo\s+cot\s+soi\s+thuy\s+tinh|frp|tau\s+vo\s+go|wooden\s+hull|"
-                r"high[-\s]?speed\s+craft|tau\s+cao\s+toc|floating\s+dock|u\s+noi|"
-                r"tau\s+quoc\s+phong|fishing\s+vessel|tau\s+ca)\b",
-                clause_clean,
-            ):
+            if not is_lifeboat_item:
+                if re.search(r"\bqcvn\s*25(?:\s*[:/]\s*\d{4})?\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_1_QCVN_25_SMALL_CRAFT")
+                if re.search(r"\b(?:qcvn\s*50|tau\s+the\s+thao|vui\s+choi\s+giai\s+tri|leisure\s+craft)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_50_LEISURE")
+                if re.search(r"\b(?:qcvn\s*51|ferrocement|xi\s+mang\s+luoi\s+thep)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_51_FERROCEMENT")
                 if re.search(r"\b(?:qcvn\s*56|frp|chat\s+deo\s+cot\s+soi\s+thuy\s+tinh)\b", clause_clean):
-                    _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_56_FRP_CRAFT")
-                elif re.search(r"\b(?:qcvn\s*84|tau\s+vo\s+go|wooden\s+hull)\b", clause_clean):
-                    _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_84_WOODEN_CRAFT")
-                elif re.search(r"\b(?:qcvn\s*54|high[-\s]?speed\s+craft|tau\s+cao\s+toc)\b", clause_clean):
-                    _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_54_HSC")
-                elif re.search(r"\b(?:qcvn\s*50|tau\s+ca|fishing\s+vessel)\b", clause_clean):
-                    _append_unique(explicit_exclusion_evidences, "STATUTORY_FISHING_VESSEL")
-                elif re.search(r"\b(?:ferrocement|xi\s+mang\s+luoi\s+thep)\b", clause_clean):
-                    _append_unique(explicit_exclusion_evidences, "STATUTORY_FERROCEMENT_CRAFT")
-                else:
-                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_1_EXCLUSION")
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_56_FRP")
+                if re.search(r"\b(?:qcvn\s*84|tau\s+vo\s+go|tau\s+go|wooden\s+hull|wooden\s+craft)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_84_WOOD")
+                if re.search(r"\b(?:qcvn\s*54|high[-\s]?speed\s+craft|tau\s+cao\s+toc)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_54_HSC")
+                if re.search(r"\b(?:qcvn\s*55|floating\s+dock|u\s+noi)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_55_DOCK")
+                if re.search(r"\b(?:tau\s+quoc\s+phong|quoc\s+phong|an\s+ninh|defense\s+vessel|security\s+vessel)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_4_DEFENSE_SECURITY")
+                if re.search(r"\b(?:tau\s+ca|fishing\s+vessel)\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_4_FISHING_VESSEL")
 
         ship_m = _SHIP_TYPE_RE.search(folded)
         if ship_m:

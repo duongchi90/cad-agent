@@ -34,7 +34,7 @@ def _ga_vrsb(
         {"handle": "1", "text": "BẢN VẼ BỐ TRÍ CHUNG", "x": 1000.0, "y": 500.0, "height": 350.0},
         {"handle": "2", "text": "KHOANG HÀNG SỐ 1 - BUỒNG MÁY - VÁCH CHỐNG VA", "x": 20000.0, "y": 2000.0, "height": 260.0},
         {"handle": "3", "text": service_line, "x": 50000.0, "y": 1000.0, "height": 250.0},
-        {"handle": "4", "text": "Lpp = 52.00 m", "x": 50000.0, "y": 1500.0, "height": 250.0},
+        {"handle": "4", "text": "Chiều dài tàu L = 52.00 m", "x": 50000.0, "y": 1500.0, "height": 250.0},
         {"handle": "5", "text": "B = 9.60 m", "x": 50000.0, "y": 2000.0, "height": 250.0},
         {"handle": "6", "text": "D = 4.20 m", "x": 50000.0, "y": 2500.0, "height": 250.0},
         {"handle": "7", "text": engine_line, "x": 50000.0, "y": 3000.0, "height": 250.0},
@@ -78,7 +78,7 @@ def _mcn_vrsb(
             {"handle": "M1", "text": "MẶT CẮT NGANG SƯỜN GIỮA", "x": 500.0, "y": 500.0, "height": 200.0},
             {"handle": "M2", "text": "ĐÁY ĐÔI - ĐÀ NGANG ĐẶC", "x": 1000.0, "y": 600.0, "height": 150.0},
             {"handle": "M3", "text": "CẤP TÀU : VR-SB", "x": 4000.0, "y": 1000.0, "height": 150.0},
-            {"handle": "M4", "text": "Lpp = 52.00 m", "x": 4000.0, "y": 1250.0, "height": 150.0},
+            {"handle": "M4", "text": "Chiều dài tàu L = 52.00 m", "x": 4000.0, "y": 1250.0, "height": 150.0},
             {"handle": "M5", "text": "B = 9.60 m", "x": 4000.0, "y": 1500.0, "height": 150.0},
             {"handle": "M6", "text": "D = 4.20 m", "x": 4000.0, "y": 1750.0, "height": 150.0},
             {"handle": "M7", "text": engine_line, "x": 4000.0, "y": 2000.0, "height": 150.0},
@@ -231,7 +231,7 @@ def test_marine_regression_bow_z_compression_small_hull_and_empty_inputs(
         "texts": [
             {"handle": "S1", "text": "MẶT CẮT NGANG SƯỜN GIỮA", "x": 100.0, "y": 100.0, "height": 150.0},
             {"handle": "S2", "text": "CẤP TÀU : VR-SII", "x": 200.0, "y": 200.0, "height": 150.0},
-            {"handle": "S3", "text": "Lpp = 18.00 m", "x": 200.0, "y": 400.0, "height": 150.0},
+            {"handle": "S3", "text": "Chiều dài tàu L = 18.00 m", "x": 200.0, "y": 400.0, "height": 150.0},
             {"handle": "S4", "text": "tôn đáy s=2.0 mm", "x": 200.0, "y": 600.0, "height": 150.0},
         ],
         "structural_metrics": {"double_bottom_height_mm": 750.0},
@@ -275,11 +275,19 @@ def test_step3_qcvn72_applicability_and_exclusion_matrix() -> None:
     res_frp = evaluate_regulation_applicability_and_submittal([frp_obs])
     assert res_frp["status"] == "NOT_APPLICABLE"
 
-    # 2. Explicit exclusion: Length Lpp > 140 m per Clause 1.1.1
+    # 2. Explicit exclusion: proven design length L > 140 m per Clause 1.1.1 / 1.4.43-1,
+    # whereas bare Lpp > 140 m without L or Lwl fails closed with INSUFFICIENT_EVIDENCE.
     long_obs = _ga_vrsb(drawing_id="LONG_155M")
-    long_obs["texts"][3]["text"] = "Lpp = 155.00 m"
+    long_obs["texts"][3]["text"] = "Chiều dài tàu L = 155.00 m"
     res_long = evaluate_regulation_applicability_and_submittal([long_obs])
     assert res_long["status"] == "NOT_APPLICABLE"
+    assert res_long["applicable_regulation_scope"]["clause_basis"] == "1.1.1"
+
+    long_lpp_only = _ga_vrsb(drawing_id="LONG_LPP_155M")
+    long_lpp_only["texts"][3]["text"] = "Lpp = 155.00 m"
+    res_long_lpp = evaluate_regulation_applicability_and_submittal([long_lpp_only])
+    assert res_long_lpp["status"] == "INSUFFICIENT_EVIDENCE"
+    assert {f["finding_id"] for f in res_long_lpp["findings"]} >= {"F_LENGTH_L_UNPROVEN_FOR_140M_LIMIT"}
 
     # 3. Unknown classification (no VR, QCVN, or ocean markers)
     unknown_obs = {
@@ -539,7 +547,7 @@ def score_ab_predictions(rows: Sequence[tuple[str, str, str]]) -> dict[str, Any]
 
 
 def test_marine_independent_engineering_baseline_comparison() -> None:
-    """Part B: Compare generic CAD baseline inspector vs Marine Knowledge Pack V0 on 16 ground-truth cases."""
+    """Part B (Internal Developer-Authored Regression): Compare Generic CAD Baseline Inspector vs Marine Knowledge Pack V0 on 16 synthetic fixtures (not an independent or blind benchmark)."""
     cases = _build_16_ground_truth_cases()
     assert len(cases) == 16
 

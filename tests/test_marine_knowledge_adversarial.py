@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+
+import fitz
 import pytest
 
 from cad_agent.marine_knowledge import (
@@ -15,6 +18,7 @@ from cad_agent.marine_knowledge import (
     validate_check_result,
     verify_source_citation,
 )
+from cad_agent.marine_knowledge.contracts import SOURCE_MANIFEST_SCHEMA_VERSION, seal_source_manifest
 
 
 def _valid_ga(
@@ -231,6 +235,11 @@ def test_group_d_unit_and_calibration_attacks() -> None:
     assert res_no_scale_val["status"] == "INSUFFICIENT_EVIDENCE"
 
     # 3. True independent calibration (calibration_verified=True AND finite scale > 0) unlocks calibrated checks
+    # with explicit Clause 1.4.43-1 design length L (bare Lpp alone must stay fail-closed).
+    for obs in (unitless_ga, unitless_mcn):
+        for entry in obs["texts"]:
+            if "Lpp" in entry["text"]:
+                entry["text"] = "Chiều dài tàu L = 52.00 m"
     res_calibrated = evaluate_regulation_applicability_and_submittal(
         [unitless_ga, unitless_mcn], calibration_verified=True, verified_scale_to_mm=1.0
     )
@@ -408,3 +417,218 @@ def test_group_i_and_j_geometry_shell_malicious_proposals_and_limits() -> None:
     # 4. Oversized untrusted observation list rejected fail-closed
     with pytest.raises(MarineKnowledgeError, match="OBSERVATION_INPUT_TOO_LARGE"):
         normalize_observation({"drawing_id": "HUGE", "texts": [{"text": "A"}] * 5001})
+
+
+def _make_synthetic_qcvn_pdf_and_manifest() -> tuple[bytes, bytes, dict[str, object]]:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text(
+        (72, 72),
+        "19 QCVN 72:2025/BGTVT\n"
+        "1.1.1 Scope covers Vietnam inland ships design length up to 140 m.",
+    )
+    p2 = doc.new_page()
+    p2.insert_text(
+        (72, 72),
+        "20 QCVN 72:2025/BGTVT\n"
+        "1.3.1 Reference QCVN 21:2015/BGTVT steel sea-going ships.",
+    )
+    doc.set_toc([[1, "1.1.1 Scope", 1], [1, "1.3.1 References", 2]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    non_pdf_bytes = b"QCVN_SYNTH_TEXT_ONLY_BYTES_V1"
+    pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+    non_pdf_sha = hashlib.sha256(non_pdf_bytes).hexdigest()
+
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "SYNTH_CITATION_MANIFEST",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [
+                {
+                    "source_id": "SYNTH_REG_PDF",
+                    "title": "Synthetic Test Regulation PDF",
+                    "document_kind": "REGULATION",
+                    "version": "2025",
+                    "origin": "synthetic-in-memory",
+                    "sha256": pdf_sha,
+                    "page_count": 2,
+                    "applicable_scope": ["test"],
+                    "usage_rights": "OPEN_ACADEMIC_RESEARCH",
+                    "commit_prohibited": True,
+                    "usage_status": "ACTIVE_INDEXED",
+                    "notes": "Synthetic PDF fixture for P1-A citation tests.",
+                },
+                {
+                    "source_id": "SYNTH_PLAIN_NOTES",
+                    "title": "Synthetic Non-PDF Notes",
+                    "document_kind": "TEXTBOOK",
+                    "version": "2025",
+                    "origin": "synthetic-in-memory",
+                    "sha256": non_pdf_sha,
+                    "page_count": None,
+                    "applicable_scope": ["test"],
+                    "usage_rights": "OPEN_ACADEMIC_RESEARCH",
+                    "commit_prohibited": True,
+                    "usage_status": "ACTIVE_INDEXED",
+                    "notes": "Synthetic non-PDF fixture for distinct byte-only verification tier.",
+                },
+            ],
+        }
+    )
+    return pdf_bytes, non_pdf_bytes, manifest
+
+
+def test_p1a_citation_verification_binds_to_verified_sha256_bytes_only() -> None:
+    """Finding P1-A causal tests: block caller page_texts promotion and require page+clause+excerpt for content level."""
+    pdf_bytes, non_pdf_bytes, synth_manifest = _make_synthetic_qcvn_pdf_and_manifest()
+    pdf_sha = next(s["sha256"] for s in synth_manifest["sources"] if s["source_id"] == "SYNTH_REG_PDF")
+    txt_sha = next(s["sha256"] for s in synth_manifest["sources"] if s["source_id"] == "SYNTH_PLAIN_NOTES")
+
+    base_cite = {
+        "source_id": "SYNTH_REG_PDF",
+        "source_sha256": pdf_sha,
+        "source_version": "2025",
+        "clause": "1.1.1 Scope",
+        "pdf_page": [1],
+        "reg_page": [19],
+        "verbatim_excerpt": "Scope covers Vietnam inland ships design length up to 140 m.",
+    }
+
+    # 1. False path #1: caller page_texts WITHOUT verified source bytes must NOT reach CLAUSE/SOURCE_CONTENT_VERIFIED
+    caller_only = verify_source_citation(
+        base_cite,
+        synth_manifest,
+        page_texts={1: "19 QCVN 72:2025/BGTVT 1.1.1 Scope covers Vietnam inland ships design length up to 140 m."},
+    )
+    assert caller_only["verification_level"] == "MANIFEST_METADATA_ONLY"
+    assert "SOURCE_BYTES_VERIFIED" not in caller_only["verification_states"]
+    assert "PAGE_VERIFIED" not in caller_only["verification_states"]
+    assert "CLAUSE_CONTENT_VERIFIED" not in caller_only["verification_states"]
+
+    # 2. False path #2a: correct source_bytes WITHOUT verbatim_excerpt must NOT claim SOURCE_CONTENT_VERIFIED
+    no_excerpt = {k: v for k, v in base_cite.items() if k != "verbatim_excerpt"}
+    bytes_and_page_only = verify_source_citation(no_excerpt, synth_manifest, source_bytes=pdf_bytes)
+    assert bytes_and_page_only["verification_level"] == "SOURCE_PAGE_VERIFIED"
+    assert "SOURCE_BYTES_VERIFIED" in bytes_and_page_only["verification_states"]
+    assert "PAGE_VERIFIED" in bytes_and_page_only["verification_states"]
+    assert "CLAUSE_CONTENT_VERIFIED" not in bytes_and_page_only["verification_states"]
+
+    # 3. False path #2b: non-PDF verified bytes without parseable page/clause must stay SOURCE_BYTES_VERIFIED only
+    bytes_only = verify_source_citation(
+        {
+            "source_id": "SYNTH_PLAIN_NOTES",
+            "source_sha256": txt_sha,
+            "clause": "Ch.1",
+            "pdf_page": [1],
+            "reg_page": [],
+            "verbatim_excerpt": "QCVN_SYNTH_TEXT_ONLY_BYTES_V1",
+        },
+        synth_manifest,
+        source_bytes=non_pdf_bytes,
+    )
+    assert bytes_only["verification_level"] == "SOURCE_BYTES_VERIFIED"
+    assert "SOURCE_BYTES_VERIFIED" in bytes_only["verification_states"]
+    assert "CLAUSE_CONTENT_VERIFIED" not in bytes_only["verification_states"]
+
+    # 4. False path #2c: real source_bytes with WRONG clause/page must fail even if bytes hash matches
+    with pytest.raises(MarineKnowledgeError, match="CITATION_CLAUSE_PAGE_MISMATCH"):
+        verify_source_citation(
+            {**no_excerpt, "clause": "3.7.21 Missing Bulkheads"},
+            synth_manifest,
+            source_bytes=pdf_bytes,
+        )
+
+    # 5. False path #2d: caller passing forged page_texts alongside real source_bytes cannot spoof forged excerpt
+    forged_excerpt_cite = {**base_cite, "verbatim_excerpt": "completely forged caller text absent from PDF"}
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(
+            forged_excerpt_cite,
+            synth_manifest,
+            source_bytes=pdf_bytes,
+            page_texts={1: "19 completely forged caller text absent from PDF"},
+        )
+
+    # 6. Genuine SHA-256 bytes + PDF page + clause + excerpt -> SOURCE_CONTENT_VERIFIED
+    full_ok = verify_source_citation(base_cite, synth_manifest, source_bytes=pdf_bytes)
+    assert full_ok["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+    assert full_ok["verification_states"] == [
+        "MANIFEST_MATCH",
+        "SOURCE_BYTES_VERIFIED",
+        "PAGE_VERIFIED",
+        "CLAUSE_CONTENT_VERIFIED",
+    ]
+
+
+def test_p1b_qcvn72_clauses_1_1_1_1_1_2_1_1_4_and_1_4_43_l_vs_lpp() -> None:
+    """Finding P1-B causal tests: separate Clauses 1.1.1 / 1.1.2 / 1.1.4 and block unproven Lpp->L conclusions."""
+    # 1. Clause 1.1.2 special vessel types MUST cite Clause 1.1.2 (never Clause 1.1.1), and QCVN 50 != fishing vessel
+    frp_obs = {
+        "drawing_id": "FRP_1_1_2",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "BẢN VẼ BỐ TRÍ CHUNG TÀU CHẤT DẺO CỐT SỢI THỦY TINH (FRP)", "x": 10.0, "y": 10.0, "height": 200.0},
+            {"handle": "2", "text": "Chiều dài tàu L = 14.00 m", "x": 10.0, "y": 200.0, "height": 200.0},
+        ],
+    }
+    res_frp = evaluate_regulation_applicability_and_submittal([frp_obs])
+    assert res_frp["status"] == "NOT_APPLICABLE"
+    assert res_frp["applicable_regulation_scope"]["clause_basis"] == "1.1.2"
+    assert res_frp["applicable_regulation_scope"]["referred_regulation"] == "QCVN 56:2013/BGTVT"
+    assert "Clause 1.1.2" in res_frp["findings"][0]["reason"]
+    assert "Clause 1.1.1" not in res_frp["findings"][0]["reason"]
+
+    leisure_obs = {
+        "drawing_id": "LEISURE_QCVN50",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "TÀU THỂ THAO VUI CHƠI GIẢI TRÍ (QCVN 50:2012/BGTVT)", "x": 10.0, "y": 10.0, "height": 200.0},
+            {"handle": "2", "text": "Chiều dài tàu L = 12.00 m", "x": 10.0, "y": 200.0, "height": 200.0},
+        ],
+    }
+    res_leisure = evaluate_regulation_applicability_and_submittal([leisure_obs])
+    assert res_leisure["status"] == "NOT_APPLICABLE"
+    assert res_leisure["applicable_regulation_scope"]["clause_basis"] == "1.1.2"
+    assert res_leisure["applicable_regulation_scope"]["referred_regulation"] == "QCVN 50:2012/BGTVT"
+    assert "FISHING" not in str(res_leisure["observed_scope"]["explicit_exclusion_evidences"])
+
+    # 2. Clause 1.1.4 non-mandatory defense/security & fishing vessels MUST cite 1.1.4 (never 1.1.1)
+    fishing_obs = {
+        "drawing_id": "FISHING_1_1_4",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "BẢN VẼ BỐ TRÍ CHUNG TÀU CÁ ĐÁNH BẮT XA BỜ", "x": 10.0, "y": 10.0, "height": 200.0},
+            {"handle": "2", "text": "Chiều dài tàu L = 24.00 m", "x": 10.0, "y": 200.0, "height": 200.0},
+        ],
+    }
+    res_fish = evaluate_regulation_applicability_and_submittal([fishing_obs])
+    assert res_fish["status"] == "NOT_APPLICABLE"
+    assert res_fish["applicable_regulation_scope"]["clause_basis"] == "1.1.4"
+    assert res_fish["applicable_regulation_scope"]["referred_regulation"] is None
+    assert "Clause 1.1.4" in res_fish["findings"][0]["reason"]
+    assert "Clause 1.1.1" not in res_fish["findings"][0]["reason"]
+
+    # 3. Unproven Lpp > 140.5 without explicit L or 0.96*Lwl > 140 must NOT issue definitive NOT_APPLICABLE
+    lpp_155_only = _valid_ga(drawing_id="LPP_155_NO_L", length_line="Lpp = 155.00 m", ap_x=1000.0, fp_x=156000.0)
+    res_155_lpp = evaluate_regulation_applicability_and_submittal([lpp_155_only])
+    assert res_155_lpp["status"] == "INSUFFICIENT_EVIDENCE"
+
+    # Explicit regulatory L > 140.0 under Clause 1.4.43-1 + 1.1.1 -> NOT_APPLICABLE
+    l_145_explicit = _valid_ga(drawing_id="L_145_PROVEN", length_line="Chiều dài tàu L = 145.00 m", ap_x=1000.0, fp_x=146000.0)
+    res_145_l = evaluate_regulation_applicability_and_submittal([l_145_explicit])
+    assert res_145_l["status"] == "NOT_APPLICABLE"
+    assert res_145_l["applicable_regulation_scope"]["clause_basis"] == "1.1.1"
+
+    # 4. Lwl straddling 140m under 1.4.43-1 ([0.96*144, 144] = [138.24, 144.0]) -> INSUFFICIENT_EVIDENCE (not NOT_APPLICABLE)
+    lwl_144 = _valid_ga(drawing_id="LWL_144_STRADDLE", length_line="Lwl = 144.00 m", ap_x=1000.0, fp_x=145000.0)
+    res_lwl_144 = evaluate_regulation_applicability_and_submittal([lwl_144])
+    assert res_lwl_144["status"] == "INSUFFICIENT_EVIDENCE"
+
+    # 5. Lpp=52.00m without L or Lwl relationship must fail closed (never claim PASS on RULE_MK_08/09)
+    lpp_52_only_ga = _valid_ga(drawing_id="LPP_52_ONLY", length_line="Lpp = 52.00 m", bulkheads=4)
+    lpp_52_only_mcn = _valid_mcn(drawing_id="MCN_52_LPP_ONLY", length_line="Lpp = 52.00 m", db_mm=750.0)
+    res_52_lpp_only = evaluate_regulation_applicability_and_submittal([lpp_52_only_ga, lpp_52_only_mcn])
+    assert res_52_lpp_only["status"] == "INSUFFICIENT_EVIDENCE"
