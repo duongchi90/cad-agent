@@ -200,7 +200,26 @@ def _read_effective_style(entity) -> dict[str, object] | None:
         return None
 
 
-def _read_rendered_block(entity) -> tuple[str | None, float | None]:
+def _is_layer_visible_and_plotted(doc, layer_name: str) -> bool:
+    """Return True only when `layer_name` exists, is ON, unfrozen, and plotted."""
+    try:
+        layer = doc.layers.get(layer_name)
+    except Exception:
+        return False
+    if layer is None:
+        return False
+    return bool(layer.is_on() and not layer.is_frozen() and int(layer.dxf.get("plot", 1)))
+
+
+@dataclass(frozen=True)
+class _RenderedBlockRead:
+    text: str | None
+    group42: float | None
+    hidden_text_count: int
+    block_missing: bool
+
+
+def _read_rendered_block(doc, entity) -> _RenderedBlockRead:
     raw_g42 = entity.dxf.get("actual_measurement")
     try:
         group42 = None if raw_g42 is None else float(raw_g42)
@@ -211,16 +230,28 @@ def _read_rendered_block(entity) -> tuple[str | None, float | None]:
     except Exception:
         block = None
     if block is None:
-        return None, group42
-    parts: list[str] = []
+        return _RenderedBlockRead(None, group42, 0, True)
+    visible_parts: list[str] = []
+    hidden_text_count = 0
     for item in block:
         kind = item.dxftype()
         if kind == "MTEXT":
-            parts.append(plain_cad_text(item.text))
+            plain = plain_cad_text(item.text)
         elif kind == "TEXT":
-            parts.append(plain_cad_text(item.dxf.get("text", "")))
-    text = " ".join(p for p in parts if p)
-    return (text or None), group42
+            plain = plain_cad_text(item.dxf.get("text", ""))
+        else:
+            continue
+        item_layer = str(item.dxf.get("layer", "0"))
+        item_hidden = bool(int(item.dxf.get("invisible", 0) or 0))
+        if not item_hidden and item_layer != "0":
+            item_hidden = not _is_layer_visible_and_plotted(doc, item_layer)
+        if item_hidden:
+            hidden_text_count += 1
+            continue
+        if plain:
+            visible_parts.append(plain)
+    text = " ".join(visible_parts)
+    return _RenderedBlockRead((text or None), group42, hidden_text_count, False)
 
 
 def _format_measured(value: float, dimtype: int, style: Mapping[str, object]) -> str:
@@ -324,12 +355,11 @@ def audit_dimension_truth(
         if dimtype in _LINEAR_OR_RADIAL_TYPES and abs(dimlfac - 1.0) > 1e-9:
             reasons.append(f"dim_dimlfac_scaled({dimlfac})")
 
+    if int(dxf.get("invisible", 0) or 0):
+        reasons.append("dim_entity_invisible")
+
     layer_name = str(dxf.get("layer", "0"))
-    try:
-        layer = doc.layers.get(layer_name)
-    except Exception:
-        layer = None
-    if layer is None or not layer.is_on() or layer.is_frozen() or not int(layer.dxf.get("plot", 1)):
+    if not _is_layer_visible_and_plotted(doc, layer_name):
         reasons.append(f"dim_layer_hidden_or_noplot({layer_name!r})")
 
     raw_dimtxt = style.get("dimtxt")
@@ -356,7 +386,15 @@ def audit_dimension_truth(
             if abs(disp.value - float(ref_value)) > max(float(tolerance_mm), 1e-6):
                 reasons.append(f"dim_override_disagrees(shown={disp.text!r}, expected={ref_value})")
 
-    rendered_text, group42 = _read_rendered_block(entity)
+    rendered = _read_rendered_block(doc, entity)
+    if rendered.hidden_text_count > 0:
+        reasons.append("dim_rendered_text_hidden")
+    rendered_text, group42 = rendered.text, rendered.group42
+    if disp.source != "suppressed":
+        if disp.text is None:
+            reasons.append(f"dim_display_unreadable(source={disp.source})")
+        if rendered.block_missing or rendered_text is None:
+            reasons.append("dim_render_missing")
     if rendered_text is not None and disp.text is not None:
         have = normalize_dim_text(rendered_text)
         want = normalize_dim_text(disp.text)
