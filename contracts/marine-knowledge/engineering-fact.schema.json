@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/engineering-fact-1.0",
+  "title": "Domain-Extensible CAD Engineering Fact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "domain",
+    "drawing_id",
+    "drawing_path",
+    "drawing_sha256",
+    "sheet_id",
+    "revision",
+    "fact_key",
+    "entity_handles",
+    "entity_type",
+    "layer",
+    "observed_raw",
+    "observed_value",
+    "observed_unit",
+    "normalized_value",
+    "normalized_unit",
+    "provenance_class",
+    "verification_state",
+    "trust_reason",
+    "fact_id",
+    "fact_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "engineering-fact-1.0"
+    },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
+    "drawing_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "drawing_path": {
+      "type": ["string", "null"]
+    },
+    "drawing_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sheet_id": {
+      "type": ["string", "null"]
+    },
+    "revision": {
+      "type": ["string", "null"]
+    },
+    "fact_key": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "entity_handles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "entity_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "layer": {
+      "type": ["string", "null"]
+    },
+    "observed_raw": {
+      "type": "string"
+    },
+    "observed_value": {
+      "type": ["number", "string", "null"]
+    },
+    "observed_unit": {
+      "type": ["string", "null"]
+    },
+    "normalized_value": {
+      "type": ["number", "string", "null"]
+    },
+    "normalized_unit": {
+      "type": ["string", "null"]
+    },
+    "provenance_class": {
+      "type": "string",
+      "enum": [
+        "NATIVE_CAD_EVIDENCE",
+        "NATIVE_CAD_UNBOUND_TEXT",
+        "NATIVE_MEASURED_GEOMETRY",
+        "OCR_ONLY",
+        "FIXTURE_SUPPLIED",
+        "INFERRED_UNVERIFIED"
+      ]
+    },
+    "verification_state": {
+      "type": "string",
+      "enum": [
+        "VERIFIED",
+        "PROVISIONAL_APPROXIMATE",
+        "FIXTURE_UNBOUND_TO_DXF_BYTES",
+        "UNVERIFIED_UNITLESS",
+        "CONFLICTING_OVERRIDE",
+        "UNVERIFIED_UNBOUND_TEXT",
+        "UNVERIFIED_OCR",
+        "UNVERIFIED_INFERRED"
+      ]
+    },
+    "trust_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fact_id": {
+      "type": "string",
+      "pattern": "^eng-fact-[0-9a-f]{16}$"
+    },
+    "fact_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

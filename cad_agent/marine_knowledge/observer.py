@@ -9,14 +9,22 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+import hashlib
 import math
+import os
 from pathlib import Path
 import re
 from typing import Any
 
+from cad_agent.file_integrity import open_bound_file
 from dxf_builder_lib._dxf_snapshot import read_dxf_snapshot
 
 from .contracts import MarineKnowledgeError
+from .evidence_binding import (
+    build_engineering_fact,
+    evaluate_dimension_fact,
+    validate_engineering_fact,
+)
 from .text_normalization import fold_marine_search_text, normalize_marine_cad_text
 
 _KNOWN_BLANK_FIELD_LABELS = (
@@ -38,15 +46,19 @@ _MAX_TEXT_LENGTH = 4096
 
 _L_DESIGN_RE = re.compile(
     r"(?:^|\b)(?:chieu\s+dai\s+tau(?:\s*\(?l\)?)?|chieu\s+dai\s+thiet\s+ke|design\s+length|ltk|l)\s*[:=]\s*"
-    r"([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+    r"(?:(abt|approx)\.?\s*)?([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+)
+_LOA_RE = re.compile(
+    r"\b(?:loa|l\.o\.a\.?|length\s*\(?o\.?a\.?\)?|chieu\s+dai\s+lon\s+nhat)\b\s*[:=]\s*"
+    r"(?:(abt|approx)\.?\s*)?([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
 )
 _LPP_RE = re.compile(
-    r"\b(?:lpp|l\.p\.p|length\s*\(?l\.?p\.?p\)?|chieu\s+dai\s+giua\s+2\s+tru)\b\s*[:=]?\s*"
-    r"([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+    r"\b(?:lpp|l\.p\.p\.?|length\s*\(?(?:l\.?)?p\.?p\.?\)?|chieu\s+dai\s+giua\s+2\s+tru)\b\s*[:=]?\s*"
+    r"(?:(abt|approx)\.?\s*)?([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
 )
 _LWL_RE = re.compile(
-    r"\b(?:lwl|chieu\s+dai\s+duong\s+nuoc(?:\s+thiet\s+ke)?)\b\s*[:=]?\s*"
-    r"([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+    r"\b(?:lwl|length\s*\(?w\.?l\.?\)?|chieu\s+dai\s+duong\s+nuoc(?:\s+thiet\s+ke)?)\b\s*[:=]?\s*"
+    r"(?:(abt|approx)\.?\s*)?([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
 )
 _BREADTH_RE = re.compile(
     r"(?:^|\b)(?:breadth(?:\s*\(?b\)?)?|chieu\s+rong(?:\s*\(?b\)?)?|b)\s*[:=]\s*"
@@ -176,6 +188,7 @@ def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str], *, dx: flo
     y = (_to_float(getattr(insert, "y", None)) or 0.0) + dy
     return {
         "handle": str(getattr(entity.dxf, "handle", "") or ""),
+        "entity_type": dxftype,
         "text": normalize_marine_cad_text(raw_text, font_hint=font_hint),
         "raw_text": raw_text,
         "font_hint": font_hint,
@@ -186,8 +199,11 @@ def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str], *, dx: flo
     }
 
 
-def _collect_dxf_texts(doc: Any, style_fonts: Mapping[str, str]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _collect_dxf_texts(
+    doc: Any, style_fonts: Mapping[str, str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
     texts: list[dict[str, Any]] = []
+    dimensions: list[dict[str, Any]] = []
     entity_counts: dict[str, int] = {}
     referenced_blocks: dict[str, tuple[float, float]] = {}
 
@@ -195,6 +211,16 @@ def _collect_dxf_texts(doc: Any, style_fonts: Mapping[str, str]) -> tuple[list[d
     for entity in msp:
         dxftype = entity.dxftype()
         entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
+        if dxftype == "DIMENSION":
+            dimensions.append(
+                {
+                    "handle": str(getattr(entity.dxf, "handle", "") or ""),
+                    "layer": str(getattr(entity.dxf, "layer", "0") or "0"),
+                    "raw_text": str(getattr(entity.dxf, "text", "") or ""),
+                    "actual_measurement": _to_float(getattr(entity.dxf, "actual_measurement", None)),
+                }
+            )
+            continue
         item = _entity_text_payload(entity, style_fonts)
         if item is not None:
             texts.append(item)
@@ -225,7 +251,7 @@ def _collect_dxf_texts(doc: Any, style_fonts: Mapping[str, str]) -> tuple[list[d
                 break
         texts.extend(block_items)
 
-    return texts, entity_counts
+    return texts, dimensions, entity_counts
 
 
 def observe_dxf_bytes(
@@ -235,11 +261,13 @@ def observe_dxf_bytes(
     drawing_code: str = "",
     claimed_scale: float | None = None,
     ocr_only: bool = False,
+    _drawing_path: str | None = None,
 ) -> dict[str, Any]:
     """Read raw DXF bytes via ``dxf_builder_lib._dxf_snapshot`` into normalized observation."""
+    drawing_sha256 = hashlib.sha256(data).hexdigest()
     doc, _styles = read_dxf_snapshot(data, observe_styles=True)
     style_fonts = _extract_style_font_hints(doc)
-    texts, entity_counts = _collect_dxf_texts(doc, style_fonts)
+    texts, dimensions, entity_counts = _collect_dxf_texts(doc, style_fonts)
 
     insunits_raw = doc.header.get("$INSUNITS", 0)
     measurement_raw = doc.header.get("$MEASUREMENT", 0)
@@ -250,6 +278,8 @@ def observe_dxf_bytes(
         {
             "drawing_id": drawing_id,
             "drawing_code": drawing_code,
+            "drawing_path": _drawing_path,
+            "drawing_sha256": drawing_sha256,
             "insunits": insunits,
             "measurement": measurement,
             "claimed_scale": claimed_scale,
@@ -257,6 +287,7 @@ def observe_dxf_bytes(
             "source_mode": "OCR_ONLY" if ocr_only else "NATIVE_DXF_SNAPSHOT",
             "entity_counts": entity_counts,
             "texts": texts,
+            "dimensions": dimensions,
         }
     )
 
@@ -269,14 +300,28 @@ def observe_dxf_file(
     claimed_scale: float | None = None,
     ocr_only: bool = False,
 ) -> dict[str, Any]:
-    """Read an on-disk DXF file in strict read-only mode using ``observe_dxf_bytes``."""
+    """Read an on-disk DXF file in bound regular-file read-only mode via ``open_bound_file``."""
     target = Path(path)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd, _opened_stat = open_bound_file(target, flags=flags, label="Marine DXF")
+    chunks: list[bytes] = []
+    try:
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+    raw_bytes = b"".join(chunks)
+    resolved_path = str(target.resolve())
     return observe_dxf_bytes(
-        target.read_bytes(),
+        raw_bytes,
         drawing_id=drawing_id or target.stem,
         drawing_code=drawing_code,
         claimed_scale=claimed_scale,
         ocr_only=ocr_only,
+        _drawing_path=resolved_path,
     )
 
 
@@ -311,6 +356,7 @@ def _normalize_text_entries(raw_texts: object) -> list[dict[str, Any]]:
         entries.append(
             {
                 "handle": str(item.get("handle", f"T{idx + 1}")),
+                "entity_type": str(item.get("entity_type") or "TEXT").upper(),
                 "raw_text": raw_str,
                 "text": norm_text,
                 "folded": folded,
@@ -358,18 +404,73 @@ def _has_neighbor_value(label_entry: Mapping[str, Any], entries: list[dict[str, 
     return False
 
 
-def _nearest_right_numeric(
+_SHEET_NO_RE = re.compile(
+    r"\b(?:to\s+so|sheet(?:\s+no\.?)?)\s*[:=]\s*([0-9A-Za-z_-]{1,12})\b",
+    re.IGNORECASE,
+)
+_TOTAL_SHEETS_RE = re.compile(
+    r"\b(?:so\s+to|total\s+sheets?)\s*[:=]\s*([0-9A-Za-z_-]{1,12})\b",
+    re.IGNORECASE,
+)
+_SHEET_OF_RE = re.compile(r"\bsheet\s+([0-9]{1,4})\s+of\s+([0-9]{1,4})\b", re.IGNORECASE)
+_REVISION_RE = re.compile(
+    r"(?:^|\b)(?:rev(?:ision)?\.?|lan\s+sua\s+doi)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._-]{0,15})\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_sheet_and_revision(
+    entries: list[dict[str, Any]],
+) -> tuple[str | None, list[str], str | None, list[str]]:
+    sheet_no: str | None = None
+    total_sheets: str | None = None
+    sheet_handles: list[str] = []
+    revision: str | None = None
+    revision_handles: list[str] = []
+
+    for entry in entries:
+        folded = entry["folded"]
+        text = entry["text"]
+        m_of = _SHEET_OF_RE.search(folded)
+        if m_of and sheet_no is None:
+            sheet_no, total_sheets = m_of.group(1), m_of.group(2)
+            _append_unique(sheet_handles, entry["handle"])
+        m_sn = _SHEET_NO_RE.search(folded)
+        if m_sn and sheet_no is None:
+            sheet_no = m_sn.group(1).strip()
+            _append_unique(sheet_handles, entry["handle"])
+        m_ts = _TOTAL_SHEETS_RE.search(folded)
+        if m_ts and total_sheets is None:
+            total_sheets = m_ts.group(1).strip()
+            _append_unique(sheet_handles, entry["handle"])
+        m_rev = _REVISION_RE.search(text)
+        if m_rev and revision is None:
+            cand = m_rev.group(1).strip()
+            if cand and cand != "?":
+                revision = cand
+                _append_unique(revision_handles, entry["handle"])
+
+    if sheet_no and total_sheets:
+        sheet_id: str | None = f"{sheet_no}/{total_sheets}"
+    elif sheet_no:
+        sheet_id = sheet_no
+    else:
+        sheet_id = None
+    return sheet_id, sheet_handles, revision, revision_handles
+
+
+def _nearest_right_row_match(
     label_entry: Mapping[str, Any],
     entries: list[dict[str, Any]],
     *,
     insunits: int = 0,
-) -> tuple[float | None, bool]:
+) -> dict[str, Any] | None:
     lx = label_entry.get("x")
     ly = label_entry.get("y")
     if lx is None or ly is None:
-        return None, False
+        return None
     h = label_entry.get("height") or 200.0
-    candidates: list[tuple[float, float, bool]] = []
+    row_items: list[tuple[float, dict[str, Any]]] = []
     for other in entries:
         if other is label_entry:
             continue
@@ -378,19 +479,47 @@ def _nearest_right_numeric(
         if ox is None or oy is None:
             continue
         dx = ox - lx
-        if dx <= 0.0 or dx > max(h * 70.0, 30000.0):
+        if dx <= 0.0 or dx > max(h * 80.0, 32000.0):
             continue
-        if abs(oy - ly) > max(h * 1.6, 350.0):
+        if abs(oy - ly) > max(h * 1.8, 360.0):
             continue
-        m = re.fullmatch(r"\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?\s*", other["folded"])
+        row_items.append((dx, other))
+    row_items.sort(key=lambda pair: pair[0])
+
+    qual_handles: list[str] = []
+    is_approx = False
+    for _dx, other in row_items:
+        stripped_tok = other["folded"].strip(" .")
+        if stripped_tok in {"abt", "approx", "xap xi", "khoang"}:
+            _append_unique(qual_handles, other["handle"])
+            is_approx = True
+            continue
+        m = re.fullmatch(
+            r"\s*(?:(abt|approx)\.?\s*)?([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?\s*",
+            other["folded"],
+        )
         if m:
-            val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
+            if m.group(1):
+                is_approx = True
+            val, verified = _unit_value_to_meters(m.group(2), m.group(3), insunits=insunits)
             if val is not None:
-                candidates.append((dx, val, verified))
-    if not candidates:
-        return None, False
-    candidates.sort(key=lambda pair: pair[0])
-    return candidates[0][1], candidates[0][2]
+                handles = [str(label_entry["handle"]), *qual_handles, str(other["handle"])]
+                raw_unit = (m.group(3) or "").lower().strip() or None
+                raw_obs = f"{label_entry['text']} -> {other['text']}"
+                if is_approx and "abt" not in raw_obs.lower() and "approx" not in raw_obs.lower():
+                    raw_obs = f"{label_entry['text']} -> ABT. {other['text']}"
+                return {
+                    "val_m": val,
+                    "verified": verified,
+                    "raw_num": _to_float(m.group(2)),
+                    "raw_unit": raw_unit,
+                    "observed_raw": raw_obs,
+                    "handles": handles,
+                    "entity_type": str(other.get("entity_type") or label_entry.get("entity_type") or "TEXT"),
+                    "layer": str(other.get("layer") or label_entry.get("layer") or "0"),
+                    "is_approx": is_approx,
+                }
+    return None
 
 
 def _detect_blank_fields(entries: list[dict[str, Any]], explicit: object) -> list[str]:
@@ -433,8 +562,9 @@ def _extract_particulars(
     raw: Mapping[str, Any],
     *,
     insunits: int = 0,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     design_length_l_m_values: list[float] = []
+    loa_values: list[float] = []
     lpp_values: list[float] = []
     lwl_values: list[float] = []
     breadth_values: list[float] = []
@@ -457,6 +587,41 @@ def _extract_particulars(
     unverified_unitless_particulars: list[str] = []
     non_marine_domain_hits: list[str] = []
     negated_scope_texts: list[str] = []
+    raw_fact_seeds: list[dict[str, Any]] = []
+
+    def _add_seed(
+        *,
+        fact_key: str,
+        handles: list[str],
+        entity_type: str,
+        layer: str | None,
+        observed_raw: str,
+        observed_value: float | str | None,
+        observed_unit: str | None,
+        normalized_value: float | str | None,
+        normalized_unit: str | None,
+        unit_verified: bool = True,
+        is_approx: bool = False,
+        is_unbound: bool = False,
+        reason_detail: str,
+    ) -> None:
+        raw_fact_seeds.append(
+            {
+                "fact_key": fact_key,
+                "handles": handles,
+                "entity_type": entity_type,
+                "layer": layer,
+                "observed_raw": observed_raw,
+                "observed_value": observed_value,
+                "observed_unit": observed_unit,
+                "normalized_value": normalized_value if unit_verified and not is_unbound else None,
+                "normalized_unit": normalized_unit if unit_verified and not is_unbound else None,
+                "unit_verified": unit_verified,
+                "is_approx": is_approx,
+                "is_unbound": is_unbound,
+                "reason_detail": reason_detail,
+            }
+        )
 
     raw_scale = _to_float(raw.get("claimed_scale"))
     if raw_scale is not None and raw_scale > 0:
@@ -465,42 +630,180 @@ def _extract_particulars(
     for entry in entries:
         text = entry["text"]
         folded = entry["folded"]
+        ehandle = str(entry["handle"])
+        etype = str(entry.get("entity_type") or "TEXT")
+        elayer = str(entry.get("layer") or "0")
 
         for bad_tok in _CORRUPTED_NUMBER_RE.findall(text):
             _append_unique(corrupted_numeric_tokens, str(bad_tok).strip())
 
         for m in _L_DESIGN_RE.finditer(folded):
-            val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
+            val, verified = _unit_value_to_meters(m.group(2), m.group(3), insunits=insunits)
             if val is not None:
-                if verified:
+                is_apx = bool(m.group(1))
+                if verified and not is_apx:
                     _append_unique(design_length_l_m_values, val)
+                elif not verified:
+                    _append_unique(unverified_unitless_particulars, f"L:{m.group(2)}")
+                _add_seed(
+                    fact_key="design_length_l_m",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=_to_float(m.group(2)),
+                    observed_unit=(m.group(3) or "").lower() or None,
+                    normalized_value=val,
+                    normalized_unit="m",
+                    unit_verified=verified,
+                    is_approx=is_apx,
+                    reason_detail=f"Regulatory design length L extracted from {etype} {ehandle}.",
+                )
+
+        loa_matched = False
+        for m in _LOA_RE.finditer(folded):
+            val, verified = _unit_value_to_meters(m.group(2), m.group(3), insunits=insunits)
+            if val is not None:
+                is_apx = bool(m.group(1)) or "abt" in folded
+                if verified:
+                    _append_unique(loa_values, val)
                 else:
-                    _append_unique(unverified_unitless_particulars, f"L:{m.group(1)}")
+                    _append_unique(unverified_unitless_particulars, f"Loa:{m.group(2)}")
+                _add_seed(
+                    fact_key="loa_m",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=_to_float(m.group(2)),
+                    observed_unit=(m.group(3) or "").lower() or None,
+                    normalized_value=val,
+                    normalized_unit="m",
+                    unit_verified=verified,
+                    is_approx=is_apx,
+                    reason_detail=f"Length overall (Loa) extracted from {etype} {ehandle}.",
+                )
+                loa_matched = True
+        if not loa_matched and (
+            folded.startswith("length (o.a")
+            or folded.startswith("length o.a")
+            or folded.startswith("chieu dai lon nhat")
+            or folded in {"loa", "l.o.a", "l.o.a."}
+        ):
+            rm = _nearest_right_row_match(entry, entries, insunits=insunits)
+            if rm is not None:
+                if rm["verified"]:
+                    _append_unique(loa_values, rm["val_m"])
+                else:
+                    _append_unique(unverified_unitless_particulars, f"Loa:{rm['val_m']}")
+                _add_seed(
+                    fact_key="loa_m",
+                    handles=rm["handles"],
+                    entity_type=rm["entity_type"],
+                    layer=rm["layer"],
+                    observed_raw=rm["observed_raw"],
+                    observed_value=rm["raw_num"],
+                    observed_unit=rm["raw_unit"],
+                    normalized_value=rm["val_m"],
+                    normalized_unit="m",
+                    unit_verified=rm["verified"],
+                    is_approx=rm["is_approx"],
+                    reason_detail=f"Paired table row Loa across handles {rm['handles']}.",
+                )
 
         lpp_matched = False
         for m in _LPP_RE.finditer(folded):
-            val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
+            val, verified = _unit_value_to_meters(m.group(2), m.group(3), insunits=insunits)
             if val is not None:
-                if verified:
+                is_apx = bool(m.group(1))
+                if verified and not is_apx:
                     _append_unique(lpp_values, val)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"Lpp:{m.group(1)}")
+                elif not verified:
+                    _append_unique(unverified_unitless_particulars, f"Lpp:{m.group(2)}")
+                _add_seed(
+                    fact_key="lpp_m",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=_to_float(m.group(2)),
+                    observed_unit=(m.group(3) or "").lower() or None,
+                    normalized_value=val,
+                    normalized_unit="m",
+                    unit_verified=verified,
+                    is_approx=is_apx,
+                    reason_detail=f"Length between perpendiculars (Lpp) from {etype} {ehandle}.",
+                )
                 lpp_matched = True
-        if not lpp_matched and any(tok in folded for tok in ("length (l.p.p)", "chieu dai giua 2 tru")):
-            nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
-            if nb is not None:
-                if nb_ok:
-                    _append_unique(lpp_values, nb)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"Lpp:{nb}")
+        if not lpp_matched and any(
+            tok in folded for tok in ("length (l.p.p", "length (p.p", "chieu dai giua 2 tru")
+        ):
+            rm = _nearest_right_row_match(entry, entries, insunits=insunits)
+            if rm is not None:
+                if rm["verified"] and not rm["is_approx"]:
+                    _append_unique(lpp_values, rm["val_m"])
+                elif not rm["verified"]:
+                    _append_unique(unverified_unitless_particulars, f"Lpp:{rm['val_m']}")
+                _add_seed(
+                    fact_key="lpp_m",
+                    handles=rm["handles"],
+                    entity_type=rm["entity_type"],
+                    layer=rm["layer"],
+                    observed_raw=rm["observed_raw"],
+                    observed_value=rm["raw_num"],
+                    observed_unit=rm["raw_unit"],
+                    normalized_value=rm["val_m"],
+                    normalized_unit="m",
+                    unit_verified=rm["verified"],
+                    is_approx=rm["is_approx"],
+                    reason_detail=f"Paired table row Lpp across handles {rm['handles']}.",
+                )
 
+        lwl_matched = False
         for m in _LWL_RE.finditer(folded):
-            val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
+            val, verified = _unit_value_to_meters(m.group(2), m.group(3), insunits=insunits)
             if val is not None:
-                if verified:
+                is_apx = bool(m.group(1))
+                if verified and not is_apx:
                     _append_unique(lwl_values, val)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"Lwl:{m.group(1)}")
+                elif not verified:
+                    _append_unique(unverified_unitless_particulars, f"Lwl:{m.group(2)}")
+                _add_seed(
+                    fact_key="lwl_m",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=_to_float(m.group(2)),
+                    observed_unit=(m.group(3) or "").lower() or None,
+                    normalized_value=val,
+                    normalized_unit="m",
+                    unit_verified=verified,
+                    is_approx=is_apx,
+                    reason_detail=f"Waterline length (Lwl) from {etype} {ehandle}.",
+                )
+                lwl_matched = True
+        if not lwl_matched and (folded.startswith("length (w.l") or folded.startswith("chieu dai duong nuoc")):
+            rm = _nearest_right_row_match(entry, entries, insunits=insunits)
+            if rm is not None:
+                if rm["verified"] and not rm["is_approx"]:
+                    _append_unique(lwl_values, rm["val_m"])
+                elif not rm["verified"]:
+                    _append_unique(unverified_unitless_particulars, f"Lwl:{rm['val_m']}")
+                _add_seed(
+                    fact_key="lwl_m",
+                    handles=rm["handles"],
+                    entity_type=rm["entity_type"],
+                    layer=rm["layer"],
+                    observed_raw=rm["observed_raw"],
+                    observed_value=rm["raw_num"],
+                    observed_unit=rm["raw_unit"],
+                    normalized_value=rm["val_m"],
+                    normalized_unit="m",
+                    unit_verified=rm["verified"],
+                    is_approx=rm["is_approx"],
+                    reason_detail=f"Paired table row Lwl across handles {rm['handles']}.",
+                )
 
         b_matched = False
         for m in _BREADTH_RE.finditer(folded):
@@ -510,14 +813,41 @@ def _extract_particulars(
                     _append_unique(breadth_values, val)
                 else:
                     _append_unique(unverified_unitless_particulars, f"B:{m.group(1)}")
+                _add_seed(
+                    fact_key="breadth_m",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=_to_float(m.group(1)),
+                    observed_unit=(m.group(2) or "").lower() or None,
+                    normalized_value=val,
+                    normalized_unit="m",
+                    unit_verified=verified,
+                    reason_detail=f"Molded breadth B from {etype} {ehandle}.",
+                )
                 b_matched = True
-        if not b_matched and folded.startswith("breadth"):
-            nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
-            if nb is not None:
-                if nb_ok:
-                    _append_unique(breadth_values, nb)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"B:{nb}")
+        if not b_matched and (folded.startswith("breadth") or folded.startswith("chieu rong")):
+            rm = _nearest_right_row_match(entry, entries, insunits=insunits)
+            if rm is not None:
+                if rm["verified"] and not rm["is_approx"]:
+                    _append_unique(breadth_values, rm["val_m"])
+                elif not rm["verified"]:
+                    _append_unique(unverified_unitless_particulars, f"B:{rm['val_m']}")
+                _add_seed(
+                    fact_key="breadth_m",
+                    handles=rm["handles"],
+                    entity_type=rm["entity_type"],
+                    layer=rm["layer"],
+                    observed_raw=rm["observed_raw"],
+                    observed_value=rm["raw_num"],
+                    observed_unit=rm["raw_unit"],
+                    normalized_value=rm["val_m"],
+                    normalized_unit="m",
+                    unit_verified=rm["verified"],
+                    is_approx=rm["is_approx"],
+                    reason_detail=f"Paired table row Breadth B across handles {rm['handles']}.",
+                )
 
         d_matched = False
         for m in _DEPTH_RE.finditer(folded):
@@ -527,15 +857,43 @@ def _extract_particulars(
                     _append_unique(depth_values, val)
                 else:
                     _append_unique(unverified_unitless_particulars, f"D:{m.group(1)}")
+                _add_seed(
+                    fact_key="depth_m",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=_to_float(m.group(1)),
+                    observed_unit=(m.group(2) or "").lower() or None,
+                    normalized_value=val,
+                    normalized_unit="m",
+                    unit_verified=verified,
+                    reason_detail=f"Molded depth D from {etype} {ehandle}.",
+                )
                 d_matched = True
-        if not d_matched and folded.startswith("depth"):
-            nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
-            if nb is not None:
-                if nb_ok:
-                    _append_unique(depth_values, nb)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"D:{nb}")
+        if not d_matched and (folded.startswith("depth") or folded.startswith("chieu cao man")):
+            rm = _nearest_right_row_match(entry, entries, insunits=insunits)
+            if rm is not None:
+                if rm["verified"] and not rm["is_approx"]:
+                    _append_unique(depth_values, rm["val_m"])
+                elif not rm["verified"]:
+                    _append_unique(unverified_unitless_particulars, f"D:{rm['val_m']}")
+                _add_seed(
+                    fact_key="depth_m",
+                    handles=rm["handles"],
+                    entity_type=rm["entity_type"],
+                    layer=rm["layer"],
+                    observed_raw=rm["observed_raw"],
+                    observed_value=rm["raw_num"],
+                    observed_unit=rm["raw_unit"],
+                    normalized_value=rm["val_m"],
+                    normalized_unit="m",
+                    unit_verified=rm["verified"],
+                    is_approx=rm["is_approx"],
+                    reason_detail=f"Paired table row Depth D across handles {rm['handles']}.",
+                )
 
+        draft_matched = False
         for m in _DRAFT_RE.finditer(text if "T" in text else folded):
             raw_num = m.group(1) or m.group(3)
             raw_unit = m.group(2) if m.group(1) else m.group(4)
@@ -546,17 +904,81 @@ def _extract_particulars(
                         _append_unique(draft_values, val)
                     else:
                         _append_unique(unverified_unitless_particulars, f"T:{raw_num}")
+                    _add_seed(
+                        fact_key="draft_m",
+                        handles=[ehandle],
+                        entity_type=etype,
+                        layer=elayer,
+                        observed_raw=text,
+                        observed_value=_to_float(raw_num),
+                        observed_unit=(raw_unit or "").lower() or None,
+                        normalized_value=val,
+                        normalized_unit="m",
+                        unit_verified=verified,
+                        reason_detail=f"Design draft T from {etype} {ehandle}.",
+                    )
+                    draft_matched = True
+        if not draft_matched and (
+            folded.startswith("draft")
+            or folded.startswith("draught")
+            or folded.startswith("chieu chim")
+            or folded.startswith("mon nuoc")
+        ):
+            rm = _nearest_right_row_match(entry, entries, insunits=insunits)
+            if rm is not None:
+                if rm["verified"] and not rm["is_approx"]:
+                    _append_unique(draft_values, rm["val_m"])
+                elif not rm["verified"]:
+                    _append_unique(unverified_unitless_particulars, f"T:{rm['val_m']}")
+                _add_seed(
+                    fact_key="draft_m",
+                    handles=rm["handles"],
+                    entity_type=rm["entity_type"],
+                    layer=rm["layer"],
+                    observed_raw=rm["observed_raw"],
+                    observed_value=rm["raw_num"],
+                    observed_unit=rm["raw_unit"],
+                    normalized_value=rm["val_m"],
+                    normalized_unit="m",
+                    unit_verified=rm["verified"],
+                    is_approx=rm["is_approx"],
+                    reason_detail=f"Paired table row Draft T across handles {rm['handles']}.",
+                )
 
         eng_match = _ENGINE_RE.search(text)
         if eng_match:
             rhs = re.sub(r"\s+", " ", eng_match.group(1)).strip(" :-=")
             if rhs and rhs != "?":
                 _append_unique(main_engines, rhs)
+                _add_seed(
+                    fact_key="main_engine",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=rhs,
+                    observed_unit=None,
+                    normalized_value=rhs,
+                    normalized_unit=None,
+                    reason_detail=f"Main engine specification from {etype} {ehandle}.",
+                )
 
         for hull_m in _HULL_NO_RE.finditer(text):
             hno = hull_m.group(1).strip()
             if hno and hno != "?":
                 _append_unique(hull_nos, hno)
+                _add_seed(
+                    fact_key="hull_no",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=hno,
+                    observed_unit=None,
+                    normalized_value=hno.upper(),
+                    normalized_unit=None,
+                    reason_detail=f"Hull / yard number from {etype} {ehandle}.",
+                )
 
         for m in _SCALE_RE.finditer(folded):
             sc = _to_float(m.group(1))
@@ -580,18 +1002,66 @@ def _extract_particulars(
                 tag = f"VR-{m.group(1).upper()}"
                 _append_unique(class_notations, tag)
                 _append_unique(service_areas, "INLAND_WATERWAY")
+                _add_seed(
+                    fact_key="class_notation",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=tag,
+                    observed_unit=None,
+                    normalized_value=tag,
+                    normalized_unit=None,
+                    reason_detail=f"Inland class notation {tag} from {etype} {ehandle}.",
+                )
             for m in _EXPLICIT_CAP_RE.finditer(clause_clean):
                 tag = f"VR-{m.group(1).upper()}"
                 _append_unique(class_notations, tag)
                 _append_unique(service_areas, "INLAND_WATERWAY")
+                _add_seed(
+                    fact_key="class_notation",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=tag,
+                    observed_unit=None,
+                    normalized_value=tag,
+                    normalized_unit=None,
+                    reason_detail=f"Explicit class notation {tag} from {etype} {ehandle}.",
+                )
 
             if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
                 _append_unique(service_areas, "INLAND_WATERWAY")
+                _add_seed(
+                    fact_key="service_area",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value="INLAND_WATERWAY",
+                    observed_unit=None,
+                    normalized_value="INLAND_WATERWAY",
+                    normalized_unit=None,
+                    reason_detail=f"Inland waterway marker from {etype} {ehandle}.",
+                )
             if any(
                 tok in clause_clean
                 for tok in ("ocean going", "vien duong", "tau bien", "qcvn 21", "unrestricted service")
             ) or re.search(r"\bvrh\b", clause_clean):
                 _append_unique(service_areas, "OCEAN_GOING")
+                _add_seed(
+                    fact_key="service_area",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value="OCEAN_GOING",
+                    observed_unit=None,
+                    normalized_value="OCEAN_GOING",
+                    normalized_unit=None,
+                    reason_detail=f"Ocean-going service marker from {etype} {ehandle}.",
+                )
 
             if re.search(r"\bqcvn\s*21(?:\s*[:/]\s*\d{4})?\b", clause_clean):
                 _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_21_SEA_SHIP")
@@ -627,8 +1097,32 @@ def _extract_particulars(
             stype = ship_m.group(1).strip().upper()
             if stype:
                 _append_unique(ship_types, stype)
+                _add_seed(
+                    fact_key="ship_type",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=stype,
+                    observed_unit=None,
+                    normalized_value=stype,
+                    normalized_unit=None,
+                    reason_detail=f"Ship type declaration from {etype} {ehandle}.",
+                )
         elif "tau hang kho" in folded or "dry cargo" in folded:
             _append_unique(ship_types, "DRY CARGO")
+            _add_seed(
+                fact_key="ship_type",
+                handles=[ehandle],
+                entity_type=etype,
+                layer=elayer,
+                observed_raw=text,
+                observed_value="DRY CARGO",
+                observed_unit=None,
+                normalized_value="DRY CARGO",
+                normalized_unit=None,
+                reason_detail=f"Dry-cargo ship type marker from {etype} {ehandle}.",
+            )
 
         x_coord = entry.get("x")
         if x_coord is not None:
@@ -646,38 +1140,72 @@ def _extract_particulars(
                 rounded = round(thk, 3)
                 if has_plate_ctx:
                     extracted_plate_mm.append(rounded)
+                    pkey = "plate_thickness_mm"
                     if any(tok in folded for tok in ("ton day", "bottom", "keel")):
                         bottom_plate_mm.append(rounded)
+                        pkey = "bottom_plate_thickness_mm"
                     if any(tok in folded for tok in ("ton hong", "ton ha ma", "bilge")):
                         bilge_plate_mm.append(rounded)
+                        pkey = "bilge_plate_thickness_mm"
+                    _add_seed(
+                        fact_key=pkey,
+                        handles=[ehandle],
+                        entity_type=etype,
+                        layer=elayer,
+                        observed_raw=text,
+                        observed_value=rounded,
+                        observed_unit="mm",
+                        normalized_value=rounded,
+                        normalized_unit="mm",
+                        reason_detail=f"Component-bound hull plate thickness ({pkey}) from {etype} {ehandle}.",
+                    )
                 else:
                     unbound_plate_mm.append(rounded)
+                    _add_seed(
+                        fact_key="unbound_plate_thickness_mm",
+                        handles=[ehandle],
+                        entity_type=etype,
+                        layer=elayer,
+                        observed_raw=text,
+                        observed_value=rounded,
+                        observed_unit="mm",
+                        normalized_value=None,
+                        normalized_unit=None,
+                        is_unbound=True,
+                        reason_detail=(
+                            f"Unbound CAD text '{text}' on {etype} {ehandle} lacks bottom/bilge/hull structural label."
+                        ),
+                    )
 
-    return {
-        "design_length_l_m_values": design_length_l_m_values,
-        "lpp_m_values": lpp_values,
-        "lwl_m_values": lwl_values,
-        "breadth_m_values": breadth_values,
-        "depth_m_values": depth_values,
-        "draft_m_values": draft_values,
-        "main_engine_values": main_engines,
-        "hull_nos": hull_nos,
-        "class_notations": class_notations,
-        "service_areas": service_areas,
-        "explicit_exclusion_evidences": explicit_exclusion_evidences,
-        "ship_types": ship_types,
-        "claimed_scales": claimed_scales,
-        "ap_x_coords": ap_coords,
-        "fp_x_coords": fp_coords,
-        "extracted_plate_thicknesses_mm": extracted_plate_mm,
-        "bottom_plate_thicknesses_mm": bottom_plate_mm,
-        "bilge_plate_thicknesses_mm": bilge_plate_mm,
-        "unbound_plate_thicknesses_mm": unbound_plate_mm,
-        "corrupted_numeric_tokens": corrupted_numeric_tokens,
-        "unverified_unitless_particulars": unverified_unitless_particulars,
-        "non_marine_domain_hits": non_marine_domain_hits,
-        "negated_scope_texts": negated_scope_texts,
-    }
+    return (
+        {
+            "design_length_l_m_values": design_length_l_m_values,
+            "loa_m_values": loa_values,
+            "lpp_m_values": lpp_values,
+            "lwl_m_values": lwl_values,
+            "breadth_m_values": breadth_values,
+            "depth_m_values": depth_values,
+            "draft_m_values": draft_values,
+            "main_engine_values": main_engines,
+            "hull_nos": hull_nos,
+            "class_notations": class_notations,
+            "service_areas": service_areas,
+            "explicit_exclusion_evidences": explicit_exclusion_evidences,
+            "ship_types": ship_types,
+            "claimed_scales": claimed_scales,
+            "ap_x_coords": ap_coords,
+            "fp_x_coords": fp_coords,
+            "extracted_plate_thicknesses_mm": extracted_plate_mm,
+            "bottom_plate_thicknesses_mm": bottom_plate_mm,
+            "bilge_plate_thicknesses_mm": bilge_plate_mm,
+            "unbound_plate_thicknesses_mm": unbound_plate_mm,
+            "corrupted_numeric_tokens": corrupted_numeric_tokens,
+            "unverified_unitless_particulars": unverified_unitless_particulars,
+            "non_marine_domain_hits": non_marine_domain_hits,
+            "negated_scope_texts": negated_scope_texts,
+        },
+        raw_fact_seeds,
+    )
 
 
 def _infer_drawing_code(raw_code: object, entries: list[dict[str, Any]]) -> str:
@@ -700,7 +1228,12 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise TypeError("observation must be a mapping")
     if raw.get("_normalized_marine_obs") is True:
-        return deepcopy(dict(raw))
+        copied = deepcopy(dict(raw))
+        existing_facts = copied.get("engineering_facts", [])
+        if not isinstance(existing_facts, list):
+            raise MarineKnowledgeError("FACT_SCHEMA_INVALID")
+        copied["engineering_facts"] = [validate_engineering_fact(f) for f in existing_facts]
+        return copied
 
     drawing_id = str(raw.get("drawing_id") or "UNSPECIFIED_DRAWING").strip()
     entries = _normalize_text_entries(raw.get("texts", []))
@@ -708,7 +1241,22 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
     insunits = int(raw["insunits"]) if isinstance(raw.get("insunits"), int) else 0
     measurement = int(raw["measurement"]) if isinstance(raw.get("measurement"), int) else 0
 
-    particulars = _extract_particulars(entries, raw, insunits=insunits)
+    sheet_id, sheet_handles, revision, revision_handles = _extract_sheet_and_revision(entries)
+    if revision is None and isinstance(raw.get("revision"), str) and raw["revision"].strip():
+        revision = raw["revision"].strip()
+    if sheet_id is None and isinstance(raw.get("sheet_id"), str) and raw["sheet_id"].strip():
+        sheet_id = raw["sheet_id"].strip()
+
+    raw_dsha = raw.get("drawing_sha256")
+    drawing_sha256 = (
+        raw_dsha.strip().lower()
+        if isinstance(raw_dsha, str) and len(raw_dsha.strip()) == 64
+        else None
+    )
+    raw_dpath = raw.get("drawing_path")
+    drawing_path = str(raw_dpath) if isinstance(raw_dpath, str) and raw_dpath.strip() else None
+
+    particulars, raw_fact_seeds = _extract_particulars(entries, raw, insunits=insunits)
     raw_metrics = raw.get("structural_metrics")
     structural_metrics = dict(raw_metrics) if isinstance(raw_metrics, Mapping) else {}
     min_plate_from_unbound_text = False
@@ -741,7 +1289,25 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
 
     source_mode = str(raw.get("source_mode") or ("OCR_ONLY" if raw.get("ocr_only") else "STRUCTURED_OR_DXF"))
     entity_counts = dict(raw.get("entity_counts", {})) if isinstance(raw.get("entity_counts"), Mapping) else {}
+    raw_dims_in = raw.get("dimensions")
+    dimensions: list[dict[str, Any]] = []
+    if isinstance(raw_dims_in, list):
+        for d_item in raw_dims_in:
+            if isinstance(d_item, Mapping):
+                dimensions.append(
+                    {
+                        "handle": str(d_item.get("handle") or ""),
+                        "layer": str(d_item.get("layer") or "0"),
+                        "raw_text": str(d_item.get("raw_text") or ""),
+                        "actual_measurement": _to_float(d_item.get("actual_measurement")),
+                    }
+                )
+
     observed_handles = [entry["handle"] for entry in entries if entry.get("handle")]
+    for dim_rec in dimensions:
+        if dim_rec["handle"] and dim_rec["handle"] not in observed_handles:
+            observed_handles.append(dim_rec["handle"])
+
     explicit_geom_status = str(raw.get("geometry_status") or "").strip().upper()
     if explicit_geom_status:
         geometry_status = explicit_geom_status
@@ -768,6 +1334,7 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
             metric_provenance[metric_key] = "UNVERIFIED_OCR_TEXT" if is_ocr else "NATIVE_CAD_TEXT"
     for p_key, p_list_key in (
         ("design_length_l_m", "design_length_l_m_values"),
+        ("loa_m", "loa_m_values"),
         ("lpp_m", "lpp_m_values"),
         ("lwl_m", "lwl_m_values"),
         ("breadth_m", "breadth_m_values"),
@@ -777,6 +1344,161 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
     ):
         if p_key not in metric_provenance and particulars.get(p_list_key):
             metric_provenance[p_key] = "UNVERIFIED_OCR_TEXT" if is_ocr else "NATIVE_CAD_TEXT"
+
+    has_native_dxf = (not is_ocr) and (drawing_sha256 is not None) and (source_mode.upper() == "NATIVE_DXF_SNAPSHOT")
+    engineering_facts: list[dict[str, Any]] = []
+    seen_fact_shas: set[str] = set()
+
+    def _append_fact(fact: dict[str, Any]) -> None:
+        if fact["fact_sha256"] not in seen_fact_shas:
+            seen_fact_shas.add(fact["fact_sha256"])
+            engineering_facts.append(fact)
+
+    for seed in raw_fact_seeds:
+        if is_ocr:
+            prov_cls = "OCR_ONLY"
+            v_state = "UNVERIFIED_OCR"
+            reason = f"OCR_ONLY input: {seed['reason_detail']} Cannot verify CAD accuracy."
+        elif seed["is_unbound"]:
+            if has_native_dxf:
+                prov_cls = "NATIVE_CAD_UNBOUND_TEXT"
+                v_state = "UNVERIFIED_UNBOUND_TEXT"
+                reason = seed["reason_detail"]
+            else:
+                prov_cls = "FIXTURE_SUPPLIED"
+                v_state = "FIXTURE_UNBOUND_TO_DXF_BYTES"
+                reason = f"Fixture-supplied unbound text without DXF bytes: {seed['reason_detail']}"
+        elif has_native_dxf:
+            prov_cls = "NATIVE_CAD_EVIDENCE"
+            if not seed["unit_verified"]:
+                v_state = "UNVERIFIED_UNITLESS"
+                reason = f"Unitless drawing ($INSUNITS={insunits}) without explicit unit: {seed['reason_detail']}"
+            elif seed["is_approx"]:
+                v_state = "PROVISIONAL_APPROXIMATE"
+                reason = f"Marked approximate (ABT./APPROX.) on CAD entity: {seed['reason_detail']}"
+            else:
+                v_state = "VERIFIED"
+                reason = f"Bound native CAD entity evidence (sha256={drawing_sha256[:12]}): {seed['reason_detail']}"
+        else:
+            prov_cls = "FIXTURE_SUPPLIED"
+            if not seed["unit_verified"]:
+                v_state = "UNVERIFIED_UNITLESS"
+                reason = f"Fixture-supplied unitless value ($INSUNITS={insunits}): {seed['reason_detail']}"
+            elif seed["is_approx"]:
+                v_state = "PROVISIONAL_APPROXIMATE"
+                reason = f"Fixture-supplied approximate value: {seed['reason_detail']}"
+            else:
+                v_state = "FIXTURE_UNBOUND_TO_DXF_BYTES"
+                reason = f"Structured fixture input without raw DXF SHA-256 bytes: {seed['reason_detail']}"
+
+        _append_fact(
+            build_engineering_fact(
+                domain="marine",
+                drawing_id=drawing_id,
+                drawing_path=drawing_path,
+                drawing_sha256=drawing_sha256,
+                sheet_id=sheet_id,
+                revision=revision,
+                fact_key=seed["fact_key"],
+                entity_handles=seed["handles"],
+                entity_type=seed["entity_type"],
+                layer=seed["layer"],
+                observed_raw=seed["observed_raw"],
+                observed_value=seed["observed_value"],
+                observed_unit=seed["observed_unit"],
+                normalized_value=seed["normalized_value"] if not is_ocr else None,
+                normalized_unit=seed["normalized_unit"] if not is_ocr else None,
+                provenance_class=prov_cls,
+                verification_state=v_state,
+                trust_reason=reason,
+            )
+        )
+
+    if isinstance(raw_metrics, Mapping):
+        for m_key, m_val in raw_metrics.items():
+            if not isinstance(m_val, (int, float)) or isinstance(m_val, bool):
+                continue
+            fval = float(m_val)
+            if not math.isfinite(fval):
+                continue
+            m_unit = "mm" if m_key.endswith("_mm") else "count"
+            m_prov_raw = metric_provenance.get(m_key, "")
+            if is_ocr or m_prov_raw == "UNVERIFIED_OCR_TEXT":
+                _append_fact(
+                    build_engineering_fact(
+                        domain="marine",
+                        drawing_id=drawing_id,
+                        drawing_path=drawing_path,
+                        drawing_sha256=drawing_sha256,
+                        sheet_id=sheet_id,
+                        revision=revision,
+                        fact_key=str(m_key),
+                        entity_handles=[],
+                        entity_type="NONE",
+                        layer=None,
+                        observed_raw=f"{m_key}={fval}",
+                        observed_value=fval,
+                        observed_unit=m_unit,
+                        normalized_value=None,
+                        normalized_unit=None,
+                        provenance_class="OCR_ONLY",
+                        verification_state="UNVERIFIED_OCR",
+                        trust_reason=f"Metric {m_key} originated from unverified OCR text.",
+                    )
+                )
+            else:
+                _append_fact(
+                    build_engineering_fact(
+                        domain="marine",
+                        drawing_id=drawing_id,
+                        drawing_path=drawing_path,
+                        drawing_sha256=drawing_sha256,
+                        sheet_id=sheet_id,
+                        revision=revision,
+                        fact_key=str(m_key),
+                        entity_handles=[],
+                        entity_type="NONE",
+                        layer=None,
+                        observed_raw=f"{m_key}={fval}",
+                        observed_value=fval,
+                        observed_unit=m_unit,
+                        normalized_value=fval,
+                        normalized_unit=m_unit,
+                        provenance_class="FIXTURE_SUPPLIED",
+                        verification_state="FIXTURE_UNBOUND_TO_DXF_BYTES",
+                        trust_reason=f"Metric {m_key} supplied directly in observation payload without CAD handle binding.",
+                    )
+                )
+
+    for dim_rec in dimensions:
+        _append_fact(
+            evaluate_dimension_fact(
+                dim_rec,
+                drawing_id=drawing_id,
+                drawing_path=drawing_path,
+                drawing_sha256=drawing_sha256,
+                sheet_id=sheet_id,
+                revision=revision,
+                insunits=insunits,
+                calibration_verified=False,
+                verified_scale_to_mm=None,
+                ocr_only=is_ocr,
+            )
+        )
+
+    drawing_evidence = {
+        "drawing_id": drawing_id,
+        "drawing_path": drawing_path,
+        "drawing_sha256": drawing_sha256,
+        "sheet_id": sheet_id,
+        "sheet_handles": sheet_handles,
+        "revision": revision,
+        "revision_handles": revision_handles,
+        "source_mode": source_mode,
+        "insunits": insunits,
+        "calibration_verified": insunits in {4, 5, 6},
+        "fact_count": len(engineering_facts),
+    }
 
     return {
         "_normalized_marine_obs": True,
@@ -791,6 +1513,9 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         "observed_handles": observed_handles,
         "entity_counts": entity_counts,
         "texts": entries,
+        "dimensions": dimensions,
+        "drawing_evidence": drawing_evidence,
+        "engineering_facts": engineering_facts,
         "particulars": particulars,
         "structural_metrics": structural_metrics,
         "metric_provenance": metric_provenance,

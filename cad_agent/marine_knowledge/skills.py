@@ -18,9 +18,31 @@ from .contracts import (
     validate_check_result,
     verify_source_citation,
 )
+from .evidence_binding import rebind_observation_dimensions, validate_engineering_fact
 from .manifest import get_marine_source_manifest
 from .observer import normalize_observation
 from .pack import get_marine_knowledge_pack, is_marine_pack_enabled
+
+
+def _select_bound_facts(
+    obs_list: Sequence[Mapping[str, Any]],
+    fact_keys: Sequence[str],
+    *,
+    drawing_id: str | None = None,
+) -> list[dict[str, Any]]:
+    wanted = set(fact_keys)
+    matched: list[dict[str, Any]] = []
+    for obs in obs_list:
+        if drawing_id is not None and obs.get("drawing_id") not in {drawing_id}:
+            # Still allow package-wide length facts (design_length_l_m / lwl_m) from sibling sheets
+            for f in obs.get("engineering_facts", []):
+                if f.get("fact_key") in {"design_length_l_m", "lwl_m", "lpp_m"} and f.get("fact_key") in wanted:
+                    matched.append(deepcopy(f))
+            continue
+        for f in obs.get("engineering_facts", []):
+            if f.get("fact_key") in wanted:
+                matched.append(deepcopy(f))
+    return matched
 
 _INSUNITS_TO_MM: dict[int, float] = {
     4: 1.0,     # Millimeters
@@ -47,6 +69,12 @@ def _validate_scale_arg(verified_scale_to_mm: object) -> float | None:
     if not math.isfinite(val) or val <= 0.0:
         raise MarineKnowledgeError("CALIBRATION_SCALE_INVALID")
     return val
+
+
+def _validate_calibration_flag(calibration_verified: object) -> bool:
+    if type(calibration_verified) is not bool:
+        raise MarineKnowledgeError("CALIBRATION_FLAG_INVALID")
+    return calibration_verified
 
 
 def build_marine_core_proposal(
@@ -659,7 +687,14 @@ def evaluate_regulation_applicability_and_submittal(
 
     scale_mm = _validate_scale_arg(verified_scale_to_mm)
     pack, rules_by_id = _pack_context()
-    obs_list = _to_obs_list(observations)
+    obs_list = [
+        rebind_observation_dimensions(
+            o,
+            calibration_verified=calibration_verified,
+            verified_scale_to_mm=scale_mm,
+        )
+        for o in _to_obs_list(observations)
+    ]
     if target_regulation not in SUPPORTED_REGULATIONS:
         unsupported_reason = (
             f"Unsupported regulation version {target_regulation!r}; "
@@ -1539,6 +1574,11 @@ def evaluate_regulation_applicability_and_submittal(
                                 "length_basis": length_basis,
                                 "observed_bulkheads": int(min_bh),
                                 "required_min": req_hi,
+                                "bound_facts": _select_bound_facts(
+                                    obs_list,
+                                    ("design_length_l_m", "lwl_m", "transverse_watertight_bulkhead_count"),
+                                    drawing_id=worst_did,
+                                ),
                             },
                             reason=(
                                 f"L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires >= {req_hi} transverse "
@@ -1673,6 +1713,17 @@ def evaluate_regulation_applicability_and_submittal(
                                 "required_min_db_height_mm": req_db_mm,
                                 "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
                                 "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
+                                "bound_facts": _select_bound_facts(
+                                    obs_list,
+                                    (
+                                        "design_length_l_m",
+                                        "lwl_m",
+                                        "double_bottom_height_mm",
+                                        "bottom_girder_max_spacing_mm",
+                                        "transverse_floor_max_spacing_mm",
+                                    ),
+                                    drawing_id=worst_db_id,
+                                ),
                             },
                             reason=db_reason,
                         )
@@ -1799,6 +1850,18 @@ def evaluate_regulation_applicability_and_submittal(
                                 "floor_mm": 2.5,
                                 "bottom_floor_mm": 3.0,
                                 "bilge_floor_mm": 4.0,
+                                "bound_facts": _select_bound_facts(
+                                    obs_list,
+                                    (
+                                        "design_length_l_m",
+                                        "lwl_m",
+                                        "plate_thickness_mm",
+                                        "bottom_plate_thickness_mm",
+                                        "bilge_plate_thickness_mm",
+                                        "min_plate_thickness_mm",
+                                    ),
+                                    drawing_id=worst_pl_id,
+                                ),
                             },
                             reason=(
                                 f"L in [{l_lo:.2f}, {l_hi:.2f}]m (<20m) plating min={min_pl_mm:.2f} mm "
@@ -1972,7 +2035,14 @@ def detect_drawing_gaps_and_conflicts(
 
     scale_mm = _validate_scale_arg(verified_scale_to_mm)
     pack, rules_by_id = _pack_context()
-    obs_list = _to_obs_list(observations)
+    obs_list = [
+        rebind_observation_dimensions(
+            o,
+            calibration_verified=calibration_verified,
+            verified_scale_to_mm=scale_mm,
+        )
+        for o in _to_obs_list(observations)
+    ]
     findings: list[dict[str, Any]] = []
     proposals: list[dict[str, Any]] = []
     checks_executed: list[str] = []
@@ -2170,6 +2240,43 @@ def detect_drawing_gaps_and_conflicts(
                     rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
                     evidence={"drawing_id": did, "metric_provenance": obs.get("metric_provenance")},
                     reason=f"Drawing {did} contains metrics with UNVERIFIED_OCR_TEXT provenance.",
+                )
+            )
+
+        dim_override_conflicts = [
+            deepcopy(f)
+            for f in obs.get("engineering_facts", [])
+            if f.get("entity_type") == "DIMENSION" and f.get("verification_state") == "CONFLICTING_OVERRIDE"
+        ]
+        if dim_override_conflicts:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_DIMENSION_TEXT_OVERRIDE_CONFLICT_{did}",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={
+                        "drawing_id": did,
+                        "conflicting_dimension_handles": [
+                            h for f in dim_override_conflicts for h in f.get("entity_handles", [])
+                        ],
+                        "bound_facts": dim_override_conflicts,
+                    },
+                    reason=(
+                        f"Native CAD DIMENSION override text conflicts with measured geometry on {did}: "
+                        f"handles={[h for f in dim_override_conflicts for h in f.get('entity_handles', [])]}."
+                    ),
+                )
+            )
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=did,
+                    action_kind="VERIFY_CAD_GEOMETRY_ENTITIES",
+                    evidence={
+                        "conflicting_dimension_handles": [
+                            h for f in dim_override_conflicts for h in f.get("entity_handles", [])
+                        ]
+                    },
                 )
             )
 
@@ -2544,7 +2651,274 @@ def detect_drawing_gaps_and_conflicts(
     )
 
 
+def audit_engineering_evidence_binding(
+    observations: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    calibration_verified: bool = False,
+    verified_scale_to_mm: float | None = None,
+    require_native_verified_facts: bool = False,
+    partial_package: bool = True,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    """V1-A Skill: Audit CAD entity provenance, unit calibration, and trustworthiness of Engineering Facts."""
+    skill_id = "SKILL_V1A_EVIDENCE_BINDING"
+    if not is_marine_pack_enabled(enabled):
+        return _disabled_result(skill_id, "Marine Knowledge Pack disabled; V1-A evidence binding audit skipped.")
+
+    _validate_calibration_flag(calibration_verified)
+    scale_mm = _validate_scale_arg(verified_scale_to_mm)
+    pack, rules_by_id = _pack_context()
+    raw_list = _to_obs_list(observations)
+    obs_list = [
+        rebind_observation_dimensions(
+            o,
+            calibration_verified=calibration_verified,
+            verified_scale_to_mm=scale_mm,
+        )
+        for o in raw_list
+    ]
+    findings: list[dict[str, Any]] = []
+    proposals: list[dict[str, Any]] = []
+    checks_executed: list[str] = [
+        "EngineeringFact schema & provenance binding audit (engineering-fact-1.0)",
+        "Native DXF DIMENSION override vs actual_measurement audit",
+        "CAD unit calibration & non-fabricated metadata check",
+    ]
+    checks_not_executed: list[str] = []
+    limitations: list[str] = [
+        "Read-only V1-A evidence binding audit; never mutates CAD drawings or proves statutory certification.",
+    ]
+
+    if not obs_list:
+        return validate_check_result(
+            {
+                "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+                "skill_id": skill_id,
+                "pack_id": pack["id"],
+                "pack_sha256": pack["pack_sha256"],
+                "pack_status": pack["status"],
+                "cad_mutation": False,
+                "regulatory_compliance_proven": False,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "summary": "No observations provided for V1-A engineering evidence binding audit.",
+                "observed_scope": {"drawing_count": 0, "drawings": []},
+                "applicable_regulation_scope": {"scope_checked": False},
+                "partial_package": bool(partial_package),
+                "findings": [],
+                "checks_executed": checks_executed,
+                "checks_not_executed": ["Per-drawing fact verification (empty input)"],
+                "limitations": limitations,
+                "proposal_only_actions": [],
+            }
+        )
+
+    drawing_summaries: list[dict[str, Any]] = []
+    total_verified_facts = 0
+
+    for obs in obs_list:
+        did = obs["drawing_id"]
+        facts: list[dict[str, Any]] = [validate_engineering_fact(f) for f in obs.get("engineering_facts", [])]
+        ev = dict(obs.get("drawing_evidence") or {})
+        by_state: dict[str, int] = {}
+        by_prov: dict[str, int] = {}
+        for f in facts:
+            by_state[f["verification_state"]] = by_state.get(f["verification_state"], 0) + 1
+            by_prov[f["provenance_class"]] = by_prov.get(f["provenance_class"], 0) + 1
+            if f["verification_state"] == "VERIFIED":
+                total_verified_facts += 1
+
+        drawing_summaries.append(
+            {
+                "drawing_id": did,
+                "drawing_evidence": ev,
+                "counts_by_provenance": by_prov,
+                "counts_by_verification_state": by_state,
+                "engineering_facts": deepcopy(facts),
+            }
+        )
+
+        override_conflicts = [f for f in facts if f["verification_state"] == "CONFLICTING_OVERRIDE"]
+        if override_conflicts:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_DIMENSION_TEXT_OVERRIDE_CONFLICT_{did}",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={
+                        "drawing_id": did,
+                        "bound_facts": deepcopy(override_conflicts),
+                    },
+                    reason=(
+                        f"Drawing {did} has {len(override_conflicts)} DIMENSION entity override conflict(s) "
+                        f"against actual_measurement."
+                    ),
+                )
+            )
+            proposals.append(
+                build_marine_core_proposal(
+                    target_drawing_id=did,
+                    action_kind="VERIFY_CAD_GEOMETRY_ENTITIES",
+                    evidence={"drawing_id": did, "conflict_count": len(override_conflicts)},
+                )
+            )
+
+        if obs.get("ocr_only") or by_prov.get("OCR_ONLY", 0) > 0:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_OCR_ONLY_EVIDENCE_{did}",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={"drawing_id": did, "ocr_fact_count": by_prov.get("OCR_ONLY", 0)},
+                    reason=f"Drawing {did} relies on OCR_ONLY inputs which cannot establish verified CAD facts.",
+                )
+            )
+
+        if ev.get("drawing_sha256") is None or by_prov.get("FIXTURE_SUPPLIED", 0) > 0:
+            if require_native_verified_facts or by_prov.get("FIXTURE_SUPPLIED", 0) > 0:
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id=f"F_NON_NATIVE_FIXTURE_EVIDENCE_{did}",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                        evidence={
+                            "drawing_id": did,
+                            "drawing_sha256": ev.get("drawing_sha256"),
+                            "fixture_fact_count": by_prov.get("FIXTURE_SUPPLIED", 0),
+                        },
+                        reason=(
+                            f"Drawing {did} contains FIXTURE_SUPPLIED facts or lacks bound DXF SHA-256."
+                        ),
+                    )
+                )
+
+        unbound_facts = [f for f in facts if f["verification_state"] == "UNVERIFIED_UNBOUND_TEXT"]
+        if unbound_facts:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_UNBOUND_CAD_TEXT_FACTS_{did}",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={
+                        "drawing_id": did,
+                        "unbound_fact_count": len(unbound_facts),
+                        "bound_facts": deepcopy(unbound_facts),
+                    },
+                    reason=(
+                        f"Drawing {did} has {len(unbound_facts)} unbound CAD text fact(s) not tied to a "
+                        "specific structural component or table field."
+                    ),
+                )
+            )
+
+        inferred_facts = [f for f in facts if f["verification_state"] == "UNVERIFIED_INFERRED"]
+        if inferred_facts:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_INFERRED_OR_UNMEASURABLE_FACTS_{did}",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={
+                        "drawing_id": did,
+                        "inferred_fact_count": len(inferred_facts),
+                        "bound_facts": deepcopy(inferred_facts),
+                    },
+                    reason=(
+                        f"Drawing {did} has {len(inferred_facts)} unmeasurable or inferred fact(s) "
+                        "(e.g. DIMENSION with actual_measurement <= 0)."
+                    ),
+                )
+            )
+
+        unitless_facts = [f for f in facts if f["verification_state"] == "UNVERIFIED_UNITLESS"]
+        if unitless_facts:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_UNCALIBRATED_GEOMETRY_FACTS_{did}",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={
+                        "drawing_id": did,
+                        "uncalibrated_fact_count": len(unitless_facts),
+                        "bound_facts": deepcopy(unitless_facts[:10]),
+                    },
+                    reason=(
+                        f"Drawing {did} has {len(unitless_facts)} uncalibrated unitless CAD/DIMENSION fact(s) "
+                        "($INSUNITS=0 without verified calibration)."
+                    ),
+                )
+            )
+
+    verdicts = [f["verdict"] for f in findings]
+    if "CONFLICT" in verdicts:
+        overall = "CONFLICT"
+    elif "INSUFFICIENT_EVIDENCE" in verdicts or total_verified_facts == 0:
+        overall = "INSUFFICIENT_EVIDENCE"
+        if not findings and total_verified_facts == 0:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_NO_VERIFIED_ENGINEERING_FACTS",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={"drawing_ids": [o["drawing_id"] for o in obs_list]},
+                    reason="No VERIFIED native CAD engineering facts were established on the supplied observations.",
+                )
+            )
+    else:
+        overall = "PASS"
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id="F_ENGINEERING_EVIDENCE_BOUND",
+                verdict="PASS",
+                rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                evidence={
+                    "drawing_ids": [o["drawing_id"] for o in obs_list],
+                    "verified_fact_count": total_verified_facts,
+                },
+                reason=f"Bound {total_verified_facts} VERIFIED native CAD engineering fact(s) with no conflicts.",
+            )
+        )
+
+    summary = (
+        f"V1-A Evidence Binding audit across {len(obs_list)} drawing(s): status={overall}, "
+        f"verified_facts={total_verified_facts}, findings={len(findings)}."
+    )
+    return validate_check_result(
+        {
+            "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+            "skill_id": skill_id,
+            "pack_id": pack["id"],
+            "pack_sha256": pack["pack_sha256"],
+            "pack_status": pack["status"],
+            "cad_mutation": False,
+            "regulatory_compliance_proven": False,
+            "status": overall,
+            "summary": summary,
+            "observed_scope": {
+                "drawing_count": len(obs_list),
+                "verified_fact_count": total_verified_facts,
+                "drawings": drawing_summaries,
+            },
+            "applicable_regulation_scope": {"scope_checked": False},
+            "partial_package": bool(partial_package),
+            "findings": findings,
+            "checks_executed": checks_executed,
+            "checks_not_executed": checks_not_executed,
+            "limitations": limitations,
+            "proposal_only_actions": proposals,
+        }
+    )
+
+
 __all__ = [
+    "audit_engineering_evidence_binding",
     "build_marine_core_proposal",
     "classify_marine_drawing",
     "detect_drawing_gaps_and_conflicts",
