@@ -799,3 +799,96 @@ def test_existing_angular_unit_interpretation_is_preserved(tmp_path: Path, unit:
     reopened = ezdxf.readfile(path)
     reasons = audit_dimension_truth(reopened, reopened.entitydb[dim.dxf.handle])
     assert (not reasons) is want_pass
+
+
+def test_explicit_override_cache_cannot_hide_configured_limits(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimlim=1, dimtol=0, dimtp=0.1, dimtm=0.1,
+    )
+    dim.dxf.text = "100"
+    _set_rendered_block_text(dim, "100")
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert not result.passed
+    assert result.qualification != "QUALIFIED"
+
+
+def test_converted_unit_cannot_conceal_physical_tolerance_mismatch(tmp_path: Path) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimtol=1, dimtp=0.1, dimtm=0.1,
+        dimtfac=0.5, dimtdec=2, dimtzin=0,
+    )
+    dim.dxf.text = "10 cm"
+    expected = Tolerance(DimStyleOverride(dim)).compile_mtext("10 cm")
+    _set_rendered_block_text(dim, expected)
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert not result.passed
+    assert result.qualification != "QUALIFIED"
+
+
+def test_native_mm_tolerance_control_remains_supported(tmp_path: Path) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimtol=1, dimtp=0.1, dimtm=0.1,
+        dimtfac=0.5, dimtdec=2, dimtzin=0,
+    )
+    dim.dxf.text = "100 mm"
+    _set_rendered_block_text(dim, Tolerance(DimStyleOverride(dim)).compile_mtext("100 mm"))
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+def test_converted_primary_without_tolerance_remains_supported(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = "10 cm"
+    _set_rendered_block_text(dim, "10 cm")
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+def test_explicit_override_cannot_skip_unsupported_alternate_units(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path, dimalt=1)
+    dim.dxf.text = "100"
+    _set_rendered_block_text(dim, "100")
+    doc.saveas(built.output_path)
+    assert not review_dxf_with_dimension_line_integrity(built).passed
+
+
+@pytest.mark.parametrize("style_values,label", [
+    ({"dimlim": 1, "dimtol": 0, "dimtp": 0.1, "dimtm": 0.1}, "99"),
+    ({"dimtol": 1, "dimtp": 0.1, "dimtm": 0.1}, "99 cm"),
+    ({"dimalt": 1}, "99"),
+])
+def test_known_primary_contradiction_remains_failed_with_unverified_style(
+    tmp_path: Path, style_values: dict, label: str,
+) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    built, doc, dim = _explicit_truth_control(tmp_path, **style_values)
+    dim.dxf.text = label
+    rendered = Tolerance(DimStyleOverride(dim)).compile_mtext(label) if style_values.get("dimtol") else label
+    _set_rendered_block_text(dim, rendered)
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "FAILED"
+
+
+def test_converted_tolerance_context_is_explicitly_unverified(tmp_path: Path) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimtol=1, dimtp=0.1, dimtm=0.1, dimtdec=2, dimtzin=0,
+    )
+    dim.dxf.text = "10 cm"
+    _set_rendered_block_text(dim, Tolerance(DimStyleOverride(dim)).compile_mtext("10 cm"))
+    doc.saveas(built.output_path)
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "UNKNOWN"
+    assert any("dim_unverified_tolerance_units" in reason for reason in result.semantic_review.dimension_mismatches)

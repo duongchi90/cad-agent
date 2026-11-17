@@ -89,6 +89,7 @@ class DimensionDisplay:
     scaled_value: float | None
     tolerance: float
     source: str
+    claim_unit_factor: float = 1.0
 
 
 def plain_cad_text(text: str | None) -> str:
@@ -275,16 +276,16 @@ def _claim_in_reference_units(value: float, suffix: str, *, angular: bool, angle
     raise _UnverifiedClaim("unsupported linear unit/annotation suffix")
 
 
-def _extract_primary_numeric_claim(
+def _parse_primary_numeric_claim(
     plain_text: str,
     *,
     angular: bool = False,
     angle_unit: int = 0,
-) -> float | None:
-    """Parse one unambiguous numeric value from plain CAD dimension text."""
+) -> tuple[float | None, float]:
+    """Keep the claim's conversion context beside its reference-unit value."""
     text = (plain_text or "").strip().translate(_NUMERIC_SIGNS)
     if not text:
-        return None
+        return None, 1.0
     if angular and angle_unit == 1:
         dms = _DMS_RE.match(text)
         if dms:
@@ -293,7 +294,7 @@ def _extract_primary_numeric_claim(
             secs = float((dms.group(3) or "0").replace(",", "."))
             sign = -1.0 if dms.group(1).startswith("-") else 1.0
             val = sign * (abs(deg) + mins / 60.0 + secs / 3600.0)
-            return val if math.isfinite(val) else None
+            return (val if math.isfinite(val) else None), 1.0
 
     cleaned = _COUNT_PREFIX_RE.sub("", text, count=1).strip()
     if cleaned and cleaned[0] in f"{DIAMETER_SIGNS}MR":
@@ -302,29 +303,37 @@ def _extract_primary_numeric_claim(
 
     matches = list(_NUMERIC_TOKEN_RE.finditer(cleaned))
     if len(matches) != 1:
-        return None
+        return None, 1.0
     match = matches[0]
     # An unknown prefix cannot discard a sign. A complete suffix must resolve
     # through supported units/qualifiers rather than being treated as harmless.
     if match.start() != 0:
-        return None
+        return None, 1.0
     suffix = cleaned[match.end():]
     token = match.group()
     if "e" in token or "E" in token:
-        return None
+        return None, 1.0
     next_ch = cleaned[match.end()] if match.end() < len(cleaned) else ""
     if next_ch and next_ch in ".,%eE":
-        return None
+        return None, 1.0
     if suffix and not any(char.isalpha() or char == "°" for char in suffix):
-        return None
+        return None, 1.0
     try:
         parsed = float(token.replace(",", "."))
     except ValueError:
-        return None
+        return None, 1.0
     if not math.isfinite(parsed):
-        return None
+        return None, 1.0
     converted = _claim_in_reference_units(parsed, suffix, angular=angular, angle_unit=angle_unit)
-    return converted if math.isfinite(converted) else None
+    factor = _claim_in_reference_units(1.0, suffix, angular=angular, angle_unit=angle_unit)
+    return (converted if math.isfinite(converted) else None), factor
+
+
+def _extract_primary_numeric_claim(
+    plain_text: str, *, angular: bool = False, angle_unit: int = 0,
+) -> float | None:
+    """Preserve the existing scalar helper while sharing one claim parser."""
+    return _parse_primary_numeric_claim(plain_text, angular=angular, angle_unit=angle_unit)[0]
 
 
 def _is_finite_number(value: object) -> bool:
@@ -576,10 +585,10 @@ def resolve_dimension_display(
     if override and override != "<>" and "<>" not in override:
         plain = normalize_dim_text(plain_cad_text(override)) or ""
         try:
-            parsed = _extract_primary_numeric_claim(plain, angular=angular, angle_unit=angle_unit)
+            parsed, unit_factor = _parse_primary_numeric_claim(plain, angular=angular, angle_unit=angle_unit)
         except _UnverifiedClaim:
             return DimensionDisplay(plain, None, scaled, 0.0, "unverified_claim")
-        return DimensionDisplay(plain, parsed, scaled, 0.0, "override")
+        return DimensionDisplay(plain, parsed, scaled, 0.0, "override", unit_factor)
 
     if style is None:
         return DimensionDisplay(None, None, scaled, 0.0, "unknown")
@@ -601,10 +610,10 @@ def resolve_dimension_display(
     raw_text = override.replace("<>", formatted, 1) if override and override != "<>" else formatted
     shown_text = normalize_dim_text(plain_cad_text(raw_text))
     try:
-        claim = _extract_primary_numeric_claim(shown_text or "", angular=angular, angle_unit=angle_unit)
+        claim, unit_factor = _parse_primary_numeric_claim(shown_text or "", angular=angular, angle_unit=angle_unit)
     except _UnverifiedClaim:
         return DimensionDisplay(shown_text, None, scaled, tol, "unverified_claim")
-    return DimensionDisplay(shown_text, claim, scaled, tol, "measurement")
+    return DimensionDisplay(shown_text, claim, scaled, tol, "measurement", unit_factor)
 
 
 def audit_dimension_truth(
@@ -640,6 +649,12 @@ def audit_dimension_truth(
 
     dimtol_enabled = bool(int(style["dimtol"]))
     dimlim_enabled = bool(int(style["dimlim"]))
+    if int(style["dimalt"]):
+        reasons.append("dim_unverified_alternate_units")
+    if dimlim_enabled and not dimtol_enabled:
+        # Unsupported configured limits remain non-PASS for explicit overrides
+        # as well as generated labels. Keep proven primary mismatches intact.
+        reasons.append("dim_unverified_limits")
     if dimtol_enabled or dimlim_enabled:
         raw_dimtfac = style.get("dimtfac")
         if not _is_finite_number(raw_dimtfac) or float(raw_dimtfac) <= 0.0:
@@ -677,6 +692,10 @@ def audit_dimension_truth(
         measured = math.nan
 
     disp = resolve_dimension_display(dimtype, measured, override_text, dimlfac, style)
+    if dimtol_enabled and disp.claim_unit_factor != 1.0:
+        # Tolerance's raw style amounts remain in native reference units. Its
+        # literal output cannot establish a converted primary's tolerance units.
+        reasons.append("dim_unverified_tolerance_units")
     ref_value = approved_value_mm if approved_value_mm is not None else expected_measurement
     if ref_value is None and math.isfinite(measured):
         ref_value = measured
