@@ -105,12 +105,12 @@ def strip_mtext_formatting(raw: str) -> tuple[str, str]:
 
 
 def _looks_like_tcvn3(text: str, font_hint: str) -> bool:
+    # Never re-decode text that already contains Unicode characters above Latin-1.
+    if any(ord(ch) > 0xFF for ch in text):
+        return False
     hint = font_hint.lower()
     if ".vn" in hint or "tcvn" in hint:
         return True
-    # Already contains Unicode characters above Latin-1 (modern Vietnamese UTF-8).
-    if any(ord(ch) > 0xFF for ch in text):
-        return False
     if any(ch in _EXCLUSIVE_TCVN3_CHARS for ch in text):
         return True
     return bool(_MID_WORD_TCVN3_RE.search(text))

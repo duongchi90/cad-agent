@@ -84,6 +84,7 @@ def test_term_lookup_rule_query_text_normalization_and_disable_toggle(
     assert normalize_marine_cad_text("§.ChuÈn", font_hint=".VnAvantH") == "Đ.Chuẩn"
     assert normalize_marine_cad_text("§.ChuÈn") == "Đ.Chuẩn"
     assert normalize_marine_cad_text("bè trÝ chung") == "bố trí chung"
+    assert normalize_marine_cad_text("bố trí chung", font_hint=".VnAvantH") == "bố trí chung"
     assert normalize_marine_cad_text("boong d\xadíi") == "boong dưới"
     assert normalize_marine_cad_text("boong duíi") == "boong duới"
     assert normalize_marine_cad_text("Kho¶ng s­ên 600") == "Khoảng sườn 600"
