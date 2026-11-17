@@ -51,8 +51,9 @@ _UNICODE_ESCAPE = re.compile(r"\\[Uu]\+([0-9A-Fa-f]{4})")
 _PERCENT_CODE = re.compile(r"%%(\d{3}|[cdpCDP]|[uoUOkK])")
 _CARET = re.compile(r"\^([JMI ])")
 _NUMERIC_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?")
+_NUMERIC_SIGNS = str.maketrans({"\u2212": "-", "\uff0d": "-", "\uff0b": "+"})
 _DMS_RE = re.compile(r"^\s*([-+]?\d+)\u00b0\s*(\d+)'(?:\s*(\d+(?:[.,]\d+)?)\")?\s*$")
-_COUNT_PREFIX_RE = re.compile(rf"^\s*\d+\s*[xX\u00d7](?:\s*(?=[{DIAMETER_SIGNS}MR])|\s+(?=\d|[.,]\d))")
+_COUNT_PREFIX_RE = re.compile(rf"^\s*\d+\s*[xX\u00d7](?:\s*(?=[{DIAMETER_SIGNS}MR])|\s+(?=[+-]?\s*(?:\d|[.,]\d)))")
 _UNSAFE_PLACEHOLDER_NEIGHBORS = frozenset("0123456789.,+-eE")
 
 _DEFAULTS: dict[str, object] = {
@@ -242,7 +243,7 @@ def _extract_primary_numeric_claim(
     angle_unit: int = 0,
 ) -> float | None:
     """Parse one unambiguous numeric value from plain CAD dimension text."""
-    text = (plain_text or "").strip()
+    text = (plain_text or "").strip().translate(_NUMERIC_SIGNS)
     if not text:
         return None
     if angular and angle_unit == 1:
@@ -256,19 +257,26 @@ def _extract_primary_numeric_claim(
             return val if math.isfinite(val) else None
 
     cleaned = _COUNT_PREFIX_RE.sub("", text, count=1).strip()
-    if cleaned and cleaned[0] in f"{DIAMETER_SIGNS}R":
+    if cleaned and cleaned[0] in f"{DIAMETER_SIGNS}MR":
         cleaned = cleaned[1:].strip()
+    cleaned = re.sub(r"^([+-])\s+", r"\1", cleaned)
 
     matches = list(_NUMERIC_TOKEN_RE.finditer(cleaned))
     if len(matches) != 1:
         return None
     match = matches[0]
+    # Parse the complete claim: an unknown prefix cannot discard a sign, and
+    # a suffix may contain unit/label letters or degrees, never more syntax.
+    if match.start() != 0:
+        return None
+    suffix = cleaned[match.end():]
+    if any(not (char.isspace() or char.isalpha() or char == "\u00b0") for char in suffix):
+        return None
     token = match.group()
     if "e" in token or "E" in token:
         return None
-    prev_ch = cleaned[match.start() - 1] if match.start() > 0 else ""
     next_ch = cleaned[match.end()] if match.end() < len(cleaned) else ""
-    if (prev_ch and prev_ch in "+-.,") or (next_ch and next_ch in ".,%eE"):
+    if next_ch and next_ch in ".,%eE":
         return None
     try:
         parsed = float(token.replace(",", "."))
@@ -357,6 +365,8 @@ def _mtext_height_profile(raw_text: str, base_height: float) -> list[tuple[str, 
         if not math.isfinite(width):
             raise ValueError("unverified effective text width")
         height = float(token.ctx.cap_height)
+        if text.strip() and height == 0.0:
+            raise _SuppressedText("zero vertical extent")
         if not math.isfinite(height) or height <= 0.0:
             raise ValueError("invalid effective text height")
         profile.extend((char, height) for char in text if not char.isspace())

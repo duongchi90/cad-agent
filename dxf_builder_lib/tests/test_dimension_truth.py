@@ -633,3 +633,33 @@ def test_supported_nonzero_width_is_not_a_readability_threshold(tmp_path: Path) 
     _set_rendered_block_text(dim, r"{\W0.5;100}")
     doc.saveas(built.output_path)
     assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+@pytest.mark.parametrize("label", ["- 100", "−100", "－100", "− 100 mm", "4x Ø−100", "100 −", "unknown −100"])
+def test_complete_signed_claim_cannot_be_reduced_to_positive_substring(tmp_path: Path, label: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = label
+    _set_rendered_block_text(dim, label)
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert Path(built.output_path).read_bytes() == before
+    assert result.qualification == "FAILED"
+
+
+@pytest.mark.parametrize("label", ["+ 100", "＋100", "4x Ø+100 mm", "4x M100"])
+def test_explicit_positive_signed_claim_remains_supported(tmp_path: Path, label: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = label
+    _set_rendered_block_text(dim, label)
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+@pytest.mark.parametrize("text", [r"{\H0x;100}", r"{\H0x;1}00", r"{\H0;100}"])
+def test_known_zero_height_is_suppression_not_unverified(tmp_path: Path, text: str) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    _set_rendered_block_text(dim, text)
+    doc.saveas(built.output_path)
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "FAILED"
