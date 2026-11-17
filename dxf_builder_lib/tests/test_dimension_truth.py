@@ -295,3 +295,213 @@ def test_truth_audit_rejects_invisible_dimension_and_hidden_rendered_text(tmp_pa
     assert res_layer.qualification == "FAILED"
     assert not res_layer.passed
     assert any("dim_rendered_text_hidden" in msg for msg in res_layer.semantic_review.dimension_mismatches)
+
+
+def _set_rendered_block_text(dim, label: str) -> None:
+    for item in dim.get_geometry_block():
+        if item.dxftype() == "MTEXT":
+            item.text = label
+        elif item.dxftype() == "TEXT":
+            item.dxf.text = label
+
+
+@pytest.mark.parametrize(
+    "variant,override_text,style_patch,rendered_text,want_pass",
+    [
+        ("positive_unit_label", "<> mm", None, "100 mm", True),
+        ("positive_count_label", "4x <>", None, "4x 100", True),
+        ("positive_dimpost_label", None, {"dimpost": "<> mm"}, "100 mm", True),
+        ("leading_decimal_lie", ".100", None, ".100", False),
+        ("scientific_lie", "100e-1", None, "100e-1", False),
+        ("multi_number_ambiguous", "100 / 200", None, "100 / 200", False),
+        ("multi_dot_malformed", "1.2.3", None, "1.2.3", False),
+        ("multi_dot_100_prefix", "100.0.5", None, "100.0.5", False),
+        ("placeholder_suffix_zero", "<>0", None, "1000", False),
+        ("placeholder_prefix_nine", "9<>", None, "9100", False),
+        ("placeholder_dot_prefix", ".<>", None, ".100", False),
+        ("placeholder_double", "<> <>", None, "100 <>", False),
+        ("dimpost_suffix_zero", None, {"dimpost": "<>0"}, "1000", False),
+        ("dimpost_prefix_nine", None, {"dimpost": "9<>"}, "9100", False),
+        ("dimpost_no_placeholder_zero", None, {"dimpost": "0", "dimzin": 0}, "100.000", False),
+    ],
+)
+def test_truth_audit_rejects_leading_decimal_placeholder_and_dimpost_numeric_mutations(
+    tmp_path: Path,
+    variant: str,
+    override_text: str | None,
+    style_patch: dict[str, object] | None,
+    rendered_text: str,
+    want_pass: bool,
+) -> None:
+    built = _build_seed(tmp_path / variant)
+    doc = ezdxf.readfile(built.output_path)
+    dim = doc.entitydb[built.dimension_handle_by_cross_validation_id["cv-1"]]
+    if override_text is not None:
+        dim.dxf.text = override_text
+    if style_patch:
+        ov = DimStyleOverride(dim)
+        for key, value in style_patch.items():
+            ov[key] = value
+        ov.commit()
+    _set_rendered_block_text(dim, rendered_text)
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert strict.passed is want_pass
+    assert semantic.passed is want_pass
+    assert strict.qualification == ("QUALIFIED" if want_pass else "FAILED")
+
+
+def test_truth_audit_validates_dimtol_with_ezdxf_tolerance_owner(tmp_path: Path) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    # Positive symmetric tolerance rendered by ezdxf passes.
+    built_sym = _build_seed(tmp_path / "tol_sym")
+    doc_sym = ezdxf.readfile(built_sym.output_path)
+    dim_sym = doc_sym.entitydb[built_sym.dimension_handle_by_cross_validation_id["cv-1"]]
+    ov_sym = DimStyleOverride(dim_sym)
+    for k, v in {"dimtol": 1, "dimtp": 0.1, "dimtm": 0.1, "dimdsep": ord("."), "dimtdec": 2, "dimtzin": 8}.items():
+        ov_sym[k] = v
+    ov_sym.commit()
+    _set_rendered_block_text(dim_sym, Tolerance(DimStyleOverride(dim_sym)).compile_mtext("100"))
+    doc_sym.saveas(built_sym.output_path)
+    assert review_dxf_with_dimension_line_integrity(built_sym).qualification == "QUALIFIED"
+
+    # Positive asymmetric tolerance rendered by ezdxf passes.
+    built_asym = _build_seed(tmp_path / "tol_asym")
+    doc_asym = ezdxf.readfile(built_asym.output_path)
+    dim_asym = doc_asym.entitydb[built_asym.dimension_handle_by_cross_validation_id["cv-1"]]
+    ov_asym = DimStyleOverride(dim_asym)
+    for k, v in {"dimtol": 1, "dimtp": 0.2, "dimtm": 0.1, "dimdsep": ord("."), "dimtdec": 2, "dimtzin": 8}.items():
+        ov_asym[k] = v
+    ov_asym.commit()
+    _set_rendered_block_text(dim_asym, Tolerance(DimStyleOverride(dim_asym)).compile_mtext("100"))
+    doc_asym.saveas(built_asym.output_path)
+    assert review_dxf_with_dimension_line_integrity(built_asym).qualification == "QUALIFIED"
+
+    # Stale tolerance values, exponent notation, and unconfigured tolerance suffixes must fail closed.
+    for variant, tol_vals, bad_text in [
+        ("stale_tol", {"dimtol": 1}, "100 +99/-99"),
+        ("exponent_tol", {"dimtol": 1}, "100e-1"),
+        ("wrong_configured_tol", {"dimtol": 1, "dimtp": 0.1, "dimtm": 0.1}, r"100\P+999/-999"),
+        ("unit_like_tol_mismatch", {"dimtol": 1, "dimtp": 0.1, "dimtm": 0.1}, "100±0.50"),
+    ]:
+        built_bad = _build_seed(tmp_path / variant)
+        doc_bad = ezdxf.readfile(built_bad.output_path)
+        dim_bad = doc_bad.entitydb[built_bad.dimension_handle_by_cross_validation_id["cv-1"]]
+        ov_bad = DimStyleOverride(dim_bad)
+        for k, v in tol_vals.items():
+            ov_bad[k] = v
+        ov_bad.commit()
+        _set_rendered_block_text(dim_bad, bad_text)
+        doc_bad.saveas(built_bad.output_path)
+        strict_bad = review_dxf_with_dimension_line_integrity(built_bad)
+        assert strict_bad.qualification == "FAILED"
+        assert not strict_bad.passed
+
+
+def test_truth_audit_rejects_tiny_height_inline_height_and_transparent_text(tmp_path: Path) -> None:
+    # Tiny entity char_height must fail closed.
+    built_tiny = _build_seed(tmp_path / "tiny_char")
+    doc_tiny = ezdxf.readfile(built_tiny.output_path)
+    dim_tiny = doc_tiny.entitydb[built_tiny.dimension_handle_by_cross_validation_id["cv-1"]]
+    for item in dim_tiny.get_geometry_block():
+        if item.dxftype() == "MTEXT":
+            item.dxf.char_height = 1e-9
+    doc_tiny.saveas(built_tiny.output_path)
+    res_tiny = review_dxf_with_dimension_line_integrity(built_tiny)
+    assert res_tiny.qualification == "FAILED"
+    assert not res_tiny.passed
+
+    # Tiny inline MTEXT height (\H...x; or absolute \H...;) must fail closed.
+    for tag, mtext_val in [("inline_rel", r"{\H0.000000001x;100}"), ("inline_abs", r"\H1e-9;100")]:
+        built_in = _build_seed(tmp_path / tag)
+        doc_in = ezdxf.readfile(built_in.output_path)
+        dim_in = doc_in.entitydb[built_in.dimension_handle_by_cross_validation_id["cv-1"]]
+        _set_rendered_block_text(dim_in, mtext_val)
+        doc_in.saveas(built_in.output_path)
+        res_in = review_dxf_with_dimension_line_integrity(built_in)
+        assert res_in.qualification == "FAILED"
+        assert not res_in.passed
+
+    # Fully transparent MTEXT or parent DIMENSION transparency must fail closed.
+    built_tr = _build_seed(tmp_path / "transparent")
+    doc_tr = ezdxf.readfile(built_tr.output_path)
+    dim_tr = doc_tr.entitydb[built_tr.dimension_handle_by_cross_validation_id["cv-1"]]
+    for item in dim_tr.get_geometry_block():
+        if item.dxftype() == "MTEXT":
+            item.transparency = 1.0
+    doc_tr.saveas(built_tr.output_path)
+    res_tr = review_dxf_with_dimension_line_integrity(built_tr)
+    assert res_tr.qualification == "FAILED"
+    assert not res_tr.passed
+
+    built_dim_tr = _build_seed(tmp_path / "dim_transparent")
+    doc_dim_tr = ezdxf.readfile(built_dim_tr.output_path)
+    dim_ent_tr = doc_dim_tr.entitydb[built_dim_tr.dimension_handle_by_cross_validation_id["cv-1"]]
+    dim_ent_tr.transparency = 1.0
+    doc_dim_tr.saveas(built_dim_tr.output_path)
+    res_dim_tr = review_dxf_with_dimension_line_integrity(built_dim_tr)
+    assert res_dim_tr.qualification == "FAILED"
+    assert not res_dim_tr.passed
+
+    # Positive control with explicit DIMTXT/DIMSCALE scaling must pass cleanly when height matches style.
+    built_scaled = _build_seed(tmp_path / "scaled_dimtxt")
+    doc_scaled = ezdxf.readfile(built_scaled.output_path)
+    dim_scaled = doc_scaled.entitydb[built_scaled.dimension_handle_by_cross_validation_id["cv-1"]]
+    ov_sc = DimStyleOverride(dim_scaled)
+    ov_sc["dimtxt"] = 3.5
+    ov_sc["dimscale"] = 2.0
+    ov_sc.commit()
+    for item in dim_scaled.get_geometry_block():
+        if item.dxftype() == "MTEXT":
+            item.dxf.char_height = 7.0
+    doc_scaled.saveas(built_scaled.output_path)
+    assert review_dxf_with_dimension_line_integrity(built_scaled).qualification == "QUALIFIED"
+
+
+def test_dimension_truth_preserves_complete_mit_license_notice_and_provenance() -> None:
+    src = (Path(__file__).resolve().parents[1] / "_dimension_truth.py").read_text(encoding="utf-8")
+    assert "6f6a538255ca9f885232e845ac32f10b4433fe3e" in src
+    assert "Copyright (c) 2026 Umutcan Edizsalan" in src
+    assert "Permission is hereby granted, free of charge" in src
+    assert 'WITHOUT WARRANTY OF ANY KIND, EXPRESS OR' in src
+
+
+def test_truth_audit_accepts_valid_leading_decimal_and_rejects_tiny_tolerance_subtoken(tmp_path: Path) -> None:
+    # Legitimate leading decimal (0.1 mm with dimzin=4 -> ".100", dimzin=12 -> ".1") must qualify.
+    for zin, expected_label in ((4, ".100"), (12, ".1")):
+        built_ld = _build_seed(tmp_path / f"valid_ld_{zin}", length_mm=0.1)
+        doc_ld = ezdxf.readfile(built_ld.output_path)
+        dim_ld = doc_ld.entitydb[built_ld.dimension_handle_by_cross_validation_id["cv-1"]]
+        ov_ld = DimStyleOverride(dim_ld)
+        ov_ld["dimzin"] = zin
+        ov_ld["dimdec"] = 3
+        ov_ld["dimdsep"] = ord(".")
+        ov_ld.commit()
+        _set_rendered_block_text(dim_ld, expected_label)
+        doc_ld.saveas(built_ld.output_path)
+        assert review_dxf_with_dimension_line_integrity(built_ld).qualification == "QUALIFIED"
+
+    # Tiny inline tolerance sub-token (\H1e-9x;) must fail closed.
+    built_tinytol = _build_seed(tmp_path / "tiny_tol_sub")
+    doc_tt = ezdxf.readfile(built_tinytol.output_path)
+    dim_tt = doc_tt.entitydb[built_tinytol.dimension_handle_by_cross_validation_id["cv-1"]]
+    ov_tt = DimStyleOverride(dim_tt)
+    for k, v in {"dimtol": 1, "dimtp": 0.1, "dimtm": 0.1, "dimdsep": ord("."), "dimtdec": 2, "dimtzin": 8}.items():
+        ov_tt[k] = v
+    ov_tt.commit()
+    _set_rendered_block_text(dim_tt, r"\A0;100{\H1e-9x;±0.10}")
+    doc_tt.saveas(built_tinytol.output_path)
+    assert review_dxf_with_dimension_line_integrity(built_tinytol).qualification == "FAILED"
+
+    # Negative dimscale must fail closed.
+    built_negscale = _build_seed(tmp_path / "neg_scale")
+    doc_ns = ezdxf.readfile(built_negscale.output_path)
+    dim_ns = doc_ns.entitydb[built_negscale.dimension_handle_by_cross_validation_id["cv-1"]]
+    ov_ns = DimStyleOverride(dim_ns)
+    ov_ns["dimscale"] = -1.0
+    ov_ns.commit()
+    doc_ns.saveas(built_negscale.output_path)
+    assert review_dxf_with_dimension_line_integrity(built_negscale).qualification == "FAILED"
