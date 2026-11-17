@@ -63,6 +63,7 @@ _DEFAULTS: dict[str, object] = {
     "dimdsep": ".",
     "dimpost": "",
     "dimlfac": 1.0,
+    "dimlunit": 2,
     "dimadec": 2,
     "dimazin": 2,
     "dimaunit": 0,
@@ -501,7 +502,8 @@ def _read_rendered_block(
         if kind not in {"TEXT", "MTEXT"}:
             continue
         raw_content = item.text if kind == "MTEXT" else item.dxf.get("text", "")
-        plain = plain_cad_text(raw_content)
+        # Native TEXT preserves backslashes/braces which are MTEXT commands.
+        plain = item.plain_text() if kind == "TEXT" else plain_cad_text(raw_content)
         if plain:
             parts.append(plain)
         layer = context.resolve_layer(item)
@@ -620,6 +622,10 @@ def resolve_dimension_display(
 
     if style is None:
         return DimensionDisplay(None, None, scaled, 0.0, "unknown")
+    if not angular and int(style.get("dimlunit", 2)) != 2:
+        # ezdxf's dimension renderer falls back to decimal for these formats;
+        # that fallback does not prove the configured generated label.
+        return DimensionDisplay(None, None, scaled, 0.0, "unverified_primary_format")
     if int(style["dimlim"]) and not int(style["dimtol"]):  # type: ignore[arg-type]
         return DimensionDisplay(None, None, scaled, 0.0, "limits")
     if int(style["dimalt"]):  # type: ignore[arg-type]
@@ -677,6 +683,10 @@ def audit_dimension_truth(
 
     dimtol_enabled = bool(int(style["dimtol"]))
     dimlim_enabled = bool(int(style["dimlim"]))
+    primary_format_unsupported = dimtype not in _ANGULAR_TYPES and int(style["dimlunit"]) != 2
+    if dimtol_enabled and primary_format_unsupported:
+        # A literal primary override does not establish tolerance formatting.
+        reasons.append("dim_unverified_primary_format")
     if int(style["dimalt"]):
         reasons.append("dim_unverified_alternate_units")
     if dimlim_enabled and not dimtol_enabled:
@@ -734,6 +744,8 @@ def audit_dimension_truth(
         reasons.append("dim_placeholder_mutates_number")
     elif disp.source == "unverified_claim":
         reasons.append(f"dim_unverified_display_claim(shown={disp.text!r})")
+    elif disp.source == "unverified_primary_format":
+        reasons.append("dim_unverified_primary_format")
     elif disp.source == "override":
         if disp.value is None or not math.isfinite(disp.value):
             reasons.append(f"dim_override_non_numeric(shown={disp.text!r})")
@@ -750,7 +762,9 @@ def audit_dimension_truth(
                     reasons.append(f"dim_displayed_disagrees(shown={disp.text!r}, expected={ref_value})")
 
     expected_mtext = disp.text
-    if dimtol_enabled and disp.text is not None:
+    if dimtol_enabled and primary_format_unsupported:
+        expected_mtext = None
+    elif dimtol_enabled and disp.text is not None:
         from ezdxf.render.dim_base import Tolerance
 
         try:
@@ -776,7 +790,7 @@ def audit_dimension_truth(
 
     rendered_text, group42 = rendered.text, rendered.group42
     if disp.source not in {"suppressed", "unsafe_placeholder"}:
-        if disp.text is None:
+        if disp.text is None and disp.source != "unverified_primary_format":
             reasons.append(f"dim_display_unreadable(source={disp.source})")
         if rendered.block_missing or rendered_text is None:
             reasons.append("dim_render_missing")
@@ -784,9 +798,10 @@ def audit_dimension_truth(
         have = normalize_dim_text(rendered_text)
         want = normalize_dim_text(disp.text)
         if dimtol_enabled:
-            expected_tols = _tolerance_rendered_candidates(override_obj, disp.text)
-            if expected_tols is None or have not in expected_tols:
-                reasons.append(f"dim_render_tolerance_mismatch(rendered={rendered_text!r})")
+            if not primary_format_unsupported:
+                expected_tols = _tolerance_rendered_candidates(override_obj, disp.text)
+                if expected_tols is None or have not in expected_tols:
+                    reasons.append(f"dim_render_tolerance_mismatch(rendered={rendered_text!r})")
         elif have != want:
             reasons.append(f"dim_render_stale(rendered={rendered_text!r}, expected={disp.text!r})")
 

@@ -949,3 +949,85 @@ def test_native_text_unresolved_stretch_font_is_not_qualified(tmp_path: Path) ->
     doc.saveas(built.output_path)
     assert review_dxf_with_dimension_line_integrity(built).qualification == "UNKNOWN"
     assert review_dxf_with_dimension_line_integrity(built, verify_dimension_truth=False).passed
+
+
+@pytest.mark.parametrize("kind,raw,override,want_pass", [
+    ("TEXT", "100", "100", True),
+    ("TEXT", r"{\H0;100}", "100", False),
+    ("TEXT", r"1\C900;00", "100", False),
+    ("TEXT", "%%c100", "%%c100", True),
+    ("MTEXT", r"{\H1x;100}", "100", True),
+    ("MTEXT", r"{\\H0;100}", "100", False),
+])
+def test_cached_entity_text_uses_its_own_literal_semantics(
+    tmp_path: Path, kind: str, raw: str, override: str, want_pass: bool,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = override
+    block = dim.get_geometry_block()
+    for cached in list(block.query("TEXT MTEXT")):
+        block.delete_entity(cached)
+    if kind == "TEXT":
+        text = block.add_text(raw, dxfattribs={"height": 1.0})
+    else:
+        text = block.add_mtext(raw, dxfattribs={"char_height": 1.0})
+    doc.saveas(built.output_path)
+    reopened = ezdxf.readfile(built.output_path)
+    assert reopened.entitydb[text.dxf.handle].dxftype() == kind
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.passed is want_pass
+    assert Path(built.output_path).read_bytes() == before
+    assert review_dxf_with_dimension_line_integrity(built, verify_dimension_truth=False).passed
+
+
+@pytest.mark.parametrize("unit", [1, 3, 4, 5, 6])
+@pytest.mark.parametrize("label", ["<>", "<> mm"])
+def test_unsupported_primary_format_cannot_borrow_decimal_cache(
+    tmp_path: Path, unit: int, label: str,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path, dimlunit=unit)
+    dim.dxf.text = label
+    _set_rendered_block_text(dim, label.replace("<>", "100"))
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert result.qualification == "UNKNOWN"
+    assert any("dim_unverified_primary_format" in reason for reason in result.semantic_review.dimension_mismatches)
+    assert Path(built.output_path).read_bytes() == before
+    assert review_dxf_with_dimension_line_integrity(built, verify_dimension_truth=False).passed
+
+
+@pytest.mark.parametrize("unit", [1, 2, 3, 4, 5, 6])
+def test_literal_primary_override_does_not_depend_on_generated_format(tmp_path: Path, unit: int) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path, dimlunit=unit)
+    dim.dxf.text = "100"
+    _set_rendered_block_text(dim, "100")
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "QUALIFIED"
+
+
+def test_literal_primary_does_not_verify_unsupported_tolerance_format(tmp_path: Path) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    built, doc, dim = _explicit_truth_control(tmp_path, dimlunit=4, dimtol=1, dimtp=0.1, dimtm=0.1)
+    dim.dxf.text = "100"
+    _set_rendered_block_text(dim, Tolerance(DimStyleOverride(dim)).compile_mtext("100"))
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "UNKNOWN"
+
+
+@pytest.mark.parametrize("with_tolerance", [False, True])
+def test_known_literal_contradiction_stays_failed_with_unsupported_primary_format(
+    tmp_path: Path, with_tolerance: bool,
+) -> None:
+    from ezdxf.render.dim_base import Tolerance
+
+    built, doc, dim = _explicit_truth_control(
+        tmp_path, dimlunit=4, dimtol=int(with_tolerance), dimtp=0.1, dimtm=0.1,
+    )
+    dim.dxf.text = "99"
+    cached = Tolerance(DimStyleOverride(dim)).compile_mtext("99") if with_tolerance else "99"
+    _set_rendered_block_text(dim, cached)
+    doc.saveas(built.output_path)
+    assert review_dxf_with_dimension_line_integrity(built).qualification == "FAILED"
