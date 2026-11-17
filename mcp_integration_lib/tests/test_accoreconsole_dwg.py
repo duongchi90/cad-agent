@@ -181,5 +181,92 @@ def test_live_accoreconsole_reads_disposable_dwg_snapshot() -> None:
     disposable_dwg = Path(os.environ["CAD_AGENT_DISPOSABLE_DWG"])
     snap, report = convert_dwg_to_dxf_and_read(disposable_dwg, extract_dxf_readback_snapshot)
     assert report["timed_out"] is False
+    assert report["exit_code"] == 0
     assert snap["dxf_version"] is not None
     assert "insunits" in snap
+
+
+def test_convert_rejects_nonzero_exit_before_callback_even_when_dxf_exists(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    src_dwg = tmp_path / "fail_exit.dwg"
+    src_dwg.write_bytes(b"AC1032_FAIL_EXIT")
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    fake_exe = tmp_path / "accoreconsole.exe"
+    fake_exe.write_bytes(b"MZ")
+    callback_calls: list[Path] = []
+
+    class _FailedProc:
+        pid = 51515
+        returncode = 7
+
+        def wait(self, timeout=None):
+            return 7
+
+    def fake_popen(argv, cwd=None, **_kwargs):
+        (Path(cwd) / "out.dxf").write_text(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1032\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            encoding="ascii",
+        )
+        return _FailedProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    with pytest.raises(DwgConversionError, match="exit code 7") as exc_info:
+        convert_dwg_to_dxf_and_read(
+            src_dwg,
+            lambda p: callback_calls.append(p),
+            staging_base=stage_root,
+            executable_path=fake_exe,
+            timeout_s=5.0,
+        )
+    assert callback_calls == []
+    assert exc_info.value.attempts[0]["exit_code"] == 7
+    assert list((stage_root / "accore").iterdir()) == []
+
+
+def test_convert_preserves_unrelated_old_staging_directories(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    src_dwg = tmp_path / "ok.dwg"
+    src_dwg.write_bytes(b"AC1032_OK")
+    stage_root = tmp_path / "stage"
+    accore_dir = stage_root / "accore"
+    unrelated = accore_dir / "unrelated-retained"
+    unrelated.mkdir(parents=True)
+    sentinel = unrelated / "sentinel.txt"
+    sentinel.write_text("must remain untouched", encoding="ascii")
+    old_mtime = 1000.0
+    os.utime(unrelated, (old_mtime, old_mtime))
+
+    fake_exe = tmp_path / "accoreconsole.exe"
+    fake_exe.write_bytes(b"MZ")
+
+    class _OkProc:
+        pid = 61616
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, cwd=None, **_kwargs):
+        (Path(cwd) / "out.dxf").write_text(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1032\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n",
+            encoding="ascii",
+        )
+        return _OkProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    snap, report = convert_dwg_to_dxf_and_read(
+        src_dwg,
+        extract_dxf_readback_snapshot,
+        staging_base=stage_root,
+        executable_path=fake_exe,
+        timeout_s=5.0,
+    )
+    assert report["exit_code"] == 0
+    assert snap["insunits"] == 4
+    assert sentinel.is_file()
+    assert sentinel.read_text(encoding="ascii") == "must remain untouched"

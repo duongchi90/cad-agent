@@ -37,7 +37,6 @@ DEFAULT_DXF_VERSION = "2018"
 SUPPORTED_DXF_VERSIONS = frozenset({"2010", "2013", "2018"})
 LOG_LINES_SHOWN = 40
 _DISABLED_VALUES = frozenset({"off", "none", "false", "0", "no"})
-_STALE_STAGING_S = 3600.0
 _REMOVE_PATIENCE_S = 5.0
 _REMOVE_PAUSE_S = 0.1
 _COPY_CHUNK_BYTES = 1024 * 1024
@@ -200,20 +199,6 @@ def _kill_tree(proc: subprocess.Popen[Any]) -> None:
         log.warning("accoreconsole pid %s did not exit after kill", proc.pid)
 
 
-def _sweep_stale(root: Path) -> None:
-    now = time.time()
-    try:
-        children = list(root.iterdir())
-    except OSError:
-        return
-    for child in children:
-        try:
-            if child.is_dir() and now - child.stat().st_mtime > _STALE_STAGING_S:
-                shutil.rmtree(child, ignore_errors=True)
-        except OSError:
-            continue
-
-
 def _remove_staging(folder: Path) -> bool:
     deadline = time.monotonic() + _REMOVE_PATIENCE_S
     while True:
@@ -247,7 +232,6 @@ def convert_dwg_to_dxf_and_read(
     if exe is None:
         raise DwgConversionError(why, [{"route": "accoreconsole", "reason": why}])
     root = prepare_ascii_staging_root(staging_base)
-    _sweep_stale(root)
     folder = root / uuid.uuid4().hex[:12]
     folder.mkdir()
     attempt: dict[str, Any] = {"route": "accoreconsole", "timeout_s": effective_timeout}
@@ -289,6 +273,9 @@ def convert_dwg_to_dxf_and_read(
         attempt["log_lines"] = len(lines)
         if attempt["timed_out"]:
             attempt["reason"] = f"timed_out after {effective_timeout:g}s"
+            raise DwgConversionError(attempt["reason"], [attempt])
+        if attempt["exit_code"] != 0:
+            attempt["reason"] = f"accoreconsole failed with exit code {attempt['exit_code']}"
             raise DwgConversionError(attempt["reason"], [attempt])
         if not staged_dxf.is_file() or staged_dxf.stat().st_size == 0:
             attempt["reason"] = "accoreconsole produced no output DXF"
