@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import os
 from pathlib import Path
 from typing import Any
@@ -325,3 +326,247 @@ def test_marine_7000_real_dxf_ab_validation() -> None:
     assert gap["status"] == "CONFLICT"
     assert gap["cad_mutation"] is False
     assert gap["regulatory_compliance_proven"] is False
+
+
+def generic_cad_baseline_inspect(
+    observations: Sequence[dict[str, Any]],
+    *,
+    calibration_verified: bool = False,
+    verified_scale_to_mm: float | None = None,
+    ocr_only_inputs: bool = False,
+) -> str:
+    """Honest non-marine CAD baseline: checks INSUNITS, OCR flag, blank colons, and zero primitives only."""
+    if not observations:
+        return "INSUFFICIENT_EVIDENCE"
+    if ocr_only_inputs or any(bool(obs.get("ocr_only")) for obs in observations):
+        return "INSUFFICIENT_EVIDENCE"
+    unitless = any(int(obs.get("insunits", 0)) not in {4, 5, 6} for obs in observations)
+    # Generic CAD tool naively accepts any positive scale even without verified calibration
+    has_scale = calibration_verified or (verified_scale_to_mm is not None and verified_scale_to_mm > 0)
+    if unitless and not has_scale:
+        return "INSUFFICIENT_EVIDENCE"
+    for obs in observations:
+        counts = obs.get("entity_counts") or {}
+        if counts:
+            prims = sum(
+                int(counts.get(k, 0) or 0)
+                for k in ("LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "SPLINE", "ELLIPSE")
+            )
+            if prims == 0:
+                return "INSUFFICIENT_EVIDENCE"
+        if obs.get("blank_fields"):
+            return "INSUFFICIENT_EVIDENCE"
+    return "PASS"
+
+
+def _build_16_ground_truth_cases() -> list[tuple[str, str, list[dict[str, Any]], Callable[[], dict[str, Any]], dict[str, Any]]]:
+    valid_ga = _ga_vrsb(bulkheads=4)
+    valid_mcn = _mcn_vrsb(db_mm=760.0)
+
+    small_valid = {
+        "drawing_id": "MCN_18M_OK",
+        "drawing_code": "KC-01",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "MẶT CẮT NGANG SƯỜN GIỮA", "x": 100.0, "y": 100.0, "height": 150.0},
+            {"handle": "2", "text": "CẤP TÀU : VR-SII", "x": 200.0, "y": 200.0, "height": 150.0},
+            {"handle": "3", "text": "Chiều dài tàu L = 18.00 m", "x": 200.0, "y": 400.0, "height": 150.0},
+            {"handle": "4", "text": "tôn đáy s=4.5 mm", "x": 200.0, "y": 600.0, "height": 150.0},
+        ],
+        "structural_metrics": {"double_bottom_height_mm": 750.0},
+    }
+    small_bad_plate = {
+        **small_valid,
+        "drawing_id": "MCN_18M_THIN",
+        "texts": [
+            *small_valid["texts"][:3],
+            {"handle": "4", "text": "tôn đáy s=2.0 mm", "x": 200.0, "y": 600.0, "height": 150.0},
+        ],
+    }
+
+    cross_ga = _ga_vrsb(drawing_id="CROSS_GA")
+    cross_ga["texts"].extend(
+        [
+            {"handle": "D1", "text": "T = 3.10 m", "x": 50000.0, "y": 4500.0, "height": 250.0},
+            {"handle": "H1", "text": "HULL NO : H-01", "x": 50000.0, "y": 5000.0, "height": 250.0},
+        ]
+    )
+    cross_mcn = _mcn_vrsb(drawing_id="CROSS_MCN", db_mm=750.0)
+    cross_mcn["texts"].extend(
+        [
+            {"handle": "D2", "text": "T = 4.40 m", "x": 4000.0, "y": 2250.0, "height": 150.0},
+            {"handle": "S2", "text": "SHIP TYPE : OIL TANKER", "x": 4000.0, "y": 2500.0, "height": 150.0},
+            {"handle": "H2", "text": "HULL NO : H-99", "x": 4000.0, "y": 2750.0, "height": 150.0},
+        ]
+    )
+
+    span_1000x = _ga_vrsb(drawing_id="SPAN_1000X", insunits=6)  # meters header vs mm coords 1000..53000
+
+    reversed_bow = _ga_vrsb(drawing_id="BOW_Z_ERR")
+    for t in reversed_bow["texts"]:
+        if t["text"] == "A.P":
+            t["x"] = 55000.0
+        elif t["text"] == "F.P":
+            t["x"] = 1000.0
+    reversed_bow["structural_metrics"]["body_plan_wl_span_mm"] = 5200.0
+
+    tcvn3_mismatch = {
+        "drawing_id": "THLT_TCVN3_MISMATCH",
+        "drawing_code": "GA-01-01",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "bè trÝ chung", "font_hint": ".VnAvantH", "x": 10.0, "y": 10.0, "height": 300.0},
+            {"handle": "2", "text": "§.ChuÈn", "x": 10.0, "y": 200.0, "height": 250.0},
+            {"handle": "3", "text": "ĐN 1 ĐN 2 CD1 CD2 Sn1 Sn10", "x": 10.0, "y": 400.0, "height": 250.0},
+        ],
+    }
+
+    no_len_ga = {
+        "drawing_id": "NO_LEN_GA",
+        "drawing_code": "GA-01",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "BẢN VẼ BỐ TRÍ CHUNG", "x": 100.0, "y": 100.0, "height": 250.0},
+            {"handle": "2", "text": "KHOANG HÀNG - BUỒNG MÁY - VÁCH CHỐNG VA", "x": 200.0, "y": 200.0, "height": 250.0},
+            {"handle": "3", "text": "CẤP TÀU : VR-SB", "x": 300.0, "y": 300.0, "height": 250.0},
+        ],
+        "structural_metrics": {"transverse_watertight_bulkhead_count": 4},
+    }
+
+    boundary_ga = _ga_vrsb(drawing_id="BOUNDARY_39_5M", bulkheads=3)
+    boundary_ga["texts"][3]["text"] = "Lpp = 39.50 m"
+    boundary_ga["texts"][9]["x"] = 40500.0
+    boundary_mcn = _mcn_vrsb(drawing_id="BOUNDARY_MCN")
+    boundary_mcn["texts"][3]["text"] = "Lpp = 39.50 m"
+
+    wrong_sheet_thlt = {
+        "drawing_id": "THLT_WRONG_METRIC",
+        "drawing_code": "THLT-01",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "TUYẾN HÌNH LÝ THUYẾT", "x": 10.0, "y": 10.0, "height": 250.0},
+            {"handle": "2", "text": "ĐN 1 ĐN 2 CD1 Sn1", "x": 10.0, "y": 300.0, "height": 250.0},
+            {"handle": "3", "text": "CẤP TÀU : VR-SB", "x": 10.0, "y": 600.0, "height": 250.0},
+            {"handle": "4", "text": "Chiều dài tàu L = 52.00 m", "x": 10.0, "y": 900.0, "height": 250.0},
+        ],
+        "structural_metrics": {"double_bottom_height_mm": 750.0},
+    }
+
+    unitless_ga = _ga_vrsb(drawing_id="UNITLESS_GA", insunits=0)
+    unitless_mcn = {**_mcn_vrsb(drawing_id="UNITLESS_MCN"), "insunits": 0}
+
+    negated_ga = {
+        "drawing_id": "NEGATED_VRSI",
+        "drawing_code": "GA-01",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "BẢN VẼ BỐ TRÍ CHUNG", "x": 10.0, "y": 10.0, "height": 250.0},
+            {"handle": "2", "text": "KHÔNG ÁP DỤNG VR-SI CHO TÀU NÀY", "x": 10.0, "y": 250.0, "height": 250.0},
+            {"handle": "3", "text": "Chiều dài tàu L = 52.00 m", "x": 10.0, "y": 500.0, "height": 250.0},
+        ],
+        "structural_metrics": {"transverse_watertight_bulkhead_count": 4},
+    }
+
+    corrupt_ga = _ga_vrsb(drawing_id="CORRUPT_OCR")
+    corrupt_ga["texts"][3]["text"] = "Lpp = 52.O5 m"
+
+    zero_geom_ga = {**_ga_vrsb(drawing_id="ZERO_GEOM"), "entity_counts": {"TEXT": 12, "LINE": 0, "LWPOLYLINE": 0}}
+
+    mech_shaft = {
+        "drawing_id": "SHAFT_C45",
+        "drawing_code": "CK-01",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "CHI TIẾT TRỤC BẠC ĐẠN", "x": 10.0, "y": 10.0, "height": 200.0},
+            {"handle": "2", "text": "VẬT LIỆU : THÉP C45 - L = 1200 mm", "x": 10.0, "y": 250.0, "height": 200.0},
+        ],
+    }
+
+    sea_vrh = {
+        **_ga_vrsb(drawing_id="SEA_VRH"),
+        "texts": [
+            {"handle": "1", "text": "GENERAL ARRANGEMENT SEA SHIP", "x": 10.0, "y": 10.0, "height": 250.0},
+            {"handle": "2", "text": "CLASS : *VRH (QCVN 21:2015/BGTVT)", "x": 10.0, "y": 300.0, "height": 250.0},
+            {"handle": "3", "text": "L = 92.40 m", "x": 10.0, "y": 600.0, "height": 250.0},
+        ],
+    }
+
+    return [
+        ("C01_VALID_INLAND_GA_MCN_52M", "PASS", [valid_ga, valid_mcn], lambda: evaluate_regulation_applicability_and_submittal([valid_ga, valid_mcn], partial_package=True), {}),
+        ("C02_VALID_INLAND_SMALL_HULL_18M", "PASS", [small_valid], lambda: evaluate_regulation_applicability_and_submittal([small_valid], partial_package=True), {}),
+        ("C03_CROSS_SHEET_CONFLICT_PACKAGE", "CONFLICT", [cross_ga, cross_mcn], lambda: detect_drawing_gaps_and_conflicts([cross_ga, cross_mcn], partial_package=True), {}),
+        ("C04_SPAN_MISMATCH_1000X_INSUNITS6", "CONFLICT", [span_1000x], lambda: detect_drawing_gaps_and_conflicts([span_1000x], partial_package=True), {}),
+        ("C05_SMALL_HULL_PLATE_LT_2_5MM", "CONFLICT", [small_bad_plate], lambda: evaluate_regulation_applicability_and_submittal([small_bad_plate], partial_package=True), {}),
+        ("C06_REVERSED_BOW_AND_Z_DISTORTION", "CONFLICT", [reversed_bow], lambda: detect_drawing_gaps_and_conflicts([reversed_bow], partial_package=True), {}),
+        ("C07_TCVN3_TITLE_VS_CONTENT_MISMATCH", "CONFLICT", [tcvn3_mismatch], lambda: classify_marine_drawing(tcvn3_mismatch), {}),
+        ("C08_MISSING_LENGTH", "INSUFFICIENT_EVIDENCE", [no_len_ga], lambda: evaluate_regulation_applicability_and_submittal([no_len_ga], partial_package=True), {}),
+        ("C09_LPP_BOUNDARY_39_5M_AMBIGUOUS", "INSUFFICIENT_EVIDENCE", [boundary_ga, boundary_mcn], lambda: evaluate_regulation_applicability_and_submittal([boundary_ga, boundary_mcn], partial_package=True), {}),
+        ("C10_WRONG_SHEET_METRIC_THLT", "INSUFFICIENT_EVIDENCE", [wrong_sheet_thlt], lambda: evaluate_regulation_applicability_and_submittal([wrong_sheet_thlt], partial_package=True), {}),
+        ("C11_UNITLESS_UNVERIFIED_SCALE", "INSUFFICIENT_EVIDENCE", [unitless_ga, unitless_mcn], lambda: evaluate_regulation_applicability_and_submittal([unitless_ga, unitless_mcn], calibration_verified=False, verified_scale_to_mm=1.0), {"calibration_verified": False, "verified_scale_to_mm": 1.0}),
+        ("C12_NEGATED_VRSI_NO_FALSE_INCLUSION", "INSUFFICIENT_EVIDENCE", [negated_ga], lambda: evaluate_regulation_applicability_and_submittal([negated_ga], partial_package=True), {}),
+        ("C13_OCR_CORRUPTED_NUMERIC_52O5", "INSUFFICIENT_EVIDENCE", [corrupt_ga], lambda: detect_drawing_gaps_and_conflicts([corrupt_ga], partial_package=True), {}),
+        ("C14_TEXT_ONLY_ZERO_GEOMETRY_SHELL", "INSUFFICIENT_EVIDENCE", [zero_geom_ga], lambda: detect_drawing_gaps_and_conflicts([zero_geom_ga], partial_package=True), {}),
+        ("C15_NON_MARINE_SHAFT_OUT_OF_DOMAIN", "NOT_APPLICABLE", [mech_shaft], lambda: evaluate_regulation_applicability_and_submittal([mech_shaft], partial_package=True), {}),
+        ("C16_EXPLICIT_QCVN21_SEA_SHIP_EXCLUSION", "NOT_APPLICABLE", [sea_vrh], lambda: evaluate_regulation_applicability_and_submittal([sea_vrh], partial_package=True), {}),
+    ]
+
+
+def score_ab_predictions(rows: Sequence[tuple[str, str, str]]) -> dict[str, Any]:
+    """Compute conflict confusion matrix + false-PASS + abstention counts over (case_id, gold, pred)."""
+    tp = sum(1 for _cid, gold, pred in rows if gold == "CONFLICT" and pred == "CONFLICT")
+    fp = sum(1 for _cid, gold, pred in rows if gold != "CONFLICT" and pred == "CONFLICT")
+    fn = sum(1 for _cid, gold, pred in rows if gold == "CONFLICT" and pred != "CONFLICT")
+    tn = sum(1 for _cid, gold, pred in rows if gold != "CONFLICT" and pred != "CONFLICT")
+    exact = sum(1 for _cid, gold, pred in rows if gold == pred)
+    false_pass = sum(1 for _cid, gold, pred in rows if gold != "PASS" and pred == "PASS")
+    app_abstain = sum(1 for _cid, gold, pred in rows if gold == "INSUFFICIENT_EVIDENCE" and pred == "INSUFFICIENT_EVIDENCE")
+    over_abstain = sum(1 for _cid, gold, pred in rows if gold != "INSUFFICIENT_EVIDENCE" and pred == "INSUFFICIENT_EVIDENCE")
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    return {
+        "total": len(rows),
+        "exact_verdict_matches": exact,
+        "tp_conflict": tp,
+        "fp_conflict": fp,
+        "fn_conflict": fn,
+        "tn_non_conflict": tn,
+        "precision_conflict": round(prec, 4),
+        "recall_conflict": round(rec, 4),
+        "false_pass": false_pass,
+        "appropriate_abstention": app_abstain,
+        "over_abstention": over_abstain,
+    }
+
+
+def test_marine_independent_engineering_baseline_comparison() -> None:
+    """Part B: Compare generic CAD baseline inspector vs Marine Knowledge Pack V0 on 16 ground-truth cases."""
+    cases = _build_16_ground_truth_cases()
+    assert len(cases) == 16
+
+    baseline_rows: list[tuple[str, str, str]] = []
+    pack_rows: list[tuple[str, str, str]] = []
+    for cid, gold, obs_list, fn_pack, base_kwargs in cases:
+        base_pred = generic_cad_baseline_inspect(obs_list, **base_kwargs)
+        pack_res = validate_check_result(fn_pack())
+        assert pack_res["cad_mutation"] is False
+        assert pack_res["regulatory_compliance_proven"] is False
+        baseline_rows.append((cid, gold, base_pred))
+        pack_rows.append((cid, gold, pack_res["status"]))
+
+    base_metrics = score_ab_predictions(baseline_rows)
+    pack_metrics = score_ab_predictions(pack_rows)
+
+    assert pack_metrics["exact_verdict_matches"] == 16
+    assert pack_metrics["tp_conflict"] == 5
+    assert pack_metrics["fp_conflict"] == 0
+    assert pack_metrics["fn_conflict"] == 0
+    assert pack_metrics["false_pass"] == 0
+    assert pack_metrics["appropriate_abstention"] == 7
+    assert pack_metrics["over_abstention"] == 0
+    assert pack_metrics["precision_conflict"] == 1.0
+    assert pack_metrics["recall_conflict"] == 1.0
+
+    # Baseline catches C14 (empty geometry shell) -> 1 appropriate abstention, misses 13 hazards (13 False PASS, 0 conflicts caught)
+    assert base_metrics["false_pass"] >= 10
+    assert base_metrics["tp_conflict"] == 0
+    assert base_metrics["exact_verdict_matches"] < pack_metrics["exact_verdict_matches"]

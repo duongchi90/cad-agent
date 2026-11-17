@@ -7,10 +7,13 @@ Reuses canonical JSON hashing and identifier discipline from
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+import hashlib
+from pathlib import Path
 import re
 from typing import Any
+import unicodedata
 
 from cad_agent.drawing_contracts import canonical_json_sha256
 
@@ -19,7 +22,50 @@ MARINE_PACK_SCHEMA_VERSION = "marine-knowledge-pack-1.0"
 MARINE_CHECK_RESULT_SCHEMA_VERSION = "marine-check-result-1.0"
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SAFE_DRAWING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_QCVN72_CONSOLIDATED_SHA256 = "4ffed2dad51f16d72bff5661a17be4d4793fe547133f999c41ded1ea72696b20"
+
+_ALLOWED_PROPOSAL_ACTIONS = frozenset(
+    {
+        "FIX_TITLE_BLOCK_TYPE_MISMATCH",
+        "RECONCILE_SERVICE_AREA_SCOPE",
+        "CONFIRM_REGULATORY_SERVICE_AREA",
+        "SET_INSUNITS_AND_VERIFY_CALIBRATION",
+        "SET_INSUNITS_AND_COMPLETE_TITLE_BLOCK",
+        "REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+        "REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
+        "VERIFY_SMALL_HULL_SCANTLINGS",
+        "REQUEST_NATIVE_CAD_AND_CALIBRATION",
+        "COMPLETE_TITLE_BLOCK_FIELDS",
+        "VERIFY_LONGLINE_BOW_TO_RIGHT",
+        "STANDARDIZE_TEXT_HEIGHTS_AT_SCALE",
+        "CHECK_NON_UNIFORM_VERTICAL_SCALE",
+        "RECONCILE_MAIN_ENGINE_SPECIFICATION",
+        "RECONCILE_L_PARTICULAR",
+        "RECONCILE_LPP_PARTICULAR",
+        "RECONCILE_B_PARTICULAR",
+        "RECONCILE_D_PARTICULAR",
+        "RECONCILE_DRAFT_PARTICULAR",
+        "RECONCILE_SHIP_TYPE_AND_HULL_ID",
+        "RECONCILE_METRIC_CONFLICT",
+        "VERIFY_CORRUPTED_NUMERIC_TEXT",
+        "VERIFY_CAD_GEOMETRY_ENTITIES",
+    }
+)
+_PROPOSAL_FIELDS = frozenset(
+    {
+        "proposal_id",
+        "target_drawing_id",
+        "action_kind",
+        "cad_mutation",
+        "proposal_only",
+        "requires_cad_core_admission",
+        "required_core_gates",
+        "evidence",
+        "reason",
+    }
+)
 
 _ALLOWED_DRAFT_STATUSES = frozenset({"CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY"})
 _ALLOWED_RESULT_PACK_STATUSES = _ALLOWED_DRAFT_STATUSES | frozenset({"DISABLED"})
@@ -470,12 +516,36 @@ def validate_check_result(payload: object) -> dict[str, Any]:
     _require_str_list(data["checks_not_executed"], "RESULT_CHECKS_NOT_EXECUTED_INVALID")
     _require_str_list(data["limitations"], "RESULT_LIMITATIONS_INVALID")
     proposals = data["proposal_only_actions"]
-    if not isinstance(proposals, list) or any(not isinstance(item, Mapping) for item in proposals):
+    if not isinstance(proposals, list):
         _fail("RESULT_PROPOSALS_INVALID")
+    for raw_prop in proposals:
+        prop = _require_mapping(raw_prop, "PROPOSAL_SCHEMA_INVALID")
+        if set(prop) != _PROPOSAL_FIELDS:
+            _fail("PROPOSAL_SCHEMA_INVALID")
+        _require_non_empty_str(prop["proposal_id"], "PROPOSAL_ID_INVALID")
+        target = _require_non_empty_str(prop["target_drawing_id"], "PROPOSAL_TARGET_INVALID")
+        if _SAFE_DRAWING_ID_RE.fullmatch(target) is None:
+            _fail("PROPOSAL_TARGET_INVALID")
+        action = _require_non_empty_str(prop["action_kind"], "PROPOSAL_ACTION_INVALID")
+        if action not in _ALLOWED_PROPOSAL_ACTIONS:
+            _fail("PROPOSAL_ACTION_INVALID")
+        if prop["cad_mutation"] is not False:
+            _fail("PROPOSAL_MUTATION_FORBIDDEN")
+        if prop["proposal_only"] is not True or prop["requires_cad_core_admission"] is not True:
+            _fail("PROPOSAL_ADMISSION_REQUIRED")
+        gates = _require_str_list(prop["required_core_gates"], "PROPOSAL_GATES_INVALID", min_items=2)
+        if "CAD_CORE_SOURCE_SUPPORT" not in gates or "CAD_CORE_REVIEW" not in gates:
+            _fail("PROPOSAL_GATES_INVALID")
+        _require_mapping(prop["evidence"], "PROPOSAL_EVIDENCE_INVALID")
+        _require_non_empty_str(prop["reason"], "PROPOSAL_REASON_INVALID")
     return deepcopy(data)
 
 
 SUPPORTED_REGULATIONS = frozenset({"QCVN_72_2025_BGTVT"})
+
+
+def _normalize_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip().casefold()
 
 
 def verify_source_citation(
@@ -483,8 +553,11 @@ def verify_source_citation(
     manifest: Mapping[str, object],
     *,
     expected_sha256: str | None = None,
+    source_file_path: str | Path | None = None,
+    source_bytes: bytes | None = None,
+    page_texts: Mapping[int, str] | Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fail-closed citation verification against SHA-256 manifest, clause, and explicit pagination basis."""
+    """Fail-closed citation verification distinguishing metadata match from verified source content."""
     valid_manifest = validate_source_manifest(manifest)
     sources = {src["source_id"]: src for src in valid_manifest["sources"]}
     record = _require_mapping(citation, "CITATION_INVALID")
@@ -492,17 +565,98 @@ def verify_source_citation(
     source_entry = sources.get(source_id)
     if source_entry is None or source_entry["usage_status"] == "EXCLUDED_NON_MARINE":
         _fail("CITATION_SOURCE_UNSUPPORTED")
-    _require_non_empty_str(record.get("clause"), "CITATION_CLAUSE_MISSING")
+
+    clause = _require_non_empty_str(record.get("clause"), "CITATION_CLAUSE_MISSING").strip()
+    if source_id == "QCVN_72_2025_BGTVT" and re.match(
+        r"^(?:qcvn\s*(?!72)\d+|solas|tcvn)\b", clause, re.IGNORECASE
+    ):
+        _fail("CITATION_CLAUSE_SOURCE_MISMATCH")
+
+    if "source_version" in record and record["source_version"] is not None:
+        cited_ver = _require_non_empty_str(record["source_version"], "CITATION_VERSION_MISMATCH")
+        manifest_ver = str(source_entry["version"])
+        ver_year = re.search(r"\b(19\d{2}|20\d{2})\b", cited_ver)
+        man_year = re.search(r"\b(19\d{2}|20\d{2})\b", manifest_ver)
+        if ver_year and man_year and ver_year.group(1) != man_year.group(1):
+            _fail("CITATION_VERSION_MISMATCH")
+        if cited_ver not in manifest_ver and not (
+            ver_year and man_year and ver_year.group(1) == man_year.group(1)
+        ):
+            _fail("CITATION_VERSION_MISMATCH")
+
     pdf_pages = _require_pos_int_list(record.get("pdf_page", []), "CITATION_PDF_PAGE_INVALID")
     reg_pages = _require_pos_int_list(record.get("reg_page", []), "CITATION_REG_PAGE_INVALID")
     if not pdf_pages and not reg_pages:
         _fail("CITATION_PAGE_MISSING")
+
     page_count = source_entry.get("page_count")
     if isinstance(page_count, int) and any(p > page_count for p in pdf_pages):
         _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
+
+    if source_entry["document_kind"] == "TEXTBOOK" and reg_pages:
+        _fail("CITATION_REG_PAGE_MISMATCH")
+    if source_entry["document_kind"] == "REGULATION":
+        if not reg_pages or (pdf_pages and len(reg_pages) != len(pdf_pages)):
+            _fail("CITATION_PAGINATION_OFFSET_MISMATCH")
+        if source_id == "QCVN_72_2025_BGTVT" and source_entry["sha256"] == _QCVN72_CONSOLIDATED_SHA256:
+            for pdf_p, reg_p in zip(pdf_pages, reg_pages):
+                if reg_p != pdf_p + 16:
+                    _fail("CITATION_PAGINATION_OFFSET_MISMATCH")
+
     cited_sha = _require_sha256(record.get("source_sha256"), "CITATION_SHA_MISSING")
     if cited_sha != source_entry["sha256"]:
         _fail("CITATION_SHA_STALE_OR_MISMATCH")
     if expected_sha256 is not None and _require_sha256(expected_sha256, "CITATION_EXPECTED_SHA_INVALID") != cited_sha:
         _fail("CITATION_SHA_STALE_OR_MISMATCH")
-    return deepcopy(dict(record))
+
+    states: list[str] = ["MANIFEST_MATCH"]
+    raw_bytes: bytes | None = source_bytes
+    if raw_bytes is None and source_file_path is not None:
+        fpath = Path(source_file_path)
+        if fpath.is_file():
+            raw_bytes = fpath.read_bytes()
+
+    if raw_bytes is not None:
+        actual_sha = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_sha != source_entry["sha256"]:
+            _fail("CITATION_SHA_STALE_OR_MISMATCH")
+        states.append("SOURCE_BYTES_VERIFIED")
+    elif page_texts is None:
+        states.extend(["METADATA_ONLY", "SOURCE_UNAVAILABLE"])
+
+    if page_texts is not None:
+        pages_dict: dict[int, str]
+        if isinstance(page_texts, Mapping):
+            pages_dict = {int(k): str(v) for k, v in page_texts.items()}
+        else:
+            pages_dict = {idx + 1: str(txt) for idx, txt in enumerate(page_texts)}
+        combined_pages: list[str] = []
+        for idx_pos, pdf_p in enumerate(pdf_pages):
+            if pdf_p not in pages_dict:
+                _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
+            page_txt = pages_dict[pdf_p]
+            combined_pages.append(page_txt)
+            if idx_pos < len(reg_pages):
+                if str(reg_pages[idx_pos]) not in page_txt[:300]:
+                    _fail("CITATION_PAGE_MISMATCH")
+        states.append("PAGE_VERIFIED")
+        excerpt = record.get("verbatim_excerpt")
+        if isinstance(excerpt, str) and excerpt.strip():
+            merged_norm = _normalize_ws(" ".join(combined_pages))
+            segments = [
+                _normalize_ws(seg)
+                for seg in excerpt.split("...")
+                if len(_normalize_ws(seg)) >= 10
+            ]
+            if not segments or not all(seg in merged_norm for seg in segments):
+                _fail("CITATION_EXCERPT_CONTENT_MISMATCH")
+            states.append("CLAUSE_CONTENT_VERIFIED")
+
+    out = deepcopy(dict(record))
+    out["verification_states"] = states
+    out["verification_level"] = (
+        "SOURCE_CONTENT_VERIFIED"
+        if "CLAUSE_CONTENT_VERIFIED" in states or "SOURCE_BYTES_VERIFIED" in states
+        else "MANIFEST_METADATA_ONLY"
+    )
+    return out

@@ -15,17 +15,19 @@
 
 - Contracts: `contracts/marine-knowledge/{source-manifest,marine-knowledge-pack,marine-check-result}.schema.json`
 - Package `cad_agent/marine_knowledge/`:
-  - `contracts.py`: fail-closed schema + hash validators (`cad_mutation=False`, `regulatory_compliance_proven=False`, non-empty provenance)
+  - `contracts.py`: fail-closed schema + hash validators (`cad_mutation=False`, `regulatory_compliance_proven=False`, non-empty provenance), proposal structural checks, and `verify_source_citation` returning explicit `verification_states` (`MANIFEST_MATCH` / `SOURCE_BYTES_VERIFIED` / `PAGE_VERIFIED` / `CLAUSE_CONTENT_VERIFIED` vs `METADATA_ONLY`)
   - `manifest.py`: external source metadata & SHA-256 inventory (excluding non-marine road-vehicle docs; no binary source files committed)
-  - `text_normalization.py`: idempotent MTEXT control-stripper, TCVN3->Unicode converter, accent-folded search normalization
-  - `knowledge_data.py`: 26 bilingual terms and 10 conditional engineering rules with exact clause/page citations
+  - `text_normalization.py`: idempotent MTEXT control-stripper, TCVN3->Unicode converter, accent-folded search normalization, bounded input guard
+  - `knowledge_data.py`: 26 bilingual terms (including QCVN 72 rule length `L` vs `Lpp` distinction) and 10 conditional engineering rules with exact clause/page citations (including QCVN 72 Clause `3.7.21` p.172/188)
   - `pack.py`: sealed pack loader, bilingual term lookup, conditional rule query, and `CAD_AGENT_DISABLE_MARINE_PACK=1` disable switch
-  - `observer.py`: read-only DXF / dictionary normalizer extracting particulars, title blanks, A.P/F.P anchors, and ACAD XDATA `.Vn*` fonts
-  - `skills.py`: Skill 1 (`classify_marine_drawing`), Skill 2 (`evaluate_regulation_applicability_and_submittal`), Skill 3 (`detect_drawing_gaps_and_conflicts`), and non-mutating `build_marine_core_proposal`
+  - `observer.py`: read-only DXF / dictionary normalizer extracting separated `L`/`Lpp`/`Lwl`, particulars with unit verification, `metric_provenance`, title blanks, A.P/F.P anchors, negated-scope & lifeboat guards, bound structural plate thickness (`s=`/`t=`), corrupted numeric token detection, non-marine markers, and ACAD XDATA `.Vn*` fonts
+  - `skills.py`: Skill 1 (`classify_marine_drawing`), Skill 2 (`evaluate_regulation_applicability_and_submittal`), Skill 3 (`detect_drawing_gaps_and_conflicts`), and hardened non-mutating `build_marine_core_proposal`
 
-## Non-Goals and Safety Boundaries
+## Non-Goals, Adversarial Hardening, and Safety Boundaries
 
 - No vector database, external agent runtime, plugin framework, or duplicate CAD/DXF/OCR package.
-- Never promotes OCR-only input or unitless (`$INSUNITS=0`) drawings without verified calibration to `PASS`.
-- Never default-applies `QCVN 72:2025/BGTVT` without confirmed inland scope; bare free-text `OCEAN GOING` labels without verified statutory/Class notation (`VRH`, `QCVN 21`, `SOLAS`) or `L > 140 m` return `INSUFFICIENT_EVIDENCE` rather than a definitive legal exclusion, while confirmed Clause 1.1.1 exclusions return `NOT_APPLICABLE`.
+- Never promotes OCR-only input, corrupted OCR numerics (`52.O5`), unbound plate text, missing length `L`/`Lpp`, empty geometric shells (`0` CAD primitives), or unitless (`$INSUNITS=0`) drawings without BOTH `calibration_verified=True` and positive finite `verified_scale_to_mm` to `PASS`.
+- Enforces `L` vs `Lpp` boundary ambiguity fail-closed behavior near QCVN 72 statutory thresholds (`20m`, `40m`, `60m`, `80m`, `120m`, `140m`) when explicit rule length `L`/`Lwl` is absent, and forbids `PASS` when zero structural checks (`RULE_MK_08`/`09`/`10`) actually executed.
+- Separates non-marine domain artifacts (`NOT_APPLICABLE`, `candidate_referred_regulation=None`), bare free-text `OCEAN GOING` labels (`INSUFFICIENT_EVIDENCE`), and verified Clause 1.1.1 statutory exclusions (`NOT_APPLICABLE` mapped accurately to `QCVN 21`/`56`/`84`/`54`).
 - Never condemns unprovided companion sheets when `partial_package=True`.
+- Verified via Two-Part A/B benchmark (`tests/test_marine_knowledge_ab.py` + `tests/test_marine_knowledge_adversarial.py`): Part A functional regression (`DISABLED` vs `ENABLED`) and Part B independent comparison (`Generic CAD Baseline Inspector` vs `Marine Knowledge Pack V0`).

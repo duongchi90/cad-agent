@@ -118,7 +118,10 @@ def _looks_like_tcvn3(text: str, font_hint: str) -> bool:
 
 def normalize_marine_cad_text(raw: str, *, font_hint: str = "") -> str:
     """Normalize MTEXT/TCVN3 marine CAD strings into clean Unicode NFC text."""
-    stripped, embedded_font = strip_mtext_formatting(raw)
+    raw_str = raw or ""
+    if len(raw_str) > 4096:
+        raise ValueError("OBSERVATION_INPUT_TOO_LARGE")
+    stripped, embedded_font = strip_mtext_formatting(raw_str)
     effective_font = font_hint or embedded_font
     if _looks_like_tcvn3(stripped, effective_font):
         decoded = stripped.translate(_TCVN3_TRANS)
