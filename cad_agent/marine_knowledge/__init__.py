@@ -5,9 +5,11 @@ from .contracts import (
     MARINE_PACK_SCHEMA_VERSION,
     MarineKnowledgeError,
     SOURCE_MANIFEST_SCHEMA_VERSION,
+    SUPPORTED_REGULATIONS,
     validate_check_result,
     validate_knowledge_pack,
     validate_source_manifest,
+    verify_source_citation,
 )
 from .manifest import get_marine_source_manifest
 from .observer import normalize_observation, observe_dxf_bytes, observe_dxf_file
@@ -31,6 +33,7 @@ __all__ = [
     "MARINE_PACK_SCHEMA_VERSION",
     "MarineKnowledgeError",
     "SOURCE_MANIFEST_SCHEMA_VERSION",
+    "SUPPORTED_REGULATIONS",
     "build_marine_core_proposal",
     "classify_marine_drawing",
     "detect_drawing_gaps_and_conflicts",
@@ -49,4 +52,5 @@ __all__ = [
     "validate_check_result",
     "validate_knowledge_pack",
     "validate_source_manifest",
+    "verify_source_citation",
 ]

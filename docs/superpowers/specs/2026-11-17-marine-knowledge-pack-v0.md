@@ -27,5 +27,5 @@
 
 - No vector database, external agent runtime, plugin framework, or duplicate CAD/DXF/OCR package.
 - Never promotes OCR-only input or unitless (`$INSUNITS=0`) drawings without verified calibration to `PASS`.
-- Never default-applies `QCVN 72:2025/BGTVT` without confirmed inland scope; `OCEAN_GOING` vessels report `NOT_APPLICABLE` referencing `QCVN 21:2015/BGTVT`.
+- Never default-applies `QCVN 72:2025/BGTVT` without confirmed inland scope; bare free-text `OCEAN GOING` labels without verified statutory/Class notation (`VRH`, `QCVN 21`, `SOLAS`) or `L > 140 m` return `INSUFFICIENT_EVIDENCE` rather than a definitive legal exclusion, while confirmed Clause 1.1.1 exclusions return `NOT_APPLICABLE`.
 - Never condemns unprovided companion sheets when `partial_package=True`.

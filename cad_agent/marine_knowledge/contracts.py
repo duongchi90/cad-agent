@@ -134,10 +134,12 @@ _FINDING_FIELDS = frozenset(
         "verdict",
         "rule_id",
         "source_id",
+        "source_sha256",
         "source_version",
         "clause",
         "pdf_page",
         "reg_page",
+        "pagination_basis",
         "conditions_applied",
         "exceptions_checked",
         "evidence",
@@ -448,10 +450,14 @@ def validate_check_result(payload: object) -> dict[str, Any]:
             _fail("FINDING_VERDICT_INVALID")
         _require_non_empty_str(f["rule_id"], "FINDING_RULE_ID_INVALID")
         _require_non_empty_str(f["source_id"], "FINDING_SOURCE_ID_INVALID")
+        _require_sha256(f["source_sha256"], "FINDING_SOURCE_SHA_INVALID")
         _require_non_empty_str(f["source_version"], "FINDING_SOURCE_VERSION_INVALID")
         _require_non_empty_str(f["clause"], "FINDING_CLAUSE_INVALID")
-        _require_pos_int_list(f["pdf_page"], "FINDING_PDF_PAGE_INVALID")
-        _require_pos_int_list(f["reg_page"], "FINDING_REG_PAGE_INVALID")
+        pdf_pages = _require_pos_int_list(f["pdf_page"], "FINDING_PDF_PAGE_INVALID")
+        reg_pages = _require_pos_int_list(f["reg_page"], "FINDING_REG_PAGE_INVALID")
+        if not pdf_pages and not reg_pages:
+            _fail("FINDING_PAGE_CITATION_MISSING")
+        _require_non_empty_str(f["pagination_basis"], "FINDING_PAGINATION_BASIS_INVALID")
         _require_str_list(f["conditions_applied"], "FINDING_CONDITIONS_INVALID")
         _require_str_list(f["exceptions_checked"], "FINDING_EXCEPTIONS_INVALID")
         _require_mapping(f["evidence"], "FINDING_EVIDENCE_INVALID")
@@ -467,3 +473,36 @@ def validate_check_result(payload: object) -> dict[str, Any]:
     if not isinstance(proposals, list) or any(not isinstance(item, Mapping) for item in proposals):
         _fail("RESULT_PROPOSALS_INVALID")
     return deepcopy(data)
+
+
+SUPPORTED_REGULATIONS = frozenset({"QCVN_72_2025_BGTVT"})
+
+
+def verify_source_citation(
+    citation: Mapping[str, object],
+    manifest: Mapping[str, object],
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Fail-closed citation verification against SHA-256 manifest, clause, and explicit pagination basis."""
+    valid_manifest = validate_source_manifest(manifest)
+    sources = {src["source_id"]: src for src in valid_manifest["sources"]}
+    record = _require_mapping(citation, "CITATION_INVALID")
+    source_id = _require_non_empty_str(record.get("source_id"), "CITATION_SOURCE_MISSING")
+    source_entry = sources.get(source_id)
+    if source_entry is None or source_entry["usage_status"] == "EXCLUDED_NON_MARINE":
+        _fail("CITATION_SOURCE_UNSUPPORTED")
+    _require_non_empty_str(record.get("clause"), "CITATION_CLAUSE_MISSING")
+    pdf_pages = _require_pos_int_list(record.get("pdf_page", []), "CITATION_PDF_PAGE_INVALID")
+    reg_pages = _require_pos_int_list(record.get("reg_page", []), "CITATION_REG_PAGE_INVALID")
+    if not pdf_pages and not reg_pages:
+        _fail("CITATION_PAGE_MISSING")
+    page_count = source_entry.get("page_count")
+    if isinstance(page_count, int) and any(p > page_count for p in pdf_pages):
+        _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
+    cited_sha = _require_sha256(record.get("source_sha256"), "CITATION_SHA_MISSING")
+    if cited_sha != source_entry["sha256"]:
+        _fail("CITATION_SHA_STALE_OR_MISMATCH")
+    if expected_sha256 is not None and _require_sha256(expected_sha256, "CITATION_EXPECTED_SHA_INVALID") != cited_sha:
+        _fail("CITATION_SHA_STALE_OR_MISMATCH")
+    return deepcopy(dict(record))

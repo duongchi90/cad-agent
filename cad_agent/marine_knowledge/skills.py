@@ -10,8 +10,11 @@ from typing import Any
 from .contracts import (
     MARINE_CHECK_RESULT_SCHEMA_VERSION,
     MarineKnowledgeError,
+    SUPPORTED_REGULATIONS,
     validate_check_result,
+    verify_source_citation,
 )
+from .manifest import get_marine_source_manifest
 from .observer import normalize_observation
 from .pack import get_marine_knowledge_pack, is_marine_pack_enabled
 
@@ -26,6 +29,9 @@ _REQUIRED_SUBMITTAL_DRAWINGS = (
     "MIDSHIP_STRUCTURAL",
     "BASIC_STRUCTURAL",
 )
+
+_MANIFEST = get_marine_source_manifest()
+_SOURCES_BY_ID = {src["source_id"]: src for src in _MANIFEST["sources"]}
 
 
 def build_marine_core_proposal(
@@ -99,15 +105,32 @@ def _make_finding(
     limitation: str | None = None,
 ) -> dict[str, Any]:
     rule = rules_by_id[rule_id]
+    source_entry = _SOURCES_BY_ID[rule["source_id"]]
+    source_sha = source_entry["sha256"]
+    citation = {
+        "source_id": rule["source_id"],
+        "source_sha256": source_sha,
+        "clause": rule["clause"],
+        "pdf_page": list(rule["pdf_page"]),
+        "reg_page": list(rule["reg_page"]),
+    }
+    verify_source_citation(citation, _MANIFEST)
+    reg_note = f"reg_page={list(rule['reg_page'])}" if rule["reg_page"] else "reg_page=[] (textbook)"
+    pagination_basis = (
+        f"bound_local_sha256:{source_sha} | pdf_page={list(rule['pdf_page'])} | {reg_note} "
+        "(external uploads may paginate differently)"
+    )
     return {
         "finding_id": finding_id,
         "verdict": verdict,
         "rule_id": rule["rule_id"],
         "source_id": rule["source_id"],
+        "source_sha256": source_sha,
         "source_version": rule["source_version"],
         "clause": rule["clause"],
         "pdf_page": list(rule["pdf_page"]),
         "reg_page": list(rule["reg_page"]),
+        "pagination_basis": pagination_basis,
         "conditions_applied": list(rule["conditions"]),
         "exceptions_checked": list(rule["exceptions"]),
         "evidence": deepcopy(dict(evidence)),
@@ -340,6 +363,7 @@ def classify_marine_drawing(
 def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
     service_areas: list[str] = []
     class_notations: list[str] = []
+    explicit_exclusions: list[str] = []
     lpp_values: list[float] = []
     ship_types: list[str] = []
     drawing_types: dict[str, str] = {}
@@ -354,6 +378,9 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
         for val in part["class_notations"]:
             if val not in class_notations:
                 class_notations.append(val)
+        for val in part.get("explicit_exclusion_evidences", []):
+            if val not in explicit_exclusions:
+                explicit_exclusions.append(val)
         for val in part["lpp_m_values"]:
             lpp_values.append(val)
         for val in part["ship_types"]:
@@ -365,6 +392,7 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
         "observed_types": sorted(set(drawing_types.values())),
         "service_areas": service_areas,
         "class_notations": class_notations,
+        "explicit_exclusion_evidences": explicit_exclusions,
         "lpp_m": lpp_values[0] if lpp_values else None,
         "lpp_m_all": sorted(set(lpp_values)),
         "ship_types": ship_types,
@@ -407,6 +435,7 @@ def evaluate_regulation_applicability_and_submittal(
     observations: Mapping[str, Any] | Sequence[Mapping[str, Any]],
     *,
     target_regulation: str = "QCVN_72_2025_BGTVT",
+    expected_source_sha256: str | None = None,
     partial_package: bool = True,
     verified_scale_to_mm: float | None = None,
     calibration_verified: bool = False,
@@ -419,6 +448,97 @@ def evaluate_regulation_applicability_and_submittal(
 
     pack, rules_by_id = _pack_context()
     obs_list = _to_obs_list(observations)
+    if target_regulation not in SUPPORTED_REGULATIONS:
+        unsupported_reason = (
+            f"Unsupported regulation version {target_regulation!r}; "
+            f"Marine Knowledge Pack V0 supports only {sorted(SUPPORTED_REGULATIONS)}."
+        )
+        return validate_check_result(
+            {
+                "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+                "skill_id": skill_id,
+                "pack_id": pack["id"],
+                "pack_sha256": pack["pack_sha256"],
+                "pack_status": pack["status"],
+                "cad_mutation": False,
+                "regulatory_compliance_proven": False,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "summary": unsupported_reason,
+                "observed_scope": {"drawing_count": len(obs_list)},
+                "applicable_regulation_scope": {
+                    "target_regulation": target_regulation,
+                    "supported_regulation": False,
+                    "supported_regulations": sorted(SUPPORTED_REGULATIONS),
+                    "in_scope": None,
+                },
+                "partial_package": bool(partial_package),
+                "findings": [
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_UNSUPPORTED_REGULATION_VERSION",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_01_QCVN72_SCOPE",
+                        evidence={
+                            "target_regulation": target_regulation,
+                            "supported_regulations": sorted(SUPPORTED_REGULATIONS),
+                        },
+                        reason=unsupported_reason,
+                    )
+                ],
+                "checks_executed": ["Regulation version support check"],
+                "checks_not_executed": [f"Checks under unsupported regulation {target_regulation}"],
+                "limitations": [unsupported_reason],
+                "proposal_only_actions": [],
+            }
+        )
+
+    if expected_source_sha256 is not None:
+        indexed_sha = _SOURCES_BY_ID[target_regulation]["sha256"]
+        if expected_source_sha256.strip().lower() != indexed_sha:
+            stale_reason = (
+                f"Stale or mismatched source SHA-256 for {target_regulation}: "
+                f"caller expected {expected_source_sha256!r} vs manifest {indexed_sha!r}; "
+                "uploaded vs local QCVN PDF cannot be assumed to share identical pagination."
+            )
+            return validate_check_result(
+                {
+                    "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+                    "skill_id": skill_id,
+                    "pack_id": pack["id"],
+                    "pack_sha256": pack["pack_sha256"],
+                    "pack_status": pack["status"],
+                    "cad_mutation": False,
+                    "regulatory_compliance_proven": False,
+                    "status": "INSUFFICIENT_EVIDENCE",
+                    "summary": stale_reason,
+                    "observed_scope": {"drawing_count": len(obs_list)},
+                    "applicable_regulation_scope": {
+                        "target_regulation": target_regulation,
+                        "supported_regulation": True,
+                        "in_scope": None,
+                        "source_sha256_verified": False,
+                    },
+                    "partial_package": bool(partial_package),
+                    "findings": [
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_STALE_OR_MISMATCHED_SOURCE_SHA256",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_01_QCVN72_SCOPE",
+                            evidence={
+                                "expected_source_sha256": expected_source_sha256,
+                                "manifest_sha256": indexed_sha,
+                            },
+                            reason=stale_reason,
+                        )
+                    ],
+                    "checks_executed": ["Source manifest SHA-256 verification"],
+                    "checks_not_executed": ["All regulation checks blocked by mismatched/stale PDF hash"],
+                    "limitations": [stale_reason],
+                    "proposal_only_actions": [],
+                }
+            )
+
     if not obs_list:
         return validate_check_result(
             {
@@ -432,7 +552,11 @@ def evaluate_regulation_applicability_and_submittal(
                 "status": "INSUFFICIENT_EVIDENCE",
                 "summary": "No marine drawing observations provided.",
                 "observed_scope": {"drawing_count": 0},
-                "applicable_regulation_scope": {"target_regulation": target_regulation, "in_scope": None},
+                "applicable_regulation_scope": {
+                    "target_regulation": target_regulation,
+                    "supported_regulation": True,
+                    "in_scope": None,
+                },
                 "partial_package": bool(partial_package),
                 "findings": [],
                 "checks_executed": [],
@@ -444,7 +568,10 @@ def evaluate_regulation_applicability_and_submittal(
 
     scope = _aggregate_package_scope(obs_list)
     service_areas = scope["service_areas"]
+    explicit_exclusions = scope["explicit_exclusion_evidences"]
     lpp_m = scope["lpp_m"]
+    lpp_all = scope["lpp_m_all"]
+    class_notations = scope["class_notations"]
     findings: list[dict[str, Any]] = []
     proposals: list[dict[str, Any]] = []
     checks_executed: list[str] = ["Regulatory applicability scope gate (QCVN 72 1.1.1 / 3.2.1)"]
@@ -453,22 +580,33 @@ def evaluate_regulation_applicability_and_submittal(
         "Per RULE_MK_02_NO_SINGLE_CHECK_CERTIFICATION, regulatory_compliance_proven remains False.",
     ]
 
-    if "OCEAN_GOING" in service_areas and "INLAND_WATERWAY" in service_areas:
+    lpp_conflict = len(lpp_all) > 1 and (max(lpp_all) - min(lpp_all)) > 0.05
+    scope_conflict = (
+        ("INLAND_WATERWAY" in service_areas and ("OCEAN_GOING" in service_areas or bool(explicit_exclusions)))
+        or len(class_notations) > 1
+        or lpp_conflict
+    )
+    if scope_conflict:
         findings.append(
             _make_finding(
                 rules_by_id,
                 finding_id="F_SCOPE_CONFLICT",
                 verdict="CONFLICT",
                 rule_id="RULE_MK_01_QCVN72_SCOPE",
-                evidence={"service_areas": service_areas, "class_notations": scope["class_notations"]},
-                reason="Conflicting service_area declarations observed across submittal (INLAND_WATERWAY vs OCEAN_GOING).",
+                evidence={
+                    "service_areas": service_areas,
+                    "class_notations": class_notations,
+                    "explicit_exclusions": explicit_exclusions,
+                    "lpp_m_all": lpp_all,
+                },
+                reason="Conflicting service_area, class notation, or Lpp declarations across submittal.",
             )
         )
         proposals.append(
             build_marine_core_proposal(
                 target_drawing_id=obs_list[0]["drawing_id"],
                 action_kind="RECONCILE_SERVICE_AREA_SCOPE",
-                evidence={"service_areas": service_areas},
+                evidence={"service_areas": service_areas, "class_notations": class_notations, "lpp_m_all": lpp_all},
             )
         )
         return validate_check_result(
@@ -481,9 +619,13 @@ def evaluate_regulation_applicability_and_submittal(
                 "cad_mutation": False,
                 "regulatory_compliance_proven": False,
                 "status": "CONFLICT",
-                "summary": "Conflicting inland vs ocean-going service_area scope prevents QCVN 72 determination.",
+                "summary": "Conflicting inland vs sea/exclusion scope or particulars prevents QCVN 72 determination.",
                 "observed_scope": scope,
-                "applicable_regulation_scope": {"target_regulation": target_regulation, "in_scope": None},
+                "applicable_regulation_scope": {
+                    "target_regulation": target_regulation,
+                    "supported_regulation": True,
+                    "in_scope": None,
+                },
                 "partial_package": bool(partial_package),
                 "findings": findings,
                 "checks_executed": checks_executed,
@@ -493,10 +635,12 @@ def evaluate_regulation_applicability_and_submittal(
             }
         )
 
-    if service_areas == ["OCEAN_GOING"] or (lpp_m is not None and lpp_m > 140.0):
+    length_excluded = lpp_m is not None and lpp_m > 140.0
+    if explicit_exclusions or length_excluded:
+        detected = explicit_exclusions[0] if explicit_exclusions else "L_GT_140M"
         out_reason = (
-            f"Target regulation {target_regulation} is NOT_APPLICABLE: "
-            "ocean-going steel sea ships refer to QCVN 21:2015/BGTVT (or L > 140 m outside QCVN 72 1.1.1)."
+            f"Target regulation {target_regulation} is NOT_APPLICABLE based on verified Clause 1.1.1 exclusion "
+            f"({detected}, Lpp={lpp_m}): refer to governing sea/special regulation (e.g. QCVN 21:2015/BGTVT)."
         )
         findings.append(
             _make_finding(
@@ -506,6 +650,7 @@ def evaluate_regulation_applicability_and_submittal(
                 rule_id="RULE_MK_01_QCVN72_SCOPE",
                 evidence={
                     "service_areas": service_areas,
+                    "explicit_exclusion_evidences": explicit_exclusions,
                     "lpp_m": lpp_m,
                     "referred_regulation": "QCVN 21:2015/BGTVT",
                 },
@@ -526,31 +671,46 @@ def evaluate_regulation_applicability_and_submittal(
                 "observed_scope": scope,
                 "applicable_regulation_scope": {
                     "target_regulation": target_regulation,
+                    "supported_regulation": True,
                     "in_scope": False,
-                    "detected_scope": "OCEAN_GOING" if "OCEAN_GOING" in service_areas else "L_GT_140M",
+                    "detected_scope": detected,
                     "referred_regulation": "QCVN 21:2015/BGTVT",
                 },
                 "partial_package": bool(partial_package),
                 "findings": findings,
                 "checks_executed": checks_executed,
-                "checks_not_executed": ["All QCVN 72 inland structural rules (vessel out of scope)"],
+                "checks_not_executed": ["All QCVN 72 inland structural rules (explicit statutory exclusion)"],
                 "limitations": limitations,
                 "proposal_only_actions": proposals,
             }
         )
 
     if "INLAND_WATERWAY" not in service_areas:
-        reason = (
-            "Insufficient evidence to confirm QCVN 72:2025/BGTVT scope: "
-            "no VR-SB/SI/SII/SIII class grade or inland service area declared (never default-apply QCVN 72)."
-        )
+        if "OCEAN_GOING" in service_areas:
+            reason = (
+                "Insufficient evidence for a legal QCVN 72 applicability verdict: drawing shows bare free-text "
+                "'OCEAN GOING' label without explicit Class/VR/VRH/QCVN 21/SOLAS statutory notation; missing "
+                "QCVN or VR notation is not proof of non-applicability (candidate reference: QCVN 21:2015/BGTVT)."
+            )
+            detected_scope = "UNVERIFIED_OCEAN_GOING_LABEL"
+        else:
+            reason = (
+                "Insufficient evidence to confirm QCVN 72:2025/BGTVT scope: unknown vessel classification "
+                "(no VR-SB/SI/SII/SIII, QCVN 72, QCVN 21, or statutory exclusion declared; missing QCVN or VR "
+                "notation is not proof of non-applicability)."
+            )
+            detected_scope = "UNKNOWN_CLASSIFICATION"
         findings.append(
             _make_finding(
                 rules_by_id,
                 finding_id="F_SCOPE_UNVERIFIED",
                 verdict="INSUFFICIENT_EVIDENCE",
                 rule_id="RULE_MK_01_QCVN72_SCOPE",
-                evidence={"service_areas": service_areas, "class_notations": scope["class_notations"]},
+                evidence={
+                    "service_areas": service_areas,
+                    "class_notations": class_notations,
+                    "explicit_exclusion_evidences": explicit_exclusions,
+                },
                 reason=reason,
             )
         )
@@ -558,7 +718,7 @@ def evaluate_regulation_applicability_and_submittal(
             build_marine_core_proposal(
                 target_drawing_id=obs_list[0]["drawing_id"],
                 action_kind="CONFIRM_REGULATORY_SERVICE_AREA",
-                evidence={"observed_service_areas": service_areas},
+                evidence={"observed_service_areas": service_areas, "detected_scope": detected_scope},
             )
         )
         return validate_check_result(
@@ -575,14 +735,18 @@ def evaluate_regulation_applicability_and_submittal(
                 "observed_scope": scope,
                 "applicable_regulation_scope": {
                     "target_regulation": target_regulation,
+                    "supported_regulation": True,
                     "in_scope": None,
-                    "detected_scope": "UNSPECIFIED",
+                    "detected_scope": detected_scope,
+                    "candidate_referred_regulation": (
+                        "QCVN 21:2015/BGTVT" if "OCEAN_GOING" in service_areas else None
+                    ),
                 },
                 "partial_package": bool(partial_package),
                 "findings": findings,
                 "checks_executed": checks_executed,
                 "checks_not_executed": [
-                    "QCVN 72 structural rule checks pending confirmed service area/class notation",
+                    "QCVN 72 structural rule checks pending verified classification / service area notation",
                 ],
                 "limitations": limitations,
                 "proposal_only_actions": proposals,

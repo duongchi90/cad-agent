@@ -135,9 +135,9 @@ def test_skill2_submittal_and_regulation_pass_conflict_missing_and_out_of_scope(
     assert res_missing["status"] == "INSUFFICIENT_EVIDENCE"
     assert res_missing["partial_package"] is True
 
-    # 4. Out-of-scope: OCEAN GOING vessel evaluated against QCVN 72 -> NOT_APPLICABLE
-    ocean_obs = {
-        "drawing_id": "GA7000_OCEAN",
+    # 4. Incomplete free-text OCEAN GOING label without explicit Class/QCVN21/VRH -> INSUFFICIENT_EVIDENCE
+    ocean_unverified = {
+        "drawing_id": "GA7000_OCEAN_BARE",
         "insunits": 0,
         "texts": [
             {"handle": "G1", "text": "GENERAL ARRANGEMENT CARGO SHIP 7000 MT", "layer": "0", "x": 100.0, "y": 100.0, "height": 250.0},
@@ -145,9 +145,38 @@ def test_skill2_submittal_and_regulation_pass_conflict_missing_and_out_of_scope(
             {"handle": "G3", "text": "Lpp = 92.40 m B = 17.50 m", "layer": "0", "x": 100.0, "y": 300.0, "height": 250.0},
         ],
     }
-    res_oos = evaluate_regulation_applicability_and_submittal([ocean_obs], partial_package=True)
+    res_unverified_ocean = evaluate_regulation_applicability_and_submittal([ocean_unverified], partial_package=True)
+    assert res_unverified_ocean["status"] == "INSUFFICIENT_EVIDENCE"
+    assert "QCVN 21:2015/BGTVT" in res_unverified_ocean["summary"]
+
+    # 5. Explicit statutory exclusion with valid evidence -> NOT_APPLICABLE
+    ocean_verified = {
+        "drawing_id": "GA7000_OCEAN_VRH",
+        "insunits": 4,
+        "texts": [
+            {"handle": "G1", "text": "GENERAL ARRANGEMENT CARGO SHIP", "layer": "0", "x": 100.0, "y": 100.0, "height": 250.0},
+            {"handle": "G2", "text": "SERVICE AREA : OCEAN GOING", "layer": "0", "x": 100.0, "y": 200.0, "height": 250.0},
+            {"handle": "G3", "text": "CLASS : *VRH (QCVN 21:2015/BGTVT)", "layer": "0", "x": 100.0, "y": 250.0, "height": 250.0},
+            {"handle": "G4", "text": "Lpp = 92.40 m B = 17.50 m", "layer": "0", "x": 100.0, "y": 300.0, "height": 250.0},
+        ],
+    }
+    res_oos = evaluate_regulation_applicability_and_submittal([ocean_verified], partial_package=True)
     assert res_oos["status"] == "NOT_APPLICABLE"
     assert "QCVN 21:2015/BGTVT" in res_oos["summary"]
+
+    # 6. Unsupported regulation version and mismatched source SHA-256 fail closed
+    res_unsupported_reg = evaluate_regulation_applicability_and_submittal(
+        [_inland_vrsb_ga_obs()],
+        target_regulation="QCVN_72_2014_BGTVT",
+    )
+    assert res_unsupported_reg["status"] == "INSUFFICIENT_EVIDENCE"
+    assert res_unsupported_reg["applicable_regulation_scope"]["supported_regulation"] is False
+
+    res_stale_sha = evaluate_regulation_applicability_and_submittal(
+        [_inland_vrsb_ga_obs()],
+        expected_source_sha256="0" * 64,
+    )
+    assert res_stale_sha["status"] == "INSUFFICIENT_EVIDENCE"
 
 
 def test_skill3_gaps_conflicts_ocr_rejection_proposals_and_disable_mode() -> None:

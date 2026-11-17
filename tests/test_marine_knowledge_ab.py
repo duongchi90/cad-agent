@@ -103,8 +103,14 @@ def test_marine_pack_ab_benchmark_beats_baseline_and_stays_isolated() -> None:
             {"handle": "4", "text": "TUYẾN HÌNH - BODY PLAN - HALF BREADTH", "x": 10.0, "y": 600.0, "height": 250.0},
         ],
     }
-    ocean_trap = _ga_vrsb(drawing_id="GA_OCEAN_7000", insunits=0, service_line="SERVICE AREA : OCEAN GOING")
-    ocean_trap["texts"][3]["text"] = "Lpp = 92.40 m"
+    ocean_bare = _ga_vrsb(drawing_id="GA_OCEAN_BARE", insunits=0, service_line="SERVICE AREA : OCEAN GOING")
+    ocean_bare["texts"][3]["text"] = "Lpp = 92.40 m"
+
+    ocean_explicit = _ga_vrsb(drawing_id="GA_OCEAN_VRH", insunits=4, service_line="SERVICE AREA : OCEAN GOING")
+    ocean_explicit["texts"][3]["text"] = "Lpp = 92.40 m"
+    ocean_explicit["texts"].append(
+        {"handle": "12", "text": "CLASS : *VRH (QCVN 21:2015/BGTVT)", "x": 50000.0, "y": 4500.0, "height": 250.0}
+    )
 
     scenarios = [
         (
@@ -122,19 +128,26 @@ def test_marine_pack_ab_benchmark_beats_baseline_and_stays_isolated() -> None:
             "CONFLICT",
         ),
         (
-            "S3_OCEAN_SCOPE_TRAP",
+            "S3_BARE_OCEAN_LABEL_FAIL_CLOSED",
             lambda en: evaluate_regulation_applicability_and_submittal(
-                [ocean_trap], partial_package=True, enabled=en
+                [ocean_bare], partial_package=True, enabled=en
+            ),
+            "INSUFFICIENT_EVIDENCE",
+        ),
+        (
+            "S4_EXPLICIT_CLAUSE_111_EXCLUSION",
+            lambda en: evaluate_regulation_applicability_and_submittal(
+                [ocean_explicit], partial_package=True, enabled=en
             ),
             "NOT_APPLICABLE",
         ),
         (
-            "S4_TITLE_CONTENT_MISMATCH",
+            "S5_TITLE_CONTENT_MISMATCH",
             lambda en: classify_marine_drawing(thlt_bad_title, enabled=en),
             "CONFLICT",
         ),
         (
-            "S5_CROSS_ENGINE_AND_BLANK_GAP",
+            "S6_CROSS_ENGINE_AND_BLANK_GAP",
             lambda en: detect_drawing_gaps_and_conflicts(
                 [_ga_vrsb(include_blanks=True), _mcn_vrsb(engine_line="MAIN ENGINE : 1200 kW")],
                 partial_package=True,
@@ -143,9 +156,16 @@ def test_marine_pack_ab_benchmark_beats_baseline_and_stays_isolated() -> None:
             "CONFLICT",
         ),
         (
-            "S6_OCR_ONLY_FAIL_CLOSED",
+            "S7_OCR_ONLY_FAIL_CLOSED",
             lambda en: detect_drawing_gaps_and_conflicts(
                 [_ga_vrsb()], ocr_only_inputs=True, enabled=en
+            ),
+            "INSUFFICIENT_EVIDENCE",
+        ),
+        (
+            "S8_UNSUPPORTED_REGULATION_VERSION",
+            lambda en: evaluate_regulation_applicability_and_submittal(
+                [_ga_vrsb()], target_regulation="QCVN_72_2014_BGTVT", enabled=en
             ),
             "INSUFFICIENT_EVIDENCE",
         ),
@@ -174,7 +194,9 @@ def test_marine_pack_ab_benchmark_beats_baseline_and_stays_isolated() -> None:
         b_class_proofs += int(res_b["regulatory_compliance_proven"])
         for finding in res_b["findings"]:
             assert finding["source_id"]
+            assert len(finding["source_sha256"]) == 64
             assert finding["clause"]
+            assert finding["pagination_basis"]
 
     assert a_domain_detections == 0
     assert b_passes == len(scenarios)
@@ -238,6 +260,45 @@ def test_marine_regression_bow_z_compression_small_hull_and_empty_inputs(
     assert classify_marine_drawing(_ga_vrsb())["status"] == "DISABLED"
 
 
+def test_step3_qcvn72_applicability_and_exclusion_matrix() -> None:
+    """Cover every Step 3 applicability branch: inland, explicit exclusions, unknown, conflict, stale/unsupported."""
+    # 1. Explicit exclusion: FRP hull governed by QCVN 56:2013/BGTVT
+    frp_obs = {
+        "drawing_id": "FRP_CRAFT_12M",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "GENERAL ARRANGEMENT - VỎ FRP (QCVN 56:2013/BGTVT)", "x": 10.0, "y": 10.0, "height": 200.0},
+            {"handle": "2", "text": "Lpp = 12.00 m", "x": 10.0, "y": 200.0, "height": 200.0},
+        ],
+    }
+    res_frp = evaluate_regulation_applicability_and_submittal([frp_obs])
+    assert res_frp["status"] == "NOT_APPLICABLE"
+
+    # 2. Explicit exclusion: Length Lpp > 140 m per Clause 1.1.1
+    long_obs = _ga_vrsb(drawing_id="LONG_155M")
+    long_obs["texts"][3]["text"] = "Lpp = 155.00 m"
+    res_long = evaluate_regulation_applicability_and_submittal([long_obs])
+    assert res_long["status"] == "NOT_APPLICABLE"
+
+    # 3. Unknown classification (no VR, QCVN, or ocean markers)
+    unknown_obs = {
+        "drawing_id": "UNKNOWN_SHIP",
+        "insunits": 4,
+        "texts": [
+            {"handle": "1", "text": "BẢN VẼ BỐ TRÍ CHUNG", "x": 10.0, "y": 10.0, "height": 200.0},
+            {"handle": "2", "text": "KHOANG HÀNG SỐ 1 - BUỒNG MÁY", "x": 10.0, "y": 200.0, "height": 200.0},
+        ],
+    }
+    res_unknown = evaluate_regulation_applicability_and_submittal([unknown_obs])
+    assert res_unknown["status"] == "INSUFFICIENT_EVIDENCE"
+
+    # 4. Conflicting inland class grades (VR-SB vs VR-SII across drawings)
+    res_class_conflict = evaluate_regulation_applicability_and_submittal(
+        [_ga_vrsb(service_line="CẤP TÀU : VR-SB"), _mcn_vrsb() | {"texts": [{"handle": "C", "text": "CẤP TÀU : VR-SII", "x": 10.0, "y": 10.0, "height": 150.0}]}]
+    )
+    assert res_class_conflict["status"] == "CONFLICT"
+
+
 @pytest.mark.real_data
 def test_marine_7000_real_dxf_ab_validation() -> None:
     """Private real-data verification over Marine-7000 DXFs when env paths are supplied outside Git."""
@@ -254,8 +315,10 @@ def test_marine_7000_real_dxf_ab_validation() -> None:
     assert cls_thlt["observed_scope"]["predicted_drawing_type"] == "LINES_PLAN"
     assert cls_thlt["observed_scope"]["title_declared_type"] == "GENERAL_ARRANGEMENT"
 
+    # Real Marine-7000 carries free-text 'OCEAN GOING' with blank Port of Registry and zero Class/QCVN/VR notation:
+    # Step 3 requires fail-closed INSUFFICIENT_EVIDENCE instead of definitive legal NOT_APPLICABLE.
     reg = evaluate_regulation_applicability_and_submittal([thlt_obs, ga_obs], partial_package=True)
-    assert reg["status"] == "NOT_APPLICABLE"
+    assert reg["status"] == "INSUFFICIENT_EVIDENCE"
     assert "QCVN 21:2015/BGTVT" in reg["summary"]
 
     gap = detect_drawing_gaps_and_conflicts([thlt_obs, ga_obs], partial_package=True)

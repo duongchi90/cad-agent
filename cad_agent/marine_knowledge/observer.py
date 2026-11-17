@@ -375,6 +375,7 @@ def _extract_particulars(entries: list[dict[str, Any]], raw: Mapping[str, Any]) 
     main_engines: list[str] = []
     class_notations: list[str] = []
     service_areas: list[str] = []
+    explicit_exclusion_evidences: list[str] = []
     ship_types: list[str] = []
     claimed_scales: list[float] = []
     ap_coords: list[float] = []
@@ -458,6 +459,22 @@ def _extract_particulars(entries: list[dict[str, Any]], raw: Mapping[str, Any]) 
         ) or re.search(r"\bvrh\b", folded):
             _append_unique(service_areas, "OCEAN_GOING")
 
+        if re.search(r"\bqcvn\s*21(?:\s*[:/]\s*\d{4})?\b", folded):
+            _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_21_SEA_SHIP")
+        if re.search(r"(?:^|[^a-z0-9])\*?\s*vrh\b", folded) or re.search(
+            r"\b(?:class|classification|cap\s+tau)\s*[:=]\s*\*?(?:vrh|dnv|abs|nk|lr|bv|rina|ccs|kr)\b",
+            folded,
+        ) or re.search(r"\b(?:dnv\s*\+?1a1|solas|iacs)\b", folded):
+            _append_unique(explicit_exclusion_evidences, "STATUTORY_SEA_CLASS_NOTATION")
+        if re.search(
+            r"\b(?:qcvn\s*(?:25|50|51|54|55|56|84)|ferrocement|xi\s+mang\s+luoi\s+thep|"
+            r"chat\s+deo\s+cot\s+soi\s+thuy\s+tinh|\bfrp\b|tau\s+vo\s+go|wooden\s+hull|"
+            r"high[-\s]?speed\s+craft|tau\s+cao\s+toc|floating\s+dock|\bu\s+noi\b|"
+            r"tau\s+quoc\s+phong|fishing\s+vessel|tau\s+ca)\b",
+            folded,
+        ):
+            _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_1_EXCLUSION")
+
         ship_m = _SHIP_TYPE_RE.search(folded)
         if ship_m:
             stype = ship_m.group(1).strip().upper()
@@ -487,6 +504,7 @@ def _extract_particulars(entries: list[dict[str, Any]], raw: Mapping[str, Any]) 
         "main_engine_values": main_engines,
         "class_notations": class_notations,
         "service_areas": service_areas,
+        "explicit_exclusion_evidences": explicit_exclusion_evidences,
         "ship_types": ship_types,
         "claimed_scales": claimed_scales,
         "ap_x_coords": ap_coords,
