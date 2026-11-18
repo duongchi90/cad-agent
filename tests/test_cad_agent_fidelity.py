@@ -4752,7 +4752,7 @@ def test_native_pdf_observation_admits_spans_inside_compound_cad_paint_operators
         lp1 = fitz.Point(lp0.x + 48.0 * ux, lp0.y + 48.0 * uy)
         sh_cad.draw_line(lp0, lp1)
         # Tall perpendicular table column divider grazing right side-bearing of "+/-1".
-        sh_cad.draw_line((323.2, 50.0), (323.2, 100.0))
+        sh_cad.draw_line((323.85, 50.0), (323.85, 100.0))
         sh_cad.finish(color=(0, 0, 0), fill=None, width=0.5)
         sh_cad.commit()
 
@@ -4986,3 +4986,179 @@ def test_native_pdf_observation_excludes_perpendicular_cap_dot_and_descender_mas
     contents = {r["content"] for r in records}
     assert target not in contents
     assert "CONTROL" in contents
+
+
+@pytest.mark.parametrize(
+    "r3_case",
+    [
+        "multitrace_overprint_M6_to_M68",
+        "intra_trace_backspace_overprint_1_to_18",
+        "shared_member_seqno_sibling_overwrite",
+        "same_seqno_later_trace_whiteout",
+        "wide_white_stroke_text_1Tr_erases_100",
+        "anisotropic_ctm_whiteout_stroke",
+        "acute_miter_spike_whiteout",
+        "condensed_50Tz_upper_cap_white_fill",
+        "condensed_75Tz_066em_cap_bar_strikethrough",
+        "vertical_stroke_right_20pct_of_1C",
+        "light_gray_079_comma_tail_erase",
+        "descender_g10_dark_strikethrough_015em",
+    ],
+)
+def test_native_pdf_observation_r3_blocks_overprint_anisotropic_miter_condensed_and_gray_escapes(
+    r3_case: str,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+
+    if r3_case == "multitrace_overprint_M6_to_M68":
+        target = "M68"
+        page.insert_text((60, 120), "M6", fontsize=12)
+        page.insert_text((70, 120), "8", fontsize=12)
+    elif r3_case == "intra_trace_backspace_overprint_1_to_18":
+        target = "18"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref) + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 180 Tm (1) Tj 0 0 Td (8) Tj ET Q\n",
+        )
+    elif r3_case == "shared_member_seqno_sibling_overwrite":
+        target = "100"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 180 Tm (1) Tj ET Q"
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 66.67 180 Tm (0) Tj ET Q"
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 73.34 180 Tm (0) Tj /F0 16 Tf -22.0 -1.2 Td (===) Tj ET Q\n",
+        )
+    elif r3_case == "same_seqno_later_trace_whiteout":
+        target = "100"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 180 Tm (100) Tj 1 1 1 rg /F0 16 Tf 1 0 0 1 48 179 Tm (MM) Tj ET Q\n",
+        )
+    elif r3_case == "wide_white_stroke_text_1Tr_erases_100":
+        target = "100"
+        page.insert_text((80, 86), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 1 1 1 RG 20 w 1 j 1 Tr /F0 12 Tf 1 0 0 1 20 280 Tm (A) Tj /F0 12.5 Tf 60 -82 Td (XXX) Tj ET Q\n",
+        )
+    elif r3_case == "anisotropic_ctm_whiteout_stroke":
+        target = "100"
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 0.05 0 0 25 0 0 cm 1 1 1 RG 1.2 w 400 4.0 3600 6.0 re 1000 7.06 m 1900 7.06 l S Q\n",
+        )
+    elif r3_case == "acute_miter_spike_whiteout":
+        target = "100"
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 2.5 w 0 j 30 M 20 120 140 150 re 68.5 140.0 m 70.0 175.0 l 71.5 140.0 l S Q\n",
+        )
+    elif r3_case == "condensed_50Tz_upper_cap_white_fill":
+        target = "77"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 50 Tz /F0 20 Tf 1 0 0 1 60 180 Tm (77) Tj ET Q"
+            + b"\nq 1 1 1 rg 20 20 5 5 re 55 188.2 30 8.0 re f Q\n",
+        )
+    elif r3_case == "condensed_75Tz_066em_cap_bar_strikethrough":
+        target = "77"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 75 Tz /F0 12 Tf 1 0 0 1 60 180 Tm (77) Tj ET Q"
+            + b"\nq 0 0 0 RG 0.8 w 10 10 380 280 re 55 187.92 m 85 187.92 l S Q\n",
+        )
+    elif r3_case == "vertical_stroke_right_20pct_of_1C":
+        target = "1C"
+        page.insert_text((80, 100), target, fontsize=12)
+        grect = fitz.Rect(page.get_texttrace()[-1]["chars"][1][3])
+        rx = grect.x1 - 0.20 * grect.width
+        sh = page.new_shape()
+        sh.draw_line((rx, 70.0), (rx, 130.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif r3_case == "light_gray_079_comma_tail_erase":
+        target = "10,5"
+        page.insert_text((60, 120), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_line((55.0, 122.15), (95.0, 122.15))
+        sh.finish(color=(0.79, 0.79, 0.79), fill=None, width=2.0)
+        sh.commit()
+    else:
+        target = "g10"
+        page.insert_text((80, 100), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_line((76.0, 101.8), (105.0, 101.8))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
+
+
+def test_native_pdf_observation_r3_dense_hatch_caching_stays_fast() -> None:
+    import time
+    from cad_agent import fidelity as fidelity_module
+
+    doc = fitz.open()
+    pg = doc.new_page(width=800, height=600)
+    for row in range(15):
+        for col in range(10):
+            pg.insert_text((40 + col * 70, 40 + row * 35), f"{row * 10 + col:03d}", fontsize=10)
+    sh = pg.new_shape()
+    sh.draw_rect(fitz.Rect(5, 5, 795, 595))
+    for k in range(2500):
+        y_h = 10.0 + (k % 25) * 0.2
+        sh.draw_line((10.0, y_h), (790.0, y_h))
+    sh.finish(color=(0, 0, 0), fill=None, width=0.3)
+    sh.commit()
+    hatch_bytes = doc.tobytes()
+    doc.close()
+
+    reopened = fitz.open(stream=hatch_bytes, filetype="pdf")
+    try:
+        t0 = time.perf_counter()
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 1600, 1200, "displayed-page-box-v1",
+        )
+        elapsed = time.perf_counter() - t0
+    finally:
+        reopened.close()
+
+    assert len(records) == 150
+    assert elapsed < 1.5

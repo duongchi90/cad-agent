@@ -1904,6 +1904,10 @@ def _native_pdf_text_span_records(
             or type(sequence_number) is not int
             or not isinstance(trace_bbox, (tuple, list)) or len(trace_bbox) != 4
             or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in trace_bbox)
+            or float(trace_bbox[2]) <= span_rect.x0
+            or float(trace_bbox[0]) >= span_rect.x1
+            or float(trace_bbox[3]) <= span_rect.y0
+            or float(trace_bbox[1]) >= span_rect.y1
         ):
             return None
 
@@ -1948,17 +1952,25 @@ def _native_pdf_text_span_records(
             return None
 
         start, selected_bbox = matches[0]
+        end = start + len(source_codepoints)
         narrowed = dict(trace)
-        narrowed["chars"] = list(chars[start:start + len(source_codepoints)])
+        narrowed["chars"] = list(chars[start:end])
         narrowed["bbox"] = tuple(float(value) for value in selected_bbox)
-        narrowed["_source_character_range"] = (start, start + len(source_codepoints))
+        narrowed["_source_character_range"] = (start, end)
         narrowed["_aggregate_trace_bbox"] = tuple(float(value) for value in trace_bbox)
+        narrowed["_later_intra_trace_chars"] = list(chars[end:])
         return narrowed
 
+    indexed_paint_traces: list[dict[str, Any]] = []
     traces_by_sequence: dict[int, list[dict[str, Any]]] = {}
-    for trace in paint_traces:
-        if isinstance(trace, dict) and type(trace.get("seqno")) is int:
-            traces_by_sequence.setdefault(trace["seqno"], []).append(trace)
+    for trace_order_idx, raw_trace in enumerate(paint_traces):
+        if isinstance(raw_trace, dict):
+            tagged_trace = dict(raw_trace)
+            tagged_trace["_trace_order_idx"] = trace_order_idx
+            indexed_paint_traces.append(tagged_trace)
+            if type(tagged_trace.get("seqno")) is int:
+                traces_by_sequence.setdefault(tagged_trace["seqno"], []).append(tagged_trace)
+    paint_traces = indexed_paint_traces
 
     try:
         raw_drawings = source_page.get_drawings()
@@ -1973,9 +1985,11 @@ def _native_pdf_text_span_records(
                 if drawing.get("type") == "fs":
                     drawings_by_sequence.setdefault(d_seq + 1, []).append(drawing)
 
-    below_baseline_ink_glyphs = frozenset("gjpqyQJ$,;()[]{}_|@#&§µçşğı±")
+    below_baseline_ink_glyphs = frozenset("gjpqyQJ$,;()[]{}_|@#&§µçşğı")
+    deep_descender_glyphs = frozenset("gjpqyQ$,;")
     baseline_punct_glyphs = frozenset(".:/\\=")
     minus_like_glyphs = frozenset("-−–—+")
+    narrow_advance_glyphs = frozenset(".,:;!'\"|ilI1()[]{}-/\\` ")
 
     def stroke_color_is_dark_visible(color: Any) -> bool:
         if not isinstance(color, (tuple, list)) or len(color) not in (1, 3, 4):
@@ -1991,12 +2005,11 @@ def _native_pdf_text_span_records(
             r = (1.0 - c) * (1.0 - k)
             g = (1.0 - m) * (1.0 - k)
             b = (1.0 - y) * (1.0 - k)
-        return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 0.80
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) <= 0.35
 
-    def nonspace_glyph_entries(
-        candidate_trace: dict[str, Any],
+    def nonspace_glyph_entries_from_chars(
+        chars: Any,
     ) -> list[tuple[int, tuple[float, float], fitz.Rect]] | None:
-        chars = candidate_trace.get("chars")
         if not isinstance(chars, (tuple, list)) or not chars:
             return None
         entries: list[tuple[int, tuple[float, float], fitz.Rect]] = []
@@ -2017,6 +2030,93 @@ def _native_pdf_text_span_records(
                 return None
             entries.append((char[0], (float(char[2][0]), float(char[2][1])), grect))
         return entries
+
+    def nonspace_glyph_entries(
+        candidate_trace: dict[str, Any],
+    ) -> list[tuple[int, tuple[float, float], fitz.Rect]] | None:
+        return nonspace_glyph_entries_from_chars(candidate_trace.get("chars"))
+
+    def expand_glyph_rect_for_condensation(
+        origin_pt: tuple[float, float],
+        grect: fitz.Rect,
+        ux: float,
+        uy: float,
+        vx: float,
+        vy: float,
+        v_scale: float,
+    ) -> fitz.Rect:
+        if v_scale <= 1.001:
+            return grect
+        ox, oy = origin_pt
+        corners = ((grect.x0, grect.y0), (grect.x1, grect.y0), (grect.x1, grect.y1), (grect.x0, grect.y1))
+        us = [(cx - ox) * ux + (cy - oy) * uy for cx, cy in corners]
+        vs = [((cx - ox) * vx + (cy - oy) * vy) * v_scale for cx, cy in corners]
+        u0, u1 = min(us), max(us)
+        v0, v1 = min(vs), max(vs)
+        mapped = [
+            (ox + u_c * ux + v_c * vx, oy + u_c * uy + v_c * vy)
+            for u_c in (u0, u1)
+            for v_c in (v0, v1)
+        ]
+        return fitz.Rect(
+            min(px for px, _ in mapped),
+            min(py for _, py in mapped),
+            max(px for px, _ in mapped),
+            max(py for _, py in mapped),
+        )
+
+    def has_valid_glyph_progression(
+        ordered_traces: list[dict[str, Any]],
+        line_dir: Any,
+        span_font_size: Any,
+    ) -> bool:
+        if (
+            not isinstance(line_dir, (tuple, list)) or len(line_dir) != 2
+            or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in line_dir)
+        ):
+            return False
+        dn = math.hypot(float(line_dir[0]), float(line_dir[1]))
+        if dn <= 1e-6:
+            return False
+        ux, uy = float(line_dir[0]) / dn, float(line_dir[1]) / dn
+        vx, vy = uy, -ux
+        is_axis_aligned = abs(ux) >= 0.999 or abs(uy) >= 0.999
+        sp_sz = float(span_font_size) if isinstance(span_font_size, (int, float)) and math.isfinite(float(span_font_size)) and float(span_font_size) > 0 else 0.0
+        ordered_glyphs: list[tuple[int, tuple[float, float], fitz.Rect, float]] = []
+        for mt in ordered_traces:
+            mt_size = mt.get("size")
+            if not isinstance(mt_size, (int, float)) or not math.isfinite(float(mt_size)) or float(mt_size) <= 0:
+                return False
+            entries = nonspace_glyph_entries(mt)
+            if entries is None:
+                return False
+            for cp, org, gr in entries:
+                ordered_glyphs.append((cp, org, gr, float(mt_size)))
+        for idx_a in range(len(ordered_glyphs)):
+            cp_a, (ox_a, oy_a), gr_a, sz_a = ordered_glyphs[idx_a]
+            if is_axis_aligned:
+                ua = [(cx - ox_a) * ux + (cy - oy_a) * uy for cx, cy in ((gr_a.x0, gr_a.y0), (gr_a.x1, gr_a.y0), (gr_a.x1, gr_a.y1), (gr_a.x0, gr_a.y1))]
+                ua0, ua1 = min(ua), max(ua)
+            else:
+                ua0 = ua1 = 0.0
+            for idx_b in range(idx_a + 1, len(ordered_glyphs)):
+                _cp_b, (ox_b, oy_b), gr_b, sz_b = ordered_glyphs[idx_b]
+                du = (ox_b - ox_a) * ux + (oy_b - oy_a) * uy
+                dv = abs((ox_b - ox_a) * vx + (oy_b - oy_a) * vy)
+                u_em = min(sz_a, sz_b)
+                eff_v = max(sz_a, sz_b, (sp_sz * sp_sz) / u_em if sp_sz > 0 and u_em > 0 else sz_a)
+                if dv > 0.15 * eff_v:
+                    return False
+                min_du = (0.16 if chr(cp_a) in narrow_advance_glyphs else 0.27) * u_em
+                if du < min_du:
+                    return False
+                if is_axis_aligned:
+                    ub = [(cx - ox_b) * ux + (cy - oy_b) * uy + du for cx, cy in ((gr_b.x0, gr_b.y0), (gr_b.x1, gr_b.y0), (gr_b.x1, gr_b.y1), (gr_b.x0, gr_b.y1))]
+                    ub0, ub1 = min(ub), max(ub)
+                    ov_u = max(0.0, min(ua1, ub1) - max(ua0, ub0)) / max(min(ua1 - ua0, ub1 - ub0), 1e-6)
+                    if ov_u > 0.18:
+                        return False
+        return True
 
     def glyph_above_baseline_rect(
         cp: int, origin_pt: tuple[float, float], grect: fitz.Rect, trace_dir: tuple[float, float],
@@ -2086,7 +2186,14 @@ def _native_pdf_text_span_records(
 
     def extract_stroke_segments(
         drawing: dict[str, Any],
-    ) -> tuple[list[tuple[tuple[float, float], tuple[float, float], float]], fitz.Rect, float] | None:
+    ) -> tuple[
+        list[tuple[float, float, float, float, tuple[float, float], tuple[float, float], float]],
+        fitz.Rect,
+        fitz.Rect,
+        float,
+        bool,
+        int,
+    ] | None:
         items = drawing.get("items")
         if not isinstance(items, (tuple, list)) or not items:
             return None
@@ -2097,16 +2204,64 @@ def _native_pdf_text_span_records(
             width = float(raw_w)
         else:
             return None
-        segs: list[tuple[tuple[float, float], tuple[float, float], float]] = []
+        raw_join = drawing.get("lineJoin", 0)
+        line_join = int(raw_join) if isinstance(raw_join, (int, float)) and math.isfinite(float(raw_join)) else 0
+        half = 0.5 * width
+        segs: list[tuple[float, float, float, float, tuple[float, float], tuple[float, float], float]] = []
         all_xs: list[float] = []
         all_ys: list[float] = []
+        has_diagonal = False
+        prev_seg_pts: tuple[tuple[float, float], tuple[float, float]] | None = None
 
-        def add_seg(p1: tuple[float, float], p2: tuple[float, float], pad: float = 0.0) -> bool:
+        def add_seg(p1: tuple[float, float], p2: tuple[float, float], pad: float = 0.0, track_join: bool = False) -> bool:
+            nonlocal has_diagonal, prev_seg_pts
             if not (math.isfinite(p1[0]) and math.isfinite(p1[1]) and math.isfinite(p2[0]) and math.isfinite(p2[1])):
                 return False
-            segs.append((p1, p2, pad))
+            dx_s, dy_s = p2[0] - p1[0], p2[1] - p1[1]
+            if abs(dx_s) > 1e-4 and abs(dy_s) > 1e-4:
+                has_diagonal = True
+            h_pad = half + pad
+            segs.append((
+                min(p1[0], p2[0]) - h_pad,
+                min(p1[1], p2[1]) - h_pad,
+                max(p1[0], p2[0]) + h_pad,
+                max(p1[1], p2[1]) + h_pad,
+                p1,
+                p2,
+                pad,
+            ))
             all_xs.extend((p1[0], p2[0]))
             all_ys.extend((p1[1], p2[1]))
+            if track_join and line_join == 0 and half > 0.0:
+                if prev_seg_pts is not None:
+                    q0, q1 = prev_seg_pts
+                    if abs(p1[0] - q1[0]) <= 1e-3 and abs(p1[1] - q1[1]) <= 1e-3:
+                        l_in = math.hypot(q1[0] - q0[0], q1[1] - q0[1])
+                        l_out = math.hypot( dx_s, dy_s)
+                        if l_in > 1e-6 and l_out > 1e-6:
+                            uin_x, uin_y = (q1[0] - q0[0]) / l_in, (q1[1] - q0[1]) / l_in
+                            uout_x, uout_y = dx_s / l_out, dy_s / l_out
+                            dot = max(-1.0, min(1.0, uin_x * uout_x + uin_y * uout_y))
+                            if dot < -0.2:
+                                sin_half = math.sqrt(max(0.0, 0.5 * (1.0 + dot)))
+                                if sin_half > 1e-4 and (1.0 / sin_half) <= 10.05:
+                                    bx, by = uin_x - uout_x, uin_y - uout_y
+                                    bn = math.hypot(bx, by)
+                                    if bn > 1e-6:
+                                        miter_len = half / sin_half
+                                        tip = (q1[0] + (bx / bn) * miter_len, q1[1] + (by / bn) * miter_len)
+                                        segs.append((
+                                            min(q1[0], tip[0]) - half,
+                                            min(q1[1], tip[1]) - half,
+                                            max(q1[0], tip[0]) + half,
+                                            max(q1[1], tip[1]) + half,
+                                            q1,
+                                            tip,
+                                            0.0,
+                                        ))
+                prev_seg_pts = (p1, p2)
+            else:
+                prev_seg_pts = None
             return True
 
         for item in items:
@@ -2114,9 +2269,10 @@ def _native_pdf_text_span_records(
                 return None
             op = item[0]
             if op == "l" and len(item) >= 3:
-                if not add_seg((float(item[1].x), float(item[1].y)), (float(item[2].x), float(item[2].y))):
+                if not add_seg((float(item[1].x), float(item[1].y)), (float(item[2].x), float(item[2].y)), 0.0, True):
                     return None
             elif op == "re" and len(item) >= 2:
+                prev_seg_pts = None
                 r = fitz.Rect(item[1])
                 if not r.is_valid:
                     return None
@@ -2125,17 +2281,20 @@ def _native_pdf_text_span_records(
                     if not add_seg(cs[idx_c], cs[(idx_c + 1) % 4]):
                         return None
             elif op == "qu" and len(item) >= 2:
+                prev_seg_pts = None
                 q = item[1]
                 cs_q = [(float(p.x), float(p.y)) for p in (q.ul, q.ur, q.lr, q.ll)]
                 for idx_c in range(4):
-                    if not add_seg(cs_q[idx_c], cs_q[(idx_c + 1) % 4]):
+                    if not add_seg(cs_q[idx_c], cs_q[(idx_c + 1) % 4], 0.0, True):
                         return None
             elif op == "c" and len(item) >= 5:
+                prev_seg_pts = None
                 p0, p1, p2, p3 = ((float(p.x), float(p.y)) for p in item[1:5])
                 if not all(math.isfinite(px) and math.isfinite(py) for px, py in (p0, p1, p2, p3)):
                     return None
                 all_xs.extend((p0[0], p1[0], p2[0], p3[0]))
                 all_ys.extend((p0[1], p1[1], p2[1], p3[1]))
+                has_diagonal = True
                 d2a = math.hypot(p0[0] - 2.0 * p1[0] + p2[0], p0[1] - 2.0 * p1[1] + p2[1])
                 d2b = math.hypot(p1[0] - 2.0 * p2[0] + p3[0], p1[1] - 2.0 * p2[1] + p3[1])
                 bulge_pad = (3.0 / 256.0) * max(d2a, d2b)
@@ -2154,9 +2313,14 @@ def _native_pdf_text_span_records(
                 return None
         if not segs:
             return None
-        half = 0.5 * width
-        bounds = fitz.Rect(min(all_xs) - half, min(all_ys) - half, max(all_xs) + half, max(all_ys) + half)
-        return segs, bounds, width
+        raw_bounds = fitz.Rect(min(all_xs), min(all_ys), max(all_xs), max(all_ys))
+        bounds = fitz.Rect(
+            min(s[0] for s in segs),
+            min(s[1] for s in segs),
+            max(s[2] for s in segs),
+            max(s[3] for s in segs),
+        )
+        return segs, raw_bounds, bounds, width, has_diagonal, line_join
 
     def is_safe_adjacent_text_overlap(left_trace: dict[str, Any], right_trace: dict[str, Any]) -> bool:
         """Ignore only a tiny shared glyph edge between matching same-baseline text paints."""
@@ -2181,8 +2345,8 @@ def _native_pdf_text_span_records(
             or not isinstance(right_chars, (tuple, list)) or not right_chars
             or not finite_quad(left_bbox) or not finite_quad(right_bbox)
             or left_trace.get("wmode") != 0 or right_trace.get("wmode") != 0
-            or left_trace.get("type") != right_trace.get("type")
-            or left_trace.get("type") not in (0, 1)
+            or left_trace.get("type") != 0
+            or right_trace.get("type") != 0
             or left_trace.get("font") != right_trace.get("font")
             or left_trace.get("layer") != right_trace.get("layer")
             or left_trace.get("colorspace") != right_trace.get("colorspace")
@@ -2244,16 +2408,148 @@ def _native_pdf_text_span_records(
             and right_rect.x0 >= left_rect.x0
         )
 
+    fill_seq_cache: dict[int, tuple[list[fitz.Rect], bool] | None] = {}
+    stroke_seq_cache: dict[
+        int,
+        list[
+            tuple[
+                list[tuple[float, float, float, float, tuple[float, float], tuple[float, float], float]],
+                fitz.Rect,
+                float,
+                bool,
+                bool,
+            ]
+        ] | None,
+    ] = {}
+
+    def get_verified_fill_seq(index: int, paint_rect: fitz.Rect) -> tuple[list[fitz.Rect], bool] | None:
+        if index in fill_seq_cache:
+            return fill_seq_cache[index]
+        seq_drawings = drawings_by_sequence.get(index, [])
+        if not seq_drawings:
+            fill_seq_cache[index] = None
+            return None
+        parsed_fills = [
+            extract_fill_subpath_rects(d) if d.get("type") in ("f", "fs") else None
+            for d in seq_drawings
+        ]
+        if not all(sub is not None for sub in parsed_fills):
+            fill_seq_cache[index] = None
+            return None
+        flat_subs = [sr for sub in parsed_fills if sub is not None for sr in sub]
+        union_fill = fitz.Rect(
+            min(r.x0 for r in flat_subs), min(r.y0 for r in flat_subs),
+            max(r.x1 for r in flat_subs), max(r.y1 for r in flat_subs),
+        )
+        coord_diff = max(
+            abs(float(paint_rect.x0) - float(union_fill.x0)),
+            abs(float(paint_rect.y0) - float(union_fill.y0)),
+            abs(float(paint_rect.x1) - float(union_fill.x1)),
+            abs(float(paint_rect.y1) - float(union_fill.y1)),
+        )
+        if coord_diff > 1.5:
+            inter = paint_rect & union_fill
+            max_area = max(paint_rect.get_area(), union_fill.get_area())
+            protrusion = max(
+                float(union_fill.x0) - float(paint_rect.x0),
+                float(union_fill.y0) - float(paint_rect.y0),
+                float(paint_rect.x1) - float(union_fill.x1),
+                float(paint_rect.y1) - float(union_fill.y1),
+            )
+            if inter.is_empty or max_area <= 0.0 or inter.get_area() / max_area < 0.85 or protrusion > 1.5:
+                fill_seq_cache[index] = None
+                return None
+        all_dark_opaque_fills = all(
+            (
+                d.get("fill_opacity") is None
+                or (
+                    isinstance(d.get("fill_opacity"), (int, float))
+                    and math.isfinite(float(d["fill_opacity"]))
+                    and float(d["fill_opacity"]) >= 0.99
+                )
+            )
+            and stroke_color_is_dark_visible(d.get("fill"))
+            for d in seq_drawings
+        )
+        res = (flat_subs, all_dark_opaque_fills)
+        fill_seq_cache[index] = res
+        return res
+
+    def get_verified_stroke_seq(
+        index: int, paint_rect: fitz.Rect,
+    ) -> list[
+        tuple[
+            list[tuple[float, float, float, float, tuple[float, float], tuple[float, float], float]],
+            fitz.Rect,
+            float,
+            bool,
+            bool,
+        ]
+    ] | None:
+        if index in stroke_seq_cache:
+            return stroke_seq_cache[index]
+        seq_drawings = drawings_by_sequence.get(index, [])
+        if not seq_drawings:
+            stroke_seq_cache[index] = None
+            return None
+        parsed_strokes = [
+            extract_stroke_segments(d) if d.get("type") in ("s", "fs") else None
+            for d in seq_drawings
+        ]
+        if not all(ps is not None for ps in parsed_strokes):
+            stroke_seq_cache[index] = None
+            return None
+        raw_rects = [ps[1] for ps in parsed_strokes if ps is not None]
+        union_raw = fitz.Rect(
+            min(r.x0 for r in raw_rects), min(r.y0 for r in raw_rects),
+            max(r.x1 for r in raw_rects), max(r.y1 for r in raw_rects),
+        )
+        max_w = max((ps[3] for ps in parsed_strokes if ps is not None), default=0.0)
+        any_diag = any(ps[4] for ps in parsed_strokes if ps is not None)
+        any_miter = any(ps[5] == 0 for ps in parsed_strokes if ps is not None)
+        margins = (
+            float(union_raw.x0) - float(paint_rect.x0),
+            float(union_raw.y0) - float(paint_rect.y0),
+            float(paint_rect.x1) - float(union_raw.x1),
+            float(paint_rect.y1) - float(union_raw.y1),
+        )
+        min_m, max_m = min(margins), max(margins)
+        allowed_max_m = (10.05 * max_w + 0.25) if (any_diag and any_miter) else (0.5 * max_w + 0.25)
+        if min_m < -0.5 or (max_m - min_m) > max(1.5, 0.5 * max_w) or max_m > allowed_max_m:
+            stroke_seq_cache[index] = None
+            return None
+        entries_out = []
+        for d, ps in zip(seq_drawings, parsed_strokes):
+            assert ps is not None
+            segs, _raw_b, d_bounds, width, _has_diag, _ljoin = ps
+            raw_sop = d.get("stroke_opacity")
+            sop_opaque = (
+                raw_sop is None
+                or (isinstance(raw_sop, (int, float)) and math.isfinite(float(raw_sop)) and float(raw_sop) >= 0.99)
+            )
+            dark_vis = stroke_color_is_dark_visible(d.get("color"))
+            entries_out.append((segs, d_bounds, width, sop_opaque, dark_vis))
+        stroke_seq_cache[index] = entries_out
+        return entries_out
+
     def has_later_paint_overlap(
-        trace: dict[str, Any], member_sequences: set[int] | None = None,
+        trace: dict[str, Any],
+        member_trace_order_ids: tuple[int, ...] = (),
+        span_font_size: Any = None,
     ) -> bool:
         sequence_number = trace.get("seqno")
         trace_bbox = trace.get("bbox")
-        if type(sequence_number) is not int or not isinstance(trace_bbox, (tuple, list)) or len(trace_bbox) != 4:
+        trace_order_id = trace.get("_trace_order_idx")
+        if (
+            type(sequence_number) is not int
+            or type(trace_order_id) is not int
+            or not isinstance(trace_bbox, (tuple, list))
+            or len(trace_bbox) != 4
+        ):
             return True
         trace_rect = fitz.Rect(trace_bbox)
-        target_glyphs = nonspace_glyph_entries(trace)
-        if target_glyphs is not None and not target_glyphs:
+        raw_target_glyphs = nonspace_glyph_entries(trace)
+        if raw_target_glyphs is not None and not raw_target_glyphs:
             return False
         raw_dir = trace.get("dir", (1.0, 0.0))
         raw_size = trace.get("size")
@@ -2270,276 +2566,341 @@ def _native_pdf_text_span_records(
         else:
             ux = uy = vx = vy = 0.0
         trace_size = float(raw_size) if size_ok else 0.0
+        sp_sz = (
+            float(span_font_size)
+            if isinstance(span_font_size, (int, float)) and math.isfinite(float(span_font_size)) and float(span_font_size) > 0.0
+            else trace_size
+        )
+        effective_v_size = (
+            max(trace_size, min(trace_size * 8.0, (sp_sz * sp_sz) / trace_size))
+            if trace_size > 0.0 and sp_sz > trace_size
+            else trace_size
+        )
+        v_scale = (effective_v_size / trace_size) if (dir_ok and trace_size > 0.0) else 1.0
+        if raw_target_glyphs is not None and v_scale > 1.001:
+            target_glyphs: list[tuple[int, tuple[float, float], fitz.Rect]] | None = [
+                (cp, org, expand_glyph_rect_for_condensation(org, gr, ux, uy, vx, vy, v_scale))
+                for cp, org, gr in raw_target_glyphs
+            ]
+            trace_rect = fitz.Rect(
+                min([trace_rect.x0] + [gr.x0 for _c, _o, gr in target_glyphs]),
+                min([trace_rect.y0] + [gr.y0 for _c, _o, gr in target_glyphs]),
+                max([trace_rect.x1] + [gr.x1 for _c, _o, gr in target_glyphs]),
+                max([trace_rect.y1] + [gr.y1 for _c, _o, gr in target_glyphs]),
+            )
+        else:
+            target_glyphs = raw_target_glyphs
+
+        member_id_set = set(member_trace_order_ids)
+
+        def trace_glyphs_hit_target(lt: dict[str, Any], lt_glyphs: list[tuple[int, tuple[float, float], fitz.Rect]]) -> bool:
+            assert target_glyphs is not None
+            lt_dir = lt.get("dir")
+            lt_size = lt.get("size")
+            same_oblique_dir = (
+                dir_ok
+                and size_ok
+                and abs(uy) > 1e-3
+                and isinstance(lt_dir, (tuple, list))
+                and len(lt_dir) == 2
+                and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in lt_dir)
+                and math.dist((ux, uy), (float(lt_dir[0]), float(lt_dir[1]))) <= 1e-3
+                and isinstance(lt_size, (int, float))
+                and math.isfinite(float(lt_size))
+                and float(lt_size) > 0
+            )
+            if same_oblique_dir:
+                raw_asc_a, raw_desc_a = trace.get("ascender"), trace.get("descender")
+                raw_asc_b, raw_desc_b = lt.get("ascender"), lt.get("descender")
+                asc_a = max(
+                    0.75,
+                    float(raw_asc_a) if isinstance(raw_asc_a, (int, float)) and math.isfinite(float(raw_asc_a)) else 0.85,
+                ) * effective_v_size
+                desc_a = min(
+                    -0.15,
+                    float(raw_desc_a) if isinstance(raw_desc_a, (int, float)) and math.isfinite(float(raw_desc_a)) else -0.25,
+                ) * effective_v_size
+                asc_b = max(
+                    0.75,
+                    float(raw_asc_b) if isinstance(raw_asc_b, (int, float)) and math.isfinite(float(raw_asc_b)) else 0.85,
+                ) * float(lt_size)
+                desc_b = min(
+                    -0.15,
+                    float(raw_desc_b) if isinstance(raw_desc_b, (int, float)) and math.isfinite(float(raw_desc_b)) else -0.25,
+                ) * float(lt_size)
+                for _cp, (ox_a, oy_a), gr in target_glyphs:
+                    for _lcp, (ox_b, oy_b), lgr in lt_glyphs:
+                        if (gr & lgr).is_empty:
+                            continue
+                        dv_orig = (ox_b - ox_a) * vx + (oy_b - oy_a) * vy
+                        if max(desc_a, dv_orig + desc_b) < min(asc_a, dv_orig + asc_b):
+                            return True
+                return False
+            return any(
+                not (gr & lgr).is_empty
+                for _cp, _org, gr in target_glyphs
+                for _lcp, _lorg, lgr in lt_glyphs
+            )
 
         try:
+            later_intra_chars = trace.get("_later_intra_trace_chars")
+            if later_intra_chars:
+                if target_glyphs is None:
+                    return True
+                intra_glyphs = nonspace_glyph_entries_from_chars(later_intra_chars)
+                if intra_glyphs is None:
+                    return True
+                if any(
+                    not (gr & igr).is_empty
+                    for _cp, _org, gr in target_glyphs
+                    for _icp, _iorg, igr in intra_glyphs
+                ):
+                    return True
+
+            if 0 <= sequence_number < len(paint_log):
+                same_seq_item = paint_log[sequence_number]
+                if not isinstance(same_seq_item, (tuple, list)) or len(same_seq_item) != 2:
+                    return True
+                same_seq_type, same_seq_bbox = same_seq_item
+                same_seq_later = [
+                    lt for lt in traces_by_sequence.get(sequence_number, [])
+                    if type(lt.get("_trace_order_idx")) is int
+                    and lt["_trace_order_idx"] > trace_order_id
+                    and lt["_trace_order_idx"] not in member_id_set
+                ]
+                if same_seq_later:
+                    if same_seq_type != "fill-text" or target_glyphs is None:
+                        return True
+                    for lt in same_seq_later:
+                        if lt.get("type") != 0 or not isinstance(lt.get("bbox"), (tuple, list)) or len(lt["bbox"]) != 4:
+                            return True
+                        lt_r = fitz.Rect(lt["bbox"])
+                        if (trace_rect & lt_r).is_empty or is_safe_adjacent_text_overlap(trace, lt):
+                            continue
+                        lt_glyphs = nonspace_glyph_entries(lt)
+                        if lt_glyphs is None or trace_glyphs_hit_target(lt, lt_glyphs):
+                            return True
+
             for index, paint_item in enumerate(paint_log):
                 if not isinstance(paint_item, (tuple, list)) or len(paint_item) != 2:
                     return True
                 paint_type, paint_bbox = paint_item
                 if index <= sequence_number or paint_type == "ignore-text":
                     continue
-                if member_sequences and index in member_sequences:
+                if (
+                    isinstance(paint_bbox, (tuple, list))
+                    and len(paint_bbox) == 4
+                    and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in paint_bbox)
+                    and (
+                        float(paint_bbox[2]) <= trace_rect.x0
+                        or float(paint_bbox[0]) >= trace_rect.x1
+                        or float(paint_bbox[3]) <= trace_rect.y0
+                        or float(paint_bbox[1]) >= trace_rect.y1
+                    )
+                ):
                     continue
                 paint_rect = fitz.Rect(paint_bbox)
                 if overlap_ratio(trace_rect, paint_rect) <= 0:
                     continue
                 later_traces = traces_by_sequence.get(index, [])
-                later_trace = later_traces[0] if len(later_traces) == 1 else None
-                expected_trace_type = {"fill-text": 0, "stroke-text": 1}.get(paint_type)
                 if (
-                    isinstance(later_trace, dict)
-                    and paint_type == "fill-text"
-                    and later_trace.get("type") == 0
-                    and overlap_ratio(fitz.Rect(later_trace["bbox"]), paint_rect) >= 0.85
-                    and is_safe_adjacent_text_overlap(trace, later_trace)
+                    paint_type == "fill-text"
+                    and later_traces
+                    and all(
+                        isinstance(lt, dict)
+                        and lt.get("type") == 0
+                        and lt.get("_trace_order_idx") in member_id_set
+                        for lt in later_traces
+                    )
                 ):
                     continue
                 if (
                     later_traces
-                    and expected_trace_type is not None
+                    and paint_type == "fill-text"
                     and target_glyphs is not None
                     and all(
                         isinstance(lt, dict)
-                        and lt.get("type") == expected_trace_type
+                        and lt.get("type") == 0
                         and isinstance(lt.get("bbox"), (tuple, list))
                         and len(lt["bbox"]) == 4
+                        and isinstance(lt.get("size"), (int, float))
+                        and math.isfinite(float(lt["size"]))
+                        and float(lt["size"]) > 0
                         for lt in later_traces
                     )
                 ):
                     lt_rects = [fitz.Rect(lt["bbox"]) for lt in later_traces]
+                    expand_single_lt_y = False
+                    if len(lt_rects) == 1:
+                        r0 = lt_rects[0]
+                        if paint_rect.y0 < r0.y0 - 0.5 or paint_rect.y1 > r0.y1 + 0.5:
+                            lt_rects = [fitz.Rect(r0.x0, min(r0.y0, paint_rect.y0), r0.x1, max(r0.y1, paint_rect.y1))]
+                            expand_single_lt_y = True
                     union_lt = fitz.Rect(
                         min(r.x0 for r in lt_rects), min(r.y0 for r in lt_rects),
                         max(r.x1 for r in lt_rects), max(r.y1 for r in lt_rects),
                     )
-                    if overlap_ratio(paint_rect, union_lt) >= 0.85:
+                    max_lt_sz = max(float(lt["size"]) for lt in later_traces)
+                    lt_protrusion = max(
+                        float(union_lt.x0) - float(paint_rect.x0),
+                        float(union_lt.y0) - float(paint_rect.y0),
+                        float(paint_rect.x1) - float(union_lt.x1),
+                        float(paint_rect.y1) - float(union_lt.y1),
+                    )
+                    p_area = paint_rect.get_area()
+                    lt_covered = (
+                        ((paint_rect & union_lt).get_area() / p_area >= 0.85)
+                        if p_area > 0.0
+                        else not (paint_rect & union_lt).is_empty
+                    )
+                    if lt_covered and lt_protrusion <= max(1.5, 0.20 * max_lt_sz):
                         glyph_hit = False
                         for lt, lt_r in zip(later_traces, lt_rects):
+                            if lt.get("_trace_order_idx") in member_id_set:
+                                continue
                             if (trace_rect & lt_r).is_empty:
                                 continue
-                            if paint_type == "fill-text" and is_safe_adjacent_text_overlap(trace, lt):
+                            if not expand_single_lt_y and is_safe_adjacent_text_overlap(trace, lt):
                                 continue
                             lt_glyphs = nonspace_glyph_entries(lt)
-                            if lt_glyphs is None or lt.get("type") == 1:
+                            if lt_glyphs is None:
                                 glyph_hit = True
                                 break
-                            lt_dir = lt.get("dir")
-                            lt_size = lt.get("size")
-                            same_oblique_dir = (
-                                dir_ok
-                                and size_ok
-                                and abs(uy) > 1e-3
-                                and isinstance(lt_dir, (tuple, list))
-                                and len(lt_dir) == 2
-                                and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in lt_dir)
-                                and math.dist((ux, uy), (float(lt_dir[0]), float(lt_dir[1]))) <= 1e-3
-                                and isinstance(lt_size, (int, float))
-                                and math.isfinite(float(lt_size))
-                                and float(lt_size) > 0
-                            )
-                            if same_oblique_dir:
-                                raw_asc_a, raw_desc_a = trace.get("ascender"), trace.get("descender")
-                                raw_asc_b, raw_desc_b = lt.get("ascender"), lt.get("descender")
-                                asc_a = max(
-                                    0.75,
-                                    float(raw_asc_a) if isinstance(raw_asc_a, (int, float)) and math.isfinite(float(raw_asc_a)) else 0.85,
-                                ) * trace_size
-                                desc_a = min(
-                                    -0.15,
-                                    float(raw_desc_a) if isinstance(raw_desc_a, (int, float)) and math.isfinite(float(raw_desc_a)) else -0.25,
-                                ) * trace_size
-                                asc_b = max(
-                                    0.75,
-                                    float(raw_asc_b) if isinstance(raw_asc_b, (int, float)) and math.isfinite(float(raw_asc_b)) else 0.85,
-                                ) * float(lt_size)
-                                desc_b = min(
-                                    -0.15,
-                                    float(raw_desc_b) if isinstance(raw_desc_b, (int, float)) and math.isfinite(float(raw_desc_b)) else -0.25,
-                                ) * float(lt_size)
-                                for _cp, (ox_a, oy_a), gr in target_glyphs:
-                                    for _lcp, (ox_b, oy_b), lgr in lt_glyphs:
-                                        if (gr & lgr).is_empty:
-                                            continue
-                                        dv_orig = (ox_b - ox_a) * vx + (oy_b - oy_a) * vy
-                                        if max(desc_a, dv_orig + desc_b) < min(asc_a, dv_orig + asc_b):
-                                            glyph_hit = True
-                                            break
-                                    if glyph_hit:
-                                        break
-                                if glyph_hit:
-                                    break
-                                continue
-                            if any(
-                                not (gr & lgr).is_empty
-                                for _cp, _org, gr in target_glyphs
-                                for _lcp, _lorg, lgr in lt_glyphs
-                            ):
+                            if expand_single_lt_y:
+                                lt_glyphs = [
+                                    (lcp, lorg, fitz.Rect(lgr.x0, min(lgr.y0, paint_rect.y0), lgr.x1, max(lgr.y1, paint_rect.y1)))
+                                    for lcp, lorg, lgr in lt_glyphs
+                                ]
+                            if trace_glyphs_hit_target(lt, lt_glyphs):
                                 glyph_hit = True
                                 break
                         if not glyph_hit:
                             continue
                         return True
 
-                seq_drawings = drawings_by_sequence.get(index, [])
-                if paint_type == "fill-path" and seq_drawings and target_glyphs is not None:
-                    parsed_fills = [
-                        extract_fill_subpath_rects(d)
-                        if d.get("type") in ("f", "fs") else None
-                        for d in seq_drawings
-                    ]
-                    if all(sub is not None for sub in parsed_fills):
-                        flat_subs = [sr for sub in parsed_fills if sub is not None for sr in sub]
-                        union_fill = fitz.Rect(
-                            min(r.x0 for r in flat_subs), min(r.y0 for r in flat_subs),
-                            max(r.x1 for r in flat_subs), max(r.y1 for r in flat_subs),
-                        )
-                        if overlap_ratio(paint_rect, union_fill) >= 0.85:
-                            all_dark_opaque_fills = all(
-                                (
-                                    d.get("fill_opacity") is None
-                                    or (
-                                        isinstance(d.get("fill_opacity"), (int, float))
-                                        and math.isfinite(float(d["fill_opacity"]))
-                                        and float(d["fill_opacity"]) >= 0.99
-                                    )
-                                )
-                                and stroke_color_is_dark_visible(d.get("fill"))
-                                for d in seq_drawings
-                            )
-                            t_dir = (ux, uy) if dir_ok else (1.0, 0.0)
-                            if any(
-                                not (
-                                    (glyph_above_baseline_rect(cp, org, gr, t_dir) if all_dark_opaque_fills else gr)
-                                    & sr
-                                ).is_empty
-                                for sr in flat_subs
-                                for cp, org, gr in target_glyphs
-                            ):
-                                return True
-                            continue
+                if paint_type == "fill-path" and target_glyphs is not None:
+                    verified_fill = get_verified_fill_seq(index, paint_rect)
+                    if verified_fill is not None:
+                        flat_subs, all_dark_opaque_fills = verified_fill
+                        t_dir = (ux, uy) if dir_ok else (1.0, 0.0)
+                        if any(
+                            not (
+                                (glyph_above_baseline_rect(cp, org, gr, t_dir) if all_dark_opaque_fills else gr)
+                                & sr
+                            ).is_empty
+                            for sr in flat_subs
+                            if not (trace_rect & sr).is_empty
+                            for cp, org, gr in target_glyphs
+                        ):
+                            return True
+                        continue
 
                 if (
                     paint_type == "stroke-path"
-                    and seq_drawings
                     and target_glyphs is not None
                     and dir_ok
                     and size_ok
                 ):
-                    parsed_strokes = [
-                        extract_stroke_segments(d)
-                        if d.get("type") in ("s", "fs") else None
-                        for d in seq_drawings
-                    ]
-                    if all(ps is not None for ps in parsed_strokes):
-                        stroke_bounds = [ps[1] for ps in parsed_strokes if ps is not None]
-                        union_stroke = fitz.Rect(
-                            min(r.x0 for r in stroke_bounds) - 0.5,
-                            min(r.y0 for r in stroke_bounds) - 0.5,
-                            max(r.x1 for r in stroke_bounds) + 0.5,
-                            max(r.y1 for r in stroke_bounds) + 0.5,
-                        )
-                        if overlap_ratio(paint_rect, union_stroke) >= 0.85:
-                            stroke_hit = False
-                            for d, ps in zip(seq_drawings, parsed_strokes):
-                                assert ps is not None
-                                segs, d_bounds, width = ps
-                                if (trace_rect & d_bounds).is_empty:
+                    verified_strokes = get_verified_stroke_seq(index, paint_rect)
+                    if verified_strokes is not None:
+                        stroke_hit = False
+                        tx0, ty0, tx1, ty1 = trace_rect.x0, trace_rect.y0, trace_rect.x1, trace_rect.y1
+                        for segs, d_bounds, width, sop_opaque, dark_vis in verified_strokes:
+                            if (trace_rect & d_bounds).is_empty:
+                                continue
+                            cand_segs = [
+                                s for s in segs
+                                if s[2] >= tx0 and s[0] <= tx1 and s[3] >= ty0 and s[1] <= ty1
+                            ]
+                            if not cand_segs:
+                                continue
+                            thin_cad_stroke = (
+                                sop_opaque
+                                and dark_vis
+                                and width <= 0.30 * effective_v_size
+                            )
+                            for glyph_idx, (cp, (ox, oy), gr) in enumerate(target_glyphs):
+                                if (gr & d_bounds).is_empty:
                                     continue
-                                raw_sop = d.get("stroke_opacity")
-                                sop_opaque = (
-                                    raw_sop is None
-                                    or (isinstance(raw_sop, (int, float)) and math.isfinite(float(raw_sop)) and float(raw_sop) >= 0.99)
+                                gx0, gy0, gx1, gy1 = gr.x0, gr.y0, gr.x1, gr.y1
+                                corners = ((gx0, gy0), (gx1, gy0), (gx1, gy1), (gx0, gy1))
+                                us = [(cx - ox) * ux + (cy - oy) * uy for cx, cy in corners]
+                                vs = [(cx - ox) * vx + (cy - oy) * vy for cx, cy in corners]
+                                u0, u1 = min(us), max(us)
+                                v0, v1 = min(vs), max(vs)
+                                ch = chr(cp)
+                                has_prev_glyph = (
+                                    glyph_idx > 0
+                                    or bool(member_trace_order_ids and trace_order_id != member_trace_order_ids[0])
                                 )
-                                thin_cad_stroke = (
-                                    sop_opaque
-                                    and stroke_color_is_dark_visible(d.get("color"))
-                                    and width <= 0.30 * trace_size
+                                has_next_glyph = (
+                                    glyph_idx < len(target_glyphs) - 1
+                                    or bool(member_trace_order_ids and trace_order_id != member_trace_order_ids[-1])
                                 )
-                                for glyph_idx, (cp, (ox, oy), gr) in enumerate(target_glyphs):
-                                    if (gr & d_bounds).is_empty:
-                                        continue
-                                    corners = ((gr.x0, gr.y0), (gr.x1, gr.y0), (gr.x1, gr.y1), (gr.x0, gr.y1))
-                                    us = [(cx - ox) * ux + (cy - oy) * uy for cx, cy in corners]
-                                    vs = [(cx - ox) * vx + (cy - oy) * vy for cx, cy in corners]
-                                    u0, u1 = min(us), max(us)
-                                    v0, v1 = min(vs), max(vs)
-                                    ch = chr(cp)
-                                    has_prev_glyph = (
-                                        glyph_idx > 0
-                                        or bool(member_sequences and sequence_number > min(member_sequences))
-                                    )
-                                    has_next_glyph = (
-                                        glyph_idx < len(target_glyphs) - 1
-                                        or bool(member_sequences and sequence_number < max(member_sequences))
-                                    )
-                                    u_span = max(0.0, u1 - u0)
-                                    if thin_cad_stroke:
-                                        v_top = min(v1, 0.68 * trace_size)
-                                        if ch in below_baseline_ink_glyphs or (cp >= 0x80 and ch not in "°′″"):
-                                            v_bot = max(v0, -0.09 * trace_size)
-                                        elif ch in baseline_punct_glyphs:
-                                            v_bot = max(v0, 0.01 * trace_size)
-                                        else:
-                                            v_bot = max(v0, 0.04 * trace_size)
-                                        left_pad = 0.0 if (has_prev_glyph or ch in minus_like_glyphs) else 0.10 * u_span
-                                        right_pad = 0.0 if (has_next_glyph or ch in minus_like_glyphs) else 0.10 * u_span
-                                        box_u0, box_u1 = u0 + left_pad, u1 - right_pad
-                                        box_v0, box_v1 = min(v_bot, v_top), max(v_bot, v_top)
+                                u_span = max(0.0, u1 - u0)
+                                if thin_cad_stroke:
+                                    v_top = min(v1, 0.68 * effective_v_size)
+                                    if ch in deep_descender_glyphs:
+                                        v_bot = max(v0, -0.22 * effective_v_size)
+                                    elif ch in below_baseline_ink_glyphs or (cp >= 0x80 and ch not in "°′″±"):
+                                        v_bot = max(v0, -0.09 * effective_v_size)
+                                    elif ch in baseline_punct_glyphs:
+                                        v_bot = max(v0, 0.01 * effective_v_size)
                                     else:
-                                        box_u0, box_u1, box_v0, box_v1 = u0, u1, v0, v1
-                                    is_first_span_glyph = not has_prev_glyph and ch not in minus_like_glyphs
-                                    is_last_span_glyph = not has_next_glyph and ch not in minus_like_glyphs
-                                    for sp1, sp2, seg_pad in segs:
-                                        su1 = (sp1[0] - ox) * ux + (sp1[1] - oy) * uy
-                                        sv1 = (sp1[0] - ox) * vx + (sp1[1] - oy) * vy
-                                        su2 = (sp2[0] - ox) * ux + (sp2[1] - oy) * uy
-                                        sv2 = (sp2[0] - ox) * vx + (sp2[1] - oy) * vy
-                                        du, dv = su2 - su1, sv2 - sv1
-                                        half = 0.5 * width + seg_pad
-                                        if thin_cad_stroke:
-                                            seg_len = math.hypot(du, dv)
-                                            if seg_len >= 2.0 * trace_size and abs(du) <= 0.08 * seg_len:
-                                                if is_first_span_glyph and max(su1, su2) + half <= u0 + 0.25 * u_span:
-                                                    continue
-                                                if is_last_span_glyph and min(su1, su2) - half >= u1 - 0.25 * u_span:
-                                                    continue
-                                        eu0, eu1 = box_u0 - half, box_u1 + half
-                                        ev0, ev1 = box_v0 - half, box_v1 + half
-                                        if eu1 < eu0 or ev1 < ev0:
-                                            continue
-                                        t0, t1 = 0.0, 1.0
-                                        clipped = True
-                                        for p_val, q_val in (
-                                            (-du, su1 - eu0),
-                                            (du, eu1 - su1),
-                                            (-dv, sv1 - ev0),
-                                            (dv, ev1 - sv1),
-                                        ):
-                                            if abs(p_val) < 1e-12:
-                                                if q_val < 0.0:
+                                        v_bot = max(v0, 0.04 * effective_v_size)
+                                    left_pad = 0.0 if (has_prev_glyph or ch in minus_like_glyphs) else 0.10 * u_span
+                                    right_pad = 0.0 if (has_next_glyph or ch in minus_like_glyphs) else 0.10 * u_span
+                                    box_u0, box_u1 = u0 + left_pad, u1 - right_pad
+                                    box_v0, box_v1 = min(v_bot, v_top), max(v_bot, v_top)
+                                else:
+                                    box_u0, box_u1, box_v0, box_v1 = u0, u1, v0, v1
+                                for sx0, sy0, sx1, sy1, sp1, sp2, seg_pad in cand_segs:
+                                    if sx1 < gx0 or sx0 > gx1 or sy1 < gy0 or sy0 > gy1:
+                                        continue
+                                    su1 = (sp1[0] - ox) * ux + (sp1[1] - oy) * uy
+                                    sv1 = (sp1[0] - ox) * vx + (sp1[1] - oy) * vy
+                                    su2 = (sp2[0] - ox) * ux + (sp2[1] - oy) * uy
+                                    sv2 = (sp2[0] - ox) * vx + (sp2[1] - oy) * vy
+                                    du, dv = su2 - su1, sv2 - sv1
+                                    half = 0.5 * width + seg_pad
+                                    eu0, eu1 = box_u0 - half, box_u1 + half
+                                    ev0, ev1 = box_v0 - half, box_v1 + half
+                                    if eu1 < eu0 or ev1 < ev0:
+                                        continue
+                                    t0, t1 = 0.0, 1.0
+                                    clipped = True
+                                    for p_val, q_val in (
+                                        (-du, su1 - eu0),
+                                        (du, eu1 - su1),
+                                        (-dv, sv1 - ev0),
+                                        (dv, ev1 - sv1),
+                                    ):
+                                        if abs(p_val) < 1e-12:
+                                            if q_val < 0.0:
+                                                clipped = False
+                                                break
+                                        else:
+                                            t_val = q_val / p_val
+                                            if p_val < 0.0:
+                                                if t_val > t1:
                                                     clipped = False
                                                     break
+                                                t0 = max(t0, t_val)
                                             else:
-                                                t_val = q_val / p_val
-                                                if p_val < 0.0:
-                                                    if t_val > t1:
-                                                        clipped = False
-                                                        break
-                                                    t0 = max(t0, t_val)
-                                                else:
-                                                    if t_val < t0:
-                                                        clipped = False
-                                                        break
-                                                    t1 = min(t1, t_val)
-                                        if clipped and t0 <= t1:
-                                            stroke_hit = True
-                                            break
-                                    if stroke_hit:
+                                                if t_val < t0:
+                                                    clipped = False
+                                                    break
+                                                t1 = min(t1, t_val)
+                                    if clipped and t0 <= t1:
+                                        stroke_hit = True
                                         break
                                 if stroke_hit:
                                     break
-                            if not stroke_hit:
-                                continue
-                            return True
+                            if stroke_hit:
+                                break
+                        if not stroke_hit:
+                            continue
+                        return True
 
                 if overlap_ratio(trace_rect, paint_rect) > 0:
                     return True
@@ -2608,32 +2969,38 @@ def _native_pdf_text_span_records(
                 if not compact_content:
                     continue
                 matching_traces: list[tuple[dict[str, Any], str, str]] = []
+                rx0, ry0, rx1, ry1 = rect.x0, rect.y0, rect.x1, rect.y1
                 for trace in paint_traces:
+                    trace_bbox = trace.get("bbox")
+                    if (
+                        not isinstance(trace_bbox, (tuple, list))
+                        or len(trace_bbox) != 4
+                        or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in trace_bbox)
+                        or float(trace_bbox[2]) <= rx0
+                        or float(trace_bbox[0]) >= rx1
+                        or float(trace_bbox[3]) <= ry0
+                        or float(trace_bbox[1]) >= ry1
+                    ):
+                        continue
+                    if overlap_ratio(rect, fitz.Rect(trace_bbox)) < 0.9:
+                        continue
                     chars = trace.get("chars")
                     trace_text = "".join(
                         chr(char[0]) for char in chars
                         if isinstance(char, (tuple, list)) and char and type(char[0]) is int
                     ) if isinstance(chars, (tuple, list)) else ""
                     agreement = trace_text_agreement(content, trace_text)
-                    trace_bbox = trace.get("bbox")
                     if (
-                        compact_content
-                        and isinstance(trace_bbox, (tuple, list))
-                        and len(trace_bbox) == 4
-                        and all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in trace_bbox)
-                        and overlap_ratio(rect, fitz.Rect(trace_bbox)) >= 0.9
-                        and (
-                            not isinstance(chars, (tuple, list))
-                            or not chars
-                            or any(
-                                isinstance(ch, (tuple, list))
-                                and len(ch) >= 4
-                                and isinstance(ch[3], (tuple, list))
-                                and len(ch[3]) == 4
-                                and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in ch[3])
-                                and not (rect & fitz.Rect(ch[3])).is_empty
-                                for ch in chars
-                            )
+                        not isinstance(chars, (tuple, list))
+                        or not chars
+                        or any(
+                            isinstance(ch, (tuple, list))
+                            and len(ch) >= 4
+                            and isinstance(ch[3], (tuple, list))
+                            and len(ch[3]) == 4
+                            and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in ch[3])
+                            and not (rect & fitz.Rect(ch[3])).is_empty
+                            for ch in chars
                         )
                     ):
                         matching_traces.append((trace, trace_text, agreement or ""))
@@ -2685,7 +3052,16 @@ def _native_pdf_text_span_records(
                         member_traces = [range_candidate[1]]
                         trace_text = content
                         text_agreement = "exact"
+                if not has_valid_glyph_progression(member_traces, direction, span.get("size")):
+                    continue
                 member_sequences = {trace["seqno"] for trace in member_traces}
+                member_trace_order_ids = tuple(
+                    trace["_trace_order_idx"]
+                    for trace in member_traces
+                    if type(trace.get("_trace_order_idx")) is int
+                )
+                if len(member_trace_order_ids) != len(member_traces):
+                    continue
                 member_paint_evidence = []
                 for trace in member_traces:
                     trace_chars = trace.get("chars")
@@ -2726,7 +3102,10 @@ def _native_pdf_text_span_records(
                     or not math.isfinite(float(paint_opacity))
                     or paint_opacity <= 0
                     or paint_wmode != 0
-                    or any(has_later_paint_overlap(trace, member_sequences) for trace in member_traces)
+                    or any(
+                        has_later_paint_overlap(trace, member_trace_order_ids, span.get("size"))
+                        for trace in member_traces
+                    )
                 ):
                     continue
                 corners = [
