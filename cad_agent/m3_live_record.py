@@ -188,22 +188,31 @@ def _validate_candidate(value: object) -> dict[str, Any]:
 
 def _validate_r5(value: object, *, path: str, expected_verdict: str, expected_candidate: str, expected_state: str) -> dict[str, Any]:
     item = _object(value, path=path)
+    common_required = {
+        "verdict",
+        "provider_backed",
+        "request_sha256",
+        "observation_sha256",
+        "verdict_sha256",
+        "candidate_revision_sha256",
+        "candidate_state_sha256",
+        "latest_mutation_sha256",
+        "canonical_result",
+    }
+    identity_variants = (
+        {"task6_thread_id", "task6_turn_id"},
+        {"task6_epoch_id", "task6_response_id"},
+    )
+    matching_variants = [
+        variant for variant in identity_variants if set(item) == common_required | variant
+    ]
+    if len(matching_variants) != 1:
+        _fail(path, "must contain exactly one truthful Task6 identity pair")
+    identity_fields = matching_variants[0]
     _keys(
         item,
         path=path,
-        required={
-            "verdict",
-            "provider_backed",
-            "request_sha256",
-            "observation_sha256",
-            "verdict_sha256",
-            "candidate_revision_sha256",
-            "candidate_state_sha256",
-            "latest_mutation_sha256",
-            "task6_thread_id",
-            "task6_turn_id",
-            "canonical_result",
-        },
+        required=common_required | identity_fields,
     )
     if item["verdict"] != expected_verdict:
         _fail(f"{path}.verdict", f"must be {expected_verdict}")
@@ -239,15 +248,24 @@ def _validate_r5(value: object, *, path: str, expected_verdict: str, expected_ca
         "candidate_revision_sha256",
         "candidate_state_sha256",
         "latest_mutation_sha256",
-        "task6_thread_id",
-        "task6_turn_id",
     ):
+        if item[field] != canonical[field]:
+            _fail(path, f"summary does not match canonical R5 owner result.{field}")
+    for field in identity_fields:
         if item[field] != canonical[field]:
             _fail(path, f"summary does not match canonical R5 owner result.{field}")
     if canonical["verdict"] != expected_verdict:
         _fail(path, "canonical R5 owner result verdict is not decision-grade")
-    _identifier(item["task6_thread_id"], path=f"{path}.task6_thread_id")
-    _identifier(item["task6_turn_id"], path=f"{path}.task6_turn_id")
+    if identity_fields == {"task6_thread_id", "task6_turn_id"}:
+        _identifier(item["task6_thread_id"], path=f"{path}.task6_thread_id")
+        _identifier(item["task6_turn_id"], path=f"{path}.task6_turn_id")
+    else:
+        _identifier(item["task6_epoch_id"], path=f"{path}.task6_epoch_id")
+        response_id = item["task6_response_id"]
+        if not isinstance(response_id, str) or not re.fullmatch(
+            r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$", response_id
+        ):
+            _fail(path, "task6_response_id must be a provider response identity")
     return item
 
 
@@ -346,7 +364,8 @@ def _validate_transport(
     value: object,
     *,
     repair_attempts: int,
-    task6_turn_ids: tuple[str, str],
+    task6_ids: tuple[str, str],
+    task6_identity_field: str,
 ) -> dict[str, Any]:
     item = _object(value, path="transport")
     expected = {"fileipc", "dotnetipc", "task6_provider", "repair_executor"}
@@ -356,7 +375,7 @@ def _validate_transport(
         entry = _object(report, path=f"transport.{name}")
         required_fields = {"attempts", "successes", "failures", "retries"}
         if name == "task6_provider":
-            required_fields.add("turn_ids")
+            required_fields.add(task6_identity_field)
         _keys(
             entry,
             path=f"transport.{name}",
@@ -387,18 +406,30 @@ def _validate_transport(
                     "transport.task6_provider",
                     "must account for exactly the pre-R5 and post-R5 Task6 turns",
                 )
-            turn_ids = entry["turn_ids"]
+            turn_ids = entry[task6_identity_field]
             if (
                 type(turn_ids) is not list
                 or len(turn_ids) != 2
-                or turn_ids != list(task6_turn_ids)
+                or turn_ids != list(task6_ids)
             ):
                 _fail(
-                    "transport.task6_provider.turn_ids",
-                    "must exactly bind the distinct pre-R5 and post-R5 Task6 turns",
+                    f"transport.task6_provider.{task6_identity_field}",
+                    "must exactly bind the distinct pre-R5 and post-R5 Task6 identities",
                 )
             for index, turn_id in enumerate(turn_ids):
-                _identifier(turn_id, path=f"transport.task6_provider.turn_ids[{index}]")
+                if task6_identity_field == "response_ids":
+                    if not isinstance(turn_id, str) or not re.fullmatch(
+                        r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$", turn_id
+                    ):
+                        _fail(
+                            f"transport.task6_provider.{task6_identity_field}[{index}]",
+                            "must be a provider response identity",
+                        )
+                else:
+                    _identifier(
+                        turn_id,
+                        path=f"transport.task6_provider.{task6_identity_field}[{index}]",
+                    )
     return item
 
 
@@ -511,15 +542,31 @@ def validate_m3_live_record(
         expected_candidate=candidate["post_revision_sha256"],
         expected_state=candidate["post_state_sha256"],
     )
-    if pre_r5["task6_turn_id"] == post_r5["task6_turn_id"]:
-        _fail("post_r5", "must use a fresh Task6 turn")
+    pre_identity_field = (
+        "task6_response_id" if "task6_response_id" in pre_r5 else "task6_turn_id"
+    )
+    post_identity_field = (
+        "task6_response_id" if "task6_response_id" in post_r5 else "task6_turn_id"
+    )
+    if pre_identity_field != post_identity_field:
+        _fail("post_r5", "must use the same truthful Task6 identity contract")
+    if pre_r5[pre_identity_field] == post_r5[post_identity_field]:
+        _fail("post_r5", "must use a fresh Task6 provider identity")
+    if (
+        pre_identity_field == "task6_response_id"
+        and pre_r5["task6_epoch_id"] == post_r5["task6_epoch_id"]
+    ):
+        _fail("post_r5", "must use a fresh server-owned Task6 epoch")
     repair = _validate_repair(
         item["repair"], pre_candidate=candidate["pre_revision_sha256"], pre_r5=pre_r5
     )
     _validate_transport(
         item["transport"],
         repair_attempts=repair["attempts"],
-        task6_turn_ids=(pre_r5["task6_turn_id"], post_r5["task6_turn_id"]),
+        task6_ids=(pre_r5[pre_identity_field], post_r5[post_identity_field]),
+        task6_identity_field=(
+            "response_ids" if pre_identity_field == "task6_response_id" else "turn_ids"
+        ),
     )
     _validate_integrity(item["integrity"])
     _validate_cleanup(item["cleanup"])
