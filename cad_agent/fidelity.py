@@ -2007,8 +2007,10 @@ def _native_pdf_text_span_records(
             b = (1.0 - y) * (1.0 - k)
         return (0.2126 * r + 0.7152 * g + 0.0722 * b) <= 0.35
 
-    def nonspace_glyph_entries_from_chars(
+    def glyph_entries_from_chars(
         chars: Any,
+        *,
+        skip_spaces: bool = True,
     ) -> list[tuple[int, tuple[float, float], fitz.Rect]] | None:
         if not isinstance(chars, (tuple, list)) or not chars:
             return None
@@ -2023,18 +2025,25 @@ def _native_pdf_text_span_records(
                 or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in char[3])
             ):
                 return None
-            if chr(char[0]).isspace():
+            if skip_spaces and chr(char[0]).isspace():
                 continue
             grect = fitz.Rect(char[3])
             if grect.is_empty or not grect.is_valid:
+                if not skip_spaces and chr(char[0]).isspace():
+                    continue
                 return None
             entries.append((char[0], (float(char[2][0]), float(char[2][1])), grect))
         return entries
 
+    def nonspace_glyph_entries_from_chars(
+        chars: Any,
+    ) -> list[tuple[int, tuple[float, float], fitz.Rect]] | None:
+        return glyph_entries_from_chars(chars, skip_spaces=True)
+
     def nonspace_glyph_entries(
         candidate_trace: dict[str, Any],
     ) -> list[tuple[int, tuple[float, float], fitz.Rect]] | None:
-        return nonspace_glyph_entries_from_chars(candidate_trace.get("chars"))
+        return glyph_entries_from_chars(candidate_trace.get("chars"), skip_spaces=True)
 
     def expand_glyph_rect_for_condensation(
         origin_pt: tuple[float, float],
@@ -2045,7 +2054,7 @@ def _native_pdf_text_span_records(
         vy: float,
         v_scale: float,
     ) -> fitz.Rect:
-        if v_scale <= 1.001:
+        if abs(v_scale - 1.0) <= 1e-3:
             return grect
         ox, oy = origin_pt
         corners = ((grect.x0, grect.y0), (grect.x1, grect.y0), (grect.x1, grect.y1), (grect.x0, grect.y1))
@@ -2067,10 +2076,7 @@ def _native_pdf_text_span_records(
 
     source_text_blocks = source_page.get_text("dict").get("blocks", [])
     try:
-        occluder_text_blocks = source_page.get_text(
-            "dict",
-            flags=getattr(fitz, "TEXTFLAGS_DICT", 0) & ~getattr(fitz, "TEXT_MEDIABOX_CLIP", 0),
-        ).get("blocks", [])
+        occluder_text_blocks = source_page.get_text("dict", flags=0).get("blocks", [])
     except TypeError:
         occluder_text_blocks = source_text_blocks
 
@@ -2134,7 +2140,7 @@ def _native_pdf_text_span_records(
         if not tr_r.is_valid:
             continue
         tr_sz_f = float(tr_sz)
-        raw_gl = nonspace_glyph_entries(tr)
+        raw_gl = glyph_entries_from_chars(tr.get("chars"), skip_spaces=False)
         if raw_gl is None:
             continue
         if not raw_gl:
@@ -2193,7 +2199,8 @@ def _native_pdf_text_span_records(
             return False
         ux, uy = float(line_dir[0]) / dn, float(line_dir[1]) / dn
         vx, vy = uy, -ux
-        is_axis_aligned = abs(ux) >= 0.999 or abs(uy) >= 0.999
+        abs_ux, abs_uy = abs(ux), abs(uy)
+        two_ux_uy = 2.0 * abs(ux * uy)
         sp_sz = float(span_font_size) if isinstance(span_font_size, (int, float)) and math.isfinite(float(span_font_size)) and float(span_font_size) > 0 else 0.0
         ordered_glyphs: list[tuple[int, tuple[float, float], fitz.Rect, float]] = []
         for mt in ordered_traces:
@@ -2207,11 +2214,7 @@ def _native_pdf_text_span_records(
                 ordered_glyphs.append((cp, org, gr, float(mt_size)))
         for idx_a in range(len(ordered_glyphs)):
             cp_a, (ox_a, oy_a), gr_a, sz_a = ordered_glyphs[idx_a]
-            if is_axis_aligned:
-                ua = [(cx - ox_a) * ux + (cy - oy_a) * uy for cx, cy in ((gr_a.x0, gr_a.y0), (gr_a.x1, gr_a.y0), (gr_a.x1, gr_a.y1), (gr_a.x0, gr_a.y1))]
-                ua0, ua1 = min(ua), max(ua)
-            else:
-                ua0 = ua1 = 0.0
+            adv_a = max(0.0, (gr_a.width * abs_ux + gr_a.height * abs_uy) - sz_a * two_ux_uy)
             for idx_b in range(idx_a + 1, len(ordered_glyphs)):
                 _cp_b, (ox_b, oy_b), gr_b, sz_b = ordered_glyphs[idx_b]
                 du = (ox_b - ox_a) * ux + (oy_b - oy_a) * uy
@@ -2223,10 +2226,10 @@ def _native_pdf_text_span_records(
                 min_du = (0.16 if chr(cp_a) in narrow_advance_glyphs else 0.27) * u_em
                 if du < min_du:
                     return False
-                if is_axis_aligned:
-                    ub = [(cx - ox_b) * ux + (cy - oy_b) * uy + du for cx, cy in ((gr_b.x0, gr_b.y0), (gr_b.x1, gr_b.y0), (gr_b.x1, gr_b.y1), (gr_b.x0, gr_b.y1))]
-                    ub0, ub1 = min(ub), max(ub)
-                    ov_u = max(0.0, min(ua1, ub1) - max(ua0, ub0)) / max(min(ua1 - ua0, ub1 - ub0), 1e-6)
+                adv_b = max(0.0, (gr_b.width * abs_ux + gr_b.height * abs_uy) - sz_b * two_ux_uy)
+                min_adv = min(adv_a, adv_b)
+                if min_adv > 1e-6:
+                    ov_u = max(0.0, min(adv_a, du + adv_b) - max(0.0, du)) / min_adv
                     if ov_u > 0.18:
                         return False
         return True
@@ -2319,7 +2322,17 @@ def _native_pdf_text_span_records(
             return None
         raw_join = drawing.get("lineJoin", 0)
         line_join = int(raw_join) if isinstance(raw_join, (int, float)) and math.isfinite(float(raw_join)) else 0
+        raw_cap = drawing.get("lineCap", 0)
+        if isinstance(raw_cap, (tuple, list)):
+            if not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in raw_cap):
+                return None
+            has_proj_cap = any(int(v) == 2 for v in raw_cap)
+        elif isinstance(raw_cap, (int, float)) and math.isfinite(float(raw_cap)):
+            has_proj_cap = int(raw_cap) == 2
+        else:
+            return None
         half = 0.5 * width
+        proj_cap_pad = ((math.sqrt(2.0) - 1.0) * half) if has_proj_cap else 0.0
         segs: list[tuple[float, float, float, float, tuple[float, float], tuple[float, float], float]] = []
         all_xs: list[float] = []
         all_ys: list[float] = []
@@ -2368,7 +2381,8 @@ def _native_pdf_text_span_records(
             dx_s, dy_s = p2[0] - p1[0], p2[1] - p1[1]
             if abs(dx_s) > 1e-4 and abs(dy_s) > 1e-4:
                 has_diagonal = True
-            h_pad = half + pad
+            eff_pad = pad + proj_cap_pad
+            h_pad = half + eff_pad
             segs.append((
                 min(p1[0], p2[0]) - h_pad,
                 min(p1[1], p2[1]) - h_pad,
@@ -2376,7 +2390,7 @@ def _native_pdf_text_span_records(
                 max(p1[1], p2[1]) + h_pad,
                 p1,
                 p2,
-                pad,
+                eff_pad,
             ))
             all_xs.extend((p1[0], p2[0]))
             all_ys.extend((p1[1], p2[1]))
@@ -2441,9 +2455,6 @@ def _native_pdf_text_span_records(
                 subpath_first_seg = None
                 subpath_just_closed = False
             elif op == "c" and len(item) >= 5:
-                prev_seg_pts = None
-                subpath_first_seg = None
-                subpath_just_closed = False
                 p0, p1, p2, p3 = ((float(p.x), float(p.y)) for p in item[1:5])
                 if not all(math.isfinite(px) and math.isfinite(py) for px, py in (p0, p1, p2, p3)):
                     return None
@@ -2461,7 +2472,7 @@ def _native_pdf_text_span_records(
                         mt**3 * p0[0] + 3.0 * mt**2 * t * p1[0] + 3.0 * mt * t**2 * p2[0] + t**3 * p3[0],
                         mt**3 * p0[1] + 3.0 * mt**2 * t * p1[1] + 3.0 * mt * t**2 * p2[1] + t**3 * p3[1],
                     )
-                    if not add_seg(prev, cur, bulge_pad):
+                    if not add_seg(prev, cur, bulge_pad, True):
                         return None
                     prev = cur
             else:
@@ -2630,6 +2641,131 @@ def _native_pdf_text_span_records(
         fill_seq_cache[index] = res
         return res
 
+    svg_stroke_safety_cache: list[tuple[bool, list[fitz.Rect]]] = []
+
+    def get_unsafe_svg_stroke_info() -> tuple[bool, list[fitz.Rect]]:
+        if svg_stroke_safety_cache:
+            return svg_stroke_safety_cache[0]
+        if not hasattr(source_page, "get_svg_image"):
+            res = (False, [])
+            svg_stroke_safety_cache.append(res)
+            return res
+        try:
+            svg_txt = source_page.get_svg_image(text_as_path=False)
+        except Exception:
+            res = (True, [])
+            svg_stroke_safety_cache.append(res)
+            return res
+        unsafe_rects: list[fitz.Rect] = []
+        tok_re = re.compile(r"[A-Za-z]|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+        for tag in re.findall(r"<path\b[^>]*>", svg_txt):
+            if 'stroke="none"' in tag or "stroke=" not in tag:
+                continue
+            a, b, c, d, e, f = 1.0, 0.0, 0.0, 1.0, 0.0, 0.0
+            m_mat = re.search(r'transform="matrix\(([^"]+)\)"', tag)
+            is_aniso = False
+            smax = 1.0
+            if m_mat:
+                m_vals = [float(x) for x in re.split(r"[\s,]+", m_mat.group(1).strip()) if x]
+                if len(m_vals) != 6 or not all(math.isfinite(v) for v in m_vals):
+                    res = (True, [])
+                    svg_stroke_safety_cache.append(res)
+                    return res
+                a, b, c, d, e, f = m_vals
+                tr_m = a * a + b * b + c * c + d * d
+                det_m = abs(a * d - b * c)
+                disc_m = math.sqrt(max(0.0, tr_m * tr_m - 4.0 * det_m * det_m))
+                smax = math.sqrt(max(0.0, 0.5 * (tr_m + disc_m)))
+                smin = math.sqrt(max(0.0, 0.5 * (tr_m - disc_m)))
+                if smin <= 1e-9 or smax / smin > 1.02:
+                    is_aniso = True
+            m_mit = re.search(r'stroke-miterlimit="([^"]+)"', tag)
+            mit_val = float(m_mit.group(1)) if m_mit else 10.0
+            if not math.isfinite(mit_val):
+                res = (True, [])
+                svg_stroke_safety_cache.append(res)
+                return res
+            if not is_aniso and mit_val <= 10.05:
+                continue
+            m_sw = re.search(r'stroke-width="([^"]+)"', tag)
+            sw_val = float(m_sw.group(1)) if m_sw else 1.0
+            m_d = re.search(r'\bd="([^"]+)"', tag)
+            if not m_d or not math.isfinite(sw_val):
+                res = (True, [])
+                svg_stroke_safety_cache.append(res)
+                return res
+            tokens = tok_re.findall(m_d.group(1))
+            pxs: list[float] = []
+            pys: list[float] = []
+            cx_u = cy_u = sx_u = sy_u = 0.0
+            cmd = "M"
+            idx_t = 0
+            ok_d = True
+            while idx_t < len(tokens):
+                tk = tokens[idx_t]
+                if tk.isalpha():
+                    cmd = tk
+                    idx_t += 1
+                    if cmd in ("Z", "z"):
+                        cx_u, cy_u = sx_u, sy_u
+                        continue
+                    if idx_t >= len(tokens):
+                        break
+                if cmd in ("M", "L", "m", "l"):
+                    if idx_t + 1 >= len(tokens) or tokens[idx_t].isalpha() or tokens[idx_t + 1].isalpha():
+                        ok_d = False
+                        break
+                    vx_u, vy_u = float(tokens[idx_t]), float(tokens[idx_t + 1])
+                    idx_t += 2
+                    cx_u = (cx_u + vx_u) if cmd.islower() else vx_u
+                    cy_u = (cy_u + vy_u) if cmd.islower() else vy_u
+                    if cmd in ("M", "m"):
+                        sx_u, sy_u = cx_u, cy_u
+                        cmd = "l" if cmd == "m" else "L"
+                    pxs.append(a * cx_u + c * cy_u + e)
+                    pys.append(b * cx_u + d * cy_u + f)
+                elif cmd in ("H", "h"):
+                    if tokens[idx_t].isalpha():
+                        ok_d = False
+                        break
+                    vx_u = float(tokens[idx_t])
+                    idx_t += 1
+                    cx_u = (cx_u + vx_u) if cmd == "h" else vx_u
+                    pxs.append(a * cx_u + c * cy_u + e)
+                    pys.append(b * cx_u + d * cy_u + f)
+                elif cmd in ("V", "v"):
+                    if tokens[idx_t].isalpha():
+                        ok_d = False
+                        break
+                    vy_u = float(tokens[idx_t])
+                    idx_t += 1
+                    cy_u = (cy_u + vy_u) if cmd == "v" else vy_u
+                    pxs.append(a * cx_u + c * cy_u + e)
+                    pys.append(b * cx_u + d * cy_u + f)
+                elif cmd in ("C", "c"):
+                    if idx_t + 5 >= len(tokens) or any(tokens[idx_t + k].isalpha() for k in range(6)):
+                        ok_d = False
+                        break
+                    ox_u, oy_u = (cx_u, cy_u) if cmd == "c" else (0.0, 0.0)
+                    for k in (0, 2, 4):
+                        qx, qy = ox_u + float(tokens[idx_t + k]), oy_u + float(tokens[idx_t + k + 1])
+                        pxs.append(a * qx + c * qy + e)
+                        pys.append(b * qx + d * qy + f)
+                    cx_u, cy_u = ox_u + float(tokens[idx_t + 4]), oy_u + float(tokens[idx_t + 5])
+                    idx_t += 6
+                else:
+                    ok_d = False
+                    break
+            if not ok_d or not pxs:
+                res = (True, [])
+                svg_stroke_safety_cache.append(res)
+                return res
+            pad_u = max(1.0, smax * max(mit_val, 1.0) * max(sw_val, 0.0) + 1.0)
+            unsafe_rects.append(fitz.Rect(min(pxs) - pad_u, min(pys) - pad_u, max(pxs) + pad_u, max(pys) + pad_u))
+        res = (False, unsafe_rects)
+        svg_stroke_safety_cache.append(res)
+        return res
+
     def get_verified_stroke_seq(
         index: int, paint_rect: fitz.Rect,
     ) -> list[
@@ -2643,6 +2779,10 @@ def _native_pdf_text_span_records(
     ] | None:
         if index in stroke_seq_cache:
             return stroke_seq_cache[index]
+        all_unsafe_svg, unsafe_svg_rects = get_unsafe_svg_stroke_info()
+        if all_unsafe_svg or any(not (paint_rect & ur).is_empty for ur in unsafe_svg_rects):
+            stroke_seq_cache[index] = None
+            return None
         seq_drawings = drawings_by_sequence.get(index, [])
         if not seq_drawings:
             stroke_seq_cache[index] = None
@@ -2726,13 +2866,14 @@ def _native_pdf_text_span_records(
             if isinstance(span_font_size, (int, float)) and math.isfinite(float(span_font_size)) and float(span_font_size) > 0.0
             else trace_size
         )
-        effective_v_size = (
-            max(trace_size, min(trace_size * 1024.0, (sp_sz * sp_sz) / trace_size))
-            if trace_size > 0.0 and sp_sz > trace_size
-            else trace_size
-        )
+        if trace_size > 0.0 and sp_sz > trace_size * 1.005:
+            effective_v_size = min(trace_size * 1024.0, (sp_sz * sp_sz) / trace_size)
+        elif trace_size > 0.0 and sp_sz < trace_size * 0.995:
+            effective_v_size = max(0.5, (sp_sz * sp_sz) / trace_size)
+        else:
+            effective_v_size = trace_size
         v_scale = (effective_v_size / trace_size) if (dir_ok and trace_size > 0.0) else 1.0
-        if raw_target_glyphs is not None and v_scale > 1.001:
+        if raw_target_glyphs is not None and abs(v_scale - 1.0) > 1e-3:
             target_glyphs: list[tuple[int, tuple[float, float], fitz.Rect]] | None = [
                 (cp, org, expand_glyph_rect_for_condensation(org, gr, ux, uy, vx, vy, v_scale))
                 for cp, org, gr in raw_target_glyphs
@@ -2803,10 +2944,10 @@ def _native_pdf_text_span_records(
             if later_intra_chars:
                 if target_glyphs is None:
                     return True
-                intra_glyphs = nonspace_glyph_entries_from_chars(later_intra_chars)
+                intra_glyphs = glyph_entries_from_chars(later_intra_chars, skip_spaces=False)
                 if intra_glyphs is None:
                     return True
-                if v_scale > 1.001:
+                if abs(v_scale - 1.0) > 1e-3:
                     intra_glyphs = [
                         (icp, iorg, expand_glyph_rect_for_condensation(iorg, igr, ux, uy, vx, vy, v_scale))
                         for icp, iorg, igr in intra_glyphs

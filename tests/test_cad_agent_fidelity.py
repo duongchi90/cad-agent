@@ -4988,6 +4988,7 @@ def test_native_pdf_observation_excludes_perpendicular_cap_dot_and_descender_mas
     assert "CONTROL" in contents
 
 
+
 @pytest.mark.parametrize(
     "r3_case",
     [
@@ -5131,6 +5132,7 @@ def test_native_pdf_observation_r3_blocks_overprint_anisotropic_miter_condensed_
     assert "CONTROL" in contents
 
 
+
 def test_native_pdf_observation_r3_dense_hatch_caching_stays_fast() -> None:
     import time
     from cad_agent import fidelity as fidelity_module
@@ -5247,6 +5249,167 @@ def test_native_pdf_observation_r4_closed_subpath_miter_and_multirun_condensed_t
             document.xref_stream(xref)
             + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 186 Tm (100) Tj "
             b"30 Tz /F0 30 Tf 0 -12 Td (MMMM) Tj ET Q\n",
+        )
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
+
+
+@pytest.mark.parametrize(
+    "r5_case",
+    [
+        "bezier_bezier_acute_miter_whiteout",
+        "closed_bezier_line_start_vertex_miter_whiteout",
+        "projecting_square_cap_2J_45deg_whiteout",
+        "anisotropic_ctm_1M_with_diag_whiteout",
+        "tounicode_space_mapped_glyph_whiteout",
+        "expanded_1500Tz_midbody_strikethrough",
+        "expanded_500Tz_10pt_thick_bar_erase",
+        "tilted_3deg_intratrace_W8_overprint",
+        "oblique_35deg_multitrace_W8_overprint",
+    ],
+)
+def test_native_pdf_observation_r5_bezier_miter_square_cap_aniso_ctm_tounicode_space_expanded_tz_and_tilted_overprint(
+    r5_case: str,
+) -> None:
+    import math
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    target = "100"
+
+    if r5_case == "bezier_bezier_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 8.0 w 0 j 10 M 20 100 140 150 re "
+            b"55.0 48.0 m 60.0 89.67 65.0 131.33 70.0 173.0 c "
+            b"75.0 131.33 80.0 89.67 85.0 48.0 c S Q\n",
+        )
+    elif r5_case == "closed_bezier_line_start_vertex_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 4.0 w 0 j 10 M 10 10 380 280 re "
+            b"70.0 175.0 m 65.0 133.33 60.0 91.67 55.0 50.0 c "
+            b"85.0 50.0 l h S Q\n",
+        )
+    elif r5_case == "projecting_square_cap_2J_45deg_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 40.0 w 2 J 1 j 10 80 160 200 re "
+            b"50.0 137.0 m 70.0 157.0 l 90.0 230.0 m 70.0 210.0 l S Q\n",
+        )
+    elif r5_case == "anisotropic_ctm_1M_with_diag_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 0.1 0 0 10 0 0 cm 1 1 1 RG 3.0 w 0 j 1 M "
+            b"400 16.0 600 5.0 re 410 16.1 m 420 16.2 l 550 17.5 m 850 17.5 l S Q\n",
+        )
+    elif r5_case == "tounicode_space_mapped_glyph_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        cmap_stream = (
+            b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+            b"/CMapName /CustomSpaceMap def\n/CMapType 2 def\n"
+            b"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+            b"1 beginbfchar\n<4D> <0020>\nendbfchar\nendcmap\n"
+            b"CMapName currentdict /CMap defineresource pop\nend\nend\n"
+        )
+        cmap_xref = document.get_new_xref()
+        document.update_object(cmap_xref, "<< >>")
+        document.update_stream(cmap_xref, cmap_stream)
+        font_xref = document.get_new_xref()
+        document.update_object(
+            font_xref,
+            f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode {cmap_xref} 0 R >>",
+        )
+        pg_obj = document.xref_object(page.xref)
+        if "/Font <<" in pg_obj:
+            document.update_object(page.xref, pg_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+        else:
+            res_type, res_val = document.xref_get_key(page.xref, "Resources")
+            r_xref = int(res_val.split()[0])
+            r_obj = document.xref_object(r_xref)
+            if "/Font <<" in r_obj:
+                document.update_object(r_xref, r_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+            else:
+                _, f_val = document.xref_get_key(r_xref, "Font")
+                f_xref = int(f_val.split()[0])
+                document.update_object(f_xref, document.xref_object(f_xref).replace("<<", f"<< /F99 {font_xref} 0 R ", 1))
+        c_xref = page.get_contents()[0]
+        document.update_stream(
+            c_xref,
+            document.xref_stream(c_xref)
+            + b"\nq BT 1 1 1 rg /F99 18 Tf 1 0 0 1 58 178 Tm (M) Tj 2 0 Td (M) Tj 2 0 Td (M) Tj 2 0 Td (M) Tj 2 0 Td (M) Tj ET Q\n",
+        )
+    elif r5_case == "expanded_1500Tz_midbody_strikethrough":
+        target = "10"
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 1500 Tz /F0 10 Tf 1 0 0 1 40 180 Tm (10) Tj ET Q\n"
+            b"q 0 0 0 RG 2.0 w 10 10 380 280 re 35 183.6 m 230 183.6 l S Q\n",
+        )
+    elif r5_case == "expanded_500Tz_10pt_thick_bar_erase":
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 500 Tz /F0 10 Tf 1 0 0 1 40 180 Tm (100) Tj ET Q\n"
+            b"q 0 0 0 RG 10.0 w 10 10 380 280 re 35 176.95 m 195 176.95 l S Q\n",
+        )
+    elif r5_case == "tilted_3deg_intratrace_W8_overprint":
+        target = "W8"
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        ang = math.radians(-3.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        t1 = f"{ca:.6f} {sa:.6f} {-sa:.6f} {ca:.6f} 60.0 180.0 Tm".encode("ascii")
+        document.update_stream(xref, document.xref_stream(xref) + b"\nq BT 0 0 0 rg /F0 12 Tf " + t1 + b" [(W) 650 (8)] TJ ET Q\n")
+    else:
+        target = "W8"
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        ang = math.radians(-35.7)
+        ca, sa = math.cos(ang), math.sin(ang)
+        t1 = f"{ca:.6f} {sa:.6f} {-sa:.6f} {ca:.6f} 60.0 180.0 Tm".encode("ascii")
+        t2 = f"{ca:.6f} {sa:.6f} {-sa:.6f} {ca:.6f} {60.0 + 3.5 * ca:.6f} {180.0 + 3.5 * sa:.6f} Tm".encode("ascii")
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf " + t1 + b" (W) Tj ET Q\n"
+            + b"q BT 0 0 0 rg /F0 12 Tf " + t2 + b" (8) Tj ET Q\n",
         )
 
     reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
