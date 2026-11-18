@@ -1907,3 +1907,82 @@ def test_r8_malformed_xdata_overflow_ordinate_and_nan_inputs_fail_closed_without
     assert not strict.passed
     assert strict.qualification in {"FAILED", "UNKNOWN"}
     assert not semantic.passed
+
+
+@pytest.mark.parametrize(
+    "r9_probe",
+    [
+        "escaped_backslash_percent_u_command_synthesis",
+        "escaped_backslash_percent_o_command_synthesis",
+        "triple_percent_fusion_percent_k",
+        "caret_bel_07_in_mtext",
+        "caret_fs_1c_in_mtext",
+        "caret_gs_1d_in_mtext",
+        "caret_us_1f_in_mtext",
+        "caret_vt_0b_in_mtext",
+        "caret_ff_0c_in_mtext",
+        "c1_nel_85_in_mtext",
+        "native_text_us_1f_control_whitespace",
+    ],
+)
+def test_r9_prelex_percent_command_synthesis_and_control_escapes_stay_non_qualified(
+    tmp_path: Path, r9_probe: str
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path / r9_probe)
+    if r9_probe == "escaped_backslash_percent_u_command_synthesis":
+        dim.dxf.text = r"\%%uA1;100"
+        _set_rendered_block_text(dim, r"\%%uA1;100")
+    elif r9_probe == "escaped_backslash_percent_o_command_synthesis":
+        dim.dxf.text = r"\%%oW1;100"
+        _set_rendered_block_text(dim, r"\%%oW1;100")
+    elif r9_probe == "triple_percent_fusion_percent_k":
+        from dxf_builder_lib._dimension_truth import _has_disallowed_percent_code
+
+        assert _has_disallowed_percent_code("%%%%%u%%%k100") is True
+        return
+    elif r9_probe == "caret_bel_07_in_mtext":
+        dim.dxf.text = "100^G"
+        _set_rendered_block_text(dim, "100^G")
+    elif r9_probe == "caret_fs_1c_in_mtext":
+        _set_rendered_block_text(dim, r"^\100")
+    elif r9_probe == "caret_gs_1d_in_mtext":
+        _set_rendered_block_text(dim, r"^]100")
+    elif r9_probe == "caret_us_1f_in_mtext":
+        _set_rendered_block_text(dim, r"^_100")
+    elif r9_probe == "caret_vt_0b_in_mtext":
+        _set_rendered_block_text(dim, "^K100")
+    elif r9_probe == "caret_ff_0c_in_mtext":
+        _set_rendered_block_text(dim, "^L100")
+    elif r9_probe == "c1_nel_85_in_mtext":
+        _set_rendered_block_text(dim, "\x85100")
+    else:
+        blk = doc.blocks.get(dim.dxf.geometry)
+        for ent in list(blk):
+            if ent.dxftype() == "MTEXT":
+                blk.delete_entity(ent)
+        blk.add_text("\x1f100", dxfattribs={"height": 1.0, "insert": (50.0, 20.0), "style": "Standard"})
+
+    doc.saveas(built.output_path)
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification in {"FAILED", "UNKNOWN"}
+    assert not semantic.passed
+
+
+def test_r9_valid_percent_toggles_symbols_and_tabs_remain_qualified(tmp_path: Path) -> None:
+    for idx, (dim_text, mtext_val) in enumerate(
+        [
+            ("<>", "%%u100%%u"),
+            ("%%c<>", "%%c100"),
+            ("<>", "^I100"),
+            ("<>", "^J100"),
+        ]
+    ):
+        built, doc, dim = _explicit_truth_control(tmp_path / f"pos_{idx}")
+        dim.dxf.text = dim_text
+        _set_rendered_block_text(dim, mtext_val)
+        doc.saveas(built.output_path)
+        strict = review_dxf_with_dimension_line_integrity(built)
+        assert strict.passed, f"Expected QUALIFIED for ({dim_text!r}, {mtext_val!r}): {strict}"
+        assert strict.qualification == "QUALIFIED"

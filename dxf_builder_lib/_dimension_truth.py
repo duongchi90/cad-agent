@@ -46,7 +46,7 @@ _PERCENT_CHARS = {"c": DIAMETER_SIGN, "d": "\u00b0", "p": "\u00b1"}
 
 _UNICODE_ESCAPE = re.compile(r"\\[Uu]\+([0-9A-Fa-f]{4})")
 _DISALLOWED_PERCENT_RE = re.compile(r"%%(?:[kK]|\d{1,3})")
-_LEGACY_TOGGLE_PERCENT_RE = re.compile(r"%%[uUoO]")
+_POST_LEX_PERCENT_RE = re.compile(r"%%(%|[cCdDpPuUoO])")
 _NUMERIC_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?")
 _NUMERIC_SIGNS = str.maketrans({"\u2212": "-", "\uff0d": "-", "\uff0b": "+"})
 _DMS_RE = re.compile(r"^\s*([-+]?\d+)\u00b0\s*(\d+)'(?:\s*(\d+(?:[.,]\d+)?)\")?\s*$")
@@ -127,17 +127,47 @@ def _decode_cif_unicode(text: str) -> str:
     return _UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), raw)
 
 
+def _has_nonprintable_control(text: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in "\t\n\r") or (0x7F <= ord(ch) <= 0x9F)
+        for ch in text
+    )
+
+
 def _has_disallowed_percent_code(raw_text: str) -> bool:
     from ezdxf.tools.text import caret_decode
 
-    decoded = caret_decode(_decode_cif_unicode(raw_text)).replace("%%%", "\x00")
-    return bool(_DISALLOWED_PERCENT_RE.search(decoded))
+    cif = _decode_cif_unicode(raw_text)
+    if _has_nonprintable_control(cif) or re.search(r"\\[Mm]\+", cif):
+        return True
+    decoded = caret_decode(cif)
+    if _has_nonprintable_control(decoded):
+        return True
+    prot = decoded.replace("%%%", "\x00")
+    return bool(
+        _DISALLOWED_PERCENT_RE.search(prot)
+        or re.search(r"(?:\\|\x00)%%[uUoO]", prot)
+    )
 
 
 def _prepare_mtext_lexer_input(raw_text: str) -> str:
-    decoded = _decode_cif_unicode(raw_text).replace("%%%", "\x00")
-    decoded = _LEGACY_TOGGLE_PERCENT_RE.sub("", decoded)
-    return decoded.replace("\x00", "%")
+    return _decode_cif_unicode(raw_text)
+
+
+def _decode_post_lex_percents(token_text: str) -> str:
+    if "%%" not in token_text:
+        return token_text
+
+    def _repl(match: re.Match[str]) -> str:
+        code = match.group(1)
+        if code == "%":
+            return "%"
+        low = code.lower()
+        if low in _PERCENT_CHARS:
+            return _PERCENT_CHARS[low]
+        return ""
+
+    return _POST_LEX_PERCENT_RE.sub(_repl, token_text)
 
 
 def plain_cad_text(text: str | None) -> str:
@@ -151,7 +181,7 @@ def plain_cad_text(text: str | None) -> str:
     for token in MTextParser(prepared):
         tname = token.type.name
         if tname == "WORD":
-            parts.append(str(token.data))
+            parts.append(_decode_post_lex_percents(str(token.data)))
         elif tname in {"SPACE", "NBSP"}:
             parts.append(" ")
         elif tname == "TABULATOR":
@@ -160,23 +190,20 @@ def plain_cad_text(text: str | None) -> str:
             parts.append("\n")
         elif tname == "STACK":
             upper, lower, divider = token.data
-            parts.append(f"{upper}/{lower}" if divider else str(upper))
-    return "".join(parts).strip()
+            u_txt = _decode_post_lex_percents(str(upper))
+            l_txt = _decode_post_lex_percents(str(lower))
+            parts.append(f"{u_txt}/{l_txt}" if divider else u_txt)
+    return "".join(parts).strip(" \t\n\r")
 
 
 def normalize_dim_text(text: str | None) -> str | None:
     """Normalize diameter symbols and whitespace for rendered-vs-expected checks."""
     if text is None:
         return None
-    out = _decode_cif_unicode(str(text))
-    out = re.sub(
-        r"%%([cCdDpP])",
-        lambda m: _PERCENT_CHARS[m.group(1).lower()],
-        out,
-    )
+    out = _decode_post_lex_percents(_decode_cif_unicode(str(text)))
     for sign in DIAMETER_SIGNS:
         out = out.replace(sign, DIAMETER_SIGN)
-    return " ".join(out.split())
+    return re.sub(r"[ \t\n\r\u00a0]+", " ", out).strip(" ")
 
 
 def _decimal_separator(value: object) -> str:
@@ -547,10 +574,14 @@ def _mtext_height_profile(
                         raise ValueError("unverified inline font charset")
             continue
         if tname == "WORD":
-            text = str(token.data)
+            text = _decode_post_lex_percents(str(token.data))
         elif tname == "STACK":
             upper, lower, divider = token.data
-            text = f"{upper}/{lower}" if divider else str(upper)
+            if not divider:
+                raise ValueError("unverified stack without divider")
+            u_txt = _decode_post_lex_percents(str(upper))
+            l_txt = _decode_post_lex_percents(str(lower))
+            text = f"{u_txt}/{l_txt}"
         else:
             continue
         if text.strip():
@@ -594,7 +625,7 @@ def _mtext_height_profile(
             raise _SuppressedText("zero vertical extent")
         if not math.isfinite(height) or height <= 0.0:
             raise ValueError("invalid effective text height")
-        profile.extend((char, height) for char in text if not char.isspace())
+        profile.extend((char, height) for char in text if char not in " \t\n\r\u00a0")
     return profile
 
 
@@ -944,7 +975,7 @@ def _read_rendered_block(
         if kind == "TEXT":
             from ezdxf.tools.text import plain_text as ezdxf_plain_text
 
-            plain = ezdxf_plain_text(_decode_cif_unicode(str(raw_content))).strip()
+            plain = ezdxf_plain_text(_decode_cif_unicode(str(raw_content))).strip(" \t\n\r")
         else:
             plain = plain_cad_text(raw_content)
         if plain:
