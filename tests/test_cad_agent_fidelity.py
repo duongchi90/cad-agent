@@ -4677,3 +4677,205 @@ def test_native_pdf_observation_aggregates_complete_nakuja_same_span_glyph_trace
     assert "".join(trace["text"] for trace in member_traces) == "10,00"
     assert [trace["sequence_number"] for trace in member_traces] == [190, 191, 192, 193, 194]
     assert all(trace["bbox_pt"] and trace["glyph_ids"] for trace in member_traces)
+
+
+@pytest.mark.parametrize(
+    "compound_mode",
+    [
+        "fm_a_multi_trace_bt_et_border_zones",
+        "fm_b_hollow_frame_and_disjoint_strokes",
+        "fm_c_multi_subpath_fill_arrowheads",
+        "fm_d_baseline_underline_oblique_leader_and_table_divider",
+        "fm_e_per_glyph_multi_trace_and_condensed_tz_spans",
+        "combined_all_four_compound_modes",
+    ],
+)
+def test_native_pdf_observation_admits_spans_inside_compound_cad_paint_operators(
+    tmp_path: Path, compound_mode: str,
+) -> None:
+    import math
+
+    source = tmp_path / f"{compound_mode}.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+
+    # Interior CAD spans painted BEFORE later sheet-wide compound operators.
+    page.insert_text((100, 120), "63", fontsize=12)
+    page.insert_text((205, 120), "2 x M3 - 6H", fontsize=12)
+    page.insert_text((155, 210), "35", fontsize=12, rotate=90)
+    oblique_pivot = fitz.Point(235, 205)
+    page.insert_text(
+        oblique_pivot, "R13.50", fontsize=12, morph=(oblique_pivot, fitz.Matrix(-35.7)),
+    )
+    page.insert_text((310, 75), "+/-1", fontsize=8)
+    page.insert_text((18, 45), "A", fontsize=10)
+
+    if compound_mode in {"fm_a_multi_trace_bt_et_border_zones", "combined_all_four_compound_modes"}:
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        multi_trace_bt_et = (
+            b"\nq BT 0 0 0 rg /F0 10 Tf 1 0 0 1 18 255 Tm (Z) Tj 362 -215 Td (Z) Tj "
+            b"/F0 10.5 Tf -362 0 Td (Y) Tj 362 215 Td (W) Tj ET Q\n"
+        )
+        document.update_stream(xref, stream + multi_trace_bt_et)
+
+    if compound_mode in {"fm_b_hollow_frame_and_disjoint_strokes", "combined_all_four_compound_modes"}:
+        sh_stroke = page.new_shape()
+        sh_stroke.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh_stroke.draw_line((30, 80), (260, 80))
+        sh_stroke.draw_line((30, 250), (360, 250))
+        sh_stroke.finish(color=(0, 0, 0), fill=None, width=0.5)
+        sh_stroke.commit()
+
+    if compound_mode in {"fm_c_multi_subpath_fill_arrowheads", "combined_all_four_compound_modes"}:
+        sh_fill = page.new_shape()
+        sh_fill.draw_polyline([(25, 35), (31, 33.5), (31, 36.5)])
+        sh_fill.draw_polyline([(370, 275), (364, 273.5), (364, 276.5)])
+        sh_fill.finish(color=None, fill=(0, 0, 0), closePath=True)
+        sh_fill.commit()
+
+    if compound_mode in {
+        "fm_d_baseline_underline_oblique_leader_and_table_divider",
+        "combined_all_four_compound_modes",
+    }:
+        sh_cad = page.new_shape()
+        # Horizontal dimension line 2.0 pt below baseline y=120 of "63" (inside char[3] descent).
+        sh_cad.draw_line((90, 122.0), (135, 122.0))
+        # Leader shelf 1.9 pt below baseline y=120 of "2 x M3 - 6H".
+        sh_cad.draw_line((200, 121.9), (285, 121.9))
+        # Oblique radial leader 2.2 pt below rotated baseline of "R13.50" (-35.7 deg in fitz -> dir=(0.812, 0.584)).
+        ang = math.radians(35.7)
+        ux, uy = math.cos(ang), math.sin(ang)
+        nx_down, ny_down = -uy, ux
+        lp0 = fitz.Point(oblique_pivot.x + 2.2 * nx_down, oblique_pivot.y + 2.2 * ny_down)
+        lp1 = fitz.Point(lp0.x + 48.0 * ux, lp0.y + 48.0 * uy)
+        sh_cad.draw_line(lp0, lp1)
+        # Tall perpendicular table column divider grazing right side-bearing of "+/-1".
+        sh_cad.draw_line((323.2, 50.0), (323.2, 100.0))
+        sh_cad.finish(color=(0, 0, 0), fill=None, width=0.5)
+        sh_cad.commit()
+
+    if compound_mode == "fm_e_per_glyph_multi_trace_and_condensed_tz_spans":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        # Inventor-style separate BT..ET per glyph ("M", "1", "2") + 75% Tz condensed aggregate run ("AB   CD").
+        per_glyph_and_tz = (
+            b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 220 Tm (M) Tj ET Q"
+            b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 70 220 Tm (1) Tj ET Q"
+            b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 76.7 220 Tm (2) Tj ET Q"
+            b"\nq BT 0 0 0 rg 75 Tz /F0 10 Tf 1 0 0 1 60 245 Tm (AB) Tj 40 0 Td (CD) Tj ET Q\n"
+        )
+        document.update_stream(xref, stream + per_glyph_and_tz)
+        sh_box = page.new_shape()
+        sh_box.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh_box.finish(color=(0, 0, 0), fill=None, width=0.5)
+        sh_box.commit()
+
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    contents = {span["content"] for span in observation["native_pdf_spans"]}
+
+    assert {"63", "2 x M3 - 6H", "35", "R13.50", "+/-1"}.issubset(contents)
+    if compound_mode == "fm_e_per_glyph_multi_trace_and_condensed_tz_spans":
+        assert {"M12", "AB", "CD"}.issubset(contents)
+    assert all(span["visibility"] == "unverified" for span in observation["native_pdf_spans"])
+    assert all(span["semantic_role"] is None for span in observation["native_pdf_spans"])
+
+
+@pytest.mark.parametrize(
+    "attack_kind",
+    [
+        "compound_fill_subpath_whiteout",
+        "horizontal_mid_body_strikethrough",
+        "diagonal_x_crossout_stroke",
+        "short_vertical_slash_through_digit",
+        "thick_dark_redaction_stroke",
+        "thin_rgb_white_erase_stroke",
+        "thin_gray_white_erase_stroke",
+        "thin_cmyk_white_erase_stroke",
+        "later_overlapping_multi_trace_text",
+    ],
+)
+def test_native_pdf_observation_compound_paint_still_excludes_real_masking_and_strikethroughs(
+    tmp_path: Path, attack_kind: str,
+) -> None:
+    source = tmp_path / f"{attack_kind}.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+
+    page.insert_text((60, 120), "100", fontsize=14)
+    page.insert_text((240, 220), "SAFE NOTE", fontsize=12)
+
+    if attack_kind == "compound_fill_subpath_whiteout":
+        sh = page.new_shape()
+        sh.draw_polyline([(20, 30), (25, 28.5), (25, 31.5)])
+        sh.draw_rect(fitz.Rect(63, 110, 82, 121))
+        sh.finish(color=None, fill=(1, 1, 1), closePath=True)
+        sh.commit()
+    elif attack_kind == "horizontal_mid_body_strikethrough":
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_line((56, 115.0), (92, 115.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.6)
+        sh.commit()
+    elif attack_kind == "diagonal_x_crossout_stroke":
+        sh = page.new_shape()
+        sh.draw_line((58, 121.0), (88, 109.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.6)
+        sh.commit()
+    elif attack_kind == "short_vertical_slash_through_digit":
+        sh = page.new_shape()
+        sh.draw_line((72.0, 109.0), (72.0, 121.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.6)
+        sh.commit()
+    elif attack_kind == "thick_dark_redaction_stroke":
+        sh = page.new_shape()
+        sh.draw_line((72.0, 40.0), (72.0, 260.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=8.0)
+        sh.commit()
+    elif attack_kind == "thin_rgb_white_erase_stroke":
+        sh = page.new_shape()
+        sh.draw_line((55.0, 121.5), (92.0, 121.5))
+        sh.finish(color=(1, 1, 1), fill=None, width=0.5)
+        sh.commit()
+    elif attack_kind == "thin_gray_white_erase_stroke":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        # PDF bottom-up y: page height 300 - 121.5 = 178.5
+        document.update_stream(xref, stream + b"\nq 1 G 0.5 w 55 178.5 m 92 178.5 l S Q\n")
+    elif attack_kind == "thin_cmyk_white_erase_stroke":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        document.update_stream(xref, stream + b"\nq 0 0 0 0 K 0.5 w 55 178.5 m 92 178.5 l S Q\n")
+    elif attack_kind == "later_overlapping_multi_trace_text":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        # PDF bottom-up y: 300 - 120 = 180 -> overlaps "100" at (60, 120) inside multi-run BT..ET!
+        overlap_bt = (
+            b"\nq BT 0 0 0 rg /F0 14 Tf 1 0 0 1 18 260 Tm (A) Tj "
+            b"/F0 14.5 Tf 44 -80 Td (999) Tj ET Q\n"
+        )
+        document.update_stream(xref, stream + overlap_bt)
+
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    contents = {span["content"] for span in observation["native_pdf_spans"]}
+
+    assert "100" not in contents
+    assert "SAFE NOTE" in contents
