@@ -417,16 +417,28 @@ _REVISION_RE = re.compile(
     r"(?:^|\b)(?:rev(?:ision)?\.?|lan\s+sua\s+doi)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._-]{0,15})\b",
     re.IGNORECASE,
 )
+_ISSUE_DATE_RE = re.compile(r"^\s*((?:0?[1-9]|1[0-2])\s*/\s*(?:19|20)\d{2})\s*$")
+_DESIGN_VARIANT_RE = re.compile(
+    r"\b(phuong\s+an\s+[ivx0-9a-z]+|option\s+[0-9a-z]+)\b",
+    re.IGNORECASE,
+)
+_VN_TITLE_SHIP_TYPE_RE = re.compile(
+    r"^\s*(tau\s+(?:hang\s*[-–]\s*khach|hang\s*[-–]\s*thuc\s+tap|hang\s+kho|"
+    r"cho\s+dau|cho\s+hoa\s+chat|cho\s+container|khach|keo|day|cong\s+trinh)|"
+    r"sa\s+lan(?:\s+cho\s+[a-z]+)?)\b"
+)
 
 
 def _extract_sheet_and_revision(
     entries: list[dict[str, Any]],
-) -> tuple[str | None, list[str], str | None, list[str]]:
+) -> tuple[str | None, list[str], str | None, list[str], list[str], list[str]]:
     sheet_no: str | None = None
     total_sheets: str | None = None
     sheet_handles: list[str] = []
     revision: str | None = None
     revision_handles: list[str] = []
+    issue_dates: list[str] = []
+    design_variants: list[str] = []
 
     for entry in entries:
         folded = entry["folded"]
@@ -449,6 +461,12 @@ def _extract_sheet_and_revision(
             if cand and cand != "?":
                 revision = cand
                 _append_unique(revision_handles, entry["handle"])
+        m_dt = _ISSUE_DATE_RE.fullmatch(text)
+        if m_dt:
+            _append_unique(issue_dates, re.sub(r"\s+", "", m_dt.group(1)))
+        m_var = _DESIGN_VARIANT_RE.search(folded)
+        if m_var:
+            _append_unique(design_variants, re.sub(r"\s+", " ", m_var.group(1)).upper())
 
     if sheet_no and total_sheets:
         sheet_id: str | None = f"{sheet_no}/{total_sheets}"
@@ -456,7 +474,7 @@ def _extract_sheet_and_revision(
         sheet_id = sheet_no
     else:
         sheet_id = None
-    return sheet_id, sheet_handles, revision, revision_handles
+    return sheet_id, sheet_handles, revision, revision_handles, issue_dates, design_variants
 
 
 def _nearest_right_row_match(
@@ -1123,6 +1141,23 @@ def _extract_particulars(
                 normalized_unit=None,
                 reason_detail=f"Dry-cargo ship type marker from {etype} {ehandle}.",
             )
+        else:
+            vn_st = _VN_TITLE_SHIP_TYPE_RE.search(folded)
+            if vn_st:
+                vn_norm = re.sub(r"\s*[-–]\s*", " - ", re.sub(r"\s+", " ", vn_st.group(1)).strip()).upper()
+                _append_unique(ship_types, vn_norm)
+                _add_seed(
+                    fact_key="ship_type",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=vn_norm,
+                    observed_unit=None,
+                    normalized_value=vn_norm,
+                    normalized_unit=None,
+                    reason_detail=f"Title-block Vietnamese vessel type '{vn_norm}' from {etype} {ehandle}.",
+                )
 
         x_coord = entry.get("x")
         if x_coord is not None:
@@ -1241,7 +1276,7 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
     insunits = int(raw["insunits"]) if isinstance(raw.get("insunits"), int) else 0
     measurement = int(raw["measurement"]) if isinstance(raw.get("measurement"), int) else 0
 
-    sheet_id, sheet_handles, revision, revision_handles = _extract_sheet_and_revision(entries)
+    sheet_id, sheet_handles, revision, revision_handles, issue_dates, design_variants = _extract_sheet_and_revision(entries)
     if revision is None and isinstance(raw.get("revision"), str) and raw["revision"].strip():
         revision = raw["revision"].strip()
     if sheet_id is None and isinstance(raw.get("sheet_id"), str) and raw["sheet_id"].strip():
@@ -1494,6 +1529,8 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         "sheet_handles": sheet_handles,
         "revision": revision,
         "revision_handles": revision_handles,
+        "issue_dates": issue_dates,
+        "design_variants": design_variants,
         "source_mode": source_mode,
         "insunits": insunits,
         "calibration_verified": insunits in {4, 5, 6},
