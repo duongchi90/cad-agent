@@ -53,8 +53,36 @@ _CARET = re.compile(r"\^([JMI ])")
 _NUMERIC_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?")
 _NUMERIC_SIGNS = str.maketrans({"\u2212": "-", "\uff0d": "-", "\uff0b": "+"})
 _DMS_RE = re.compile(r"^\s*([-+]?\d+)\u00b0\s*(\d+)'(?:\s*(\d+(?:[.,]\d+)?)\")?\s*$")
-_COUNT_PREFIX_RE = re.compile(rf"^\s*\d+\s*[xX\u00d7](?:\s*(?=[{DIAMETER_SIGNS}MR])|\s+(?=[+-]?\s*(?:\d|[.,]\d)))")
+_COUNT_PREFIX_RE = re.compile(rf"^\s*[1-9]\d*\s*[xX\u00d7](?:\s*(?=[{DIAMETER_SIGNS}MR])|\s+(?=[+-]?\s*(?:\d|[.,]\d)))")
+_PERCENT_STRIKE_RE = re.compile(r"%%[kK]")
 _UNSAFE_PLACEHOLDER_NEIGHBORS = frozenset("0123456789.,+-eE")
+_MAX_DECIMAL_PLACES = 12
+_MIN_POSITIVE_DIMRND = 1e-9
+_MAX_DIMRND = 1e9
+_SUPPORTED_DIMAUNITS = frozenset({0, 1, 2, 3})
+_SYMBOL_FONT_STEMS = frozenset({
+    "gdt",
+    "amgdt",
+    "aigdt",
+    "geniso12",
+    "syastro",
+    "symap",
+    "symath",
+    "symeteo",
+    "symusic",
+    "symbol",
+    "wingdings",
+    "wingdings 2",
+    "wingdings 3",
+    "wingdings2",
+    "wingdings3",
+    "webdings",
+    "marlett",
+    "zapfdingbats",
+    "bookshelf symbol 7",
+    "ms outlook",
+    "mt extra",
+})
 
 _DEFAULTS: dict[str, object] = {
     "dimdec": 2,
@@ -183,11 +211,27 @@ def _suppress_zeros(text: str, leading: bool, trailing: bool) -> str:
     return sign + (text or "0")
 
 
+def _is_valid_places(value: object) -> bool:
+    return (
+        _is_finite_number(value)
+        and float(value).is_integer()  # type: ignore[arg-type]
+        and 0 <= int(value) <= _MAX_DECIMAL_PLACES  # type: ignore[arg-type]
+    )
+
+
+def _is_valid_dimrnd(value: object) -> bool:
+    if not _is_finite_number(value):
+        return False
+    rnd = float(value)  # type: ignore[arg-type]
+    return rnd == 0.0 or (_MIN_POSITIVE_DIMRND <= rnd <= _MAX_DIMRND)
+
+
 def _format_decimal(value: float, places: int, zin: int, sep: str, rounding: float) -> str:
-    if rounding and rounding > 0:
+    capped_places = min(_MAX_DECIMAL_PLACES, max(0, int(places)))
+    if _is_valid_dimrnd(rounding) and rounding > 0.0:
         factor = 1.0 / float(rounding)
         value = round(value * factor) / factor
-    text = f"{value:.{max(0, int(places))}f}"
+    text = f"{value:.{capped_places}f}"
     text = _suppress_zeros(text, bool(zin & 4), bool(zin & 8))
     return text.replace(".", sep) if sep != "." else text
 
@@ -255,7 +299,7 @@ def _claim_in_reference_units(value: float, suffix: str, *, angular: bool, angle
     if angular:
         # Inverse of the existing _format_measured DIMAUNIT output, not a new
         # angle-expression parser. Linear units never convert angular claims.
-        expected = {0: "°", 1: "°", 2: "g", 3: "r", 4: "°"}.get(angle_unit)
+        expected = {0: "°", 1: "°", 2: "g", 3: "r"}.get(angle_unit)
         if expected is None or unit not in {"", expected}:
             raise _UnverifiedClaim("unsupported angular unit/annotation suffix")
         if angle_unit == 2:
@@ -282,6 +326,7 @@ def _parse_primary_numeric_claim(
     *,
     angular: bool = False,
     angle_unit: int = 0,
+    dimtype: int | None = None,
 ) -> tuple[float | None, float]:
     """Keep the claim's conversion context beside its reference-unit value."""
     text = (plain_text or "").strip().translate(_NUMERIC_SIGNS)
@@ -299,6 +344,13 @@ def _parse_primary_numeric_claim(
 
     cleaned = _COUNT_PREFIX_RE.sub("", text, count=1).strip()
     if cleaned and cleaned[0] in f"{DIAMETER_SIGNS}MR":
+        symbol = cleaned[0]
+        if angular:
+            raise _UnverifiedClaim("linear symbol on angular dimension")
+        if dimtype == 4 and symbol in f"{DIAMETER_SIGNS}M":
+            return None, 1.0
+        if dimtype == 3 and symbol == RADIUS_SIGN:
+            return None, 1.0
         cleaned = cleaned[1:].strip()
     cleaned = re.sub(r"^([+-])\s+", r"\1", cleaned)
 
@@ -351,10 +403,12 @@ def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object]
         for name, default in _DEFAULTS.items():
             value = override.get(name, default)
             if name == "dimrnd":
-                value = float(value or 0.0)
+                value = 0.0 if value is None else value
             elif isinstance(value, bool):
                 value = int(value)
             vars_dict[name] = value
+        if vars_dict.get("dimadec") == -1 and _is_valid_places(vars_dict.get("dimdec")):
+            vars_dict["dimadec"] = int(vars_dict["dimdec"])  # type: ignore[arg-type]
         vars_dict["dimdsep"] = override.get_decimal_separator()
 
         dimscale_raw = vars_dict.get("dimscale")
@@ -367,6 +421,10 @@ def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object]
 
         text_style_name = str(vars_dict.get("dimtxsty") or "Standard")
         text_style = dim_base.get_text_style(doc, text_style_name)
+        raw_font = str(text_style.dxf.get("font", "") or "").strip()
+        font_stem = raw_font.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0].strip().casefold()
+        vars_dict["style_font_stem"] = font_stem
+        vars_dict["unverified_text_font"] = font_stem in _SYMBOL_FONT_STEMS
         ts_height_raw = text_style.dxf.get("height", 0.0)
         if not _is_finite_number(ts_height_raw) or float(ts_height_raw) < 0.0:
             return override, vars_dict, None
@@ -396,10 +454,18 @@ class _SuppressedText(ValueError):
     """The existing text owner resolves a degenerate rendered token."""
 
 
-def _mtext_height_profile(raw_text: str, base_height: float) -> list[tuple[str, float]]:
+def _mtext_height_profile(
+    raw_text: str,
+    base_height: float,
+    *,
+    allowed_font_stems: frozenset[str] = frozenset(),
+) -> list[tuple[str, float]]:
     """Use the existing parser's token contexts, never infer roles from size."""
     from ezdxf.tools.text import MTextContext, MTextParser
 
+    if _PERCENT_STRIKE_RE.search(str(raw_text).replace("%%%", "")):
+        raise ValueError("strikethrough percent toggle")
+    default_font_face = MTextContext().font_face
     context = MTextContext()
     context.cap_height = base_height
     profile: list[tuple[str, float]] = []
@@ -411,6 +477,33 @@ def _mtext_height_profile(raw_text: str, base_height: float) -> list[tuple[str, 
             text = plain_cad_text(str(upper)) + "/" + plain_cad_text(str(lower))
         else:
             continue
+        if text.strip():
+            if bool(getattr(token.ctx, "strike_through", False)):
+                raise ValueError("inline strikethrough")
+            tracking = float(getattr(token.ctx, "char_tracking_factor", 1.0))
+            if not math.isfinite(tracking) or tracking <= 0.0:
+                raise _SuppressedText("collapsed tracking")
+            if tracking < 0.75 or tracking > 4.0:
+                raise ValueError("unverified text tracking")
+            oblique = float(getattr(token.ctx, "oblique", 0.0))
+            if not math.isfinite(oblique) or abs(oblique) >= 85.0:
+                raise ValueError("invalid text oblique")
+            if token.ctx.font_face != default_font_face:
+                fam = str(getattr(token.ctx.font_face, "family", "") or "").strip().casefold()
+                fn = (
+                    str(getattr(token.ctx.font_face, "filename", "") or "")
+                    .replace("\\", "/")
+                    .rsplit("/", 1)[-1]
+                    .rsplit(".", 1)[0]
+                    .strip()
+                    .casefold()
+                )
+                if (
+                    fam in _SYMBOL_FONT_STEMS
+                    or fn in _SYMBOL_FONT_STEMS
+                    or not ({fam, fn} & allowed_font_stems)
+                ):
+                    raise ValueError("unverified inline font override")
         width = float(token.ctx.width_factor)
         if text.strip() and width == 0.0:
             raise _SuppressedText("zero horizontal extent")
@@ -605,6 +698,56 @@ def _insert_is_non_label_geometry(
     return depth + subtree_height <= _MAX_NESTED_INSERT_DEPTH
 
 
+def _has_planar_wcs_extrusion(value: object) -> bool:
+    try:
+        coords = tuple(value)  # type: ignore[arg-type]
+    except TypeError:
+        return False
+    return (
+        len(coords) == 3
+        and all(_is_finite_number(coord) for coord in coords)
+        and abs(float(coords[0])) <= 1e-9
+        and abs(float(coords[1])) <= 1e-9
+        and math.isclose(float(coords[2]), 1.0, rel_tol=0.0, abs_tol=1e-6)
+    )
+
+
+def _rendered_text_geometry_is_valid(item, kind: str) -> bool:
+    if not _has_finite_coords(item.dxf.get("insert", (0.0, 0.0, 0.0))):
+        return False
+    if not _has_planar_wcs_extrusion(item.dxf.get("extrusion", (0.0, 0.0, 1.0))):
+        return False
+    if not _is_finite_number(item.dxf.get("rotation", 0.0)):
+        return False
+    if kind == "MTEXT":
+        raw_w = item.dxf.get("width", 0.0)
+        if not _is_finite_number(raw_w) or float(raw_w) < 0.0:
+            return False
+        if item.dxf.hasattr("text_direction"):
+            td = item.dxf.get("text_direction")
+            if not _has_finite_coords(td):
+                return False
+            coords = tuple(float(v) for v in td)
+            if len(coords) != 3 or math.hypot(coords[0], coords[1]) <= 1e-9 or abs(coords[2]) > 1e-6:
+                return False
+        try:
+            bg_fill = int(item.dxf.get("bg_fill", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if bg_fill == 1:
+            return False
+        return True
+    raw_oblique = item.dxf.get("oblique", 0.0)
+    if not _is_finite_number(raw_oblique) or abs(float(raw_oblique)) >= 85.0:
+        return False
+    raw_xscale = item.dxf.get("width", 1.0)
+    if not _is_finite_number(raw_xscale) or float(raw_xscale) <= 0.0:
+        return False
+    if item.dxf.hasattr("align_point") and not _has_finite_coords(item.dxf.get("align_point")):
+        return False
+    return True
+
+
 def _read_rendered_block(
     doc,
     entity,
@@ -612,6 +755,7 @@ def _read_rendered_block(
     context,
     nominal_base_height: float,
     expected_mtext: str | None,
+    allowed_font_stems: frozenset[str] = frozenset(),
 ) -> _RenderedBlockRead:
     raw_g42 = entity.dxf.get("actual_measurement")
     try:
@@ -627,7 +771,7 @@ def _read_rendered_block(
 
     parts: list[str] = []
     profile: list[tuple[str, float]] = []
-    hidden_count = transparent_count = unreadable_count = height_mismatch = empty_text_count = 0
+    hidden_count = transparent_count = unreadable_count = height_mismatch = empty_text_count = text_entity_count = 0
     root_block_name = str(getattr(block, "name", "") or "").casefold()
     initial_active = frozenset({root_block_name}) if root_block_name else frozenset()
     verified_insert_heights: dict[str, int] = {}
@@ -647,7 +791,12 @@ def _read_rendered_block(
         if kind not in {"TEXT", "MTEXT"}:
             unreadable_count += 1
             continue
+        text_entity_count += 1
+        if not _rendered_text_geometry_is_valid(item, kind):
+            unreadable_count += 1
         raw_content = item.text if kind == "MTEXT" else item.dxf.get("text", "")
+        if kind == "TEXT" and _PERCENT_STRIKE_RE.search(str(raw_content).replace("%%%", "")):
+            unreadable_count += 1
         # Native TEXT preserves backslashes/braces which are MTEXT commands.
         plain = item.plain_text() if kind == "TEXT" else plain_cad_text(raw_content)
         if plain:
@@ -668,18 +817,18 @@ def _read_rendered_block(
             continue
         try:
             if kind == "MTEXT":
-                profile.extend(_mtext_height_profile(raw_content, float(raw_h)))
+                profile.extend(_mtext_height_profile(raw_content, float(raw_h), allowed_font_stems=allowed_font_stems))
             else:
                 profile.extend(_text_height_profile(item, context, plain, float(raw_h)))
         except _SuppressedText:
             hidden_count += 1
         except (ValueError, TypeError, AttributeError, IndexError):
             unreadable_count += 1
-    if empty_text_count > 0 and parts:
+    if text_entity_count > 1 or (empty_text_count > 0 and parts):
         unreadable_count += 1
     if expected_mtext is not None:
         try:
-            expected = _mtext_height_profile(expected_mtext, nominal_base_height)
+            expected = _mtext_height_profile(expected_mtext, nominal_base_height, allowed_font_stems=allowed_font_stems)
             if [c for c, _h in expected] != [c for c, _h in profile]:
                 unreadable_count += 1
             elif any(not math.isclose(a[1], b[1], rel_tol=1e-9, abs_tol=1e-12)
@@ -749,8 +898,10 @@ def resolve_dimension_display(
     style: Mapping[str, object] | None,
 ) -> DimensionDisplay:
     """Resolve what plain text and numeric value a DIMENSION displays."""
-    angular = dimtype in _ANGULAR_TYPES
-    angle_unit = int(style["dimaunit"]) if style and "dimaunit" in style else 0  # type: ignore[arg-type]
+    base_dimtype = int(dimtype) & 0x07
+    angular = base_dimtype in _ANGULAR_TYPES
+    raw_angle_unit = style["dimaunit"] if style and "dimaunit" in style else 0
+    angle_unit = int(raw_angle_unit) if _is_finite_number(raw_angle_unit) and float(raw_angle_unit).is_integer() else -1  # type: ignore[arg-type]
     if measurement is None or not math.isfinite(measurement):
         scaled = None
     elif angular:
@@ -765,17 +916,26 @@ def resolve_dimension_display(
     if override and override != "<>" and "<>" not in override:
         plain = normalize_dim_text(plain_cad_text(override)) or ""
         try:
-            parsed, unit_factor = _parse_primary_numeric_claim(plain, angular=angular, angle_unit=angle_unit)
+            parsed, unit_factor = _parse_primary_numeric_claim(
+                plain, angular=angular, angle_unit=angle_unit, dimtype=base_dimtype,
+            )
         except _UnverifiedClaim:
             return DimensionDisplay(plain, None, scaled, 0.0, "unverified_claim")
         return DimensionDisplay(plain, parsed, scaled, 0.0, "override", unit_factor)
 
     if style is None:
         return DimensionDisplay(None, None, scaled, 0.0, "unknown")
+    if angular and angle_unit not in _SUPPORTED_DIMAUNITS:
+        return DimensionDisplay(None, None, scaled, 0.0, "unverified_primary_format")
     if not angular and int(style.get("dimlunit", 2)) != 2:
         # ezdxf's dimension renderer falls back to decimal for these formats;
         # that fallback does not prove the configured generated label.
         return DimensionDisplay(None, None, scaled, 0.0, "unverified_primary_format")
+    raw_places = style.get("dimadec" if angular else "dimdec")
+    if not _is_valid_places(raw_places):
+        return DimensionDisplay(None, None, scaled, 0.0, "unknown")
+    if not angular and not _is_valid_dimrnd(style.get("dimrnd", 0.0)):
+        return DimensionDisplay(None, None, scaled, 0.0, "unknown")
     if int(style["dimlim"]) and not int(style["dimtol"]):  # type: ignore[arg-type]
         return DimensionDisplay(None, None, scaled, 0.0, "limits")
     if int(style["dimalt"]):  # type: ignore[arg-type]
@@ -787,14 +947,15 @@ def resolve_dimension_display(
     if _has_unsafe_dimpost(dimpost) or ("<>" in override and _has_unsafe_placeholder(override)):
         return DimensionDisplay(None, None, scaled, 0.0, "unsafe_placeholder")
 
-    formatted = _format_measured(scaled, dimtype, style)
-    places = max(0, int(style["dimadec" if angular else "dimdec"]))  # type: ignore[arg-type]
-    rounding = 0.0 if angular else float(style["dimrnd"] or 0.0)  # type: ignore[arg-type]
-    tol = max(0.5 * 10.0 ** (-places), rounding / 2.0) if rounding > 0 else 0.5 * 10.0 ** (-places)
+    formatted = _format_measured(scaled, base_dimtype, style)
+    places = int(raw_places)  # type: ignore[arg-type]
+    tol = 0.5 * 10.0 ** (-places)
     raw_text = override.replace("<>", formatted, 1) if override and override != "<>" else formatted
     shown_text = normalize_dim_text(plain_cad_text(raw_text))
     try:
-        claim, unit_factor = _parse_primary_numeric_claim(shown_text or "", angular=angular, angle_unit=angle_unit)
+        claim, unit_factor = _parse_primary_numeric_claim(
+            shown_text or "", angular=angular, angle_unit=angle_unit, dimtype=base_dimtype,
+        )
     except _UnverifiedClaim:
         return DimensionDisplay(shown_text, None, scaled, tol, "unverified_claim")
     return DimensionDisplay(shown_text, claim, scaled, tol, "measurement", unit_factor)
@@ -811,12 +972,30 @@ def audit_dimension_truth(
     """Audit one DXF DIMENSION entity for override lies, scaling traps, stale *D text, and visibility."""
     reasons: list[str] = []
     dxf = entity.dxf
-    dimtype = int(dxf.get("dimtype", 0)) & 0x0F
+    dimtype = int(dxf.get("dimtype", 0)) & 0x07
+    if dimtype == 7:
+        reasons.append("dim_unverified_dimension_type")
+    if dimtype not in _ANGULAR_TYPES:
+        try:
+            raw_insunits = doc.header.get("$INSUNITS", None)
+        except Exception:
+            raw_insunits = None
+        if isinstance(raw_insunits, bool) or not isinstance(raw_insunits, int) or raw_insunits != 4:
+            reasons.append("dim_unverified_drawing_units")
     override_text = str(dxf.get("text", "") or "")
     override_obj, style, nominal_base_height = _read_effective_style(doc, entity)
     if style is None or override_obj is None:
         reasons.append("dim_style_unreadable")
         return reasons
+
+    if style.get("unverified_text_font"):
+        reasons.append("dim_unverified_rendered_structure")
+
+    raw_places = style.get("dimadec" if dimtype in _ANGULAR_TYPES else "dimdec")
+    if not _is_valid_places(raw_places):
+        reasons.append("dim_unverified_precision")
+    if dimtype not in _ANGULAR_TYPES and not _is_valid_dimrnd(style.get("dimrnd", 0.0)):
+        reasons.append(f"dim_dimrnd_invalid({style.get('dimrnd')!r})")
 
     raw_lfac = style.get("dimlfac")
     if not _is_finite_number(raw_lfac) or float(raw_lfac) <= 0.0:  # type: ignore[arg-type]
@@ -833,9 +1012,21 @@ def audit_dimension_truth(
 
     dimtol_enabled = bool(int(style["dimtol"]))
     dimlim_enabled = bool(int(style["dimlim"]))
-    primary_format_unsupported = dimtype not in _ANGULAR_TYPES and int(style["dimlunit"]) != 2
-    if dimtol_enabled and primary_format_unsupported:
-        # A literal primary override does not establish tolerance formatting.
+    raw_dimaunit = style.get("dimaunit", 0)
+    angular_unit_unsupported = (
+        dimtype in _ANGULAR_TYPES
+        and (
+            not _is_finite_number(raw_dimaunit)
+            or not float(raw_dimaunit).is_integer()  # type: ignore[arg-type]
+            or int(raw_dimaunit) not in _SUPPORTED_DIMAUNITS  # type: ignore[arg-type]
+        )
+    )
+    primary_format_unsupported = (
+        angular_unit_unsupported
+        or (dimtype not in _ANGULAR_TYPES and int(style["dimlunit"]) != 2)
+    )
+    if angular_unit_unsupported or (dimtol_enabled and primary_format_unsupported):
+        # A literal primary override does not establish tolerance or surveyor formatting.
         reasons.append("dim_unverified_primary_format")
     if int(style["dimalt"]):
         reasons.append("dim_unverified_alternate_units")
@@ -843,7 +1034,10 @@ def audit_dimension_truth(
         # Unsupported configured limits remain non-PASS for explicit overrides
         # as well as generated labels. Keep proven primary mismatches intact.
         reasons.append("dim_unverified_limits")
+    tdec_valid = _is_valid_places(style.get("dimtdec", 2))
     if dimtol_enabled or dimlim_enabled:
+        if not tdec_valid:
+            reasons.append("dim_unverified_precision")
         raw_dimtfac = style.get("dimtfac")
         if not _is_finite_number(raw_dimtfac) or float(raw_dimtfac) <= 0.0:
             reasons.append(f"dim_dimtfac_invalid({raw_dimtfac!r})")
@@ -912,7 +1106,7 @@ def audit_dimension_truth(
                     reasons.append(f"dim_displayed_disagrees(shown={disp.text!r}, expected={ref_value})")
 
     expected_mtext = disp.text
-    if dimtol_enabled and primary_format_unsupported:
+    if dimtol_enabled and (primary_format_unsupported or not tdec_valid):
         expected_mtext = None
     elif dimtol_enabled and disp.text is not None:
         from ezdxf.render.dim_base import Tolerance
@@ -922,9 +1116,11 @@ def audit_dimension_truth(
         except (ValueError, TypeError, AttributeError):
             reasons.append("dim_unverified_tolerance_rendering")
             expected_mtext = None
+    style_font_stem = str(style.get("style_font_stem") or "").strip().casefold()
+    allowed_stems = frozenset({style_font_stem}) if style_font_stem else frozenset()
     rendered = _read_rendered_block(
         doc, entity, context=context, nominal_base_height=nominal_base_height,
-        expected_mtext=expected_mtext,
+        expected_mtext=expected_mtext, allowed_font_stems=allowed_stems,
     )
     if rendered.hidden_text_count > 0:
         reasons.append("dim_rendered_text_hidden")
@@ -948,7 +1144,7 @@ def audit_dimension_truth(
         have = normalize_dim_text(rendered_text)
         want = normalize_dim_text(disp.text)
         if dimtol_enabled:
-            if not primary_format_unsupported:
+            if not primary_format_unsupported and tdec_valid:
                 expected_tols = _tolerance_rendered_candidates(override_obj, disp.text)
                 if expected_tols is None or have not in expected_tols:
                     reasons.append(f"dim_render_tolerance_mismatch(rendered={rendered_text!r})")

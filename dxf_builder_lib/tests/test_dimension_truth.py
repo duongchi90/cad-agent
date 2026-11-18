@@ -1318,3 +1318,245 @@ def test_primary_contradiction_stays_failed_even_with_nested_insert_label(tmp_pa
     result = review_dxf_with_dimension_line_integrity(built)
     assert not result.passed
     assert result.qualification == "FAILED"
+
+
+@pytest.mark.parametrize(
+    ("rnd_val", "fake_rendered"),
+    [(200.0, "0"), (60.0, "120"), (150.0, "150")],
+)
+def test_dimrnd_cannot_self_inflate_tolerance_to_hide_wrong_displayed_value(
+    tmp_path: Path, rnd_val: float, fake_rendered: str,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path / f"rnd_{int(rnd_val)}", dimrnd=rnd_val)
+    _set_rendered_block_text(dim, fake_rendered)
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification == "FAILED"
+    assert not semantic.passed
+
+
+@pytest.mark.parametrize(
+    "bad_style",
+    [
+        {"dimrnd": 1e-308},
+        {"dimrnd": float("inf")},
+        {"dimrnd": -0.5},
+        {"dimdec": 500_000, "dimzin": 0},
+        {"dimdec": -1},
+    ],
+)
+def test_extreme_or_invalid_dimrnd_and_dimdec_fail_closed_in_o1_without_exception(
+    tmp_path: Path, bad_style: dict[str, object],
+) -> None:
+    built, doc, _dim = _explicit_truth_control(tmp_path, **bad_style)
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification in {"FAILED", "UNKNOWN"}
+    assert not semantic.passed
+
+
+@pytest.mark.parametrize(
+    ("insunits", "label"),
+    [(1, "100 mm"), (1, "10 cm"), (6, ""), (0, "100 mm")],
+)
+def test_non_millimetre_drawing_insunits_cannot_qualify_linear_reference(
+    tmp_path: Path, insunits: int, label: str,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path / f"ins_{insunits}_{label.replace(' ', '_')}")
+    doc.header["$INSUNITS"] = insunits
+    if label:
+        dim.dxf.text = label
+        _set_rendered_block_text(dim, label)
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification != "QUALIFIED"
+    assert not semantic.passed
+
+
+def test_zero_count_prefix_cross_symbol_lies_and_surveyor_dimaunit_fail_closed(
+    tmp_path: Path,
+) -> None:
+    from dxf_builder_lib._dimension_truth import audit_dimension_truth
+
+    built_zero, doc_zero, dim_zero = _explicit_truth_control(tmp_path / "zero_mult")
+    dim_zero.dxf.text = "0x 100"
+    _set_rendered_block_text(dim_zero, "0x 100")
+    doc_zero.saveas(built_zero.output_path)
+    res_zero = review_dxf_with_dimension_line_integrity(built_zero)
+    assert not res_zero.passed
+    assert res_zero.qualification == "FAILED"
+
+    built_two, doc_two, dim_two = _explicit_truth_control(tmp_path / "two_mult")
+    dim_two.dxf.text = "2x 100"
+    _set_rendered_block_text(dim_two, "2x 100")
+    doc_two.saveas(built_two.output_path)
+    assert review_dxf_with_dimension_line_integrity(built_two).qualification == "QUALIFIED"
+
+    doc_rad = ezdxf.new("R2010", setup=True)
+    doc_rad.header["$INSUNITS"] = 4
+    ov_rad = doc_rad.modelspace().add_radius_dim(
+        center=(0, 0), radius=13.5, angle=45,
+        override={"dimtxt": 1.0, "dimlfac": 1.0, "dimscale": 1.0, "dimdec": 2, "dimzin": 0},
+        text="%%c13.50",
+    )
+    ov_rad.render()
+    _set_rendered_block_text(ov_rad.dimension, "\u00d813.50")
+    rad_path = tmp_path / "rad_lie.dxf"
+    doc_rad.saveas(rad_path)
+    re_rad = ezdxf.readfile(rad_path)
+    assert audit_dimension_truth(
+        re_rad, re_rad.entitydb[ov_rad.dimension.dxf.handle],
+        expected_measurement=13.5, approved_value_mm=13.5,
+    )
+
+    doc_rad_ok = ezdxf.new("R2010", setup=True)
+    doc_rad_ok.header["$INSUNITS"] = 4
+    ov_rad_ok = doc_rad_ok.modelspace().add_radius_dim(
+        center=(0, 0), radius=13.5, angle=45,
+        override={"dimtxt": 1.0, "dimlfac": 1.0, "dimscale": 1.0, "dimdec": 2, "dimzin": 0},
+    )
+    ov_rad_ok.render()
+    ov_rad_ok.dimension.dxf.dimtype = 164
+    _set_rendered_block_text(ov_rad_ok.dimension, r"\A1;R13.50")
+    rad_ok_path = tmp_path / "rad_ok.dxf"
+    doc_rad_ok.saveas(rad_ok_path)
+    re_rad_ok = ezdxf.readfile(rad_ok_path)
+    assert audit_dimension_truth(
+        re_rad_ok, re_rad_ok.entitydb[ov_rad_ok.dimension.dxf.handle],
+        expected_measurement=13.5, approved_value_mm=13.5,
+    ) == []
+
+    doc_dia = ezdxf.new("R2010", setup=True)
+    doc_dia.header["$INSUNITS"] = 4
+    ov_dia = doc_dia.modelspace().add_diameter_dim(
+        center=(0, 0), radius=17.0, angle=45,
+        override={"dimtxt": 1.0, "dimlfac": 1.0, "dimscale": 1.0},
+        text="R34",
+    )
+    ov_dia.render()
+    _set_rendered_block_text(ov_dia.dimension, "R34")
+    dia_path = tmp_path / "dia_lie.dxf"
+    doc_dia.saveas(dia_path)
+    re_dia = ezdxf.readfile(dia_path)
+    assert audit_dimension_truth(
+        re_dia, re_dia.entitydb[ov_dia.dimension.dxf.handle],
+        expected_measurement=34.0, approved_value_mm=34.0,
+    )
+
+    doc_ang = ezdxf.new("R2010", setup=True)
+    ov_ang = doc_ang.modelspace().add_angular_dim_2l(
+        base=(5, 5), line1=((0, 0), (10, 0)),
+        line2=((0, 0), (5, 8.660254037844387)),
+        override={"dimtxt": 1.0, "dimscale": 1.0, "dimaunit": 4, "dimadec": 0},
+    )
+    ov_ang.render()
+    _set_rendered_block_text(ov_ang.dimension, "60\u00b0")
+    ang_path = tmp_path / "ang_surveyor.dxf"
+    doc_ang.saveas(ang_path)
+    re_ang = ezdxf.readfile(ang_path)
+    ang_reasons = audit_dimension_truth(
+        re_ang, re_ang.entitydb[ov_ang.dimension.dxf.handle], expected_measurement=60.0,
+    )
+    assert any("dim_unverified_primary_format" in r for r in ang_reasons)
+
+
+@pytest.mark.parametrize(
+    "rendered_tamper",
+    [
+        "mtext_nan_insert",
+        "mtext_zero_extrusion",
+        "mtext_edgeon_extrusion",
+        "mtext_zero_text_direction",
+        "text_nan_rotation",
+        "text_nan_oblique",
+        "multi_mtext_bgfill_mask",
+        "inline_strikethrough_K",
+        "inline_percent_k_strikethrough",
+        "inline_zero_tracking_T0",
+        "inline_oblique_90_Q90",
+        "inline_symbol_font_Fgdt",
+        "style_symbol_font_gdt",
+    ],
+)
+def test_rendered_text_transform_split_bgfill_and_inline_mtext_escapes_fail_closed(
+    tmp_path: Path, rendered_tamper: str,
+) -> None:
+    from ezdxf.math import Vec3
+
+    built, doc, dim = _explicit_truth_control(tmp_path / rendered_tamper)
+    blk = dim.get_geometry_block()
+    mt = next(e for e in blk if e.dxftype() == "MTEXT")
+
+    if rendered_tamper == "mtext_nan_insert":
+        mt.dxf.unprotected_set("insert", Vec3(math.nan, 0.0, 0.0))
+    elif rendered_tamper == "mtext_zero_extrusion":
+        mt.dxf.unprotected_set("extrusion", Vec3(0.0, 0.0, 0.0))
+    elif rendered_tamper == "mtext_edgeon_extrusion":
+        mt.dxf.extrusion = (0.0, 1.0, 0.0)
+    elif rendered_tamper == "mtext_zero_text_direction":
+        mt.dxf.unprotected_set("text_direction", Vec3(0.0, 0.0, 0.0))
+    elif rendered_tamper == "text_nan_rotation":
+        blk.delete_entity(mt)
+        t = blk.add_text("100", dxfattribs={"height": 1.0})
+        t.dxf.unprotected_set("rotation", math.nan)
+    elif rendered_tamper == "text_nan_oblique":
+        blk.delete_entity(mt)
+        t = blk.add_text("100", dxfattribs={"height": 1.0})
+        t.dxf.unprotected_set("oblique", math.nan)
+    elif rendered_tamper == "multi_mtext_bgfill_mask":
+        dim.dxf.text = "100 mm"
+        blk.delete_entity(mt)
+        blk.add_mtext("100", dxfattribs={"char_height": 1.0, "insert": (50.0, 8.0, 0.0)})
+        blk.add_mtext(
+            "mm",
+            dxfattribs={"char_height": 1.0, "insert": (50.0, 8.0, 0.0), "bg_fill": 1, "bg_fill_color": 7},
+        )
+    elif rendered_tamper == "inline_strikethrough_K":
+        _set_rendered_block_text(dim, r"{\K100}")
+    elif rendered_tamper == "inline_percent_k_strikethrough":
+        _set_rendered_block_text(dim, "%%k100")
+    elif rendered_tamper == "inline_zero_tracking_T0":
+        _set_rendered_block_text(dim, r"{\T0;100}")
+    elif rendered_tamper == "inline_oblique_90_Q90":
+        _set_rendered_block_text(dim, r"{\Q90;100}")
+    elif rendered_tamper == "inline_symbol_font_Fgdt":
+        _set_rendered_block_text(dim, r"{\Fgdt;100}")
+    elif rendered_tamper == "style_symbol_font_gdt":
+        doc.styles.get("Standard").dxf.font = "gdt.shx"
+
+    doc.saveas(built.output_path)
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification in {"FAILED", "UNKNOWN"}
+    assert not semantic.passed
+
+
+@pytest.mark.parametrize(
+    ("override_val", "rendered_val"),
+    [
+        (None, "99 : dim_unverified_x"),
+        ("99 / 88 : dim_unverified_", "99 / 88 : dim_unverified_"),
+    ],
+)
+def test_untrusted_dim_unverified_substring_cannot_downgrade_failed_contradiction(
+    tmp_path: Path, override_val: str | None, rendered_val: str,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    if override_val is not None:
+        dim.dxf.text = override_val
+    _set_rendered_block_text(dim, rendered_val)
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    assert not strict.passed
+    assert strict.qualification == "FAILED"

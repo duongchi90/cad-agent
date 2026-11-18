@@ -911,8 +911,9 @@ def review_dxf_with_dimension_line_integrity(
     if line_mismatches:
         return DimensionLineIntegrityResult("FAILED", semantic_review, tuple(line_mismatches))
     if not semantic_review.passed:
+        unverified_prefixes = tuple(f"{vid}: dim_unverified_" for vid in expectation_ids)
         if (semantic_review.dimension_mismatches
-                and all(": dim_unverified_" in issue for issue in semantic_review.dimension_mismatches)
+                and all(issue.startswith(unverified_prefixes) for issue in semantic_review.dimension_mismatches)
                 and not semantic_review.mismatches
                 and not semantic_review.component_mismatches
                 and not semantic_review.contour_mismatches):
