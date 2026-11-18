@@ -106,6 +106,7 @@ _DEFAULTS: dict[str, object] = {
     "dimtdec": 2,
     "dimtzin": 8,
     "dimtxsty": "Standard",
+    "dimclrt": 0,
 }
 
 
@@ -424,7 +425,19 @@ def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object]
         raw_font = str(text_style.dxf.get("font", "") or "").strip()
         font_stem = raw_font.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0].strip().casefold()
         vars_dict["style_font_stem"] = font_stem
-        vars_dict["unverified_text_font"] = font_stem in _SYMBOL_FONT_STEMS
+        style_gen_flags = int(text_style.dxf.get("generation_flags", 0) or 0)
+        style_flags = int(text_style.dxf.get("flags", 0) or 0)
+        style_width_raw = text_style.dxf.get("width", 1.0)
+        style_oblique_raw = text_style.dxf.get("oblique", 0.0)
+        vars_dict["unverified_text_font"] = (
+            font_stem in _SYMBOL_FONT_STEMS
+            or style_gen_flags != 0
+            or (style_flags & 0x04) != 0
+            or not _is_finite_number(style_width_raw)
+            or float(style_width_raw) <= 0.0
+            or not _is_finite_number(style_oblique_raw)
+            or abs(float(style_oblique_raw)) >= 85.0
+        )
         ts_height_raw = text_style.dxf.get("height", 0.0)
         if not _is_finite_number(ts_height_raw) or float(ts_height_raw) < 0.0:
             return override, vars_dict, None
@@ -459,17 +472,28 @@ def _mtext_height_profile(
     base_height: float,
     *,
     allowed_font_stems: frozenset[str] = frozenset(),
+    allowed_inline_acis: frozenset[int] = frozenset(),
 ) -> list[tuple[str, float]]:
     """Use the existing parser's token contexts, never infer roles from size."""
     from ezdxf.tools.text import MTextContext, MTextParser
 
     if _PERCENT_STRIKE_RE.search(str(raw_text).replace("%%%", "")):
         raise ValueError("strikethrough percent toggle")
-    default_font_face = MTextContext().font_face
     context = MTextContext()
+    sentinel_font_face = type(context.font_face)(family="__dimtxsty_inherited__")
+    sentinel_aci = 256
+    context.font_face = sentinel_font_face
+    context.aci = sentinel_aci
     context.cap_height = base_height
     profile: list[tuple[str, float]] = []
-    for token in MTextParser(raw_text, ctx=context):
+    for token in MTextParser(raw_text, ctx=context, yield_property_commands=True):
+        if token.type.name == "PROPERTIES_CHANGED":
+            cmd_data = str(token.data or "")
+            if cmd_data.startswith("\\C"):
+                m_aci = re.match(r"^\\C(\d+)", cmd_data)
+                if m_aci is None or int(m_aci.group(1)) not in allowed_inline_acis:
+                    raise ValueError("unverified inline color override")
+            continue
         if token.type.name == "WORD":
             text = plain_cad_text(str(token.data))
         elif token.type.name == "STACK":
@@ -480,6 +504,10 @@ def _mtext_height_profile(
         if text.strip():
             if bool(getattr(token.ctx, "strike_through", False)):
                 raise ValueError("inline strikethrough")
+            if token.ctx.rgb is not None or (
+                token.ctx.aci != sentinel_aci and token.ctx.aci not in allowed_inline_acis
+            ):
+                raise ValueError("unverified inline color override")
             tracking = float(getattr(token.ctx, "char_tracking_factor", 1.0))
             if not math.isfinite(tracking) or tracking <= 0.0:
                 raise _SuppressedText("collapsed tracking")
@@ -488,7 +516,7 @@ def _mtext_height_profile(
             oblique = float(getattr(token.ctx, "oblique", 0.0))
             if not math.isfinite(oblique) or abs(oblique) >= 85.0:
                 raise ValueError("invalid text oblique")
-            if token.ctx.font_face != default_font_face:
+            if token.ctx.font_face != sentinel_font_face:
                 fam = str(getattr(token.ctx.font_face, "family", "") or "").strip().casefold()
                 fn = (
                     str(getattr(token.ctx.font_face, "filename", "") or "")
@@ -526,6 +554,15 @@ def _render_alpha(context, entity) -> int:
         raise ValueError("invalid transparency")
     color = context.resolve_color(entity)
     return 255 if len(color) == 7 else int(color[7:9], 16)
+
+
+def _is_paper_whiteout_color(paper_context, entity) -> bool:
+    """Reject non-inverting near-white colors (e.g. ACI 255 or white TrueColor) on white plots."""
+    color = paper_context.resolve_color(entity)
+    r = int(color[1:3], 16)
+    g = int(color[3:5], 16)
+    b = int(color[5:7], 16)
+    return min(r, g, b) >= 240
 
 
 def _text_height_profile(item, context, plain: str, base_height: float) -> list[tuple[str, float]]:
@@ -734,8 +771,16 @@ def _rendered_text_geometry_is_valid(item, kind: str) -> bool:
             bg_fill = int(item.dxf.get("bg_fill", 0) or 0)
         except (TypeError, ValueError, OverflowError):
             return False
-        if bg_fill == 1:
+        if bg_fill < 0 or (bg_fill & ~0x13) != 0 or ((bg_fill & 0x01) != 0 and (bg_fill & 0x02) == 0):
             return False
+        if (bg_fill & 0x02) != 0 and item.dxf.hasattr("box_fill_scale"):
+            raw_bfs = item.dxf.get("box_fill_scale", 1.5)
+            if not _is_finite_number(raw_bfs) or not (1.0 <= float(raw_bfs) <= 5.0):
+                return False
+        if item.dxf.hasattr("line_spacing_factor"):
+            raw_lsf = item.dxf.get("line_spacing_factor", 1.0)
+            if not _is_finite_number(raw_lsf) or not (0.25 <= float(raw_lsf) <= 4.0):
+                return False
         return True
     raw_oblique = item.dxf.get("oblique", 0.0)
     if not _is_finite_number(raw_oblique) or abs(float(raw_oblique)) >= 85.0:
@@ -743,6 +788,12 @@ def _rendered_text_geometry_is_valid(item, kind: str) -> bool:
     raw_xscale = item.dxf.get("width", 1.0)
     if not _is_finite_number(raw_xscale) or float(raw_xscale) <= 0.0:
         return False
+    if item.dxf.hasattr("text_generation_flag"):
+        try:
+            if int(item.dxf.get("text_generation_flag", 0) or 0) != 0:
+                return False
+        except (TypeError, ValueError, OverflowError):
+            return False
     if item.dxf.hasattr("align_point") and not _has_finite_coords(item.dxf.get("align_point")):
         return False
     return True
@@ -753,9 +804,11 @@ def _read_rendered_block(
     entity,
     *,
     context,
+    paper_context=None,
     nominal_base_height: float,
     expected_mtext: str | None,
     allowed_font_stems: frozenset[str] = frozenset(),
+    allowed_inline_acis: frozenset[int] = frozenset(),
 ) -> _RenderedBlockRead:
     raw_g42 = entity.dxf.get("actual_measurement")
     try:
@@ -809,6 +862,8 @@ def _read_rendered_block(
         try:
             if _render_alpha(context, item) == 0:
                 transparent_count += 1
+            if paper_context is not None and _is_paper_whiteout_color(paper_context, item):
+                unreadable_count += 1
         except (ValueError, TypeError, AttributeError):
             unreadable_count += 1
         raw_h = item.dxf.get("char_height" if kind == "MTEXT" else "height")
@@ -817,7 +872,14 @@ def _read_rendered_block(
             continue
         try:
             if kind == "MTEXT":
-                profile.extend(_mtext_height_profile(raw_content, float(raw_h), allowed_font_stems=allowed_font_stems))
+                profile.extend(
+                    _mtext_height_profile(
+                        raw_content,
+                        float(raw_h),
+                        allowed_font_stems=allowed_font_stems,
+                        allowed_inline_acis=allowed_inline_acis,
+                    )
+                )
             else:
                 profile.extend(_text_height_profile(item, context, plain, float(raw_h)))
         except _SuppressedText:
@@ -828,7 +890,12 @@ def _read_rendered_block(
         unreadable_count += 1
     if expected_mtext is not None:
         try:
-            expected = _mtext_height_profile(expected_mtext, nominal_base_height, allowed_font_stems=allowed_font_stems)
+            expected = _mtext_height_profile(
+                expected_mtext,
+                nominal_base_height,
+                allowed_font_stems=allowed_font_stems,
+                allowed_inline_acis=allowed_inline_acis,
+            )
             if [c for c, _h in expected] != [c for c, _h in profile]:
                 unreadable_count += 1
             elif any(not math.isclose(a[1], b[1], rel_tol=1e-9, abs_tol=1e-12)
@@ -1051,11 +1118,14 @@ def audit_dimension_truth(
     from ezdxf.addons.drawing.properties import RenderContext
 
     context = RenderContext(doc)
+    paper_context = RenderContext(doc)
+    paper_context.current_layout_properties.set_colors("#ffffff")
     try:
         parent_properties = context.resolve_all(entity)
         if _render_alpha(context, entity) == 0:
             reasons.append("dim_entity_transparent")
         context.push_state(parent_properties)
+        paper_context.push_state(paper_context.resolve_all(entity))
     except (ValueError, TypeError, AttributeError):
         reasons.append("dim_unverified_transparency")
 
@@ -1118,9 +1188,23 @@ def audit_dimension_truth(
             expected_mtext = None
     style_font_stem = str(style.get("style_font_stem") or "").strip().casefold()
     allowed_stems = frozenset({style_font_stem}) if style_font_stem else frozenset()
+    raw_dimclrt = style.get("dimclrt", 0)
+    if _is_finite_number(raw_dimclrt) and float(raw_dimclrt).is_integer():  # type: ignore[arg-type]
+        dimclrt_int = int(raw_dimclrt)  # type: ignore[arg-type]
+    else:
+        dimclrt_int = -1
+    if dimclrt_int < 0 or dimclrt_int == 255 or dimclrt_int > 256:
+        reasons.append("dim_unverified_rendered_structure")
+    allowed_acis = frozenset({dimclrt_int}) if 1 <= dimclrt_int <= 254 else frozenset()
     rendered = _read_rendered_block(
-        doc, entity, context=context, nominal_base_height=nominal_base_height,
-        expected_mtext=expected_mtext, allowed_font_stems=allowed_stems,
+        doc,
+        entity,
+        context=context,
+        paper_context=paper_context,
+        nominal_base_height=nominal_base_height,
+        expected_mtext=expected_mtext,
+        allowed_font_stems=allowed_stems,
+        allowed_inline_acis=allowed_acis,
     )
     if rendered.hidden_text_count > 0:
         reasons.append("dim_rendered_text_hidden")

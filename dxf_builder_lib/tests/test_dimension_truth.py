@@ -1560,3 +1560,133 @@ def test_untrusted_dim_unverified_substring_cannot_downgrade_failed_contradictio
     strict = review_dxf_with_dimension_line_integrity(built)
     assert not strict.passed
     assert strict.qualification == "FAILED"
+
+
+def _rendered_mtext(dim):
+    return next(e for e in dim.get_geometry_block() if e.dxftype() == "MTEXT")
+
+
+@pytest.mark.parametrize(
+    "tamper_case",
+    [
+        "custom_bg_fill_17_with_text_frame",
+        "unknown_bg_fill_bit_64",
+        "excessive_box_fill_scale",
+        "inline_truecolor_white_self_erasure",
+        "inline_aci0_byblock_color",
+        "inline_aci1_without_dimclrt",
+        "inline_aci255_white",
+        "inline_aci256_bylayer",
+        "inline_font_sans_serif_default_bypass",
+        "entity_truecolor_white_self_erasure",
+        "entity_aci255_white_self_erasure",
+        "layer_truecolor_white_self_erasure",
+        "dimclrt_255_white_self_erasure",
+        "style_mirrored_generation_flag",
+        "text_mirrored_generation_flag",
+    ],
+)
+def test_rendered_block_r7_bg_fill_color_and_font_escapes_stay_non_qualified(
+    tmp_path: Path, tamper_case: str,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path / tamper_case)
+    blk = dim.get_geometry_block()
+    mt = _rendered_mtext(dim)
+    if tamper_case == "custom_bg_fill_17_with_text_frame":
+        mt.set_bg_color(7, text_frame=True)
+    elif tamper_case == "unknown_bg_fill_bit_64":
+        mt.dxf.unprotected_set("bg_fill", 64)
+    elif tamper_case == "excessive_box_fill_scale":
+        mt.dxf.bg_fill = 3
+        mt.dxf.box_fill_scale = 20.0
+    elif tamper_case == "inline_truecolor_white_self_erasure":
+        mt.text = r"{\c16777215;100}"
+    elif tamper_case == "inline_aci0_byblock_color":
+        mt.text = r"{\C0;100}"
+    elif tamper_case == "inline_aci1_without_dimclrt":
+        mt.text = r"{\C1;100}"
+    elif tamper_case == "inline_aci255_white":
+        mt.text = r"{\C255;100}"
+    elif tamper_case == "inline_aci256_bylayer":
+        mt.text = r"{\C256;100}"
+    elif tamper_case == "inline_font_sans_serif_default_bypass":
+        mt.text = r"{\fsans-serif;100}"
+    elif tamper_case == "entity_truecolor_white_self_erasure":
+        mt.rgb = (255, 255, 255)
+    elif tamper_case == "entity_aci255_white_self_erasure":
+        mt.dxf.color = 255
+    elif tamper_case == "layer_truecolor_white_self_erasure":
+        mt.dxf.color = 256
+        doc.layers.get(mt.dxf.layer).rgb = (255, 255, 255)
+    elif tamper_case == "dimclrt_255_white_self_erasure":
+        from ezdxf.entities import DimStyleOverride
+
+        ovr = DimStyleOverride(dim)
+        ovr.update({"dimclrt": 255})
+        ovr.commit()
+    elif tamper_case == "style_mirrored_generation_flag":
+        doc.styles.get("Standard").dxf.generation_flags = 2
+    elif tamper_case == "text_mirrored_generation_flag":
+        blk.delete_entity(mt)
+        blk.add_text("100", dxfattribs={"height": 1.0, "text_generation_flag": 2})
+
+    doc.saveas(built.output_path)
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification in {"FAILED", "UNKNOWN"}
+    assert not semantic.passed
+
+
+@pytest.mark.parametrize("bg_fill_val", [0, 2, 3, 16, 18, 19])
+def test_legitimate_dimtfill_canvas_mask_and_text_frame_remain_qualified(
+    tmp_path: Path, bg_fill_val: int,
+) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    mt = _rendered_mtext(dim)
+    mt.dxf.bg_fill = bg_fill_val
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    assert strict.passed
+    assert strict.qualification == "QUALIFIED"
+
+
+def test_legitimate_dimclrt_rendered_and_inline_matching_aci_remain_qualified() -> None:
+    from dxf_builder_lib._dimension_truth import audit_dimension_truth
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    msp = doc.modelspace()
+    msp.add_line((0, 0), (100, 0))
+    dim_tol = msp.add_linear_dim(
+        base=(0, 20),
+        p1=(0, 0),
+        p2=(100, 0),
+        text="<>",
+        override={"dimtxt": 2.5, "dimclrt": 1, "dimtol": 1, "dimtp": 0.1, "dimtm": 0.1},
+    )
+    dim_tol.render()
+    assert audit_dimension_truth(doc, dim_tol.dimension, expected_measurement=100.0) == []
+
+    dim_inline = msp.add_linear_dim(
+        base=(0, 40),
+        p1=(0, 0),
+        p2=(100, 0),
+        text="<>",
+        override={"dimtxt": 2.5, "dimclrt": 1},
+    )
+    dim_inline.render()
+    mt = next(e for e in dim_inline.dimension.get_geometry_block() if e.dxftype() == "MTEXT")
+    mt.text = r"{\C1;100}"
+    assert audit_dimension_truth(doc, dim_inline.dimension, expected_measurement=100.0) == []
+
+    dim_yellow = msp.add_linear_dim(
+        base=(0, 60),
+        p1=(0, 0),
+        p2=(100, 0),
+        text="<>",
+        override={"dimtxt": 2.5, "dimclrt": 2},
+    )
+    dim_yellow.render()
+    assert audit_dimension_truth(doc, dim_yellow.dimension, expected_measurement=100.0) == []
