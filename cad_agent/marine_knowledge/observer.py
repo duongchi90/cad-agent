@@ -23,6 +23,7 @@ from .contracts import MarineKnowledgeError
 from .evidence_binding import (
     build_engineering_fact,
     evaluate_dimension_fact,
+    strip_mtext_formatting,
     validate_engineering_fact,
 )
 from .text_normalization import fold_marine_search_text, normalize_marine_cad_text
@@ -110,6 +111,58 @@ _STRUCTURAL_PLATE_CTX_RE = re.compile(
     r"ket\s+cau|song\s+day|da\s+ngang|vach|bottom|bilge|keel|side\s+shell|deck|shell\s+plate|hull\s+plate)\b"
 )
 
+_SINGLE_BOTTOM_RE = re.compile(r"\b(?:tau\s+day\s+don|day\s+don|single[-\s]?bottom)\b")
+
+_DB_NON_CENTERLINE_CTX_RE = re.compile(
+    r"\b(?:o\s+man|tai\s+man|phia\s+man|ben\s+man|at\s+side|at\s+bilge|margin\s+plate|o\s+hong|tai\s+hong)\b"
+)
+_DB_SIDE_HEIGHT_RE = re.compile(
+    r"\b(?:"
+    r"(?:chieu\s+cao\s+(?:cua\s+)?day\s+doi|double[-\s]?bottom\s+height|h_?(?:dd|db)|day\s+doi|double[-\s]?bottom)"
+    r"[^;=\n]{0,48}?\b(?:o\s+man|tai\s+man|phia\s+man|ben\s+man|at\s+side|at\s+bilge|o\s+hong|tai\s+hong)\b[^:=\n]{0,20}?"
+    r"|"
+    r"margin\s+plate\s+height"
+    r")\s*(?:[:=]\s*|\s+)([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+)
+_DB_HEIGHT_INLINE_RE = re.compile(
+    r"\b(?:"
+    r"chieu\s+cao\s+(?:cua\s+)?day\s+doi"
+    r"(?:\s*(?:do\s+)?(?:tai\s+|o\s+)?\(?(?:mat\s+phang\s+doc\s+tam(?:\s+tau)?|mp\s*doc\s*tam|mpdt|doc\s+tam|cl|centerline|centreline)\)?)?"
+    r"(?:\s*\(?(?:h(?:_?(?:dd|db))?|cl)\)?)?"
+    r"\s*(?:[:=]\s*|\s+)"
+    r"|"
+    r"double[-\s]?bottom\s+height"
+    r"(?:\s*(?:at\s+)?\(?(?:cl|centerline|centreline|mat\s+phang\s+doc\s+tam)\)?)?"
+    r"(?:\s*\(?h(?:_?(?:db|dd))?\)?)?"
+    r"\s*(?:[:=]\s*|\s+)"
+    r"|"
+    r"h_?(?:dd|db)(?:\s*(?:tai\s+|at\s+)?\(?(?:cl|centerline|centreline|mp\s*doc\s*tam|mpdt|mat\s+phang\s+doc\s+tam)\)?)?\s*[:=]\s*"
+    r"|"
+    r"(?:day\s+doi|double[-\s]?bottom)\s*(?:tai\s+|at\s+)?\(?(?:cl|centerline|centreline|mp\s*doc\s*tam|mpdt|mat\s+phang\s+doc\s+tam(?:\s+tau)?)\)?\s*[,:-]?\s*(?:chieu\s+cao\s*)?h(?:_?(?:dd|db))?\s*[:=]\s*"
+    r")(?:(abt|approx)\.?\s*)?([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+)
+_BARE_UNBOUND_HEIGHT_RE = re.compile(
+    r"(?:^|\b)(?:chieu\s+cao\s+)?h\s*[:=]\s*([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+)
+_DB_CL_LABEL_RE = re.compile(
+    r"\b(?:"
+    r"chieu\s+cao\s+(?:cua\s+)?day\s+doi(?:\s*(?:tai\s+|o\s+)?\(?(?:cl|centerline|centreline|mp\s*doc\s*tam|mpdt|mat\s+phang\s+doc\s+tam(?:\s+tau)?)\)?)?"
+    r"|"
+    r"double[-\s]?bottom\s+height(?:\s*(?:at\s+)?\(?(?:cl|centerline|centreline)\)?)?"
+    r"|"
+    r"(?:day\s+doi|double[-\s]?bottom)\s*(?:tai\s+|at\s+)?\(?(?:cl|centerline|centreline|mp\s*doc\s*tam|mpdt|mat\s+phang\s+doc\s+tam(?:\s+tau)?)\)?"
+    r"|"
+    r"h_?(?:dd|db)(?:\s*(?:tai\s+|at\s+)?\(?(?:cl|centerline|centreline|mpdt|mp\s*doc\s*tam)\)?)?"
+    r")\b"
+)
+_DB_DIM_TAG_RE = re.compile(
+    r"\b(?:h_?(?:dd|db)|day\s+doi\s*(?:\(?cl\)?)?|double[-\s]?bottom\s*(?:\(?cl\)?)?|db\s+cl)\b"
+)
+_DB_DIM_LAYERS: frozenset[str] = frozenset(
+    {"DAY_DOI_CL", "DB_CL", "DOUBLE_BOTTOM_CL", "H_DD_CL"}
+)
+_DB_DIM_MAX_PROXIMITY_UNITS = 3000.0
+
 _MAX_BLOCK_TEXT_ITEMS = 250
 
 
@@ -146,6 +199,26 @@ def _unit_value_to_meters(raw_num: str, unit: str | None, *, insunits: int = 0) 
         return round(val / 100.0, 4), True
     if insunits == 6:
         return round(val, 4), True
+    return round(val, 4), False
+
+
+def _unit_value_to_mm(raw_num: str, unit: str | None, *, insunits: int = 0) -> tuple[float | None, bool]:
+    val = _to_float(raw_num)
+    if val is None or val <= 0:
+        return None, False
+    unit_norm = (unit or "").lower().strip()
+    if unit_norm == "mm":
+        return round(val, 4), True
+    if unit_norm == "cm":
+        return round(val * 10.0, 4), True
+    if unit_norm == "m":
+        return round(val * 1000.0, 4), True
+    if insunits == 4:
+        return round(val, 4), True
+    if insunits == 5:
+        return round(val * 10.0, 4), True
+    if insunits == 6:
+        return round(val * 1000.0, 4), True
     return round(val, 4), False
 
 
@@ -212,12 +285,26 @@ def _collect_dxf_texts(
         dxftype = entity.dxftype()
         entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
         if dxftype == "DIMENSION":
+            defpt = getattr(entity.dxf, "defpoint", None)
+            txtmp = getattr(entity.dxf, "text_midpoint", None)
+            def_x = _to_float(getattr(defpt, "x", None))
+            def_y = _to_float(getattr(defpt, "y", None))
+            mid_x = _to_float(getattr(txtmp, "x", None))
+            mid_y = _to_float(getattr(txtmp, "y", None))
+            anchor_x = mid_x if mid_x is not None else def_x
+            anchor_y = mid_y if mid_y is not None else def_y
             dimensions.append(
                 {
                     "handle": str(getattr(entity.dxf, "handle", "") or ""),
                     "layer": str(getattr(entity.dxf, "layer", "0") or "0"),
                     "raw_text": str(getattr(entity.dxf, "text", "") or ""),
                     "actual_measurement": _to_float(getattr(entity.dxf, "actual_measurement", None)),
+                    "x": round(anchor_x, 3) if anchor_x is not None else None,
+                    "y": round(anchor_y, 3) if anchor_y is not None else None,
+                    "defpoint_x": round(def_x, 3) if def_x is not None else None,
+                    "defpoint_y": round(def_y, 3) if def_y is not None else None,
+                    "text_midpoint_x": round(mid_x, 3) if mid_x is not None else None,
+                    "text_midpoint_y": round(mid_y, 3) if mid_y is not None else None,
                 }
             )
             continue
@@ -593,6 +680,7 @@ def _extract_particulars(
     class_notations: list[str] = []
     service_areas: list[str] = []
     explicit_exclusion_evidences: list[str] = []
+    single_bottom_evidences: list[str] = []
     ship_types: list[str] = []
     claimed_scales: list[float] = []
     ap_coords: list[float] = []
@@ -1109,6 +1197,20 @@ def _extract_particulars(
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_4_DEFENSE_SECURITY")
                 if re.search(r"\b(?:tau\s+ca|fishing\s+vessel)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_4_FISHING_VESSEL")
+                if _SINGLE_BOTTOM_RE.search(clause_clean):
+                    _append_unique(single_bottom_evidences, text)
+                    _add_seed(
+                        fact_key="hull_bottom_configuration",
+                        handles=[ehandle],
+                        entity_type=etype,
+                        layer=elayer,
+                        observed_raw=text,
+                        observed_value="SINGLE_BOTTOM",
+                        observed_unit=None,
+                        normalized_value="SINGLE_BOTTOM",
+                        normalized_unit=None,
+                        reason_detail=f"Single-bottom hull declaration from {etype} {ehandle}.",
+                    )
 
         ship_m = _SHIP_TYPE_RE.search(folded)
         if ship_m:
@@ -1212,6 +1314,96 @@ def _extract_particulars(
                         ),
                     )
 
+        db_matched_entry = False
+        for m_side in _DB_SIDE_HEIGHT_RE.finditer(folded):
+            raw_side = _to_float(m_side.group(1))
+            if raw_side is not None and raw_side > 0:
+                db_matched_entry = True
+                _add_seed(
+                    fact_key="unbound_double_bottom_height_mm",
+                    handles=[ehandle],
+                    entity_type=etype,
+                    layer=elayer,
+                    observed_raw=text,
+                    observed_value=round(raw_side, 4),
+                    observed_unit=(m_side.group(2) or "").lower() or None,
+                    normalized_value=None,
+                    normalized_unit=None,
+                    is_unbound=True,
+                    reason_detail=(
+                        f"Non-centerline side/margin height '{text}' on {etype} {ehandle}: "
+                        "QCVN 72 Clause 2.4.3-2 requires double-bottom height measured at centerline "
+                        "(mặt phẳng dọc tâm tàu / CL), not at side/margin."
+                    ),
+                )
+
+        if not db_matched_entry:
+            for m_db in _DB_HEIGHT_INLINE_RE.finditer(folded):
+                val_mm, verified_mm = _unit_value_to_mm(m_db.group(2), m_db.group(3), insunits=insunits)
+                if val_mm is not None:
+                    db_matched_entry = True
+                    raw_num_db = _to_float(m_db.group(2))
+                    raw_unit_db = (m_db.group(3) or "").lower() or None
+                    if _DB_NON_CENTERLINE_CTX_RE.search(folded):
+                        _add_seed(
+                            fact_key="unbound_double_bottom_height_mm",
+                            handles=[ehandle],
+                            entity_type=etype,
+                            layer=elayer,
+                            observed_raw=text,
+                            observed_value=raw_num_db,
+                            observed_unit=raw_unit_db,
+                            normalized_value=None,
+                            normalized_unit=None,
+                            is_unbound=True,
+                            reason_detail=(
+                                f"Non-centerline double-bottom height '{text}' on {etype} {ehandle}: "
+                                "QCVN 72 Clause 2.4.3-2 requires measurement at centerline "
+                                "(mặt phẳng dọc tâm tàu / CL), not at side/margin."
+                            ),
+                        )
+                    else:
+                        _add_seed(
+                            fact_key="double_bottom_height_mm",
+                            handles=[ehandle],
+                            entity_type=etype,
+                            layer=elayer,
+                            observed_raw=text,
+                            observed_value=raw_num_db,
+                            observed_unit=raw_unit_db,
+                            normalized_value=val_mm,
+                            normalized_unit="mm",
+                            unit_verified=verified_mm,
+                            is_approx=bool(m_db.group(1)),
+                            reason_detail=(
+                                f"Centerline double-bottom height extracted from {etype} {ehandle} "
+                                "(QCVN 72 Clause 2.4.3-2)."
+                            ),
+                        )
+
+        if not db_matched_entry and not any(
+            tok in folded for tok in ("day doi", "double bottom", "double-bottom")
+        ):
+            for m_ub in _BARE_UNBOUND_HEIGHT_RE.finditer(folded):
+                raw_ub = _to_float(m_ub.group(1))
+                if raw_ub is not None and raw_ub > 0:
+                    _add_seed(
+                        fact_key="unbound_double_bottom_height_mm",
+                        handles=[ehandle],
+                        entity_type=etype,
+                        layer=elayer,
+                        observed_raw=text,
+                        observed_value=round(raw_ub, 4),
+                        observed_unit=(m_ub.group(2) or "").lower() or None,
+                        normalized_value=None,
+                        normalized_unit=None,
+                        is_unbound=True,
+                        reason_detail=(
+                            f"Unbound CAD height annotation '{text}' on {etype} {ehandle} lacks explicit "
+                            "double-bottom (đáy đôi / double bottom) structural context."
+                        ),
+                    )
+
     return (
         {
             "design_length_l_m_values": design_length_l_m_values,
@@ -1226,6 +1418,7 @@ def _extract_particulars(
             "class_notations": class_notations,
             "service_areas": service_areas,
             "explicit_exclusion_evidences": explicit_exclusion_evidences,
+            "single_bottom_evidences": single_bottom_evidences,
             "ship_types": ship_types,
             "claimed_scales": claimed_scales,
             "ap_x_coords": ap_coords,
@@ -1335,6 +1528,12 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
                         "layer": str(d_item.get("layer") or "0"),
                         "raw_text": str(d_item.get("raw_text") or ""),
                         "actual_measurement": _to_float(d_item.get("actual_measurement")),
+                        "x": _to_float(d_item.get("x")),
+                        "y": _to_float(d_item.get("y")),
+                        "defpoint_x": _to_float(d_item.get("defpoint_x")),
+                        "defpoint_y": _to_float(d_item.get("defpoint_y")),
+                        "text_midpoint_x": _to_float(d_item.get("text_midpoint_x")),
+                        "text_midpoint_y": _to_float(d_item.get("text_midpoint_y")),
                     }
                 )
 
@@ -1521,6 +1720,21 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
             )
         )
 
+    for db_dim_fact in _build_double_bottom_dimension_facts(
+        entries=entries,
+        dimensions=dimensions,
+        drawing_id=drawing_id,
+        drawing_path=drawing_path,
+        drawing_sha256=drawing_sha256,
+        sheet_id=sheet_id,
+        revision=revision,
+        insunits=insunits,
+        calibration_verified=False,
+        verified_scale_to_mm=None,
+        ocr_only=is_ocr,
+    ):
+        _append_fact(db_dim_fact)
+
     drawing_evidence = {
         "drawing_id": drawing_id,
         "drawing_path": drawing_path,
@@ -1562,8 +1776,173 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dim_anchor_points(dim_rec: Mapping[str, Any]) -> list[tuple[float, float]]:
+    pts: list[tuple[float, float]] = []
+    for kx, ky in (
+        ("text_midpoint_x", "text_midpoint_y"),
+        ("defpoint_x", "defpoint_y"),
+        ("x", "y"),
+    ):
+        px = _to_float(dim_rec.get(kx))
+        py = _to_float(dim_rec.get(ky))
+        if px is not None and py is not None:
+            pair = (px, py)
+            if pair not in pts:
+                pts.append(pair)
+    return pts
+
+
+def _build_double_bottom_dimension_facts(
+    *,
+    entries: list[dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    drawing_id: str,
+    drawing_path: str | None,
+    drawing_sha256: str | None,
+    sheet_id: str | None,
+    revision: str | None,
+    insunits: int,
+    calibration_verified: bool,
+    verified_scale_to_mm: float | None,
+    ocr_only: bool,
+) -> list[dict[str, Any]]:
+    if not dimensions:
+        return []
+
+    cl_labels: list[dict[str, Any]] = []
+    for entry in entries:
+        folded = str(entry.get("folded") or "")
+        if not folded or re.search(r"\d", folded):
+            continue
+        if _DB_NON_CENTERLINE_CTX_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
+            continue
+        if _DB_CL_LABEL_RE.search(folded):
+            cl_labels.append(entry)
+
+    out_facts: list[dict[str, Any]] = []
+    for dim_rec in dimensions:
+        dim_handle = str(dim_rec.get("handle") or "").strip() or "UNKNOWN_DIM"
+        dim_layer = str(dim_rec.get("layer") or "0").strip() or "0"
+        dim_layer_norm = re.sub(r"[\s-]+", "_", dim_layer.upper())
+        vis_folded = fold_marine_search_text(strip_mtext_formatting(str(dim_rec.get("raw_text") or "")))
+        tagged_in_text = bool(_DB_DIM_TAG_RE.search(vis_folded)) and not bool(
+            _DB_NON_CENTERLINE_CTX_RE.search(vis_folded)
+        )
+        tagged_by_layer = dim_layer_norm in _DB_DIM_LAYERS
+
+        nearest_label: dict[str, Any] | None = None
+        best_dist = _DB_DIM_MAX_PROXIMITY_UNITS + 1.0
+        dim_pts = _dim_anchor_points(dim_rec)
+        if dim_pts and cl_labels:
+            for lbl in cl_labels:
+                lx = _to_float(lbl.get("x"))
+                ly = _to_float(lbl.get("y"))
+                if lx is None or ly is None:
+                    continue
+                dist = min(math.hypot(lx - px, ly - py) for px, py in dim_pts)
+                if dist <= _DB_DIM_MAX_PROXIMITY_UNITS and dist < best_dist:
+                    best_dist = dist
+                    nearest_label = lbl
+
+        if nearest_label is None and not tagged_in_text and not tagged_by_layer:
+            continue
+
+        base_fact = evaluate_dimension_fact(
+            dim_rec,
+            drawing_id=drawing_id,
+            drawing_path=drawing_path,
+            drawing_sha256=drawing_sha256,
+            sheet_id=sheet_id,
+            revision=revision,
+            insunits=insunits,
+            calibration_verified=calibration_verified,
+            verified_scale_to_mm=verified_scale_to_mm,
+            ocr_only=ocr_only,
+        )
+        if nearest_label is not None:
+            handles = [str(nearest_label["handle"]), dim_handle]
+            obs_raw = f"{nearest_label['text']} -> {base_fact['observed_raw']}"
+            binding_note = (
+                f"Paired centerline double-bottom label {nearest_label['handle']} "
+                f"(dist={best_dist:.1f} CAD units) with DIMENSION {dim_handle}: "
+            )
+        else:
+            handles = [dim_handle]
+            obs_raw = str(base_fact["observed_raw"])
+            binding_note = f"Bound centerline double-bottom DIMENSION {dim_handle} on layer {dim_layer}: "
+
+        out_facts.append(
+            build_engineering_fact(
+                domain="marine",
+                drawing_id=drawing_id,
+                drawing_path=drawing_path,
+                drawing_sha256=drawing_sha256,
+                sheet_id=sheet_id,
+                revision=revision,
+                fact_key="double_bottom_height_mm",
+                entity_handles=handles,
+                entity_type="DIMENSION",
+                layer=base_fact["layer"],
+                observed_raw=obs_raw,
+                observed_value=base_fact["observed_value"],
+                observed_unit=base_fact["observed_unit"],
+                normalized_value=base_fact["normalized_value"],
+                normalized_unit=base_fact["normalized_unit"],
+                provenance_class=base_fact["provenance_class"],
+                verification_state=base_fact["verification_state"],
+                trust_reason=f"{binding_note}{base_fact['trust_reason']}",
+            )
+        )
+    return out_facts
+
+
+def rebind_double_bottom_dimension_facts(
+    obs: Mapping[str, Any],
+    *,
+    calibration_verified: bool = False,
+    verified_scale_to_mm: float | None = None,
+) -> dict[str, Any]:
+    """Re-attach centerline double-bottom DIMENSION facts after dimension calibration rebinding."""
+    if type(calibration_verified) is not bool:
+        raise MarineKnowledgeError("CALIBRATION_FLAG_INVALID")
+    out = deepcopy(dict(obs))
+    raw_dims = out.get("dimensions", [])
+    raw_texts = out.get("texts", [])
+    if not isinstance(raw_dims, list) or not raw_dims or not isinstance(raw_texts, list):
+        return out
+    ev = out.get("drawing_evidence") or {}
+    existing = [
+        validate_engineering_fact(f)
+        for f in out.get("engineering_facts", [])
+        if not (f.get("fact_key") == "double_bottom_height_mm" and f.get("entity_type") == "DIMENSION")
+    ]
+    rebound_db_dims = _build_double_bottom_dimension_facts(
+        entries=list(raw_texts),
+        dimensions=list(raw_dims),
+        drawing_id=str(out["drawing_id"]),
+        drawing_path=ev.get("drawing_path"),
+        drawing_sha256=ev.get("drawing_sha256"),
+        sheet_id=ev.get("sheet_id"),
+        revision=ev.get("revision"),
+        insunits=int(out.get("insunits", 0)),
+        calibration_verified=calibration_verified,
+        verified_scale_to_mm=verified_scale_to_mm,
+        ocr_only=bool(out.get("ocr_only", False)),
+    )
+    seen_shas = {f["fact_sha256"] for f in existing}
+    for db_fact in rebound_db_dims:
+        if db_fact["fact_sha256"] not in seen_shas:
+            seen_shas.add(db_fact["fact_sha256"])
+            existing.append(db_fact)
+    out["engineering_facts"] = existing
+    if isinstance(out.get("drawing_evidence"), dict):
+        out["drawing_evidence"]["fact_count"] = len(existing)
+    return out
+
+
 __all__ = [
     "normalize_observation",
     "observe_dxf_bytes",
     "observe_dxf_file",
+    "rebind_double_bottom_dimension_facts",
 ]

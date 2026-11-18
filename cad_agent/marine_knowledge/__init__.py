@@ -1,5 +1,6 @@
 """Marine Knowledge Pack V0: source-grounded naval architecture terms, rules, and read-only checks."""
 
+from .conditional_rules import evaluate_double_bottom_height_rule
 from .contracts import (
     MARINE_CHECK_RESULT_SCHEMA_VERSION,
     MARINE_PACK_SCHEMA_VERSION,
@@ -60,6 +61,7 @@ __all__ = [
     "classify_marine_drawing",
     "detect_drawing_gaps_and_conflicts",
     "evaluate_dimension_fact",
+    "evaluate_double_bottom_height_rule",
     "evaluate_particulars_consistency",
     "evaluate_regulation_applicability_and_submittal",
     "explain_fact_traceability",
