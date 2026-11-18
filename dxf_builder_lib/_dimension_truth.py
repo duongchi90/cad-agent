@@ -42,21 +42,17 @@ RADIUS_SIGN = "R"
 
 _LINEAR_OR_RADIAL_TYPES = frozenset({0, 1, 3, 4, 6})
 _ANGULAR_TYPES = frozenset({2, 5})
-_ARG_CODES = frozenset("fFHWQTACcp")
-_TOGGLE_CODES = frozenset("LlOoKkN")
 _PERCENT_CHARS = {"c": DIAMETER_SIGN, "d": "\u00b0", "p": "\u00b1"}
-_CARET_CHARS = {"J": "\n", "M": "\n", "I": "\t", " ": "^"}
 
 _UNICODE_ESCAPE = re.compile(r"\\[Uu]\+([0-9A-Fa-f]{4})")
-_PERCENT_CODE = re.compile(r"%%(\d{3}|[cdpCDP]|[uoUOkK])")
-_CARET = re.compile(r"\^([JMI ])")
+_DISALLOWED_PERCENT_RE = re.compile(r"%%(?:[kK]|\d{1,3})")
+_LEGACY_TOGGLE_PERCENT_RE = re.compile(r"%%[uUoO]")
 _NUMERIC_TOKEN_RE = re.compile(r"[-+]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][-+]?\d+)?")
 _NUMERIC_SIGNS = str.maketrans({"\u2212": "-", "\uff0d": "-", "\uff0b": "+"})
 _DMS_RE = re.compile(r"^\s*([-+]?\d+)\u00b0\s*(\d+)'(?:\s*(\d+(?:[.,]\d+)?)\")?\s*$")
 _COUNT_PREFIX_RE = re.compile(rf"^\s*[1-9]\d*\s*[xX\u00d7](?:\s*(?=[{DIAMETER_SIGNS}MR])|\s+(?=[+-]?\s*(?:\d|[.,]\d)))")
-_PERCENT_STRIKE_RE = re.compile(r"%%[kK]")
 _UNSAFE_PLACEHOLDER_NEIGHBORS = frozenset("0123456789.,+-eE")
-_MAX_DECIMAL_PLACES = 12
+_MAX_DECIMAL_PLACES = 8
 _MIN_POSITIVE_DIMRND = 1e-9
 _MAX_DIMRND = 1e9
 _SUPPORTED_DIMAUNITS = frozenset({0, 1, 2, 3})
@@ -122,62 +118,57 @@ class DimensionDisplay:
     claim_unit_factor: float = 1.0
 
 
+def _decode_cif_unicode(text: str) -> str:
+    from ezdxf.lldxf.encoding import decode_dxf_unicode, has_dxf_unicode
+
+    raw = str(text)
+    if has_dxf_unicode(raw):
+        raw = decode_dxf_unicode(raw)
+    return _UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), raw)
+
+
+def _has_disallowed_percent_code(raw_text: str) -> bool:
+    from ezdxf.tools.text import caret_decode
+
+    decoded = caret_decode(_decode_cif_unicode(raw_text)).replace("%%%", "\x00")
+    return bool(_DISALLOWED_PERCENT_RE.search(decoded))
+
+
+def _prepare_mtext_lexer_input(raw_text: str) -> str:
+    decoded = _decode_cif_unicode(raw_text).replace("%%%", "\x00")
+    decoded = _LEGACY_TOGGLE_PERCENT_RE.sub("", decoded)
+    return decoded.replace("\x00", "%")
+
+
 def plain_cad_text(text: str | None) -> str:
-    """Decode AutoCAD control escapes and strip MTEXT formatting codes."""
+    """Decode AutoCAD control escapes and strip MTEXT formatting codes via MTextParser."""
     if not text:
         return ""
-    source = _UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), str(text))
-    source = _CARET.sub(lambda m: _CARET_CHARS[m.group(1)], source)
-    source = source.replace("%%%", "\x00")
+    from ezdxf.tools.text import MTextParser
 
-    def _percent(match: re.Match[str]) -> str:
-        code = match.group(1)
-        if code.isdigit():
-            return chr(int(code))
-        return _PERCENT_CHARS.get(code.lower(), "")
-
-    source = _PERCENT_CODE.sub(_percent, source).replace("\x00", "%")
-    out: list[str] = []
-    i, n = 0, len(source)
-    while i < n:
-        ch = source[i]
-        if ch == "\\" and i + 1 < n:
-            code = source[i + 1]
-            if code in "\\{}":
-                out.append(code)
-                i += 2
-            elif code in "PX":
-                out.append("\n")
-                i += 2
-            elif code == "~":
-                out.append(" ")
-                i += 2
-            elif code == "S":
-                end = source.find(";", i + 2)
-                end = n if end < 0 else end
-                out.append(re.sub(r"[\^#]", "/", source[i + 2 : end]))
-                i = end + 1
-            elif code in _ARG_CODES:
-                end = source.find(";", i + 2)
-                i = n if end < 0 else end + 1
-            elif code in _TOGGLE_CODES:
-                i += 2
-            else:
-                out.append(code)
-                i += 2
-        elif ch in "{}":
-            i += 1
-        else:
-            out.append(ch)
-            i += 1
-    return "".join(out).strip()
+    prepared = _prepare_mtext_lexer_input(str(text))
+    parts: list[str] = []
+    for token in MTextParser(prepared):
+        tname = token.type.name
+        if tname == "WORD":
+            parts.append(str(token.data))
+        elif tname in {"SPACE", "NBSP"}:
+            parts.append(" ")
+        elif tname == "TABULATOR":
+            parts.append("\t")
+        elif tname in {"NEW_PARAGRAPH", "NEW_COLUMN", "WRAP_AT_DIMLINE"}:
+            parts.append("\n")
+        elif tname == "STACK":
+            upper, lower, divider = token.data
+            parts.append(f"{upper}/{lower}" if divider else str(upper))
+    return "".join(parts).strip()
 
 
 def normalize_dim_text(text: str | None) -> str | None:
     """Normalize diameter symbols and whitespace for rendered-vs-expected checks."""
     if text is None:
         return None
-    out = _UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), str(text))
+    out = _decode_cif_unicode(str(text))
     out = re.sub(
         r"%%([cCdDpP])",
         lambda m: _PERCENT_CHARS[m.group(1).lower()],
@@ -191,8 +182,14 @@ def normalize_dim_text(text: str | None) -> str | None:
 def _decimal_separator(value: object) -> str:
     if isinstance(value, str):
         return value or "."
-    code = int(value)  # type: ignore[arg-type]
-    return "," if code == 0 else chr(code)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or not float(value).is_integer():
+        raise ValueError("invalid decimal separator")
+    code = int(value)
+    if code == 0:
+        return ","
+    if not (1 <= code <= 0x10FFFF):
+        raise ValueError("out-of-range decimal separator")
+    return chr(code)
 
 
 def _suppress_zeros(text: str, leading: bool, trailing: bool) -> str:
@@ -228,16 +225,26 @@ def _is_valid_dimrnd(value: object) -> bool:
 
 
 def _format_decimal(value: float, places: int, zin: int, sep: str, rounding: float) -> str:
+    if not math.isfinite(value):
+        raise ValueError("non-finite decimal value")
     capped_places = min(_MAX_DECIMAL_PLACES, max(0, int(places)))
     if _is_valid_dimrnd(rounding) and rounding > 0.0:
         factor = 1.0 / float(rounding)
-        value = round(value * factor) / factor
+        scaled_round = value * factor
+        if not math.isfinite(scaled_round):
+            raise ValueError("rounding overflow")
+        rounded_val = round(scaled_round) / factor
+        if not math.isfinite(rounded_val):
+            raise ValueError("rounding overflow")
+        value = rounded_val
     text = f"{value:.{capped_places}f}"
     text = _suppress_zeros(text, bool(zin & 4), bool(zin & 8))
     return text.replace(".", sep) if sep != "." else text
 
 
 def _format_dms(degrees: float, places: int, zin: int, sep: str) -> str:
+    if not math.isfinite(degrees) or abs(degrees) > 1e12:
+        raise ValueError("non-finite degrees")
     total = abs(degrees)
     d = int(total)
     minutes_full = (total - d) * 60.0
@@ -394,6 +401,37 @@ def _is_finite_number(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
+def _inspect_text_style_entry(doc, style_name: str) -> tuple[bool, str, float | None]:
+    try:
+        ts = doc.styles.get(style_name)
+    except Exception:
+        ts = None
+    if ts is None:
+        return False, "", None
+    try:
+        raw_font = str(ts.dxf.get("font", "") or "").strip()
+        font_stem = raw_font.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0].strip().casefold()
+        gen_flags = int(ts.dxf.get("generation_flags", 0) or 0)
+        flags = int(ts.dxf.get("flags", 0) or 0)
+        width_raw = ts.dxf.get("width", 1.0)
+        oblique_raw = ts.dxf.get("oblique", 0.0)
+        height_raw = ts.dxf.get("height", 0.0)
+    except (TypeError, ValueError, OverflowError, AttributeError):
+        return False, "", None
+    if not _is_finite_number(height_raw) or float(height_raw) < 0.0:
+        return False, font_stem, None
+    is_safe = (
+        font_stem not in _SYMBOL_FONT_STEMS
+        and gen_flags == 0
+        and (flags & 0x04) == 0
+        and _is_finite_number(width_raw)
+        and 0.75 <= float(width_raw) <= 4.0
+        and _is_finite_number(oblique_raw)
+        and abs(float(oblique_raw)) < 85.0
+    )
+    return is_safe, font_stem, float(height_raw)
+
+
 def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object] | None, float | None]:
     from ezdxf.entities import DimStyleOverride
     from ezdxf.render import dim_base
@@ -408,9 +446,15 @@ def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object]
             elif isinstance(value, bool):
                 value = int(value)
             vars_dict[name] = value
+        for int_key in ("dimtol", "dimlim", "dimalt", "dimlunit", "dimzin", "dimazin", "dimtzin"):
+            raw_iv = vars_dict.get(int_key)
+            if not _is_finite_number(raw_iv) or not float(raw_iv).is_integer():  # type: ignore[arg-type]
+                return None, None, None
+            vars_dict[int_key] = int(raw_iv)  # type: ignore[arg-type]
         if vars_dict.get("dimadec") == -1 and _is_valid_places(vars_dict.get("dimdec")):
             vars_dict["dimadec"] = int(vars_dict["dimdec"])  # type: ignore[arg-type]
         vars_dict["dimdsep"] = override.get_decimal_separator()
+        _decimal_separator(vars_dict["dimdsep"])
 
         dimscale_raw = vars_dict.get("dimscale")
         dimtxt_raw = vars_dict.get("dimtxt")
@@ -420,32 +464,22 @@ def _read_effective_style(doc, entity) -> tuple[object | None, dict[str, object]
             return override, vars_dict, None
         eff_scale = 1.0 if float(dimscale_raw) == 0.0 else float(dimscale_raw)  # type: ignore[arg-type]
 
-        text_style_name = str(vars_dict.get("dimtxsty") or "Standard")
+        text_style_name = str(vars_dict.get("dimtxsty") or "Standard").strip() or "Standard"
         text_style = dim_base.get_text_style(doc, text_style_name)
-        raw_font = str(text_style.dxf.get("font", "") or "").strip()
-        font_stem = raw_font.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0].strip().casefold()
+        resolved_style_name = str(text_style.dxf.get("name") or text_style_name).strip()
+        style_safe, font_stem, ts_height = _inspect_text_style_entry(doc, resolved_style_name)
+        vars_dict["style_name"] = resolved_style_name
+        vars_dict["eff_scale"] = eff_scale
         vars_dict["style_font_stem"] = font_stem
-        style_gen_flags = int(text_style.dxf.get("generation_flags", 0) or 0)
-        style_flags = int(text_style.dxf.get("flags", 0) or 0)
-        style_width_raw = text_style.dxf.get("width", 1.0)
-        style_oblique_raw = text_style.dxf.get("oblique", 0.0)
-        vars_dict["unverified_text_font"] = (
-            font_stem in _SYMBOL_FONT_STEMS
-            or style_gen_flags != 0
-            or (style_flags & 0x04) != 0
-            or not _is_finite_number(style_width_raw)
-            or float(style_width_raw) <= 0.0
-            or not _is_finite_number(style_oblique_raw)
-            or abs(float(style_oblique_raw)) >= 85.0
-        )
-        ts_height_raw = text_style.dxf.get("height", 0.0)
-        if not _is_finite_number(ts_height_raw) or float(ts_height_raw) < 0.0:
+        vars_dict["unverified_text_font"] = not style_safe
+        if ts_height is None:
             return override, vars_dict, None
-        ts_height = float(ts_height_raw)
         if ts_height > 0.0:
             nominal_h = ts_height * eff_scale
         else:
             nominal_h = float(dimtxt_raw) * eff_scale  # type: ignore[arg-type]
+        if not math.isfinite(nominal_h):
+            return override, vars_dict, None
         vars_dict["height_authoritative"] = ts_height > 0.0 or "dimtxt" in override.dimstyle_attribs
         return override, vars_dict, nominal_h
     except Exception:
@@ -477,8 +511,9 @@ def _mtext_height_profile(
     """Use the existing parser's token contexts, never infer roles from size."""
     from ezdxf.tools.text import MTextContext, MTextParser
 
-    if _PERCENT_STRIKE_RE.search(str(raw_text).replace("%%%", "")):
-        raise ValueError("strikethrough percent toggle")
+    if _has_disallowed_percent_code(raw_text):
+        raise ValueError("disallowed percent code")
+    prepared = _prepare_mtext_lexer_input(raw_text)
     context = MTextContext()
     sentinel_font_face = type(context.font_face)(family="__dimtxsty_inherited__")
     sentinel_aci = 256
@@ -486,19 +521,36 @@ def _mtext_height_profile(
     context.aci = sentinel_aci
     context.cap_height = base_height
     profile: list[tuple[str, float]] = []
-    for token in MTextParser(raw_text, ctx=context, yield_property_commands=True):
-        if token.type.name == "PROPERTIES_CHANGED":
+    for token in MTextParser(prepared, ctx=context, yield_property_commands=True):
+        tname = token.type.name
+        if tname == "NEW_COLUMN":
+            raise ValueError("unverified column break")
+        if tname == "PROPERTIES_CHANGED":
             cmd_data = str(token.data or "")
+            if cmd_data.startswith("\\p"):
+                raise ValueError("unverified paragraph formatting")
+            if cmd_data.startswith("\\c"):
+                raise ValueError("unverified inline truecolor override")
             if cmd_data.startswith("\\C"):
                 m_aci = re.match(r"^\\C(\d+)", cmd_data)
                 if m_aci is None or int(m_aci.group(1)) not in allowed_inline_acis:
                     raise ValueError("unverified inline color override")
+            if cmd_data.startswith(("\\f", "\\F")):
+                body = cmd_data[2:]
+                if body.endswith(";"):
+                    body = body[:-1]
+                f_parts = body.split("|")
+                if not f_parts or not f_parts[0].strip():
+                    raise ValueError("empty inline font family")
+                for qual in f_parts[1:]:
+                    if qual.lower().startswith("c") and qual[1:].strip() not in {"", "0"}:
+                        raise ValueError("unverified inline font charset")
             continue
-        if token.type.name == "WORD":
-            text = plain_cad_text(str(token.data))
-        elif token.type.name == "STACK":
-            upper, lower, _divider = token.data
-            text = plain_cad_text(str(upper)) + "/" + plain_cad_text(str(lower))
+        if tname == "WORD":
+            text = str(token.data)
+        elif tname == "STACK":
+            upper, lower, divider = token.data
+            text = f"{upper}/{lower}" if divider else str(upper)
         else:
             continue
         if text.strip():
@@ -806,6 +858,8 @@ def _read_rendered_block(
     context,
     paper_context=None,
     nominal_base_height: float,
+    eff_scale: float = 1.0,
+    expected_style_name: str = "Standard",
     expected_mtext: str | None,
     allowed_font_stems: frozenset[str] = frozenset(),
     allowed_inline_acis: frozenset[int] = frozenset(),
@@ -822,12 +876,35 @@ def _read_rendered_block(
     if block is None:
         return _RenderedBlockRead(None, group42, 0, 0, 0, 0, True)
 
+    block_header = getattr(block, "block", None)
+    try:
+        root_flags = int(block_header.dxf.get("flags", 0) or 0) if block_header is not None else 4
+        root_xref_path = str(block_header.dxf.get("xref_path", "") or "").strip() if block_header is not None else ""
+        root_base_pt = tuple(float(v) for v in getattr(block, "base_point", (0.0, 0.0, 0.0)))
+    except (TypeError, ValueError, OverflowError, AttributeError):
+        root_flags = 4
+        root_xref_path = "invalid"
+        root_base_pt = ()
+    if (
+        block_header is None
+        or bool(getattr(block, "is_any_layout", False))
+        or bool(getattr(block_header, "is_xref", False))
+        or bool(getattr(block_header, "is_xref_overlay", False))
+        or bool(root_flags & 0x0C)
+        or bool(root_xref_path)
+        or len(root_base_pt) != 3
+        or not all(math.isfinite(v) for v in root_base_pt)
+        or root_base_pt != (0.0, 0.0, 0.0)
+    ):
+        return _RenderedBlockRead(None, group42, 0, 0, 0, 1, False)
+
     parts: list[str] = []
     profile: list[tuple[str, float]] = []
     hidden_count = transparent_count = unreadable_count = height_mismatch = empty_text_count = text_entity_count = 0
     root_block_name = str(getattr(block, "name", "") or "").casefold()
     initial_active = frozenset({root_block_name}) if root_block_name else frozenset()
     verified_insert_heights: dict[str, int] = {}
+    exp_style_cf = expected_style_name.strip().casefold()
     for item in block:
         kind = item.dxftype()
         if kind in _NON_LABEL_RENDERED_GEOMETRY_TYPES:
@@ -847,11 +924,29 @@ def _read_rendered_block(
         text_entity_count += 1
         if not _rendered_text_geometry_is_valid(item, kind):
             unreadable_count += 1
+        item_style_name = str(item.dxf.get("style") or "Standard").strip() or "Standard"
+        item_style_safe, item_font_stem, item_style_h = _inspect_text_style_entry(doc, item_style_name)
+        style_matches_dimtxsty = item_style_name.casefold() == exp_style_cf or (
+            bool(allowed_font_stems)
+            and item_font_stem in allowed_font_stems
+            and item_style_h is not None
+            and (
+                item_style_h == 0.0
+                or math.isclose(item_style_h * eff_scale, nominal_base_height, rel_tol=1e-9, abs_tol=1e-12)
+            )
+        )
+        if not item_style_safe or not style_matches_dimtxsty:
+            unreadable_count += 1
         raw_content = item.text if kind == "MTEXT" else item.dxf.get("text", "")
-        if kind == "TEXT" and _PERCENT_STRIKE_RE.search(str(raw_content).replace("%%%", "")):
+        if _has_disallowed_percent_code(str(raw_content)):
             unreadable_count += 1
         # Native TEXT preserves backslashes/braces which are MTEXT commands.
-        plain = item.plain_text() if kind == "TEXT" else plain_cad_text(raw_content)
+        if kind == "TEXT":
+            from ezdxf.tools.text import plain_text as ezdxf_plain_text
+
+            plain = ezdxf_plain_text(_decode_cif_unicode(str(raw_content))).strip()
+        else:
+            plain = plain_cad_text(raw_content)
         if plain:
             parts.append(plain)
         else:
@@ -976,10 +1071,13 @@ def resolve_dimension_display(
     elif dimlfac is None or not math.isfinite(dimlfac):
         scaled = None
     else:
-        scaled = float(measurement) * float(dimlfac)
+        prod = float(measurement) * float(dimlfac)
+        scaled = prod if math.isfinite(prod) else None
 
     if override == " ":
         return DimensionDisplay("", None, scaled, 0.0, "suppressed")
+    if override and _has_disallowed_percent_code(override):
+        return DimensionDisplay(override, None, scaled, 0.0, "unverified_claim")
     if override and override != "<>" and "<>" not in override:
         plain = normalize_dim_text(plain_cad_text(override)) or ""
         try:
@@ -994,7 +1092,8 @@ def resolve_dimension_display(
         return DimensionDisplay(None, None, scaled, 0.0, "unknown")
     if angular and angle_unit not in _SUPPORTED_DIMAUNITS:
         return DimensionDisplay(None, None, scaled, 0.0, "unverified_primary_format")
-    if not angular and int(style.get("dimlunit", 2)) != 2:
+    raw_lunit = style.get("dimlunit", 2)
+    if not angular and (not _is_finite_number(raw_lunit) or not float(raw_lunit).is_integer() or int(raw_lunit) != 2):  # type: ignore[arg-type]
         # ezdxf's dimension renderer falls back to decimal for these formats;
         # that fallback does not prove the configured generated label.
         return DimensionDisplay(None, None, scaled, 0.0, "unverified_primary_format")
@@ -1007,14 +1106,19 @@ def resolve_dimension_display(
         return DimensionDisplay(None, None, scaled, 0.0, "limits")
     if int(style["dimalt"]):  # type: ignore[arg-type]
         return DimensionDisplay(None, None, scaled, 0.0, "alternate_units")
-    if scaled is None:
+    if scaled is None or not math.isfinite(scaled):
         return DimensionDisplay(None, None, None, 0.0, "unknown")
 
     dimpost = str(style["dimpost"] or "")
+    if _has_disallowed_percent_code(dimpost):
+        return DimensionDisplay(None, None, scaled, 0.0, "unverified_claim")
     if _has_unsafe_dimpost(dimpost) or ("<>" in override and _has_unsafe_placeholder(override)):
         return DimensionDisplay(None, None, scaled, 0.0, "unsafe_placeholder")
 
-    formatted = _format_measured(scaled, base_dimtype, style)
+    try:
+        formatted = _format_measured(scaled, base_dimtype, style)
+    except (ValueError, OverflowError, TypeError):
+        return DimensionDisplay(None, None, None, 0.0, "unknown")
     places = int(raw_places)  # type: ignore[arg-type]
     tol = 0.5 * 10.0 ** (-places)
     raw_text = override.replace("<>", formatted, 1) if override and override != "<>" else formatted
@@ -1038,10 +1142,43 @@ def audit_dimension_truth(
 ) -> list[str]:
     """Audit one DXF DIMENSION entity for override lies, scaling traps, stale *D text, and visibility."""
     reasons: list[str] = []
+    if (
+        isinstance(tolerance_mm, bool)
+        or not isinstance(tolerance_mm, (int, float))
+        or not math.isfinite(float(tolerance_mm))
+        or float(tolerance_mm) < 0.0
+    ):
+        reasons.append("dim_invalid_audit_parameters")
+        eff_tol = 1e-6
+    else:
+        eff_tol = max(float(tolerance_mm), 1e-6)
+    if expected_measurement is not None and (
+        isinstance(expected_measurement, bool)
+        or not isinstance(expected_measurement, (int, float))
+        or not math.isfinite(float(expected_measurement))
+    ):
+        reasons.append("dim_invalid_expected_measurement")
+        expected_measurement = None
+    if approved_value_mm is not None and (
+        isinstance(approved_value_mm, bool)
+        or not isinstance(approved_value_mm, (int, float))
+        or not math.isfinite(float(approved_value_mm))
+    ):
+        reasons.append("dim_invalid_approved_measurement")
+        approved_value_mm = None
+
     dxf = entity.dxf
-    dimtype = int(dxf.get("dimtype", 0)) & 0x07
-    if dimtype == 7:
+    try:
+        dimtype = int(dxf.get("dimtype", 0)) & 0x07
+    except (TypeError, ValueError, OverflowError):
         reasons.append("dim_unverified_dimension_type")
+        dimtype = 7
+    if dimtype in {6, 7}:
+        reasons.append("dim_unverified_dimension_type")
+    if dxf.hasattr("insert") and not _has_finite_coords(dxf.get("insert")):
+        reasons.append("dim_unverified_rendered_structure")
+    if not _has_planar_wcs_extrusion(dxf.get("extrusion", (0.0, 0.0, 1.0))):
+        reasons.append("dim_unverified_rendered_structure")
     if dimtype not in _ANGULAR_TYPES:
         try:
             raw_insunits = doc.header.get("$INSUNITS", None)
@@ -1139,9 +1276,15 @@ def audit_dimension_truth(
 
     try:
         measured_raw = entity.get_measurement()
-        measured = float(measured_raw) if isinstance(measured_raw, (int, float)) else math.nan
+        measured = (
+            float(measured_raw)
+            if not isinstance(measured_raw, bool) and isinstance(measured_raw, (int, float))
+            else math.nan
+        )
     except Exception:
         measured = math.nan
+    if not math.isfinite(measured) and dimtype not in {6, 7}:
+        reasons.append("dim_measurement_unreadable")
 
     disp = resolve_dimension_display(dimtype, measured, override_text, dimlfac, style)
     if dimtol_enabled and disp.claim_unit_factor != 1.0:
@@ -1164,13 +1307,13 @@ def audit_dimension_truth(
         if disp.value is None or not math.isfinite(disp.value):
             reasons.append(f"dim_override_non_numeric(shown={disp.text!r})")
         elif ref_value is not None and math.isfinite(ref_value):
-            if abs(disp.value - float(ref_value)) > max(float(tolerance_mm), 1e-6):
+            if abs(disp.value - float(ref_value)) > eff_tol:
                 reasons.append(f"dim_override_disagrees(shown={disp.text!r}, expected={ref_value})")
     elif disp.source == "measurement":
         if disp.value is None or not math.isfinite(disp.value):
             reasons.append(f"dim_displayed_claim_unreadable(shown={disp.text!r})")
         else:
-            allowed_tol = disp.tolerance + max(float(tolerance_mm), 1e-6)
+            allowed_tol = disp.tolerance + eff_tol
             if ref_value is not None and math.isfinite(ref_value):
                 if abs(disp.value - float(ref_value)) > allowed_tol:
                     reasons.append(f"dim_displayed_disagrees(shown={disp.text!r}, expected={ref_value})")
@@ -1202,6 +1345,8 @@ def audit_dimension_truth(
         context=context,
         paper_context=paper_context,
         nominal_base_height=nominal_base_height,
+        eff_scale=float(style.get("eff_scale") or 1.0),  # type: ignore[arg-type]
+        expected_style_name=str(style.get("style_name") or "Standard"),
         expected_mtext=expected_mtext,
         allowed_font_stems=allowed_stems,
         allowed_inline_acis=allowed_acis,
@@ -1240,7 +1385,7 @@ def audit_dimension_truth(
         if not math.isfinite(group42):
             reasons.append("dim_group42_non_finite")
         elif group42 >= 0.0 and expected_measurement is not None and math.isfinite(expected_measurement):
-            if abs(group42 - float(expected_measurement)) > max(float(tolerance_mm), 1e-4):
+            if abs(group42 - float(expected_measurement)) > max(eff_tol, 1e-4):
                 reasons.append(f"dim_group42_stale(grp42={group42}, expected={expected_measurement})")
 
     return reasons

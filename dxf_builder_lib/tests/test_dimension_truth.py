@@ -1690,3 +1690,220 @@ def test_legitimate_dimclrt_rendered_and_inline_matching_aci_remain_qualified() 
     )
     dim_yellow.render()
     assert audit_dimension_truth(doc, dim_yellow.dimension, expected_measurement=100.0) == []
+
+
+@pytest.mark.parametrize(
+    "r8_escape",
+    [
+        "override_unterminated_align_100_A1999",
+        "override_semicolon_align_A1999_semi_100",
+        "override_height_arg_H1x999_semi_100",
+        "dimpost_unterminated_align_1999",
+        "mtext_unicode_escaped_percent_k",
+        "text_caret_escaped_percent_k",
+        "mtext_cif_U005C_zero_height_H0",
+        "mtext_pct092_fake_font_999",
+        "mtext_pct049_literal_codes",
+        "mtext_column_break_backslash_N",
+        "mtext_empty_font_family_charset2",
+        "mtext_txt_font_symbol_charset2",
+        "mtext_paragraph_indent_pxi10000",
+        "mtext_spoof_style_wingdings",
+        "text_spoof_style_mirrored",
+        "root_dblock_xref_flag_and_path",
+        "dim_edgeon_extrusion_semantic",
+        "dimdec_10_exceeds_autocad_max_8",
+    ],
+)
+def test_r8_unified_lexer_style_xref_extrusion_and_precision_escapes_stay_non_qualified(
+    tmp_path: Path, r8_escape: str,
+) -> None:
+    from ezdxf.entities import DimStyleOverride
+
+    built, doc, dim = _explicit_truth_control(tmp_path / r8_escape)
+    blk = dim.get_geometry_block()
+    mt = _rendered_mtext(dim)
+    if r8_escape == "override_unterminated_align_100_A1999":
+        dim.dxf.text = r"100\A1999"
+    elif r8_escape == "override_semicolon_align_A1999_semi_100":
+        dim.dxf.text = r"\A1999;100"
+    elif r8_escape == "override_height_arg_H1x999_semi_100":
+        dim.dxf.text = r"\H1x999;100"
+    elif r8_escape == "dimpost_unterminated_align_1999":
+        ov = DimStyleOverride(dim)
+        ov["dimpost"] = r"<>\A1999"
+        ov.commit()
+    elif r8_escape == "mtext_unicode_escaped_percent_k":
+        mt.text = r"\U+0025%k100"
+    elif r8_escape == "text_caret_escaped_percent_k":
+        blk.delete_entity(mt)
+        blk.add_text("^e^ek100", dxfattribs={"height": 1.0})
+    elif r8_escape == "mtext_cif_U005C_zero_height_H0":
+        mt.text = r"\U+005CH0;100"
+    elif r8_escape == "mtext_pct092_fake_font_999":
+        mt.text = "%%092f999;100"
+    elif r8_escape == "mtext_pct049_literal_codes":
+        mt.text = "%%049%%048%%048"
+    elif r8_escape == "mtext_column_break_backslash_N":
+        mt.text = r"1\N00"
+    elif r8_escape == "mtext_empty_font_family_charset2":
+        mt.text = r"{\f|b1|c2;100}"
+    elif r8_escape == "mtext_txt_font_symbol_charset2":
+        mt.text = r"{\ftxt|c2;100}"
+    elif r8_escape == "mtext_paragraph_indent_pxi10000":
+        mt.text = r"{\pxi10000;100}"
+    elif r8_escape == "mtext_spoof_style_wingdings":
+        doc.styles.add("SPOOF_STYLE", font="wingdings.ttf")
+        mt.dxf.style = "SPOOF_STYLE"
+    elif r8_escape == "text_spoof_style_mirrored":
+        doc.styles.add("SPOOF_STYLE", font="Arial.ttf", dxfattribs={"generation_flags": 2})
+        blk.delete_entity(mt)
+        blk.add_text("100", dxfattribs={"height": 1.0, "style": "SPOOF_STYLE"})
+    elif r8_escape == "root_dblock_xref_flag_and_path":
+        blk.block.dxf.flags = int(blk.block.dxf.get("flags", 0)) | 4
+        blk.block.dxf.xref_path = "evil_overlay.dwg"
+    elif r8_escape == "dim_edgeon_extrusion_semantic":
+        dim.dxf.extrusion = (0.0, 1.0, 0.0)
+    elif r8_escape == "dimdec_10_exceeds_autocad_max_8":
+        ov = DimStyleOverride(dim)
+        ov["dimdec"] = 10
+        ov.commit()
+
+    doc.saveas(built.output_path)
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification in {"FAILED", "UNKNOWN"}
+    assert not semantic.passed
+
+
+def test_r8_validation_id_prefix_collision_cannot_downgrade_failed_to_unknown(tmp_path: Path) -> None:
+    from dxf_builder_lib.builder import NativeLinearDimensionSpec
+    from ezdxf.entities import DimStyleOverride
+
+    l1 = Primitive(
+        id="l1",
+        type="line",
+        source="geometry_pdfvector",
+        confidence=1.0,
+        trace=Trace(bbox_px=(0, 0, 10, 10)),
+        geometry=LineGeometry(start=Point2D(0, 0), end=Point2D(100, 0)),
+    )
+    l2 = Primitive(
+        id="l2",
+        type="line",
+        source="geometry_pdfvector",
+        confidence=1.0,
+        trace=Trace(bbox_px=(0, 20, 10, 30)),
+        geometry=LineGeometry(start=Point2D(0, 20), end=Point2D(100, 20)),
+    )
+    ir = PrimitiveIRDocument(
+        source_document=SourceDocument("s.png", 0, 200, 100),
+        calibration=Calibration("mm", 1.0, (0, 0), "manual_override"),
+        primitives=[l1, l2],
+        cross_validations=[],
+    )
+    built = build_dxf(
+        ir,
+        str(tmp_path / "candidate.dxf"),
+        build_dimensions=True,
+        dimension_specs=[
+            NativeLinearDimensionSpec("cv", "l1", 100.0, "t1"),
+            NativeLinearDimensionSpec("cv: dim_unverified_spoof", "l2", 100.0, "t2"),
+        ],
+        capture_dimension_line_integrity=True,
+    )
+    doc = ezdxf.readfile(built.output_path)
+    for h in built.dimension_handle_by_cross_validation_id.values():
+        ov = DimStyleOverride(doc.entitydb[h])
+        ov["dimtxt"] = 1.0
+        ov.commit()
+    dim2 = doc.entitydb[built.dimension_handle_by_cross_validation_id["cv: dim_unverified_spoof"]]
+    dim2.dxf.text = "999"
+    _set_rendered_block_text(dim2, "999")
+    doc.saveas(built.output_path)
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    assert strict.qualification == "FAILED"
+
+
+@pytest.mark.parametrize(
+    "crash_probe",
+    [
+        "dimlfac_1e305_dimrnd_1e_5_overflow",
+        "dimlfac_1e307_dimrnd_1_scaled_inf",
+        "xdata_dstyle_dimtol_nan",
+        "xdata_dstyle_dimlunit_str",
+        "xdata_dstyle_dimalt_inf",
+        "tampered_dimtype_6_ordinate",
+        "tampered_dimtype_7_reserved",
+        "tampered_dim_zero_extrusion",
+        "ordinate_override_99999_audit",
+        "nan_defpoint_override_99999_audit",
+        "nan_caller_args_audit",
+    ],
+)
+def test_r8_malformed_xdata_overflow_ordinate_and_nan_inputs_fail_closed_without_exception(
+    tmp_path: Path, crash_probe: str,
+) -> None:
+    from dxf_builder_lib._dimension_truth import audit_dimension_truth
+    from ezdxf.entities import DimStyleOverride
+    from ezdxf.math import Vec3
+
+    if crash_probe == "ordinate_override_99999_audit":
+        doc_ord = ezdxf.new("R2010", setup=True)
+        doc_ord.header["$INSUNITS"] = 4
+        ov_ord = doc_ord.modelspace().add_ordinate_x_dim(
+            feature_location=(100, 50),
+            offset=(10, 10),
+            override={"dimtxt": 1.0, "dimscale": 1.0, "dimlfac": 1.0},
+            text="99999",
+        )
+        ov_ord.render()
+        _set_rendered_block_text(ov_ord.dimension, "99999")
+        assert audit_dimension_truth(doc_ord, ov_ord.dimension) != []
+        return
+
+    built, doc, dim = _explicit_truth_control(tmp_path / crash_probe)
+    if crash_probe == "dimlfac_1e305_dimrnd_1e_5_overflow":
+        ov = DimStyleOverride(dim)
+        ov["dimlfac"] = 1e305
+        ov["dimrnd"] = 1e-5
+        ov.commit()
+    elif crash_probe == "dimlfac_1e307_dimrnd_1_scaled_inf":
+        ov = DimStyleOverride(dim)
+        ov["dimlfac"] = 1e307
+        ov["dimrnd"] = 1.0
+        ov.commit()
+    elif crash_probe == "xdata_dstyle_dimtol_nan":
+        dim.set_xdata("ACAD", [(1000, "DSTYLE"), (1002, "{"), (1070, 140), (1040, 1.0), (1070, 71), (1040, math.nan), (1002, "}")])
+    elif crash_probe == "xdata_dstyle_dimlunit_str":
+        dim.set_xdata("ACAD", [(1000, "DSTYLE"), (1002, "{"), (1070, 140), (1040, 1.0), (1070, 277), (1000, "bad"), (1002, "}")])
+    elif crash_probe == "xdata_dstyle_dimalt_inf":
+        dim.set_xdata("ACAD", [(1000, "DSTYLE"), (1002, "{"), (1070, 140), (1040, 1.0), (1070, 170), (1040, math.inf), (1002, "}")])
+    elif crash_probe == "tampered_dimtype_6_ordinate":
+        dim.dxf.dimtype = 6
+    elif crash_probe == "tampered_dimtype_7_reserved":
+        dim.dxf.dimtype = 7
+    elif crash_probe == "tampered_dim_zero_extrusion":
+        dim.dxf.unprotected_set("extrusion", Vec3(0.0, 0.0, 0.0))
+    elif crash_probe in {"nan_defpoint_override_99999_audit", "nan_caller_args_audit"}:
+        dim.dxf.unprotected_set("defpoint2", Vec3(math.nan, 0.0, 0.0))
+        dim.dxf.text = "99999"
+        _set_rendered_block_text(dim, "99999")
+        doc.saveas(built.output_path)
+        re_doc = ezdxf.readfile(built.output_path)
+        re_dim = re_doc.entitydb[built.dimension_handle_by_cross_validation_id["cv-1"]]
+        if crash_probe == "nan_defpoint_override_99999_audit":
+            assert audit_dimension_truth(re_doc, re_dim) != []
+        else:
+            assert audit_dimension_truth(re_doc, re_dim, expected_measurement=math.nan) != []
+            assert audit_dimension_truth(re_doc, re_dim, expected_measurement=100.0, tolerance_mm=math.nan) != []
+        return
+
+    doc.saveas(built.output_path)
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert not strict.passed
+    assert strict.qualification in {"FAILED", "UNKNOWN"}
+    assert not semantic.passed

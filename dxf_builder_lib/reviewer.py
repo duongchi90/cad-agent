@@ -344,6 +344,7 @@ def _review_dxf_loaded(
     *,
     strict_primitive_inventory: bool = False,
     verify_dimension_truth: bool = False,
+    _dimension_issue_unverified_flags: List[bool] | None = None,
 ) -> ReviewResult:
     """Run the legacy semantic/graphics review on an already loaded document."""
     db = doc.entitydb
@@ -497,11 +498,16 @@ def _review_dxf_loaded(
     dimension_checked = 0
     dimension_measurement_by_id: Dict[str, float] = {}
 
+    def _record_dim_mismatch(message: str, *, is_unverified: bool = False) -> None:
+        dimension_mismatches.append(message)
+        if _dimension_issue_unverified_flags is not None:
+            _dimension_issue_unverified_flags.append(is_unverified)
+
     actual_dimension_count = sum(
         1 for entity in doc.modelspace() if entity.dxftype() == "DIMENSION"
     )
     if actual_dimension_count != build_result.dimension_count:
-        dimension_mismatches.append(
+        _record_dim_mismatch(
             "DIMENSION count mismatch: "
             f"expected {build_result.dimension_count}, actual {actual_dimension_count}"
         )
@@ -513,32 +519,40 @@ def _review_dxf_loaded(
         )
         entity = db.get(handle)
         if expected is None:
-            dimension_mismatches.append(
+            _record_dim_mismatch(
                 f"{validation_id}: missing written dimension evidence"
             )
             continue
         if entity is None:
-            dimension_mismatches.append(
+            _record_dim_mismatch(
                 f"{validation_id}: DIMENSION handle {handle!r} not found"
             )
             continue
         dimension_checked += 1
         if entity.dxftype() != "DIMENSION":
-            dimension_mismatches.append(
+            _record_dim_mismatch(
                 f"{validation_id}: expected DIMENSION, actual {entity.dxftype()}"
             )
             continue
         if entity.dxf.layer != expected["layer"]:
-            dimension_mismatches.append(
+            _record_dim_mismatch(
                 f"{validation_id}: expected layer {expected['layer']!r}, "
                 f"actual {entity.dxf.layer!r}"
             )
-        measurement = float(entity.get_measurement())
+        try:
+            raw_meas = entity.get_measurement()
+            measurement = (
+                float(raw_meas)
+                if not isinstance(raw_meas, bool) and isinstance(raw_meas, (int, float))
+                else math.nan
+            )
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError, ArithmeticError, AttributeError):
+            measurement = math.nan
         dimension_measurement_by_id[validation_id] = measurement
         if not _scalar_matches(
             measurement, float(expected["measurement"]), tolerance_mm,
         ):
-            dimension_mismatches.append(
+            _record_dim_mismatch(
                 f"{validation_id}: expected measurement "
                 f"{expected['measurement']}, actual {measurement}"
             )
@@ -546,7 +560,7 @@ def _review_dxf_loaded(
         if approved is not None and not _scalar_matches(
             measurement, float(approved), tolerance_mm,
         ):
-            dimension_mismatches.append(
+            _record_dim_mismatch(
                 f"{validation_id}: approved measurement {approved}, "
                 f"actual {measurement}, tolerance {tolerance_mm}"
             )
@@ -556,18 +570,24 @@ def _review_dxf_loaded(
             feature = db.get(feature_handle) if feature_handle else None
             feature_geometry = {}
             if feature is not None and feature.dxftype() == "LINE":
-                feature_geometry = {
-                    "type": "LINE", "layout": "Model" if feature in doc.modelspace() else None,
-                    "start": tuple(feature.dxf.start), "end": tuple(feature.dxf.end),
+                try:
+                    feature_geometry = {
+                        "type": "LINE", "layout": "Model" if feature in doc.modelspace() else None,
+                        "start": tuple(feature.dxf.start), "end": tuple(feature.dxf.end),
+                    }
+                except (TypeError, ValueError, AttributeError):
+                    feature_geometry = {}
+            try:
+                definition = {
+                    "dimtype": entity.dxf.dimtype,
+                    "layout": "Model" if entity in doc.modelspace() else None,
+                    "defpoint2": tuple(entity.dxf.get("defpoint2")) if entity.dxf.hasattr("defpoint2") else None,
+                    "defpoint3": tuple(entity.dxf.get("defpoint3")) if entity.dxf.hasattr("defpoint3") else None,
                 }
-            definition = {
-                "dimtype": entity.dxf.dimtype,
-                "layout": "Model" if entity in doc.modelspace() else None,
-                "defpoint2": tuple(entity.dxf.get("defpoint2")) if entity.dxf.hasattr("defpoint2") else None,
-                "defpoint3": tuple(entity.dxf.get("defpoint3")) if entity.dxf.hasattr("defpoint3") else None,
-            }
+            except (TypeError, ValueError, AttributeError):
+                definition = {}
             if not linear_dimension_matches_feature(definition, feature_geometry):
-                dimension_mismatches.append(
+                _record_dim_mismatch(
                     f"{validation_id}: DIMENSION feature binding unavailable or differs from LINE {feature_id!r}"
                 )
         if verify_dimension_truth:
@@ -580,7 +600,10 @@ def _review_dxf_loaded(
                 approved_value_mm=approved,
                 tolerance_mm=tolerance_mm,
             ):
-                dimension_mismatches.append(f"{validation_id}: {truth_issue}")
+                _record_dim_mismatch(
+                    f"{validation_id}: {truth_issue}",
+                    is_unverified=truth_issue.startswith("dim_unverified_"),
+                )
 
     for part_id, handle in build_result.component_handle_by_part_id.items():
         written = build_result.written_component_by_part_id.get(part_id)
@@ -835,11 +858,13 @@ def review_dxf_with_dimension_line_integrity(
         ) from exc
 
     doc = ezdxf.readfile(build_result.output_path)
+    issue_unverified_flags: List[bool] = []
     semantic_review = _review_dxf_loaded(
         build_result,
         doc,
         tolerance_mm,
         verify_dimension_truth=verify_dimension_truth,
+        _dimension_issue_unverified_flags=issue_unverified_flags,
     )
     db = doc.entitydb
     line_mismatches: list[str] = []
@@ -872,8 +897,12 @@ def review_dxf_with_dimension_line_integrity(
         ):
             return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
                                                 ("unsupported DIMENSION insertion transform",))
-        extrusion = tuple(dimension.dxf.get("extrusion", (0.0, 0.0, 1.0)))
-        if extrusion != (0.0, 0.0, 1.0):
+        try:
+            extrusion = tuple(float(v) for v in dimension.dxf.get("extrusion", (0.0, 0.0, 1.0)))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
+                                                ("unsupported DIMENSION extrusion",))
+        if len(extrusion) != 3 or not all(math.isfinite(v) for v in extrusion) or extrusion != (0.0, 0.0, 1.0):
             return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
                                                 ("unsupported DIMENSION extrusion",))
         try:
@@ -882,8 +911,27 @@ def review_dxf_with_dimension_line_integrity(
         except (AttributeError, KeyError, TypeError):
             block = None
             actual_block_name = None
-        if (block is None or actual_block_name != expectation.block_name
-                or tuple(block.base_point) != (0.0, 0.0, 0.0)):
+        block_hdr = getattr(block, "block", None) if block is not None else None
+        try:
+            block_flags = int(block_hdr.dxf.get("flags", 0) or 0) if block_hdr is not None else 0
+            block_xref_path = str(block_hdr.dxf.get("xref_path", "") or "").strip() if block_hdr is not None else ""
+            base_pt = tuple(float(v) for v in block.base_point) if block is not None else ()
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            block_flags = 4
+            block_xref_path = "invalid"
+            base_pt = ()
+        if (
+            block is None
+            or block_hdr is None
+            or actual_block_name != expectation.block_name
+            or len(base_pt) != 3
+            or not all(math.isfinite(v) for v in base_pt)
+            or base_pt != (0.0, 0.0, 0.0)
+            or bool(getattr(block_hdr, "is_xref", False))
+            or bool(getattr(block_hdr, "is_xref_overlay", False))
+            or bool(block_flags & 0x0C)
+            or bool(block_xref_path)
+        ):
             return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
                                                 ("missing, reassociated, or unsupported anonymous block",))
         actual_lines = []
@@ -911,12 +959,14 @@ def review_dxf_with_dimension_line_integrity(
     if line_mismatches:
         return DimensionLineIntegrityResult("FAILED", semantic_review, tuple(line_mismatches))
     if not semantic_review.passed:
-        unverified_prefixes = tuple(f"{vid}: dim_unverified_" for vid in expectation_ids)
-        if (semantic_review.dimension_mismatches
-                and all(issue.startswith(unverified_prefixes) for issue in semantic_review.dimension_mismatches)
-                and not semantic_review.mismatches
-                and not semantic_review.component_mismatches
-                and not semantic_review.contour_mismatches):
+        if (
+            semantic_review.dimension_mismatches
+            and len(issue_unverified_flags) == len(semantic_review.dimension_mismatches)
+            and all(issue_unverified_flags)
+            and not semantic_review.mismatches
+            and not semantic_review.component_mismatches
+            and not semantic_review.contour_mismatches
+        ):
             return DimensionLineIntegrityResult("UNKNOWN", semantic_review,
                                                 ("dimension rendering remains unverified",))
         return DimensionLineIntegrityResult("FAILED", semantic_review,
