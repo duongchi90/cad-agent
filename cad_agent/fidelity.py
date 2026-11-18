@@ -1973,7 +1973,9 @@ def _native_pdf_text_span_records(
                 if drawing.get("type") == "fs":
                     drawings_by_sequence.setdefault(d_seq + 1, []).append(drawing)
 
-    descender_glyphs = frozenset("gjpqy,;()[]{}_|@#&§µçşğı")
+    below_baseline_ink_glyphs = frozenset("gjpqyQJ$,;()[]{}_|@#&§µçşğı±")
+    baseline_punct_glyphs = frozenset(".:/\\=")
+    minus_like_glyphs = frozenset("-−–—+")
 
     def stroke_color_is_dark_visible(color: Any) -> bool:
         if not isinstance(color, (tuple, list)) or len(color) not in (1, 3, 4):
@@ -2019,7 +2021,7 @@ def _native_pdf_text_span_records(
     def glyph_above_baseline_rect(
         cp: int, origin_pt: tuple[float, float], grect: fitz.Rect, trace_dir: tuple[float, float],
     ) -> fitz.Rect:
-        if chr(cp) in descender_glyphs:
+        if chr(cp) in below_baseline_ink_glyphs or cp >= 0x80:
             return grect
         ox, oy = origin_pt
         dx, dy = trace_dir
@@ -2335,10 +2337,24 @@ def _native_pdf_text_span_records(
                                 and float(lt_size) > 0
                             )
                             if same_oblique_dir:
-                                asc_a = float(trace.get("ascender") or 0.85) * trace_size
-                                desc_a = float(trace.get("descender") or -0.25) * trace_size
-                                asc_b = float(lt.get("ascender") or 0.85) * float(lt_size)
-                                desc_b = float(lt.get("descender") or -0.25) * float(lt_size)
+                                raw_asc_a, raw_desc_a = trace.get("ascender"), trace.get("descender")
+                                raw_asc_b, raw_desc_b = lt.get("ascender"), lt.get("descender")
+                                asc_a = max(
+                                    0.75,
+                                    float(raw_asc_a) if isinstance(raw_asc_a, (int, float)) and math.isfinite(float(raw_asc_a)) else 0.85,
+                                ) * trace_size
+                                desc_a = min(
+                                    -0.15,
+                                    float(raw_desc_a) if isinstance(raw_desc_a, (int, float)) and math.isfinite(float(raw_desc_a)) else -0.25,
+                                ) * trace_size
+                                asc_b = max(
+                                    0.75,
+                                    float(raw_asc_b) if isinstance(raw_asc_b, (int, float)) and math.isfinite(float(raw_asc_b)) else 0.85,
+                                ) * float(lt_size)
+                                desc_b = min(
+                                    -0.15,
+                                    float(raw_desc_b) if isinstance(raw_desc_b, (int, float)) and math.isfinite(float(raw_desc_b)) else -0.25,
+                                ) * float(lt_size)
                                 for _cp, (ox_a, oy_a), gr in target_glyphs:
                                     for _lcp, (ox_b, oy_b), lgr in lt_glyphs:
                                         if (gr & lgr).is_empty:
@@ -2377,9 +2393,24 @@ def _native_pdf_text_span_records(
                             max(r.x1 for r in flat_subs), max(r.y1 for r in flat_subs),
                         )
                         if overlap_ratio(paint_rect, union_fill) >= 0.85:
+                            all_dark_opaque_fills = all(
+                                (
+                                    d.get("fill_opacity") is None
+                                    or (
+                                        isinstance(d.get("fill_opacity"), (int, float))
+                                        and math.isfinite(float(d["fill_opacity"]))
+                                        and float(d["fill_opacity"]) >= 0.99
+                                    )
+                                )
+                                and stroke_color_is_dark_visible(d.get("fill"))
+                                for d in seq_drawings
+                            )
                             t_dir = (ux, uy) if dir_ok else (1.0, 0.0)
                             if any(
-                                not (glyph_above_baseline_rect(cp, org, gr, t_dir) & sr).is_empty
+                                not (
+                                    (glyph_above_baseline_rect(cp, org, gr, t_dir) if all_dark_opaque_fills else gr)
+                                    & sr
+                                ).is_empty
                                 for sr in flat_subs
                                 for cp, org, gr in target_glyphs
                             ):
@@ -2423,7 +2454,7 @@ def _native_pdf_text_span_records(
                                     and stroke_color_is_dark_visible(d.get("color"))
                                     and width <= 0.30 * trace_size
                                 )
-                                for cp, (ox, oy), gr in target_glyphs:
+                                for glyph_idx, (cp, (ox, oy), gr) in enumerate(target_glyphs):
                                     if (gr & d_bounds).is_empty:
                                         continue
                                     corners = ((gr.x0, gr.y0), (gr.x1, gr.y0), (gr.x1, gr.y1), (gr.x0, gr.y1))
@@ -2431,29 +2462,46 @@ def _native_pdf_text_span_records(
                                     vs = [(cx - ox) * vx + (cy - oy) * vy for cx, cy in corners]
                                     u0, u1 = min(us), max(us)
                                     v0, v1 = min(vs), max(vs)
+                                    ch = chr(cp)
+                                    has_prev_glyph = (
+                                        glyph_idx > 0
+                                        or bool(member_sequences and sequence_number > min(member_sequences))
+                                    )
+                                    has_next_glyph = (
+                                        glyph_idx < len(target_glyphs) - 1
+                                        or bool(member_sequences and sequence_number < max(member_sequences))
+                                    )
+                                    u_span = max(0.0, u1 - u0)
                                     if thin_cad_stroke:
-                                        v_top = min(v1, 0.58 * trace_size)
-                                        v_bot = (
-                                            max(v0, -0.09 * trace_size)
-                                            if chr(cp) in descender_glyphs
-                                            else max(v0, 0.08 * trace_size)
-                                        )
-                                        u_pad = 0.12 * max(0.0, u1 - u0)
-                                        box_u0, box_u1 = u0 + u_pad, u1 - u_pad
+                                        v_top = min(v1, 0.68 * trace_size)
+                                        if ch in below_baseline_ink_glyphs or (cp >= 0x80 and ch not in "°′″"):
+                                            v_bot = max(v0, -0.09 * trace_size)
+                                        elif ch in baseline_punct_glyphs:
+                                            v_bot = max(v0, 0.01 * trace_size)
+                                        else:
+                                            v_bot = max(v0, 0.04 * trace_size)
+                                        left_pad = 0.0 if (has_prev_glyph or ch in minus_like_glyphs) else 0.10 * u_span
+                                        right_pad = 0.0 if (has_next_glyph or ch in minus_like_glyphs) else 0.10 * u_span
+                                        box_u0, box_u1 = u0 + left_pad, u1 - right_pad
                                         box_v0, box_v1 = min(v_bot, v_top), max(v_bot, v_top)
                                     else:
                                         box_u0, box_u1, box_v0, box_v1 = u0, u1, v0, v1
+                                    is_first_span_glyph = not has_prev_glyph and ch not in minus_like_glyphs
+                                    is_last_span_glyph = not has_next_glyph and ch not in minus_like_glyphs
                                     for sp1, sp2, seg_pad in segs:
                                         su1 = (sp1[0] - ox) * ux + (sp1[1] - oy) * uy
                                         sv1 = (sp1[0] - ox) * vx + (sp1[1] - oy) * vy
                                         su2 = (sp2[0] - ox) * ux + (sp2[1] - oy) * uy
                                         sv2 = (sp2[0] - ox) * vx + (sp2[1] - oy) * vy
                                         du, dv = su2 - su1, sv2 - sv1
+                                        half = 0.5 * width + seg_pad
                                         if thin_cad_stroke:
                                             seg_len = math.hypot(du, dv)
-                                            if seg_len >= 2.0 * trace_size and abs(du) <= 0.15 * seg_len:
-                                                continue
-                                        half = 0.5 * width + seg_pad
+                                            if seg_len >= 2.0 * trace_size and abs(du) <= 0.08 * seg_len:
+                                                if is_first_span_glyph and max(su1, su2) + half <= u0 + 0.25 * u_span:
+                                                    continue
+                                                if is_last_span_glyph and min(su1, su2) - half >= u1 - 0.25 * u_span:
+                                                    continue
                                         eu0, eu1 = box_u0 - half, box_u1 + half
                                         ev0, ev1 = box_v0 - half, box_v1 + half
                                         if eu1 < eu0 or ev1 < ev0:

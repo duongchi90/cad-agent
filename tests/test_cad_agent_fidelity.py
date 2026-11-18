@@ -4879,3 +4879,110 @@ def test_native_pdf_observation_compound_paint_still_excludes_real_masking_and_s
 
     assert "100" not in contents
     assert "SAFE NOTE" in contents
+
+
+@pytest.mark.parametrize(
+    "vector_id",
+    [
+        "vertical_stroke_turns_minus_into_plus",
+        "tall_vertical_stroke_through_middle_digit",
+        "horizontal_stroke_across_rotated_90_seam",
+        "horizontal_stroke_across_upper_cap_bar_066em",
+        "horizontal_stroke_across_decimal_point_004em",
+        "below_baseline_white_fill_over_q_tail",
+        "inverted_font_descriptor_oblique_overwrite",
+    ],
+)
+def test_native_pdf_observation_excludes_perpendicular_cap_dot_and_descender_masks(
+    vector_id: str,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=300, height=200)
+    page.insert_text((200, 160), "CONTROL", fontsize=12)
+
+    if vector_id == "vertical_stroke_turns_minus_into_plus":
+        target = "-100"
+        page.insert_text((80, 100), target, fontsize=12)
+        minus_rect = fitz.Rect(page.get_texttrace()[-1]["chars"][0][3])
+        mx = 0.5 * (minus_rect.x0 + minus_rect.x1)
+        sh = page.new_shape()
+        sh.draw_line((mx, 75.0), (mx, 125.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "tall_vertical_stroke_through_middle_digit":
+        target = "100"
+        page.insert_text((80, 100), target, fontsize=12)
+        zero_rect = fitz.Rect(page.get_texttrace()[-1]["chars"][1][3])
+        zx = 0.5 * (zero_rect.x0 + zero_rect.x1)
+        sh = page.new_shape()
+        sh.draw_line((zx, 70.0), (zx, 130.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "horizontal_stroke_across_rotated_90_seam":
+        target = "35"
+        page.insert_text((140, 120), target, fontsize=12, rotate=90)
+        t_rect = fitz.Rect(page.get_texttrace()[-1]["bbox"])
+        mid_y = 0.5 * (t_rect.y0 + t_rect.y1)
+        sh = page.new_shape()
+        sh.draw_line((110.0, mid_y), (170.0, mid_y))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "horizontal_stroke_across_upper_cap_bar_066em":
+        target = "77"
+        page.insert_text((80, 100), target, fontsize=12)
+        y_upper = 100.0 - 0.66 * 12.0
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 290, 190))
+        sh.draw_line((75.0, y_upper), (105.0, y_upper))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "horizontal_stroke_across_decimal_point_004em":
+        target = "10.5"
+        page.insert_text((80, 100), target, fontsize=12)
+        y_dot = 100.0 - 0.04 * 12.0
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 290, 190))
+        sh.draw_line((75.0, y_dot), (115.0, y_dot))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "below_baseline_white_fill_over_q_tail":
+        target = "Q10"
+        page.insert_text((80, 100), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_polyline([(20, 20), (25, 19), (25, 21)])
+        sh.draw_rect(fitz.Rect(78.0, 100.05, 95.0, 104.0))
+        sh.finish(color=None, fill=(1, 1, 1), closePath=True)
+        sh.commit()
+    else:
+        target = "OBL1"
+        piv = fitz.Point(80, 120)
+        page.insert_text(piv, target, fontsize=12, morph=(piv, fitz.Matrix(-35.0)))
+        page.insert_text(piv, "OBL2", fontsize=12, morph=(piv, fitz.Matrix(-35.0)))
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        pg = reopened[0]
+        if vector_id == "inverted_font_descriptor_oblique_overwrite":
+            class InvertedMetricsPage:
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(pg, name)
+
+                def get_texttrace(self) -> list[dict[str, Any]]:
+                    return [dict(t, ascender=-0.5, descender=0.9) for t in pg.get_texttrace()]
+
+            records = fidelity_module._native_pdf_text_span_records(
+                InvertedMetricsPage(), 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+            )
+        else:
+            records = fidelity_module._native_pdf_text_span_records(
+                pg, 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+            )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
