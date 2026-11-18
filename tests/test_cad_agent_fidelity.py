@@ -5270,9 +5270,11 @@ def test_native_pdf_observation_r4_closed_subpath_miter_and_multirun_condensed_t
     [
         pytest.param(83.2, {"CONTROL"}, id="crosses-ink-above-0.68em"),
         pytest.param(80.5, {"77", "CONTROL"}, id="clear-top-margin"),
+        pytest.param(99.5, {"CONTROL"}, id="crosses-ink-near-baseline"),
+        pytest.param(101.0, {"77", "CONTROL"}, id="clear-bottom-margin"),
     ],
 )
-def test_native_pdf_observation_thin_stroke_above_glyph_core(
+def test_native_pdf_observation_thin_stroke_at_glyph_bounds(
     line_y: float, expected: set[str],
 ) -> None:
     with fitz.open() as document:

@@ -3183,7 +3183,7 @@ def _native_pdf_text_span_records(
                                     elif ch in baseline_punct_glyphs:
                                         v_bot = max(v0, 0.01 * effective_v_size)
                                     else:
-                                        v_bot = max(v0, 0.04 * effective_v_size)
+                                        v_bot = max(v0, 0.0)
                                     left_pad = 0.0 if (has_prev_glyph or ch in minus_like_glyphs) else 0.10 * u_span
                                     right_pad = 0.0 if (has_next_glyph or ch in minus_like_glyphs) else 0.10 * u_span
                                     box_u0, box_u1 = u0 + left_pad, u1 - right_pad
