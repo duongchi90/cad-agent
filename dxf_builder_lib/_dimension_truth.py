@@ -474,6 +474,134 @@ class _RenderedBlockRead:
     block_missing: bool
 
 
+_NON_LABEL_RENDERED_GEOMETRY_TYPES = frozenset({
+    "LINE",
+    "POINT",
+    "SOLID",
+    "TRACE",
+    "3DFACE",
+    "ARC",
+    "CIRCLE",
+    "ELLIPSE",
+    "SPLINE",
+    "LWPOLYLINE",
+    "POLYLINE",
+    "HATCH",
+    "WIPEOUT",
+})
+_MAX_NESTED_INSERT_DEPTH = 32
+
+
+def _has_finite_coords(value: object) -> bool:
+    try:
+        coords = tuple(value)  # type: ignore[arg-type]
+    except TypeError:
+        return False
+    return len(coords) in {2, 3} and all(_is_finite_number(coord) for coord in coords)
+
+
+def _insert_is_non_label_geometry(
+    doc,
+    insert_entity,
+    *,
+    active_blocks: frozenset[str],
+    verified_heights: dict[str, int],
+    depth: int = 0,
+) -> bool:
+    """Return True iff `insert_entity` resolves to bounded, cycle-free non-label geometry."""
+    if depth >= _MAX_NESTED_INSERT_DEPTH:
+        return False
+    if getattr(insert_entity, "attribs", ()):
+        return False
+    try:
+        if int(insert_entity.dxf.get("attribs_follow", 0) or 0):
+            return False
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not _has_finite_coords(insert_entity.dxf.get("insert", (0.0, 0.0, 0.0))):
+        return False
+    if not _has_finite_coords(insert_entity.dxf.get("extrusion", (0.0, 0.0, 1.0))):
+        return False
+    for attr, default in (
+        ("xscale", 1.0),
+        ("yscale", 1.0),
+        ("zscale", 1.0),
+        ("rotation", 0.0),
+        ("row_spacing", 0.0),
+        ("column_spacing", 0.0),
+    ):
+        if not _is_finite_number(insert_entity.dxf.get(attr, default)):
+            return False
+    for count_attr in ("row_count", "column_count"):
+        raw_count = insert_entity.dxf.get(count_attr, 1)
+        if (
+            not _is_finite_number(raw_count)
+            or not float(raw_count).is_integer()  # type: ignore[arg-type]
+            or int(raw_count) < 1  # type: ignore[arg-type]
+        ):
+            return False
+
+    raw_name = insert_entity.dxf.get("name")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        return False
+    try:
+        target_block = doc.blocks.get(raw_name)
+    except Exception:
+        return False
+    if target_block is None or bool(getattr(target_block, "is_any_layout", False)):
+        return False
+    block_header = getattr(target_block, "block", None)
+    if block_header is None:
+        return False
+    try:
+        flags = int(block_header.dxf.get("flags", 0) or 0)
+        xref_path = str(block_header.dxf.get("xref_path", "") or "").strip()
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (
+        bool(getattr(block_header, "is_xref", False))
+        or bool(getattr(block_header, "is_xref_overlay", False))
+        or bool(flags & 0x0C)
+        or bool(xref_path)
+    ):
+        return False
+    if not _has_finite_coords(getattr(target_block, "base_point", (0.0, 0.0, 0.0))):
+        return False
+
+    block_key = str(getattr(target_block, "name", raw_name)).casefold()
+    if block_key in active_blocks:
+        return False
+    cached_height = verified_heights.get(block_key)
+    if cached_height is not None:
+        return depth + cached_height <= _MAX_NESTED_INSERT_DEPTH
+
+    next_active = active_blocks | {block_key}
+    max_child_height = 0
+    for child in target_block:
+        child_kind = child.dxftype()
+        if child_kind in _NON_LABEL_RENDERED_GEOMETRY_TYPES:
+            continue
+        if child_kind == "INSERT":
+            if not _insert_is_non_label_geometry(
+                doc,
+                child,
+                active_blocks=next_active,
+                verified_heights=verified_heights,
+                depth=depth + 1,
+            ):
+                return False
+            child_name = child.dxf.get("name")
+            child_target = doc.blocks.get(child_name) if isinstance(child_name, str) else None
+            child_key = str(getattr(child_target, "name", child_name)).casefold()
+            max_child_height = max(max_child_height, verified_heights.get(child_key, 1))
+            continue
+        return False
+
+    subtree_height = 1 + max_child_height
+    verified_heights[block_key] = subtree_height
+    return depth + subtree_height <= _MAX_NESTED_INSERT_DEPTH
+
+
 def _read_rendered_block(
     doc,
     entity,
@@ -497,9 +625,24 @@ def _read_rendered_block(
     parts: list[str] = []
     profile: list[tuple[str, float]] = []
     hidden_count = transparent_count = unreadable_count = height_mismatch = 0
+    root_block_name = str(getattr(block, "name", "") or "").casefold()
+    initial_active = frozenset({root_block_name}) if root_block_name else frozenset()
+    verified_insert_heights: dict[str, int] = {}
     for item in block:
         kind = item.dxftype()
+        if kind in _NON_LABEL_RENDERED_GEOMETRY_TYPES:
+            continue
+        if kind == "INSERT":
+            if not _insert_is_non_label_geometry(
+                doc,
+                item,
+                active_blocks=initial_active,
+                verified_heights=verified_insert_heights,
+            ):
+                unreadable_count += 1
+            continue
         if kind not in {"TEXT", "MTEXT"}:
+            unreadable_count += 1
             continue
         raw_content = item.text if kind == "MTEXT" else item.dxf.get("text", "")
         # Native TEXT preserves backslashes/braces which are MTEXT commands.

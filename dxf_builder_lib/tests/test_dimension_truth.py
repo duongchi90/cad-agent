@@ -1031,3 +1031,210 @@ def test_known_literal_contradiction_stays_failed_with_unsupported_primary_forma
     _set_rendered_block_text(dim, cached)
     doc.saveas(built.output_path)
     assert review_dxf_with_dimension_line_integrity(built).qualification == "FAILED"
+
+
+@pytest.mark.parametrize(
+    "arrow_variant",
+    [
+        "default_closedfilled_and_defpoints",
+        "standard_autocad_arrows",
+        "two_level_pure_geometry_insert",
+        "diamond_dag_pure_geometry_insert",
+    ],
+)
+def test_pure_geometry_dimension_arrow_blocks_and_defpoints_stay_qualified(
+    tmp_path: Path, arrow_variant: str,
+) -> None:
+    from ezdxf.render.arrows import ARROWS
+
+    built, doc, dim = _explicit_truth_control(tmp_path / arrow_variant)
+    block = dim.get_geometry_block()
+    if "Defpoints" not in doc.layers:
+        doc.layers.add("Defpoints", dxfattribs={"plot": 0})
+    block.add_point((0.0, 0.0, 0.0), dxfattribs={"layer": "Defpoints"})
+
+    if arrow_variant == "standard_autocad_arrows":
+        for arrow_name in (ARROWS.open, ARROWS.dot, ARROWS.architectural_tick, ARROWS.origin_indicator):
+            blk_name = ARROWS.create_block(doc.blocks, arrow_name)
+            block.add_blockref(blk_name, (0.0, 0.0, 0.0))
+    elif arrow_variant == "two_level_pure_geometry_insert":
+        leaf = doc.blocks.new("PURE_GEO_LEAF")
+        leaf.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        leaf.add_arc((0.0, 0.0), radius=1.0, start_angle=0.0, end_angle=90.0)
+        leaf.add_circle((0.0, 0.0), radius=0.5)
+        leaf.add_lwpolyline([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], close=True)
+        leaf.add_polyline2d([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], close=True)
+        leaf.add_trace([(0.0, 0.0), (1.0, 0.0), (1.0, 0.2), (0.0, 0.2)])
+        leaf.add_wipeout([(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)])
+        hatch = leaf.add_hatch()
+        hatch.paths.add_polyline_path([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], is_closed=True)
+        leaf.add_spline([(0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (2.0, 0.0, 0.0)])
+        leaf.add_ellipse(center=(0.0, 0.0, 0.0), major_axis=(2.0, 0.0, 0.0), ratio=0.5)
+        outer = doc.blocks.new("PURE_GEO_OUTER")
+        outer.add_blockref(leaf.name, (0.0, 0.0, 0.0))
+        block.add_blockref(outer.name, (0.0, 0.0, 0.0))
+    elif arrow_variant == "diamond_dag_pure_geometry_insert":
+        leaf = doc.blocks.new("DAG_LEAF")
+        leaf.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        mid_a = doc.blocks.new("DAG_MID_A")
+        mid_a.add_blockref(leaf.name, (0.0, 0.0, 0.0))
+        mid_b = doc.blocks.new("DAG_MID_B")
+        mid_b.add_blockref(leaf.name, (1.0, 0.0, 0.0))
+        top = doc.blocks.new("DAG_TOP")
+        top.add_blockref(mid_a.name, (0.0, 0.0, 0.0))
+        top.add_blockref(mid_b.name, (0.0, 0.0, 0.0))
+        block.add_blockref(top.name, (0.0, 0.0, 0.0))
+
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert Path(built.output_path).read_bytes() == before
+    assert strict.qualification == "QUALIFIED"
+    assert strict.passed
+    assert semantic.passed
+
+
+@pytest.mark.parametrize(
+    "escape_case",
+    [
+        "nested_insert_text_99",
+        "nested_insert_mtext_200",
+        "two_level_nested_insert_text_999",
+        "insert_with_visible_attrib_888",
+        "insert_with_invisible_attrib_888",
+        "nested_block_with_attdef_777",
+        "direct_constant_attdef_777",
+        "direct_leader",
+        "nested_leader",
+        "direct_mleader",
+        "nested_mleader",
+        "direct_tolerance",
+        "nested_tolerance",
+        "missing_target_block_insert",
+        "xref_block_insert",
+        "layout_block_insert",
+        "deep_nested_insert_over_cap",
+        "cyclic_insert_a_b_a",
+        "self_cyclic_insert_a_a",
+    ],
+)
+def test_uninspected_nested_or_non_text_rendered_structures_fail_closed(
+    tmp_path: Path, escape_case: str,
+) -> None:
+    from ezdxf.math import Vec2
+
+    built, doc, dim = _explicit_truth_control(tmp_path / escape_case)
+    block = dim.get_geometry_block()
+
+    if escape_case == "nested_insert_text_99":
+        child = doc.blocks.new("EXTRA_NATIVE_LABEL_TEXT")
+        child.add_text("99", dxfattribs={"height": 1.0})
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "nested_insert_mtext_200":
+        child = doc.blocks.new("EXTRA_NATIVE_LABEL_MTEXT")
+        child.add_mtext("200", dxfattribs={"char_height": 1.0})
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "two_level_nested_insert_text_999":
+        leaf = doc.blocks.new("LEAF_LABEL_999")
+        leaf.add_text("999", dxfattribs={"height": 1.0})
+        wrapper = doc.blocks.new("WRAPPER_BLK")
+        wrapper.add_blockref(leaf.name, (0.0, 0.0, 0.0))
+        block.add_blockref(wrapper.name, (0.0, 0.0, 0.0))
+    elif escape_case in {"insert_with_visible_attrib_888", "insert_with_invisible_attrib_888"}:
+        arrow = doc.blocks.new("ARROW_SOLID_ONLY")
+        arrow.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        ref = block.add_blockref(arrow.name, (0.0, 0.0, 0.0))
+        flags = 1 if "invisible" in escape_case else 0
+        ref.add_attrib("FAKE_LABEL", "888", (0.0, 0.0, 0.0), dxfattribs={"height": 1.0, "flags": flags})
+    elif escape_case == "nested_block_with_attdef_777":
+        child = doc.blocks.new("BLK_CONST_ATTDEF")
+        child.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        child.add_attdef("CONST_TAG", (0.0, 0.0, 0.0), "777", dxfattribs={"height": 1.0, "flags": 3})
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "direct_constant_attdef_777":
+        block.add_attdef("CONST_TAG", (0.0, 0.0, 0.0), "777", dxfattribs={"height": 1.0, "flags": 2})
+    elif escape_case == "direct_leader":
+        block.add_leader([(0.0, 0.0), (5.0, 5.0), (10.0, 5.0)])
+    elif escape_case == "nested_leader":
+        child = doc.blocks.new("BLK_LEADER")
+        child.add_leader([(0.0, 0.0), (5.0, 5.0), (10.0, 5.0)])
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "direct_mleader":
+        ml = block.add_multileader_mtext()
+        ml.quick_leader("999", target=Vec2(0.0, 0.0), segment1=Vec2(5.0, 5.0))
+    elif escape_case == "nested_mleader":
+        child = doc.blocks.new("BLK_MLEADER")
+        ml = child.add_multileader_mtext()
+        ml.quick_leader("999", target=Vec2(0.0, 0.0), segment1=Vec2(5.0, 5.0))
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "direct_tolerance":
+        block.new_entity(
+            "TOLERANCE",
+            dxfattribs={"content": r"{\Fgdt;j}%%v0.05", "insert": (0.0, 0.0, 0.0), "dimstyle": "Standard"},
+        )
+    elif escape_case == "nested_tolerance":
+        child = doc.blocks.new("BLK_TOLERANCE")
+        child.new_entity(
+            "TOLERANCE",
+            dxfattribs={"content": r"{\Fgdt;j}%%v0.05", "insert": (0.0, 0.0, 0.0), "dimstyle": "Standard"},
+        )
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "missing_target_block_insert":
+        placeholder = doc.blocks.new("TEMP_VALID_TARGET")
+        placeholder.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        ref = block.add_blockref(placeholder.name, (0.0, 0.0, 0.0))
+        ref.dxf.name = "MISSING_TARGET_ARROW_BLK"
+    elif escape_case == "xref_block_insert":
+        doc.add_xref_def(filename="external_labels.dwg", name="XREF_LABEL_BLK")
+        block.add_blockref("XREF_LABEL_BLK", (0.0, 0.0, 0.0))
+    elif escape_case == "layout_block_insert":
+        placeholder = doc.blocks.new("TEMP_LAYOUT_TARGET")
+        placeholder.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        ref = block.add_blockref(placeholder.name, (0.0, 0.0, 0.0))
+        ref.dxf.name = "*Paper_Space"
+    elif escape_case == "deep_nested_insert_over_cap":
+        prev = doc.blocks.new("DEEP_ARROW_LEAF")
+        prev.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        for idx in range(34):
+            nxt = doc.blocks.new(f"DEEP_ARROW_{idx}")
+            nxt.add_blockref(prev.name, (0.0, 0.0, 0.0))
+            prev = nxt
+        block.add_blockref(prev.name, (0.0, 0.0, 0.0))
+    elif escape_case == "cyclic_insert_a_b_a":
+        cyc_a = doc.blocks.new("CYC_A")
+        cyc_b = doc.blocks.new("CYC_B")
+        cyc_a.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        cyc_a.add_blockref(cyc_b.name, (0.0, 0.0, 0.0))
+        cyc_b.add_blockref(cyc_a.name, (0.0, 0.0, 0.0))
+        block.add_blockref(cyc_a.name, (0.0, 0.0, 0.0))
+    elif escape_case == "self_cyclic_insert_a_a":
+        self_a = doc.blocks.new("SELF_A")
+        self_a.add_blockref(self_a.name, (0.0, 0.0, 0.0))
+        block.add_blockref(self_a.name, (0.0, 0.0, 0.0))
+
+    doc.saveas(built.output_path)
+    before = Path(built.output_path).read_bytes()
+
+    strict = review_dxf_with_dimension_line_integrity(built)
+    semantic = review_dxf(built, verify_dimension_truth=True)
+    assert Path(built.output_path).read_bytes() == before
+    assert review_dxf_with_dimension_line_integrity(built, verify_dimension_truth=False).passed
+    assert not strict.passed
+    assert strict.qualification == "UNKNOWN"
+    assert not semantic.passed
+    assert any("dim_unverified_rendered_structure" in msg for msg in semantic.dimension_mismatches)
+
+
+def test_primary_contradiction_stays_failed_even_with_nested_insert_label(tmp_path: Path) -> None:
+    built, doc, dim = _explicit_truth_control(tmp_path)
+    dim.dxf.text = "99"
+    _set_rendered_block_text(dim, "99")
+    child = doc.blocks.new("EXTRA_NESTED_200")
+    child.add_text("200", dxfattribs={"height": 1.0})
+    dim.get_geometry_block().add_blockref(child.name, (0.0, 0.0, 0.0))
+    doc.saveas(built.output_path)
+
+    result = review_dxf_with_dimension_line_integrity(built)
+    assert not result.passed
+    assert result.qualification == "FAILED"
