@@ -1040,6 +1040,7 @@ def test_known_literal_contradiction_stays_failed_with_unsupported_primary_forma
         "standard_autocad_arrows",
         "two_level_pure_geometry_insert",
         "diamond_dag_pure_geometry_insert",
+        "mirrored_negative_scale_and_mixed_case_insert",
     ],
 )
 def test_pure_geometry_dimension_arrow_blocks_and_defpoints_stay_qualified(
@@ -1063,13 +1064,9 @@ def test_pure_geometry_dimension_arrow_blocks_and_defpoints_stay_qualified(
         leaf.add_arc((0.0, 0.0), radius=1.0, start_angle=0.0, end_angle=90.0)
         leaf.add_circle((0.0, 0.0), radius=0.5)
         leaf.add_lwpolyline([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], close=True)
-        leaf.add_polyline2d([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], close=True)
         leaf.add_trace([(0.0, 0.0), (1.0, 0.0), (1.0, 0.2), (0.0, 0.2)])
-        leaf.add_wipeout([(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)])
-        hatch = leaf.add_hatch()
-        hatch.paths.add_polyline_path([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], is_closed=True)
-        leaf.add_spline([(0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (2.0, 0.0, 0.0)])
-        leaf.add_ellipse(center=(0.0, 0.0, 0.0), major_axis=(2.0, 0.0, 0.0), ratio=0.5)
+        leaf.add_line((0.0, 0.0), (1.0, 0.0))
+        leaf.add_point((0.0, 0.0, 0.0))
         outer = doc.blocks.new("PURE_GEO_OUTER")
         outer.add_blockref(leaf.name, (0.0, 0.0, 0.0))
         block.add_blockref(outer.name, (0.0, 0.0, 0.0))
@@ -1084,6 +1081,14 @@ def test_pure_geometry_dimension_arrow_blocks_and_defpoints_stay_qualified(
         top.add_blockref(mid_a.name, (0.0, 0.0, 0.0))
         top.add_blockref(mid_b.name, (0.0, 0.0, 0.0))
         block.add_blockref(top.name, (0.0, 0.0, 0.0))
+    elif arrow_variant == "mirrored_negative_scale_and_mixed_case_insert":
+        arrow = doc.blocks.new("MIXED_CASE_ARROW")
+        arrow.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        block.add_blockref(
+            "mixed_case_arrow",
+            (0.0, 0.0, 0.0),
+            dxfattribs={"xscale": -1.0, "yscale": -1.0, "zscale": 1.0, "rotation": 180.0},
+        )
 
     doc.saveas(built.output_path)
     before = Path(built.output_path).read_bytes()
@@ -1117,12 +1122,27 @@ def test_pure_geometry_dimension_arrow_blocks_and_defpoints_stay_qualified(
         "deep_nested_insert_over_cap",
         "cyclic_insert_a_b_a",
         "self_cyclic_insert_a_a",
+        "mixed_case_cyclic_insert",
+        "direct_wipeout_masking",
+        "nested_wipeout_masking",
+        "direct_solid_hatch",
+        "nested_solid_hatch",
+        "nested_spline_glyph_outline",
+        "nested_ellipse_outline",
+        "nested_3dface",
+        "direct_polyface_mesh",
+        "nested_polyline2d",
+        "blank_bg_fill_mtext_alongside_label",
+        "minsert_multi_grid",
+        "zero_xscale_insert",
+        "zero_zscale_insert",
+        "zero_extrusion_insert",
     ],
 )
 def test_uninspected_nested_or_non_text_rendered_structures_fail_closed(
     tmp_path: Path, escape_case: str,
 ) -> None:
-    from ezdxf.math import Vec2
+    from ezdxf.math import Vec2, Vec3
 
     built, doc, dim = _explicit_truth_control(tmp_path / escape_case)
     block = dim.get_geometry_block()
@@ -1212,6 +1232,66 @@ def test_uninspected_nested_or_non_text_rendered_structures_fail_closed(
         self_a = doc.blocks.new("SELF_A")
         self_a.add_blockref(self_a.name, (0.0, 0.0, 0.0))
         block.add_blockref(self_a.name, (0.0, 0.0, 0.0))
+    elif escape_case == "mixed_case_cyclic_insert":
+        cyc_a = doc.blocks.new("Cycle_Alpha")
+        cyc_b = doc.blocks.new("cycle_beta")
+        cyc_a.add_blockref("CYCLE_BETA", (0.0, 0.0, 0.0))
+        cyc_b.add_blockref("cycle_alpha", (0.0, 0.0, 0.0))
+        block.add_blockref("CYCLE_ALPHA", (0.0, 0.0, 0.0))
+    elif escape_case == "direct_wipeout_masking":
+        block.add_wipeout([(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)])
+    elif escape_case == "nested_wipeout_masking":
+        child = doc.blocks.new("BLK_WIPEOUT_MASK")
+        child.add_wipeout([(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)])
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "direct_solid_hatch":
+        hatch = block.add_hatch()
+        hatch.paths.add_polyline_path([(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)], is_closed=True)
+    elif escape_case == "nested_solid_hatch":
+        child = doc.blocks.new("BLK_SOLID_HATCH")
+        hatch = child.add_hatch()
+        hatch.paths.add_polyline_path([(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)], is_closed=True)
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "nested_spline_glyph_outline":
+        child = doc.blocks.new("BLK_SPLINE_GLYPH")
+        child.add_spline([(0.0, 0.0, 0.0), (1.0, 2.0, 0.0), (2.0, 0.0, 0.0)])
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "nested_ellipse_outline":
+        child = doc.blocks.new("BLK_ELLIPSE_GLYPH")
+        child.add_ellipse(center=(0.0, 0.0, 0.0), major_axis=(2.0, 0.0, 0.0), ratio=0.5)
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "nested_3dface":
+        child = doc.blocks.new("BLK_3DFACE")
+        child.add_3dface([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)])
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "direct_polyface_mesh":
+        pface = block.add_polyface()
+        pface.append_face([(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 5.0, 0.0)])
+    elif escape_case == "nested_polyline2d":
+        child = doc.blocks.new("BLK_POLYLINE2D")
+        child.add_polyline2d([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)], close=True)
+        block.add_blockref(child.name, (0.0, 0.0, 0.0))
+    elif escape_case == "blank_bg_fill_mtext_alongside_label":
+        block.add_mtext("   ", dxfattribs={"char_height": 2.5, "bg_fill": 1, "bg_fill_color": 7})
+    elif escape_case == "minsert_multi_grid":
+        arrow = doc.blocks.new("ARROW_MINSERT")
+        arrow.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        block.add_blockref(arrow.name, (0.0, 0.0, 0.0)).grid(size=(4, 4), spacing=(1.0, 1.0))
+    elif escape_case == "zero_xscale_insert":
+        arrow = doc.blocks.new("ARROW_ZERO_X")
+        arrow.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        ref = block.add_blockref(arrow.name, (0.0, 0.0, 0.0))
+        ref.dxf.unprotected_set("xscale", 0.0)
+    elif escape_case == "zero_zscale_insert":
+        arrow = doc.blocks.new("ARROW_ZERO_Z")
+        arrow.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        ref = block.add_blockref(arrow.name, (0.0, 0.0, 0.0))
+        ref.dxf.unprotected_set("zscale", 0.0)
+    elif escape_case == "zero_extrusion_insert":
+        arrow = doc.blocks.new("ARROW_ZERO_EXT")
+        arrow.add_solid([(0.0, 0.0), (1.0, 0.0), (0.5, 0.5)])
+        ref = block.add_blockref(arrow.name, (0.0, 0.0, 0.0))
+        ref.dxf.unprotected_set("extrusion", Vec3(0.0, 0.0, 0.0))
 
     doc.saveas(built.output_path)
     before = Path(built.output_path).read_bytes()

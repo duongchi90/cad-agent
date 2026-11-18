@@ -479,15 +479,9 @@ _NON_LABEL_RENDERED_GEOMETRY_TYPES = frozenset({
     "POINT",
     "SOLID",
     "TRACE",
-    "3DFACE",
     "ARC",
     "CIRCLE",
-    "ELLIPSE",
-    "SPLINE",
     "LWPOLYLINE",
-    "POLYLINE",
-    "HATCH",
-    "WIPEOUT",
 })
 _MAX_NESTED_INSERT_DEPTH = 32
 
@@ -498,6 +492,18 @@ def _has_finite_coords(value: object) -> bool:
     except TypeError:
         return False
     return len(coords) in {2, 3} and all(_is_finite_number(coord) for coord in coords)
+
+
+def _has_nonzero_extrusion(value: object) -> bool:
+    try:
+        coords = tuple(value)  # type: ignore[arg-type]
+    except TypeError:
+        return False
+    return (
+        len(coords) == 3
+        and all(_is_finite_number(coord) for coord in coords)
+        and any(float(coord) != 0.0 for coord in coords)
+    )
 
 
 def _insert_is_non_label_geometry(
@@ -520,24 +526,21 @@ def _insert_is_non_label_geometry(
         return False
     if not _has_finite_coords(insert_entity.dxf.get("insert", (0.0, 0.0, 0.0))):
         return False
-    if not _has_finite_coords(insert_entity.dxf.get("extrusion", (0.0, 0.0, 1.0))):
+    if not _has_nonzero_extrusion(insert_entity.dxf.get("extrusion", (0.0, 0.0, 1.0))):
         return False
-    for attr, default in (
-        ("xscale", 1.0),
-        ("yscale", 1.0),
-        ("zscale", 1.0),
-        ("rotation", 0.0),
-        ("row_spacing", 0.0),
-        ("column_spacing", 0.0),
-    ):
-        if not _is_finite_number(insert_entity.dxf.get(attr, default)):
+    for scale_attr in ("xscale", "yscale", "zscale"):
+        raw_scale = insert_entity.dxf.get(scale_attr, 1.0)
+        if not _is_finite_number(raw_scale) or float(raw_scale) == 0.0:  # type: ignore[arg-type]
+            return False
+    for attr in ("rotation", "row_spacing", "column_spacing"):
+        if not _is_finite_number(insert_entity.dxf.get(attr, 0.0)):
             return False
     for count_attr in ("row_count", "column_count"):
         raw_count = insert_entity.dxf.get(count_attr, 1)
         if (
             not _is_finite_number(raw_count)
             or not float(raw_count).is_integer()  # type: ignore[arg-type]
-            or int(raw_count) < 1  # type: ignore[arg-type]
+            or int(raw_count) != 1  # type: ignore[arg-type]
         ):
             return False
 
@@ -624,7 +627,7 @@ def _read_rendered_block(
 
     parts: list[str] = []
     profile: list[tuple[str, float]] = []
-    hidden_count = transparent_count = unreadable_count = height_mismatch = 0
+    hidden_count = transparent_count = unreadable_count = height_mismatch = empty_text_count = 0
     root_block_name = str(getattr(block, "name", "") or "").casefold()
     initial_active = frozenset({root_block_name}) if root_block_name else frozenset()
     verified_insert_heights: dict[str, int] = {}
@@ -649,6 +652,8 @@ def _read_rendered_block(
         plain = item.plain_text() if kind == "TEXT" else plain_cad_text(raw_content)
         if plain:
             parts.append(plain)
+        else:
+            empty_text_count += 1
         layer = context.resolve_layer(item)
         if bool(int(item.dxf.get("invisible", 0) or 0)) or not _is_layer_visible_and_plotted(doc, layer):
             hidden_count += 1
@@ -670,6 +675,8 @@ def _read_rendered_block(
             hidden_count += 1
         except (ValueError, TypeError, AttributeError, IndexError):
             unreadable_count += 1
+    if empty_text_count > 0 and parts:
+        unreadable_count += 1
     if expected_mtext is not None:
         try:
             expected = _mtext_height_profile(expected_mtext, nominal_base_height)
