@@ -5296,6 +5296,69 @@ def test_native_pdf_observation_thin_stroke_at_glyph_bounds(
     assert {record["content"] for record in records} == expected
 
 
+@pytest.mark.real_data
+@pytest.mark.parametrize(
+    ("swap_svg_strokes", "expected_target_retained"),
+    [
+        pytest.param(False, False, id="source-bound-contact"),
+        pytest.param(True, True, id="same-kind-substitution-falls-back"),
+    ],
+)
+def test_native_pdf_observation_jxs_below_baseline_stroke_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    swap_svg_strokes: bool,
+    expected_target_retained: bool,
+) -> None:
+    import hashlib
+    from xml.etree import ElementTree as ET
+
+    source_value = os.environ.get("CAD_AGENT_PR578_JXS_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_PR578_JXS_PDF is not configured")
+    source = Path(source_value).read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    assert source_sha == "622cb0e63817026bb2d680c8c2e7cb265b9fe3a5c8a6b86e5390e15bf86e8f05"
+
+    swapped = False
+    if swap_svg_strokes:
+        original_export = fitz.Page.get_svg_image
+
+        def export_with_mismatched_stroke(page, matrix=None, text_as_path=True):
+            nonlocal swapped
+            svg = original_export(page, matrix=matrix, text_as_path=text_as_path)
+            if not text_as_path:
+                return svg
+            root = ET.fromstring(svg)
+            path_positions = [i for i, child in enumerate(root) if child.tag.endswith("}path")]
+            path_sequences = [
+                i for i, (kind, _) in enumerate(page.get_bboxlog())
+                if kind in ("stroke-path", "fill-path")
+            ]
+            positions_by_sequence = dict(zip(path_sequences, path_positions, strict=True))
+            clear_stroke = positions_by_sequence[101]
+            contact_stroke = positions_by_sequence[103]
+            root[clear_stroke], root[contact_stroke] = root[contact_stroke], root[clear_stroke]
+            swapped = True
+            return ET.tostring(root, encoding="unicode")
+
+        monkeypatch.setattr(fitz.Page, "get_svg_image", export_with_mismatched_stroke)
+
+    with fitz.open(stream=source, filetype="pdf") as document:
+        page = document[0]
+        raster = page.get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+        result = fidelity_module._native_pdf_text_span_records(
+            page, 1, source_sha, hashlib.sha256(raster.samples).hexdigest(),
+            raster.width, raster.height, "displayed-page-box-v1",
+        )
+
+    spans = {span["id"]: span for span in result}
+    assert "native-pdf-p01-b041-l004-s000" in spans  # Verified clear gap of 0.292 pt.
+    assert "native-pdf-p01-b028-l000-s000" not in spans  # Existing stroke rejection.
+    assert swapped is swap_svg_strokes
+    target_retained = "native-pdf-p01-b007-l001-s000" in spans
+    assert target_retained is expected_target_retained
+
+
 @pytest.mark.parametrize(
     "r5_case",
     [

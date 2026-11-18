@@ -1752,6 +1752,305 @@ def _fresh_fidelity_ocr_candidates(
     return candidates
 
 
+class _NativePdfThinStrokeCheck:
+    """Confirm contact in the lower margin of a glyph using independently bound paint."""
+
+    _SCALE = 24
+    _PAIR_LIMIT = 64
+    _PAIR_PIXELS = 2_000_000
+    _PAGE_PIXELS = 8_000_000
+    _SVG_NS = "{http://www.w3.org/2000/svg}"
+    _HREF = "{http://www.w3.org/1999/xlink}href"
+
+    def __init__(self, page: fitz.Page, paint_log: Collection[Any]) -> None:
+        self.page = page
+        self.paint_log = paint_log
+        self.export_ready = False
+        self.paths: dict[int, Any] = {}
+        self.glyphs: dict[tuple[str, int], list[tuple[Any, tuple[float, ...]]]] = {}
+        self.definitions: dict[str, Any] = {}
+        self.fonts: dict[str, Any] = {}
+        self.strokes: dict[int, str | None] = {}
+        self.masks: dict[tuple[Any, ...], np.ndarray | None] = {}
+        self.pairs = 0
+        self.pixels = 0
+
+    @staticmethod
+    def _matrix(node: Any) -> tuple[float, ...]:
+        transform = re.fullmatch(r"matrix\(([^)]+)\)", node.get("transform", ""))
+        if transform is None:
+            raise ValueError("Expected an explicit SVG paint transform")
+        matrix = tuple(float(value) for value in re.split(r"[\s,]+", transform[1].strip()))
+        if len(matrix) != 6 or not all(math.isfinite(value) for value in matrix):
+            raise ValueError("Invalid SVG paint transform")
+        return matrix
+
+    @staticmethod
+    def _color_matches(color: str, rgb: Any) -> bool:
+        return (
+            re.fullmatch(r"#[0-9a-fA-F]{6}", color) is not None
+            and isinstance(rgb, (list, tuple)) and len(rgb) == 3
+            and all(abs(int(color[i:i + 2], 16) / 255 - value) <= 0.5 / 255 + 1e-7
+                    for i, value in zip((1, 3, 5), rgb))
+        )
+
+    @staticmethod
+    def _path_data(node: Any) -> str:
+        path = node.get("d", "")
+        if not re.fullmatch(r"[MLHVCSQTAZmlhvcsqtaz0-9eE.+, \t\r\n-]+", path):
+            raise ValueError("Unsupported SVG path data")
+        return path
+
+    def _prepare_export(self) -> None:
+        from xml.etree import ElementTree
+
+        self.export_ready = True
+        svg = self.page.get_svg_image(text_as_path=True)
+        if len(svg.encode("utf-8")) > 4 * 1024 * 1024 or "<!" in svg:
+            return
+        root = ElementTree.fromstring(svg)
+        ns = self._SVG_NS
+        if root.tag != ns + "svg" or not set(root.attrib) <= {"width", "height", "viewBox", "version"}:
+            return
+        if tuple(map(float, root.attrib["viewBox"].split())) != (
+            0.0, 0.0, round(self.page.rect.width, 3), round(self.page.rect.height, 3),
+        ):
+            return
+        if sum(1 for _ in root.iter()) > 10_000:
+            return
+        if any(child.tag not in {ns + "defs", ns + "path", ns + "use"} for child in root):
+            return
+        defs = root.findall(ns + "defs")
+        if len(defs) != 1:
+            return
+        definitions = {node.get("id"): node for node in defs[0]}
+        if len(definitions) != len(defs[0]) or None in definitions:
+            return
+        path_nodes = [node for node in root if node.tag == ns + "path"]
+        path_sequences = [(i, paint[0]) for i, paint in enumerate(self.paint_log)
+                          if paint[0] in ("stroke-path", "fill-path")]
+        if len(path_nodes) != len(path_sequences):
+            return
+        indexed = {}
+        for node in root:
+            if node.tag != ns + "use":
+                continue
+            match = re.fullmatch(r"#(font_\d+_(\d+))", node.get(self._HREF, ""))
+            if match is None or match[1] not in definitions:
+                return
+            key = (node.get("data-text"), int(match[2]))
+            indexed.setdefault(key, []).append((node, self._matrix(node)))
+        for (index, kind), node in zip(path_sequences, path_nodes):
+            if (node.get("stroke", "none") != "none") != (kind == "stroke-path"):
+                return
+        self.glyphs = indexed
+        self.definitions = definitions
+        self.paths = {index: node for (index, _), node in zip(path_sequences, path_nodes)}
+
+    def _bound_stroke(self, sequence: int, drawing: dict[str, Any]) -> str | None:
+        from fontTools.pens.recordingPen import RecordingPen
+        from fontTools.svgLib.path import parse_path
+
+        node = self.paths.get(sequence)
+        allowed = {"d", "transform", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke",
+                   "fill", "stroke-opacity", "opacity"}
+        if node is None or not set(node.attrib) <= allowed or drawing.get("type") != "s":
+            return None
+        if (drawing.get("seqno") != sequence or drawing.get("layer") or drawing.get("closePath")
+                or drawing.get("dashes") != "[] 0" or drawing.get("stroke_opacity") != 1
+                or tuple(drawing.get("lineCap", ())) != (1, 1, 1) or drawing.get("lineJoin") != 1
+                or node.get("stroke-linecap") != "round" or node.get("stroke-linejoin") != "round"
+                or node.get("fill") != "none"
+                or float(node.get("stroke-opacity", "1")) != 1 or float(node.get("opacity", "1")) != 1):
+            return None
+        stroke = node.get("stroke", "")
+        if not self._color_matches(stroke, drawing.get("color")):
+            return None
+        a, b, c, d, e, f = self._matrix(node)
+        scale = math.hypot(a, b)
+        width = float(node.get("stroke-width", "0"))
+        if (scale <= 0 or abs(math.hypot(c, d) - scale) > 1e-6 or abs(a * c + b * d) > 1e-6
+                or not width > 0 or abs(width * scale - drawing["width"]) > 1e-5):
+            return None
+
+        path = self._path_data(node)
+        pen = RecordingPen()
+        parse_path(path, pen)
+        transform = fitz.Matrix(a, b, c, d, e, f)
+        previous = None
+        segments = []
+        for command, points in pen.value:
+            if command == "moveTo":
+                previous = fitz.Point(points[0]) * transform
+            elif command == "lineTo" and previous is not None:
+                endpoint = fitz.Point(points[0]) * transform
+                segments.append((previous, endpoint))
+                previous = endpoint
+            elif command != "endPath":
+                return None
+        original = drawing.get("items", ())
+        if len(segments) != len(original) or not segments:
+            return None
+        for segment, (kind, *points) in zip(segments, original):
+            if kind != "l" or len(points) != 2 or not all(
+                abs(v - original_v) <= 0.002
+                for point, expected in zip(segment, points)
+                for v, original_v in zip(point, expected)
+            ):
+                return None
+        matrix = " ".join(map(str, (a, b, c, d, e, f)))
+        return (f'<path d="{path}" transform="matrix({matrix})" fill="none" stroke="{stroke}" '
+                f'stroke-width="{width}" stroke-linecap="round" stroke-linejoin="round"/>')
+
+    def _embedded_font(self, name: str) -> Any:
+        from io import BytesIO
+
+        from fontTools.ttLib import TTFont
+
+        document = self.page.parent
+        if document is None:
+            return None
+        # Subset resource aliases of the same font are equivalent only when
+        # every usable program for this trace name has identical bytes.
+        programs = set()
+        for resource in self.page.get_fonts(full=True):
+            if resource[3].split("+", 1)[-1] != name:
+                continue
+            if resource[1:3] != ("ttf", "Type0") or resource[5] != "Identity-H" or resource[6] != 0:
+                return None
+            kind, descendant = document.xref_get_key(resource[0], "DescendantFonts")
+            if kind == "xref":
+                ref = re.fullmatch(r"(\d+) 0 R", descendant)
+                if ref is None:
+                    return None
+                descendant = document.xref_object(int(ref[1]))
+            elif kind != "array":
+                return None
+            descendant_ref = re.fullmatch(r"\s*\[\s*(\d+) 0 R\s*\]\s*", descendant)
+            if descendant_ref is None or document.xref_get_key(
+                int(descendant_ref[1]), "CIDToGIDMap",
+            ) != ("name", "/Identity"):
+                return None
+            program = document.extract_font(resource[0])[3]
+            if not program or len(program) > 4 * 1024 * 1024:
+                return None
+            programs.add(program)
+            if len(programs) > 1:
+                return None
+        return TTFont(BytesIO(next(iter(programs))), lazy=True) if programs else None
+
+    def _glyph_paths(
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
+    ) -> tuple[str, str] | None:
+        from fontTools.pens.svgPathPen import SVGPathPen
+        from fontTools.pens.transformPen import TransformPen
+
+        code, gid, (ox, oy), _ = glyph
+        if trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer") or trace.get("wmode") != 0:
+            return None
+        if tuple(trace.get("dir", ())) != (1.0, 0.0) or not isinstance(gid, int) or gid < 0:
+            return None
+        candidates = [(node, matrix) for node, matrix in self.glyphs.get((chr(code), gid), ())
+                      if abs(matrix[4] - ox) <= 0.001 and abs(matrix[5] - oy) <= 0.001]
+        if len(candidates) != 1:
+            return None
+        node, (a, b, c, d, e, f) = candidates[0]
+        if not set(node.attrib) <= {"data-text", self._HREF, "transform", "fill"}:
+            return None
+        if b != 0 or c != 0 or a <= 0 or d >= 0:
+            return None
+        if abs(a - trace["size"]) > 0.001 or abs(math.sqrt(-a * d) - span_size) > 0.001:
+            return None
+        fill = node.get("fill", "#000000")
+        if not self._color_matches(fill, trace.get("color")):
+            return None
+        definition = self.definitions[node.attrib[self._HREF][1:]]
+        if definition.tag != self._SVG_NS + "path" or set(definition.attrib) != {"id", "d"}:
+            return None
+        font_name = trace["font"]
+        if font_name not in self.fonts:
+            self.fonts[font_name] = self._embedded_font(font_name)
+        font = self.fonts[font_name]
+        if font is None:
+            return None
+        units = font["head"].unitsPerEm
+        order = font.getGlyphOrder()
+        if gid >= len(order) or units <= 0:
+            return None
+        glyph_set = font.getGlyphSet()
+        pen = SVGPathPen(glyph_set)
+        unit = 1.0 / units
+        glyph_set[order[gid]].draw(TransformPen(pen, (unit, 0, 0, unit, 0, 0)))
+        font_path = pen.getCommands()
+        if not font_path:
+            return None
+        matrix = f"{a} {b} {c} {d} {e} {f}"
+        return tuple(f'<path d="{path}" transform="matrix({matrix})" fill="{fill}"/>'
+                     for path in (self._path_data(definition), font_path))
+
+    def _dark_mask(self, markup: str, bounds: fitz.IRect) -> np.ndarray:
+        scale = self._SCALE
+        width, height = bounds.width, bounds.height
+        image = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+            f'viewBox="{bounds.x0 / scale} {bounds.y0 / scale} {width / scale} {height / scale}">'
+            f'{markup}</svg>'
+        )
+        with fitz.open(stream=image.encode(), filetype="svg") as document:
+            raster = document[0].get_pixmap(colorspace=fitz.csGRAY)
+            if raster.width != width or raster.height != height:
+                raise ValueError("SVG raster and bounded clip do not match")
+            return np.frombuffer(raster.samples, np.uint8).reshape(height, width) < 128
+
+    def overlaps_below_baseline(
+        self, sequence: int, drawing: dict[str, Any], trace: dict[str, Any],
+        glyph: tuple[Any, ...], span_size: Any, clip: fitz.Rect,
+    ) -> bool:
+        if (
+            self.pairs >= self._PAIR_LIMIT
+            or not isinstance(span_size, (int, float))
+            or not math.isfinite(span_size) or span_size <= 0
+        ):
+            return False
+        self.pairs += 1
+        try:
+            if not self.export_ready:
+                self._prepare_export()
+            if not self.paths or not self.page.rect.contains(clip):
+                return False
+            if sequence not in self.strokes:
+                self.strokes[sequence] = self._bound_stroke(sequence, drawing)
+            stroke = self.strokes[sequence]
+            if stroke is None:
+                return False
+            bounds = (clip * fitz.Matrix(self._SCALE, self._SCALE)).irect
+            key = (trace["_trace_order_idx"], glyph[0], glyph[1], tuple(glyph[2]), span_size, tuple(bounds))
+            cached = key in self.masks
+            pixels = bounds.width * bounds.height
+            pair_pixels = pixels * (2 if cached else 3)
+            if pixels <= 0 or pair_pixels > self._PAIR_PIXELS or self.pixels + pair_pixels > self._PAGE_PIXELS:
+                return False
+            self.pixels += pair_pixels
+            if not cached:
+                paths = self._glyph_paths(trace, glyph, span_size)
+                bound_mask = None
+                if paths is not None:
+                    svg_mask = self._dark_mask(paths[0], bounds)
+                    if np.array_equal(svg_mask, self._dark_mask(paths[1], bounds)):
+                        bound_mask = svg_mask
+                self.masks[key] = bound_mask
+            glyph_mask = self.masks[key]
+            if glyph_mask is None or not np.any(glyph_mask):
+                return False
+            # Exclude boundary samples whose centers could straddle the baseline.
+            baseline = glyph[2][1]
+            rows = (bounds.y0 + np.arange(bounds.height) + 0.5) / self._SCALE
+            return bool(np.any(glyph_mask & self._dark_mask(stroke, bounds) & (rows[:, None] > baseline + 0.5 / self._SCALE)))
+        except Exception:
+            # Renderer and font parser failures leave the R7 observation decision intact.
+            return False
+
+
 def _native_pdf_text_span_records(
     source_page: fitz.Page,
     page_number: int,
@@ -2827,6 +3126,8 @@ def _native_pdf_text_span_records(
         stroke_seq_cache[index] = entries_out
         return entries_out
 
+    thin_stroke_check = _NativePdfThinStrokeCheck(source_page, paint_log)
+
     def has_later_paint_overlap(
         trace: dict[str, Any],
         member_trace_order_ids: tuple[int, ...] = (),
@@ -3140,6 +3441,7 @@ def _native_pdf_text_span_records(
                     verified_strokes = get_verified_stroke_seq(index, paint_rect)
                     if verified_strokes is not None:
                         stroke_hit = False
+                        below_baseline_candidates = []
                         tx0, ty0, tx1, ty1 = trace_rect.x0, trace_rect.y0, trace_rect.x1, trace_rect.y1
                         for segs, d_bounds, width, sop_opaque, dark_vis in verified_strokes:
                             if (trace_rect & d_bounds).is_empty:
@@ -3230,13 +3532,37 @@ def _native_pdf_text_span_records(
                                     if clipped and t0 <= t1:
                                         stroke_hit = True
                                         break
+                                    if (
+                                        thin_cad_stroke and ux == 1.0 and uy == 0.0
+                                        and max(sy0, oy) < min(sy1, gy1)
+                                        and max(sx0, gx0) < min(sx1, gx1)
+                                    ):
+                                        below_baseline_candidates.append((cp, ox, oy, gr))
                                 if stroke_hit:
                                     break
                             if stroke_hit:
                                 break
-                        if not stroke_hit:
-                            continue
-                        return True
+                        if stroke_hit:
+                            return True
+                        seq_drawings = drawings_by_sequence.get(index, [])
+                        if below_baseline_candidates and len(seq_drawings) == 1:
+                            checked_glyphs = set()
+                            for cp, ox, oy, glyph_rect in below_baseline_candidates:
+                                key = (cp, ox, oy)
+                                if key in checked_glyphs:
+                                    continue
+                                checked_glyphs.add(key)
+                                matches = [
+                                    glyph for glyph in trace["chars"] if glyph[0] == cp and tuple(glyph[2]) == (ox, oy)
+                                ]
+                                if len(matches) != 1:
+                                    continue
+                                clip = fitz.Rect(glyph_rect.x0 - 0.25, oy, glyph_rect.x1 + 0.25, glyph_rect.y1 + 0.25)
+                                if thin_stroke_check.overlaps_below_baseline(
+                                    index, seq_drawings[0], trace, matches[0], span_font_size, clip,
+                                ):
+                                    return True
+                        continue
 
                 if overlap_ratio(trace_rect, paint_rect) > 0:
                     return True
