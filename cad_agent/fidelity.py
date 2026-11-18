@@ -3175,7 +3175,7 @@ def _native_pdf_text_span_records(
                                 )
                                 u_span = max(0.0, u1 - u0)
                                 if thin_cad_stroke:
-                                    v_top = min(v1, 0.68 * effective_v_size)
+                                    v_top = v1
                                     if ch in deep_descender_glyphs:
                                         v_bot = max(v0, -0.22 * effective_v_size)
                                     elif ch in below_baseline_ink_glyphs or (cp >= 0x80 and ch not in "°′″±"):

@@ -5266,6 +5266,35 @@ def test_native_pdf_observation_r4_closed_subpath_miter_and_multirun_condensed_t
 
 
 @pytest.mark.parametrize(
+    ("line_y", "expected"),
+    [
+        pytest.param(83.2, {"CONTROL"}, id="crosses-ink-above-0.68em"),
+        pytest.param(80.5, {"77", "CONTROL"}, id="clear-top-margin"),
+    ],
+)
+def test_native_pdf_observation_thin_stroke_above_glyph_core(
+    line_y: float, expected: set[str],
+) -> None:
+    with fitz.open() as document:
+        page = document.new_page(width=300, height=200)
+        page.insert_text((80, 100), "77", fontsize=24, fontname="helv")
+        page.insert_text((180, 100), "CONTROL", fontsize=12)
+        shape = page.new_shape()
+        shape.draw_rect(fitz.Rect(10, 10, 290, 190))
+        shape.draw_line((75, line_y), (112, line_y))
+        shape.finish(color=(0, 0, 0), width=0.20)
+        shape.commit()
+        pdf_bytes = document.tobytes()
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as reopened:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+        )
+
+    assert {record["content"] for record in records} == expected
+
+
+@pytest.mark.parametrize(
     "r5_case",
     [
         "bezier_bezier_acute_miter_whiteout",
