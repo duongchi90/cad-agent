@@ -5162,3 +5162,102 @@ def test_native_pdf_observation_r3_dense_hatch_caching_stays_fast() -> None:
 
     assert len(records) == 150
     assert elapsed < 1.5
+
+
+@pytest.mark.parametrize(
+    "r4_case",
+    [
+        "closed_subpath_start_vertex_acute_miter_whiteout",
+        "closed_subpath_zero_length_prefix_acute_miter_whiteout",
+        "quad_ul_start_vertex_acute_miter_whiteout",
+        "multirun_later_30Tz_tall_white_overwrite",
+        "multirun_later_5Tz_extreme_tall_white_overwrite",
+        "same_seq_later_uncolored_30Tz_tall_dark_overwrite",
+    ],
+)
+def test_native_pdf_observation_r4_closed_subpath_miter_and_multirun_condensed_text_occluders(
+    r4_case: str,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    target = "100"
+
+    if r4_case == "closed_subpath_start_vertex_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 4.0 w 0 j 10 M 10 10 380 280 re 70.0 175.0 m 55.0 50.0 l 85.0 50.0 l h S Q\n",
+        )
+    elif r4_case == "closed_subpath_zero_length_prefix_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 4.0 w 0 j 10 M 10 10 380 280 re 70.0 175.0 m 70.0 175.0 l 55.0 50.0 l 85.0 50.0 l h S Q\n",
+        )
+    elif r4_case == "quad_ul_start_vertex_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_quad(
+            fitz.Quad(
+                fitz.Point(70.0, 125.0),
+                fitz.Point(85.0, 250.0),
+                fitz.Point(55.0, 250.0),
+                fitz.Point(70.0, 260.0),
+            )
+        )
+        sh.finish(color=(1, 1, 1), fill=None, width=4.0, lineJoin=0)
+        sh.commit()
+    elif r4_case == "multirun_later_30Tz_tall_white_overwrite":
+        page.insert_text((60, 114), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 1 1 1 rg /F0 12 Tf 1 0 0 1 15 280 Tm (A) Tj "
+            b"30 Tz /F0 30 Tf 45 -106 Td (MMMM) Tj "
+            b"100 Tz /F0 12 Tf 290 -154 Td (B) Tj ET Q\n",
+        )
+    elif r4_case == "multirun_later_5Tz_extreme_tall_white_overwrite":
+        page.insert_text((60, 114), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 1 1 1 rg /F0 12 Tf 1 0 0 1 15 280 Tm (A) Tj "
+            b"5 Tz /F0 60 Tf 45 -126 Td (MMMMMMMMMMMM) Tj "
+            b"100 Tz /F0 12 Tf 290 -134 Td (B) Tj ET Q\n",
+        )
+    else:
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 186 Tm (100) Tj "
+            b"30 Tz /F0 30 Tf 0 -12 Td (MMMM) Tj ET Q\n",
+        )
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents

@@ -2065,6 +2065,119 @@ def _native_pdf_text_span_records(
             max(py for _, py in mapped),
         )
 
+    source_text_blocks = source_page.get_text("dict").get("blocks", [])
+    try:
+        occluder_text_blocks = source_page.get_text(
+            "dict",
+            flags=getattr(fitz, "TEXTFLAGS_DICT", 0) & ~getattr(fitz, "TEXT_MEDIABOX_CLIP", 0),
+        ).get("blocks", [])
+    except TypeError:
+        occluder_text_blocks = source_text_blocks
+
+    dict_span_candidates: list[tuple[str | None, float, float, float, float, float, fitz.Rect]] = []
+    for blk in occluder_text_blocks:
+        if not isinstance(blk, dict):
+            continue
+        for ln in blk.get("lines", []):
+            if not isinstance(ln, dict) or ln.get("wmode") != 0:
+                continue
+            ldir = ln.get("dir", (1.0, 0.0))
+            if (
+                not isinstance(ldir, (tuple, list)) or len(ldir) != 2
+                or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in ldir)
+            ):
+                continue
+            ldn = math.hypot(float(ldir[0]), float(ldir[1]))
+            if ldn <= 1e-6:
+                continue
+            lux, luy = float(ldir[0]) / ldn, float(ldir[1]) / ldn
+            for sp in ln.get("spans", []):
+                if not isinstance(sp, dict):
+                    continue
+                sp_sz = sp.get("size")
+                sp_bb = sp.get("bbox")
+                sp_org = sp.get("origin")
+                if (
+                    not isinstance(sp_sz, (int, float)) or not math.isfinite(float(sp_sz)) or float(sp_sz) <= 0.0
+                    or not isinstance(sp_bb, (tuple, list)) or len(sp_bb) != 4
+                    or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in sp_bb)
+                    or not isinstance(sp_org, (tuple, list)) or len(sp_org) != 2
+                    or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in sp_org)
+                ):
+                    continue
+                sp_r = fitz.Rect(sp_bb)
+                if sp_r.is_empty or not sp_r.is_valid:
+                    continue
+                sp_f = sp.get("font") if isinstance(sp.get("font"), str) else None
+                dict_span_candidates.append((sp_f, lux, luy, float(sp_sz), float(sp_org[0]), float(sp_org[1]), sp_r))
+
+    for tr in paint_traces:
+        tr_bb = tr.get("bbox")
+        tr_sz = tr.get("size")
+        tr_dir = tr.get("dir", (1.0, 0.0))
+        if (
+            tr.get("type") != 0
+            or tr.get("wmode") != 0
+            or not isinstance(tr_bb, (tuple, list)) or len(tr_bb) != 4
+            or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in tr_bb)
+            or not isinstance(tr_sz, (int, float)) or not math.isfinite(float(tr_sz)) or float(tr_sz) <= 0.0
+            or not isinstance(tr_dir, (tuple, list)) or len(tr_dir) != 2
+            or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in tr_dir)
+        ):
+            continue
+        tdn = math.hypot(float(tr_dir[0]), float(tr_dir[1]))
+        if tdn <= 1e-6:
+            continue
+        tux, tuy = float(tr_dir[0]) / tdn, float(tr_dir[1]) / tdn
+        tvx, tvy = tuy, -tux
+        tr_r = fitz.Rect(tr_bb)
+        if not tr_r.is_valid:
+            continue
+        tr_sz_f = float(tr_sz)
+        raw_gl = nonspace_glyph_entries(tr)
+        if raw_gl is None:
+            continue
+        if not raw_gl:
+            tr["_occluder_bbox"] = tr_r
+            tr["_occluder_glyphs"] = []
+            tr["_occluder_v_expanded"] = False
+            tr["_effective_v_size"] = tr_sz_f
+            continue
+        tr_f = tr.get("font") if isinstance(tr.get("font"), str) else None
+        matched_max_sp_sz = 0.0
+        for sp_f, lux, luy, sp_sz_f, sox, soy, sp_r in dict_span_candidates:
+            if sp_f != tr_f or math.dist((tux, tuy), (lux, luy)) > 1e-2 or (tr_r & sp_r).is_empty:
+                continue
+            v_tol = max(0.75, 0.20 * max(tr_sz_f, sp_sz_f))
+            if any(
+                abs((sox - cox) * tvx + (soy - coy) * tvy) <= v_tol and overlap_ratio(cgr, sp_r) >= 0.75
+                for _cp, (cox, coy), cgr in raw_gl
+            ):
+                if sp_sz_f > matched_max_sp_sz:
+                    matched_max_sp_sz = sp_sz_f
+        if matched_max_sp_sz > tr_sz_f * 1.005:
+            eff_v = min(tr_sz_f * 1024.0, (matched_max_sp_sz * matched_max_sp_sz) / tr_sz_f)
+            v_sc = eff_v / tr_sz_f
+            exp_gl = [
+                (cp, org, expand_glyph_rect_for_condensation(org, cgr, tux, tuy, tvx, tvy, v_sc))
+                for cp, org, cgr in raw_gl
+            ]
+            occ_r = fitz.Rect(
+                min([tr_r.x0] + [gr.x0 for _c, _o, gr in exp_gl]),
+                min([tr_r.y0] + [gr.y0 for _c, _o, gr in exp_gl]),
+                max([tr_r.x1] + [gr.x1 for _c, _o, gr in exp_gl]),
+                max([tr_r.y1] + [gr.y1 for _c, _o, gr in exp_gl]),
+            )
+            tr["_occluder_bbox"] = occ_r
+            tr["_occluder_glyphs"] = exp_gl
+            tr["_occluder_v_expanded"] = True
+            tr["_effective_v_size"] = eff_v
+        else:
+            tr["_occluder_bbox"] = tr_r
+            tr["_occluder_glyphs"] = raw_gl
+            tr["_occluder_v_expanded"] = False
+            tr["_effective_v_size"] = tr_sz_f
+
     def has_valid_glyph_progression(
         ordered_traces: list[dict[str, Any]],
         line_dir: Any,
@@ -2212,9 +2325,44 @@ def _native_pdf_text_span_records(
         all_ys: list[float] = []
         has_diagonal = False
         prev_seg_pts: tuple[tuple[float, float], tuple[float, float]] | None = None
+        subpath_first_seg: tuple[tuple[float, float], tuple[float, float]] | None = None
+        subpath_just_closed = False
+
+        def emit_miter_join(
+            in_seg: tuple[tuple[float, float], tuple[float, float]],
+            out_seg: tuple[tuple[float, float], tuple[float, float]],
+        ) -> None:
+            q0, q1 = in_seg
+            r0, r1 = out_seg
+            if abs(r0[0] - q1[0]) > 1e-3 or abs(r0[1] - q1[1]) > 1e-3:
+                return
+            l_in = math.hypot(q1[0] - q0[0], q1[1] - q0[1])
+            l_out = math.hypot(r1[0] - r0[0], r1[1] - r0[1])
+            if l_in <= 1e-6 or l_out <= 1e-6:
+                return
+            uin_x, uin_y = (q1[0] - q0[0]) / l_in, (q1[1] - q0[1]) / l_in
+            uout_x, uout_y = (r1[0] - r0[0]) / l_out, (r1[1] - r0[1]) / l_out
+            dot = max(-1.0, min(1.0, uin_x * uout_x + uin_y * uout_y))
+            if dot < -0.2:
+                sin_half = math.sqrt(max(0.0, 0.5 * (1.0 + dot)))
+                if sin_half > 1e-4 and (1.0 / sin_half) <= 10.05:
+                    bx, by = uin_x - uout_x, uin_y - uout_y
+                    bn = math.hypot(bx, by)
+                    if bn > 1e-6:
+                        miter_len = half / sin_half
+                        tip = (q1[0] + (bx / bn) * miter_len, q1[1] + (by / bn) * miter_len)
+                        segs.append((
+                            min(q1[0], tip[0]) - half,
+                            min(q1[1], tip[1]) - half,
+                            max(q1[0], tip[0]) + half,
+                            max(q1[1], tip[1]) + half,
+                            q1,
+                            tip,
+                            0.0,
+                        ))
 
         def add_seg(p1: tuple[float, float], p2: tuple[float, float], pad: float = 0.0, track_join: bool = False) -> bool:
-            nonlocal has_diagonal, prev_seg_pts
+            nonlocal has_diagonal, prev_seg_pts, subpath_first_seg, subpath_just_closed
             if not (math.isfinite(p1[0]) and math.isfinite(p1[1]) and math.isfinite(p2[0]) and math.isfinite(p2[1])):
                 return False
             dx_s, dy_s = p2[0] - p1[0], p2[1] - p1[1]
@@ -2232,36 +2380,34 @@ def _native_pdf_text_span_records(
             ))
             all_xs.extend((p1[0], p2[0]))
             all_ys.extend((p1[1], p2[1]))
-            if track_join and line_join == 0 and half > 0.0:
-                if prev_seg_pts is not None:
-                    q0, q1 = prev_seg_pts
-                    if abs(p1[0] - q1[0]) <= 1e-3 and abs(p1[1] - q1[1]) <= 1e-3:
-                        l_in = math.hypot(q1[0] - q0[0], q1[1] - q0[1])
-                        l_out = math.hypot( dx_s, dy_s)
-                        if l_in > 1e-6 and l_out > 1e-6:
-                            uin_x, uin_y = (q1[0] - q0[0]) / l_in, (q1[1] - q0[1]) / l_in
-                            uout_x, uout_y = dx_s / l_out, dy_s / l_out
-                            dot = max(-1.0, min(1.0, uin_x * uout_x + uin_y * uout_y))
-                            if dot < -0.2:
-                                sin_half = math.sqrt(max(0.0, 0.5 * (1.0 + dot)))
-                                if sin_half > 1e-4 and (1.0 / sin_half) <= 10.05:
-                                    bx, by = uin_x - uout_x, uin_y - uout_y
-                                    bn = math.hypot(bx, by)
-                                    if bn > 1e-6:
-                                        miter_len = half / sin_half
-                                        tip = (q1[0] + (bx / bn) * miter_len, q1[1] + (by / bn) * miter_len)
-                                        segs.append((
-                                            min(q1[0], tip[0]) - half,
-                                            min(q1[1], tip[1]) - half,
-                                            max(q1[0], tip[0]) + half,
-                                            max(q1[1], tip[1]) + half,
-                                            q1,
-                                            tip,
-                                            0.0,
-                                        ))
-                prev_seg_pts = (p1, p2)
+            if track_join:
+                if math.hypot(dx_s, dy_s) > 1e-6:
+                    if (
+                        prev_seg_pts is not None
+                        and abs(p1[0] - prev_seg_pts[1][0]) <= 1e-3
+                        and abs(p1[1] - prev_seg_pts[1][1]) <= 1e-3
+                    ):
+                        if line_join == 0 and half > 0.0:
+                            emit_miter_join(prev_seg_pts, (p1, p2))
+                        if subpath_just_closed:
+                            subpath_first_seg = (p1, p2)
+                            subpath_just_closed = False
+                        elif (
+                            subpath_first_seg is not None
+                            and abs(p2[0] - subpath_first_seg[0][0]) <= 1e-3
+                            and abs(p2[1] - subpath_first_seg[0][1]) <= 1e-3
+                        ):
+                            if line_join == 0 and half > 0.0:
+                                emit_miter_join((p1, p2), subpath_first_seg)
+                            subpath_just_closed = True
+                    else:
+                        subpath_first_seg = (p1, p2)
+                        subpath_just_closed = False
+                    prev_seg_pts = (p1, p2)
             else:
                 prev_seg_pts = None
+                subpath_first_seg = None
+                subpath_just_closed = False
             return True
 
         for item in items:
@@ -2273,6 +2419,8 @@ def _native_pdf_text_span_records(
                     return None
             elif op == "re" and len(item) >= 2:
                 prev_seg_pts = None
+                subpath_first_seg = None
+                subpath_just_closed = False
                 r = fitz.Rect(item[1])
                 if not r.is_valid:
                     return None
@@ -2282,13 +2430,20 @@ def _native_pdf_text_span_records(
                         return None
             elif op == "qu" and len(item) >= 2:
                 prev_seg_pts = None
+                subpath_first_seg = None
+                subpath_just_closed = False
                 q = item[1]
-                cs_q = [(float(p.x), float(p.y)) for p in (q.ul, q.ur, q.lr, q.ll)]
+                cs_q = [(float(p.x), float(p.y)) for p in (q.ul, q.ll, q.lr, q.ur)]
                 for idx_c in range(4):
                     if not add_seg(cs_q[idx_c], cs_q[(idx_c + 1) % 4], 0.0, True):
                         return None
+                prev_seg_pts = None
+                subpath_first_seg = None
+                subpath_just_closed = False
             elif op == "c" and len(item) >= 5:
                 prev_seg_pts = None
+                subpath_first_seg = None
+                subpath_just_closed = False
                 p0, p1, p2, p3 = ((float(p.x), float(p.y)) for p in item[1:5])
                 if not all(math.isfinite(px) and math.isfinite(py) for px, py in (p0, p1, p2, p3)):
                     return None
@@ -2572,7 +2727,7 @@ def _native_pdf_text_span_records(
             else trace_size
         )
         effective_v_size = (
-            max(trace_size, min(trace_size * 8.0, (sp_sz * sp_sz) / trace_size))
+            max(trace_size, min(trace_size * 1024.0, (sp_sz * sp_sz) / trace_size))
             if trace_size > 0.0 and sp_sz > trace_size
             else trace_size
         )
@@ -2612,6 +2767,7 @@ def _native_pdf_text_span_records(
             if same_oblique_dir:
                 raw_asc_a, raw_desc_a = trace.get("ascender"), trace.get("descender")
                 raw_asc_b, raw_desc_b = lt.get("ascender"), lt.get("descender")
+                lt_eff_v = float(lt.get("_effective_v_size", lt_size))
                 asc_a = max(
                     0.75,
                     float(raw_asc_a) if isinstance(raw_asc_a, (int, float)) and math.isfinite(float(raw_asc_a)) else 0.85,
@@ -2623,11 +2779,11 @@ def _native_pdf_text_span_records(
                 asc_b = max(
                     0.75,
                     float(raw_asc_b) if isinstance(raw_asc_b, (int, float)) and math.isfinite(float(raw_asc_b)) else 0.85,
-                ) * float(lt_size)
+                ) * lt_eff_v
                 desc_b = min(
                     -0.15,
                     float(raw_desc_b) if isinstance(raw_desc_b, (int, float)) and math.isfinite(float(raw_desc_b)) else -0.25,
-                ) * float(lt_size)
+                ) * lt_eff_v
                 for _cp, (ox_a, oy_a), gr in target_glyphs:
                     for _lcp, (ox_b, oy_b), lgr in lt_glyphs:
                         if (gr & lgr).is_empty:
@@ -2650,6 +2806,11 @@ def _native_pdf_text_span_records(
                 intra_glyphs = nonspace_glyph_entries_from_chars(later_intra_chars)
                 if intra_glyphs is None:
                     return True
+                if v_scale > 1.001:
+                    intra_glyphs = [
+                        (icp, iorg, expand_glyph_rect_for_condensation(iorg, igr, ux, uy, vx, vy, v_scale))
+                        for icp, iorg, igr in intra_glyphs
+                    ]
                 if any(
                     not (gr & igr).is_empty
                     for _cp, _org, gr in target_glyphs
@@ -2662,22 +2823,52 @@ def _native_pdf_text_span_records(
                 if not isinstance(same_seq_item, (tuple, list)) or len(same_seq_item) != 2:
                     return True
                 same_seq_type, same_seq_bbox = same_seq_item
+                seq_all_traces = traces_by_sequence.get(sequence_number, [])
                 same_seq_later = [
-                    lt for lt in traces_by_sequence.get(sequence_number, [])
+                    lt for lt in seq_all_traces
                     if type(lt.get("_trace_order_idx")) is int
                     and lt["_trace_order_idx"] > trace_order_id
                     and lt["_trace_order_idx"] not in member_id_set
                 ]
                 if same_seq_later:
-                    if same_seq_type != "fill-text" or target_glyphs is None:
+                    if (
+                        same_seq_type != "fill-text"
+                        or target_glyphs is None
+                        or not isinstance(same_seq_bbox, (tuple, list))
+                        or len(same_seq_bbox) != 4
+                        or not all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in same_seq_bbox)
+                        or not seq_all_traces
+                        or not all(
+                            isinstance(st, dict)
+                            and st.get("type") == 0
+                            and st.get("wmode") == 0
+                            and isinstance(st.get("_occluder_bbox"), fitz.Rect)
+                            for st in seq_all_traces
+                        )
+                    ):
+                        return True
+                    same_seq_rect = fitz.Rect(same_seq_bbox)
+                    st_rects = [st["_occluder_bbox"] for st in seq_all_traces]
+                    union_st = fitz.Rect(
+                        min(r.x0 for r in st_rects), min(r.y0 for r in st_rects),
+                        max(r.x1 for r in st_rects), max(r.y1 for r in st_rects),
+                    )
+                    max_st_sz = max(float(st.get("_effective_v_size", st.get("size", 0.0))) for st in seq_all_traces)
+                    st_protrusion = max(
+                        float(union_st.x0) - float(same_seq_rect.x0),
+                        float(union_st.y0) - float(same_seq_rect.y0),
+                        float(same_seq_rect.x1) - float(union_st.x1),
+                        float(same_seq_rect.y1) - float(union_st.y1),
+                    )
+                    if st_protrusion > max(1.5, 0.20 * max_st_sz):
                         return True
                     for lt in same_seq_later:
-                        if lt.get("type") != 0 or not isinstance(lt.get("bbox"), (tuple, list)) or len(lt["bbox"]) != 4:
-                            return True
-                        lt_r = fitz.Rect(lt["bbox"])
-                        if (trace_rect & lt_r).is_empty or is_safe_adjacent_text_overlap(trace, lt):
+                        lt_r = lt["_occluder_bbox"]
+                        if (trace_rect & lt_r).is_empty:
                             continue
-                        lt_glyphs = nonspace_glyph_entries(lt)
+                        if not lt.get("_occluder_v_expanded") and is_safe_adjacent_text_overlap(trace, lt):
+                            continue
+                        lt_glyphs = lt.get("_occluder_glyphs")
                         if lt_glyphs is None or trace_glyphs_hit_target(lt, lt_glyphs):
                             return True
 
@@ -2721,17 +2912,17 @@ def _native_pdf_text_span_records(
                     and all(
                         isinstance(lt, dict)
                         and lt.get("type") == 0
-                        and isinstance(lt.get("bbox"), (tuple, list))
-                        and len(lt["bbox"]) == 4
+                        and lt.get("wmode") == 0
+                        and isinstance(lt.get("_occluder_bbox"), fitz.Rect)
                         and isinstance(lt.get("size"), (int, float))
                         and math.isfinite(float(lt["size"]))
                         and float(lt["size"]) > 0
                         for lt in later_traces
                     )
                 ):
-                    lt_rects = [fitz.Rect(lt["bbox"]) for lt in later_traces]
+                    lt_rects = [lt["_occluder_bbox"] for lt in later_traces]
                     expand_single_lt_y = False
-                    if len(lt_rects) == 1:
+                    if len(lt_rects) == 1 and not later_traces[0].get("_occluder_v_expanded"):
                         r0 = lt_rects[0]
                         if paint_rect.y0 < r0.y0 - 0.5 or paint_rect.y1 > r0.y1 + 0.5:
                             lt_rects = [fitz.Rect(r0.x0, min(r0.y0, paint_rect.y0), r0.x1, max(r0.y1, paint_rect.y1))]
@@ -2740,7 +2931,7 @@ def _native_pdf_text_span_records(
                         min(r.x0 for r in lt_rects), min(r.y0 for r in lt_rects),
                         max(r.x1 for r in lt_rects), max(r.y1 for r in lt_rects),
                     )
-                    max_lt_sz = max(float(lt["size"]) for lt in later_traces)
+                    max_lt_sz = max(float(lt.get("_effective_v_size", lt["size"])) for lt in later_traces)
                     lt_protrusion = max(
                         float(union_lt.x0) - float(paint_rect.x0),
                         float(union_lt.y0) - float(paint_rect.y0),
@@ -2760,9 +2951,13 @@ def _native_pdf_text_span_records(
                                 continue
                             if (trace_rect & lt_r).is_empty:
                                 continue
-                            if not expand_single_lt_y and is_safe_adjacent_text_overlap(trace, lt):
+                            if (
+                                not expand_single_lt_y
+                                and not lt.get("_occluder_v_expanded")
+                                and is_safe_adjacent_text_overlap(trace, lt)
+                            ):
                                 continue
-                            lt_glyphs = nonspace_glyph_entries(lt)
+                            lt_glyphs = lt.get("_occluder_glyphs")
                             if lt_glyphs is None:
                                 glyph_hit = True
                                 break
@@ -2908,7 +3103,6 @@ def _native_pdf_text_span_records(
             return True
         return False
 
-    source_text_blocks = source_page.get_text("dict").get("blocks", [])
     span_trace_ranges: dict[tuple[int, int, int], tuple[int, dict[str, Any]]] = {}
     trace_range_coverage: dict[int, list[tuple[int, int]]] = {}
     for block_index, block in enumerate(source_text_blocks):
