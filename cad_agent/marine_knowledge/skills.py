@@ -38,6 +38,12 @@ _MANIFEST = get_marine_source_manifest()
 _SOURCES_BY_ID = {src["source_id"]: src for src in _MANIFEST["sources"]}
 
 
+_VERIFIED_PROVENANCES = frozenset({"NATIVE_CAD_TEXT", "FIXTURE_SUPPLIED"})
+_NON_DIM_METRIC_KEYS = frozenset({"floor_spacing_region"})
+_UNDER_HATCH_REGIONS = frozenset({"UNDER_CARGO_HATCH", "UNDER_HATCH", "CARGO_HATCH", "CARGO_HOLD", "DUOI_MIENG_KHOANG_HANG"})
+_OUTSIDE_HATCH_REGIONS = frozenset({"OUTSIDE_CARGO_HATCH", "OUTSIDE_HATCH", "NGOAI_MIENG_KHOANG_HANG", "NGOAI_KHOANG_HANG"})
+
+
 def _validate_scale_arg(verified_scale_to_mm: object) -> float | None:
     if verified_scale_to_mm is None:
         return None
@@ -142,6 +148,7 @@ def _make_finding(
     reason: str,
     confidence: str | None = None,
     limitation: str | None = None,
+    exceptions_checked: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     rule = rules_by_id[rule_id]
     source_entry = _SOURCES_BY_ID[rule["source_id"]]
@@ -159,6 +166,11 @@ def _make_finding(
         f"bound_local_sha256:{source_sha} | pdf_page={list(rule['pdf_page'])} | {reg_note} "
         "(external uploads may paginate differently)"
     )
+    resolved_exceptions = (
+        list(exceptions_checked)
+        if exceptions_checked is not None
+        else [f"Not evaluated in V0: {exc}" for exc in rule["exceptions"]]
+    )
     return {
         "finding_id": finding_id,
         "verdict": verdict,
@@ -171,7 +183,7 @@ def _make_finding(
         "reg_page": list(rule["reg_page"]),
         "pagination_basis": pagination_basis,
         "conditions_applied": list(rule["conditions"]),
-        "exceptions_checked": list(rule["exceptions"]),
+        "exceptions_checked": resolved_exceptions,
         "evidence": deepcopy(dict(evidence)),
         "reason": reason,
         "confidence": confidence or rule["confidence_default"],
@@ -433,15 +445,22 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
     draft_values: list[float] = []
     hull_nos: list[str] = []
     ship_types: list[str] = []
+    hull_materials: list[str] = []
     corrupted_tokens: list[str] = []
     unverified_unitless: list[str] = []
     non_marine_hits: list[str] = []
     drawing_types: dict[str, str] = {}
+    obs_drawing_types: list[str] = []
+    seen_types_by_id: dict[str, set[str]] = {}
     marine_score = 0
 
     for obs in obs_list:
         cls = _classify_observation(obs)
-        drawing_types[obs["drawing_id"]] = cls["predicted_drawing_type"]
+        pred_type = cls["predicted_drawing_type"]
+        did = obs["drawing_id"]
+        obs_drawing_types.append(pred_type)
+        drawing_types[did] = pred_type
+        seen_types_by_id.setdefault(did, set()).add(pred_type)
         marine_score += sum(cls["evidence_scores"].values())
         part = obs["particulars"]
         for val in part["service_areas"]:
@@ -465,6 +484,9 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
         for val in part["ship_types"]:
             if val not in ship_types:
                 ship_types.append(val)
+        for val in part.get("hull_materials", []):
+            if val not in hull_materials:
+                hull_materials.append(val)
         for val in part.get("corrupted_numeric_tokens", []):
             if val not in corrupted_tokens:
                 corrupted_tokens.append(val)
@@ -475,9 +497,17 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
             if val not in non_marine_hits:
                 non_marine_hits.append(val)
 
+    duplicate_drawing_id_conflicts = sorted(
+        did
+        for did, types in seen_types_by_id.items()
+        if did != "UNSPECIFIED_DRAWING" and len(types) > 1
+    )
+
     return {
         "drawing_types_by_id": drawing_types,
-        "observed_types": sorted(set(drawing_types.values())),
+        "obs_drawing_types": obs_drawing_types,
+        "duplicate_drawing_id_type_conflicts": duplicate_drawing_id_conflicts,
+        "observed_types": sorted(set(obs_drawing_types)),
         "service_areas": service_areas,
         "class_notations": class_notations,
         "explicit_exclusion_evidences": explicit_exclusions,
@@ -491,6 +521,7 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
         "draft_m_all": sorted(set(draft_values)),
         "hull_nos": hull_nos,
         "ship_types": ship_types,
+        "hull_materials": hull_materials,
         "corrupted_numeric_tokens": corrupted_tokens,
         "unverified_unitless_particulars": unverified_unitless,
         "non_marine_domain_hits": non_marine_hits,
@@ -508,7 +539,7 @@ _CLAUSE_1_1_1_MAP: dict[str, str] = {
 
 _CLAUSE_1_1_2_MAP: dict[str, str] = {
     "STATUTORY_CLAUSE_1_1_2_QCVN_50_LEISURE": "QCVN 50:2012/BGTVT",
-    "STATUTORY_CLAUSE_1_1_2_QCVN_51_FERROCEMENT": "QCVN 51:2012/BGTVT",
+    "STATUTORY_CLAUSE_1_1_2_QCVN_51_FERROCEMENT": "QCVN 51:2013/BGTVT",
     "STATUTORY_CLAUSE_1_1_2_QCVN_56_FRP": "QCVN 56:2013/BGTVT",
     "STATUTORY_QCVN_56_FRP_CRAFT": "QCVN 56:2013/BGTVT",
     "STATUTORY_CLAUSE_1_1_2_QCVN_84_WOOD": "QCVN 84:2014/BGTVT",
@@ -560,57 +591,117 @@ def _required_inland_bulkheads(lpp_m: float) -> int:
     return 6
 
 
+def _is_valid_finite_metric(key: str, raw_val: object) -> tuple[bool, float | None]:
+    if isinstance(raw_val, bool) or not isinstance(raw_val, (int, float)):
+        return False, None
+    val = float(raw_val)
+    if not math.isfinite(val):
+        return False, None
+    if key == "transverse_watertight_bulkhead_count":
+        if val < 0.0 or not val.is_integer():
+            return False, None
+        return True, val
+    if val <= 0.0:
+        return False, None
+    return True, val
+
+
 def _extract_strict_metric(
     obs_list: list[dict[str, Any]],
     key: str,
     *,
     allowed_types: tuple[str, ...],
-    drawing_types: Mapping[str, str],
-) -> tuple[list[tuple[str, float]], list[str], list[str]]:
-    eligible: list[tuple[str, float]] = []
+    obs_drawing_types: Sequence[str],
+) -> tuple[list[tuple[str, float, dict[str, Any]]], list[str], list[str], list[str]]:
+    eligible: list[tuple[str, float, dict[str, Any]]] = []
     wrong_sheet_ids: list[str] = []
-    ocr_metric_ids: list[str] = []
-    for obs in obs_list:
+    untrusted_prov_ids: list[str] = []
+    invalid_issues: list[str] = []
+    for idx, obs in enumerate(obs_list):
         did = obs["drawing_id"]
-        raw_val = obs.get("structural_metrics", {}).get(key)
-        if not isinstance(raw_val, (int, float)) or isinstance(raw_val, bool):
+        metrics = obs.get("structural_metrics", {})
+        if key not in metrics or metrics[key] is None:
             continue
-        prov = str(obs.get("metric_provenance", {}).get(key, ""))
-        if prov == "UNVERIFIED_OCR_TEXT" or obs.get("ocr_only"):
-            ocr_metric_ids.append(did)
-        if drawing_types.get(did) in allowed_types:
-            eligible.append((did, float(raw_val)))
+        raw_val = metrics[key]
+        valid, val = _is_valid_finite_metric(key, raw_val)
+        if not valid or val is None:
+            invalid_issues.append(f"{did}:{key}={raw_val!r}")
+            continue
+        prov = str(obs.get("metric_provenance", {}).get(key, "")).strip()
+        if obs.get("ocr_only") or prov not in _VERIFIED_PROVENANCES:
+            untrusted_prov_ids.append(did)
+        sheet_type = obs_drawing_types[idx] if idx < len(obs_drawing_types) else "UNKNOWN"
+        if sheet_type in allowed_types:
+            eligible.append((did, val, obs))
         else:
             wrong_sheet_ids.append(did)
-    return eligible, wrong_sheet_ids, ocr_metric_ids
+    return eligible, wrong_sheet_ids, untrusted_prov_ids, invalid_issues
 
 
 def _has_implausible_particulars(scope: Mapping[str, Any], obs_list: list[dict[str, Any]]) -> list[str]:
     issues: list[str] = []
     for val in scope.get("design_length_l_m_all", []) + scope.get("lpp_m_all", []) + scope.get("lwl_m_all", []):
-        if val > 500.0 or val <= 0.0:
+        if not isinstance(val, (int, float)) or not math.isfinite(float(val)) or val > 500.0 or val <= 0.0:
             issues.append(f"length_m={val}")
     for val in scope.get("breadth_m_all", []):
-        if val > 100.0 or val <= 0.0:
+        if not isinstance(val, (int, float)) or not math.isfinite(float(val)) or val > 100.0 or val <= 0.0:
             issues.append(f"breadth_m={val}")
     for val in scope.get("depth_m_all", []):
-        if val > 60.0 or val <= 0.0:
+        if not isinstance(val, (int, float)) or not math.isfinite(float(val)) or val > 60.0 or val <= 0.0:
             issues.append(f"depth_m={val}")
-    depth_vals = scope.get("depth_m_all", [])
-    draft_vals = scope.get("draft_m_all", [])
+    depth_vals = [float(v) for v in scope.get("depth_m_all", []) if math.isfinite(float(v))]
+    draft_vals = [float(v) for v in scope.get("draft_m_all", []) if math.isfinite(float(v))]
     if depth_vals and draft_vals and min(draft_vals) > max(depth_vals) + 0.05:
         issues.append(f"draft_m={min(draft_vals)}_gt_depth_m={max(depth_vals)}")
+
+    # Clause 1.4.43-1 consistency: 0.96 * Lwl <= L <= Lwl when both declared
+    design_ls = scope.get("design_length_l_m_all", [])
+    lwls = scope.get("lwl_m_all", [])
+    for lv in design_ls:
+        for lwlv in lwls:
+            if lv < (0.96 * lwlv - 0.02) or lv > (lwlv + 0.02):
+                issues.append(f"L={lv}_violates_1_4_43_1_range_0.96_to_1.0_Lwl={lwlv}")
+
     for obs in obs_list:
+        did = obs["drawing_id"]
         metrics = obs.get("structural_metrics", {})
-        for k in ("double_bottom_height_mm", "min_plate_thickness_mm", "min_bottom_plate_mm", "min_bilge_plate_mm"):
-            mv = metrics.get(k)
-            if isinstance(mv, (int, float)) and not isinstance(mv, bool):
-                if float(mv) <= 0.0 or (k == "double_bottom_height_mm" and float(mv) > 20000.0) or ("plate" in k and float(mv) > 150.0):
-                    issues.append(f"{obs['drawing_id']}:{k}={mv}")
-        bh = metrics.get("transverse_watertight_bulkhead_count")
-        if isinstance(bh, (int, float)) and not isinstance(bh, bool) and int(bh) < 0:
-            issues.append(f"{obs['drawing_id']}:bulkhead_count={bh}")
+        for k, mv in metrics.items():
+            if k in _NON_DIM_METRIC_KEYS or mv is None:
+                continue
+            valid, fval = _is_valid_finite_metric(k, mv)
+            if not valid or fval is None:
+                issues.append(f"{did}:{k}={mv!r}")
+                continue
+            if k in {"double_bottom_height_mm", "bottom_girder_max_spacing_mm", "transverse_floor_max_spacing_mm", "body_plan_wl_span_mm"} and fval > 20000.0:
+                issues.append(f"{did}:{k}={mv!r}")
+            elif "plate" in k and fval > 150.0:
+                issues.append(f"{did}:{k}={mv!r}")
     return issues
+
+
+def _collect_untrusted_dependency_provenances(obs_list: list[dict[str, Any]]) -> list[str]:
+    flagged: list[str] = []
+    dep_keys_to_part = (
+        ("design_length_l_m", "design_length_l_m_values"),
+        ("lwl_m", "lwl_m_values"),
+        ("lpp_m", "lpp_m_values"),
+        ("ship_type", "ship_types"),
+        ("hull_material", "hull_materials"),
+    )
+    for obs in obs_list:
+        did = obs["drawing_id"]
+        part = obs["particulars"]
+        mprov = obs.get("metric_provenance", {})
+        for pkey, list_key in dep_keys_to_part:
+            has_val = bool(part.get(list_key))
+            if not has_val and pkey not in mprov:
+                continue
+            prov = str(mprov.get(pkey, "")).strip()
+            if prov and (obs.get("ocr_only") or prov not in _VERIFIED_PROVENANCES):
+                flagged.append(f"{did}:{pkey}={prov}")
+            elif has_val and pkey in mprov and prov not in _VERIFIED_PROVENANCES:
+                flagged.append(f"{did}:{pkey}={prov}")
+    return flagged
 
 
 def _cross_package_conflicts(cross: Mapping[str, Mapping[str, list[str]]]) -> dict[str, Any]:
@@ -623,6 +714,8 @@ def _cross_package_conflicts(cross: Mapping[str, Mapping[str, list[str]]]) -> di
         conflicts["class_notations"] = dict(cross["class_notations"])
     if len(cross["ship_types"]) > 1:
         conflicts["ship_types"] = dict(cross["ship_types"])
+    if len(cross["hull_materials"]) > 1:
+        conflicts["hull_materials"] = dict(cross["hull_materials"])
     if len(cross["hull_nos"]) > 1:
         conflicts["hull_nos"] = dict(cross["hull_nos"])
     for key, label, tol in (
@@ -842,7 +935,7 @@ def evaluate_regulation_applicability_and_submittal(
             }
         )
 
-    cross_s2 = _collect_cross_sheet_values(obs_list, drawing_types=scope["drawing_types_by_id"])
+    cross_s2 = _collect_cross_sheet_values(obs_list, obs_drawing_types=scope["obs_drawing_types"])
     pkg_conflicts = _cross_package_conflicts(cross_s2)
     implausible_issues = _has_implausible_particulars(scope, obs_list)
     exclusions_111 = [t for t in explicit_exclusions if t in _CLAUSE_1_1_1_MAP]
@@ -851,6 +944,7 @@ def evaluate_regulation_applicability_and_submittal(
     fatal_scope_conflict = (
         ("INLAND_WATERWAY" in service_areas and ("OCEAN_GOING" in service_areas or bool(exclusions_111)))
         or "class_notations" in pkg_conflicts
+        or "hull_materials" in pkg_conflicts
         or "L" in pkg_conflicts
         or "Lpp" in pkg_conflicts
         or "Lwl" in pkg_conflicts
@@ -924,7 +1018,8 @@ def evaluate_regulation_applicability_and_submittal(
     lwl_all = scope["lwl_m_all"]
     # Clause 1.4.43-1 bounds regulatory design length L strictly inside [0.96 * Lwl, Lwl].
     # Bare Lpp without explicit L or Lwl cannot prove L > 140 m or L <= 140 m.
-    length_excluded = (bool(design_l_all) and max(design_l_all) > 140.0) or (
+    # Require the ENTIRE interval (min > 140.0) before declaring definitive NOT_APPLICABLE.
+    length_excluded = (bool(design_l_all) and min(design_l_all) > 140.0) or (
         not design_l_all and bool(lwl_all) and (0.96 * min(lwl_all)) > 140.0
     )
 
@@ -1127,10 +1222,13 @@ def evaluate_regulation_applicability_and_submittal(
             }
         )
 
+    design_straddles_140 = bool(design_l_all) and min(design_l_all) <= 140.0 < max(design_l_all)
     unproven_gt_140 = (
         not length_excluded
-        and not design_l_all
-        and ((bool(lwl_all) and max(lwl_all) > 140.0) or (not lwl_all and bool(lpp_all) and max(lpp_all) > 140.0))
+        and (
+            design_straddles_140
+            or (not design_l_all and ((bool(lwl_all) and max(lwl_all) > 140.0) or (not lwl_all and bool(lpp_all) and max(lpp_all) > 140.0)))
+        )
     )
     if unproven_gt_140:
         unproven_reason = (
@@ -1270,25 +1368,58 @@ def evaluate_regulation_applicability_and_submittal(
     l_hi: float | None = None
     length_basis = "UNAVAILABLE"
     if design_l_all:
-        l_lo = round(design_l_all[0], 4)
-        l_hi = l_lo
+        l_lo = round(min(design_l_all), 4)
+        l_hi = round(max(design_l_all), 4)
         effective_l_m = l_lo
         length_basis = "EXPLICIT_DESIGN_LENGTH_L"
     elif lwl_all:
-        l_lo = round(0.96 * lwl_all[0], 4)
-        l_hi = round(lwl_all[0], 4)
+        l_lo = round(0.96 * min(lwl_all), 4)
+        l_hi = round(max(lwl_all), 4)
         effective_l_m = l_lo
         length_basis = "PROVEN_LWL_INTERVAL_1_4_43"
     elif lpp_all:
         length_basis = "UNPROVEN_LPP_ONLY_NO_REGULATORY_L"
 
+    untrusted_deps = _collect_untrusted_dependency_provenances(obs_list)
+    invalid_obs_metrics = [
+        f"{obs['drawing_id']}:{item}"
+        for obs in obs_list
+        for item in obs.get("invalid_structural_metrics", [])
+    ]
     input_gates_blocked = bool(
         has_ocr_only
         or corrupted_tokens
         or unverified_unitless
         or bad_geom_ids
         or not units_ok
+        or untrusted_deps
+        or invalid_obs_metrics
     )
+    if untrusted_deps:
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id="F_UNTRUSTED_DEPENDENCY_PROVENANCE",
+                verdict="INSUFFICIENT_EVIDENCE",
+                rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                evidence={"untrusted_provenances": untrusted_deps},
+                reason=(
+                    "Length, ship-type, or material dependencies carry untrusted/OCR provenance: "
+                    f"{', '.join(untrusted_deps)}."
+                ),
+            )
+        )
+    if invalid_obs_metrics:
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id="F_INVALID_STRUCTURAL_METRIC",
+                verdict="CONFLICT",
+                rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                evidence={"invalid_structural_metrics": invalid_obs_metrics},
+                reason=f"Non-finite or invalid structural metrics detected: {', '.join(invalid_obs_metrics)}.",
+            )
+        )
     if has_ocr_only:
         findings.append(
             _make_finding(
@@ -1391,88 +1522,155 @@ def evaluate_regulation_applicability_and_submittal(
         )
 
     structural_checks_ran = 0
+    obs_drawing_types = scope["obs_drawing_types"]
+    hull_materials = scope["hull_materials"]
+    non_steel_materials = [m for m in hull_materials if m != "STEEL"]
+    steel_verified = hull_materials == ["STEEL"]
     if input_gates_blocked:
         checks_not_executed.append("Dimensional QCVN 72 scantling/bulkhead rules blocked by input/OCR/unit/geometry gate")
     else:
-        # Check RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (dry-cargo GENERAL_ARRANGEMENT / BASIC_STRUCTURAL only)
-        bh_pairs, bh_wrong, bh_ocr = _extract_strict_metric(
+        if not hull_materials:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_HULL_MATERIAL_UNVERIFIED",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_01_QCVN72_SCOPE",
+                    evidence={"hull_materials": hull_materials},
+                    reason=(
+                        "Hull material (e.g. HULL MATERIAL : STEEL vs ALUMINUM) is unverified; "
+                        "steel structural scantling rules cannot return PASS."
+                    ),
+                )
+            )
+        elif non_steel_materials:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_NON_STEEL_HULL_OUT_OF_V0_RULESET",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_01_QCVN72_SCOPE",
+                    evidence={"hull_materials": hull_materials},
+                    reason=(
+                        f"Declared hull material(s) {', '.join(non_steel_materials)} require specialized "
+                        "non-steel QCVN 72 rules (e.g. Part 2A Chapter 4 aluminum alloy), outside steel V0 ruleset."
+                    ),
+                )
+            )
+
+        # Check RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (dry-cargo steel GENERAL_ARRANGEMENT / BASIC_STRUCTURAL only)
+        bh_pairs, bh_wrong, bh_untrusted, bh_invalid = _extract_strict_metric(
             obs_list,
             "transverse_watertight_bulkhead_count",
             allowed_types=("GENERAL_ARRANGEMENT", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
         if bh_wrong:
             checks_not_executed.append(
                 f"Watertight bulkhead count on non-GA/KCCB sheet(s) {', '.join(bh_wrong)} excluded"
             )
+            if not bh_pairs and not bh_invalid:
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_WRONG_SHEET_METRIC_BULKHEAD",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                        evidence={"wrong_sheet_drawing_ids": bh_wrong},
+                        reason=f"Bulkhead count supplied only on non-GA/KCCB sheet(s) {', '.join(bh_wrong)}.",
+                    )
+                )
+        if bh_invalid:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_INVALID_BULKHEAD_COUNT",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                    evidence={"invalid_metrics": bh_invalid},
+                    reason=f"Invalid non-integer/negative bulkhead count: {', '.join(bh_invalid)}.",
+                )
+            )
         special_bh_types = [
             st for st in scope["ship_types"]
-            if any(tok in st for tok in ("TANKER", "CHỞ DẦU", "CHO DAU", "PASSENGER", "KHÁCH", "KHACH", "BARGE", "SÀ LAN", "SA LAN"))
+            if any(tok in st for tok in ("TANKER", "CHỞ DẦU", "CHO DAU", "PASSENGER", "KHÁCH", "KHACH", "BARGE", "SÀ LAN", "SA LAN", "LIQUID", "HÀNG LỎNG", "HANG LONG"))
         ]
-        if bh_pairs and bh_ocr:
+        is_dry_cargo = bool(scope["ship_types"]) and not special_bh_types and any(
+            any(tok in st for tok in ("DRY CARGO", "HÀNG KHÔ", "HANG KHO", "GENERAL CARGO", "TỔNG HỢP", "TONG HOP"))
+            for st in scope["ship_types"]
+        )
+        mk08_exceptions = [
+            "Evaluated: Clause 3.7.21 (< 20 m >= 2 bulkheads) vs Clause 2.4.6-8 (20 m..140 m dry-cargo band)",
+            "Not evaluated in V0: Clause 2.4.6-9 double-hull / container Registry-approved exception",
+            "Not evaluated in V0: Engine-room boundary bulkhead placement (2.4.6-4) and collision bulkhead position (2.4.6-2)",
+        ]
+        if bh_pairs and bh_untrusted:
             findings.append(
                 _make_finding(
                     rules_by_id,
                     finding_id="F_OCR_METRIC_BULKHEAD",
                     verdict="INSUFFICIENT_EVIDENCE",
                     rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                    evidence={"ocr_drawing_ids": bh_ocr},
-                    reason="Bulkhead count sourced from unverified OCR text cannot produce PASS.",
-                )
-            )
-        elif bh_pairs and special_bh_types:
-            findings.append(
-                _make_finding(
-                    rules_by_id,
-                    finding_id="F_BULKHEAD_SHIP_TYPE_SPECIAL_REVIEW",
-                    verdict="INSUFFICIENT_EVIDENCE",
-                    rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                    evidence={"ship_types": special_bh_types, "effective_l_m": effective_l_m},
-                    reason=(
-                        f"Dry-cargo bulkhead table does not prove compliance for specialized ship type "
-                        f"({', '.join(special_bh_types)})."
-                    ),
+                    evidence={"untrusted_drawing_ids": bh_untrusted},
+                    reason="Bulkhead count lacks verified CAD/fixture provenance and cannot produce PASS.",
+                    exceptions_checked=mk08_exceptions,
                 )
             )
         elif bh_pairs:
-            worst_did, min_bh = min(bh_pairs, key=lambda pair: pair[1])
-            if length_unproven:
-                if int(min_bh) < 2:
-                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (length-invariant minimum)")
-                    structural_checks_ran += 1
-                    findings.append(
-                        _make_finding(
-                            rules_by_id,
-                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
-                            verdict="CONFLICT",
-                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                            evidence={
-                                "drawing_id": worst_did,
-                                "length_basis": length_basis,
-                                "observed_bulkheads": int(min_bh),
-                                "required_min": 2,
-                                "invariant_minimum": True,
-                            },
-                            reason=(
-                                f"Observed {int(min_bh)} transverse watertight bulkhead(s) on {worst_did} violates "
-                                "QCVN 72 invariant minimum (>= 2 bulkheads for all ship lengths)."
-                            ),
-                        )
+            worst_did, min_bh, _ = min(bh_pairs, key=lambda item: item[1])
+            min_bh_int = int(round(min_bh))
+            if min_bh_int < 2:
+                checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (length-invariant minimum)")
+                structural_checks_ran += 1
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                        verdict="CONFLICT",
+                        rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                        evidence={
+                            "drawing_id": worst_did,
+                            "length_basis": length_basis,
+                            "observed_bulkheads": min_bh_int,
+                            "required_min": 2,
+                            "invariant_minimum": True,
+                        },
+                        reason=(
+                            f"Observed {min_bh_int} transverse watertight bulkhead(s) on {worst_did} violates "
+                            "QCVN 72 invariant minimum (>= 2 bulkheads for all ship lengths)."
+                        ),
+                        exceptions_checked=mk08_exceptions,
                     )
-                    proposals.append(
-                        build_marine_core_proposal(
-                            target_drawing_id=worst_did,
-                            action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
-                            evidence={"observed": int(min_bh), "required_min": 2, "length_basis": length_basis},
-                        )
+                )
+                proposals.append(
+                    build_marine_core_proposal(
+                        target_drawing_id=worst_did,
+                        action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                        evidence={"observed": min_bh_int, "required_min": 2, "length_basis": length_basis},
                     )
-                else:
-                    checks_not_executed.append("RULE_MK_08 bulkhead table threshold check deferred (proven regulatory L required)")
+                )
+            elif special_bh_types or not is_dry_cargo:
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_BULKHEAD_SHIP_TYPE_SPECIAL_REVIEW",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                        evidence={"ship_types": scope["ship_types"], "special_types": special_bh_types, "effective_l_m": effective_l_m},
+                        reason=(
+                            f"QCVN 72 Clause 2.4.6-8 dry-cargo bulkhead table requires verified DRY CARGO ship type; "
+                            f"observed ship_types={scope['ship_types'] or 'UNSPECIFIED'}."
+                        ),
+                        exceptions_checked=mk08_exceptions,
+                    )
+                )
+            elif length_unproven:
+                checks_not_executed.append("RULE_MK_08 bulkhead table threshold check deferred (proven regulatory L required)")
             else:
                 assert l_lo is not None and l_hi is not None
                 req_lo = _required_inland_bulkheads(l_lo)
                 req_hi = _required_inland_bulkheads(l_hi)
-                if int(min_bh) < req_lo:
+                if min_bh_int < req_lo:
                     checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
                     structural_checks_ran += 1
                     findings.append(
@@ -1486,20 +1684,21 @@ def evaluate_regulation_applicability_and_submittal(
                                 "effective_l_m": effective_l_m,
                                 "l_interval_m": [l_lo, l_hi],
                                 "length_basis": length_basis,
-                                "observed_bulkheads": int(min_bh),
+                                "observed_bulkheads": min_bh_int,
                                 "required_min": req_lo,
                             },
                             reason=(
                                 f"Interval L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires at least {req_lo} "
-                                f"transverse watertight bulkheads; observed {int(min_bh)} on {worst_did}."
+                                f"transverse watertight bulkheads; observed {min_bh_int} on {worst_did}."
                             ),
+                            exceptions_checked=mk08_exceptions,
                         )
                     )
                     proposals.append(
                         build_marine_core_proposal(
                             target_drawing_id=worst_did,
                             action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
-                            evidence={"observed": int(min_bh), "required_min": req_lo, "l_interval_m": [l_lo, l_hi]},
+                            evidence={"observed": min_bh_int, "required_min": req_lo, "l_interval_m": [l_lo, l_hi]},
                         )
                     )
                 elif req_lo != req_hi:
@@ -1518,9 +1717,22 @@ def evaluate_regulation_applicability_and_submittal(
                                 "length_basis": length_basis,
                             },
                             reason=(
-                                f"Clause 1.4.43-1 interval [{l_lo:.2f}, {l_hi:.2f}]m straddles QCVN 72 bulkhead "
-                                f"threshold (required {req_lo}..{req_hi}); explicit regulatory L required."
+                                f"Length interval [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) straddles QCVN 72 bulkhead "
+                                f"threshold (required {req_lo}..{req_hi}); reconciled regulatory L required."
                             ),
+                            exceptions_checked=mk08_exceptions,
+                        )
+                    )
+                elif not steel_verified:
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_MATERIAL_UNVERIFIED",
+                            verdict="NOT_APPLICABLE" if non_steel_materials else "INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={"drawing_id": worst_did, "hull_materials": hull_materials},
+                            reason="Steel dry-cargo bulkhead PASS requires verified STEEL hull material.",
+                            exceptions_checked=mk08_exceptions,
                         )
                     )
                 else:
@@ -1537,191 +1749,336 @@ def evaluate_regulation_applicability_and_submittal(
                                 "effective_l_m": effective_l_m,
                                 "l_interval_m": [l_lo, l_hi],
                                 "length_basis": length_basis,
-                                "observed_bulkheads": int(min_bh),
+                                "observed_bulkheads": min_bh_int,
                                 "required_min": req_hi,
                             },
                             reason=(
                                 f"L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires >= {req_hi} transverse "
-                                f"watertight bulkheads; observed {int(min_bh)} on {worst_did}."
+                                f"watertight bulkheads; observed {min_bh_int} on {worst_did}."
                             ),
+                            exceptions_checked=mk08_exceptions,
                         )
                     )
         elif "GENERAL_ARRANGEMENT" in observed_types or "BASIC_STRUCTURAL" in observed_types:
             checks_not_executed.append("Watertight bulkhead count (transverse_watertight_bulkhead_count not annotated/extracted)")
 
         # Check RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT (MIDSHIP_STRUCTURAL / BASIC_STRUCTURAL only)
-        db_pairs, db_wrong, db_ocr = _extract_strict_metric(
+        db_pairs, db_wrong, db_untrusted, db_invalid = _extract_strict_metric(
             obs_list,
             "double_bottom_height_mm",
             allowed_types=("MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
-        if db_wrong:
-            checks_not_executed.append(
-                f"Double-bottom height on non-structural sheet(s) {', '.join(db_wrong)} excluded"
-            )
-        girder_pairs, _, _ = _extract_strict_metric(
+        girder_pairs, gr_wrong, gr_untrusted, gr_invalid = _extract_strict_metric(
             obs_list,
             "bottom_girder_max_spacing_mm",
             allowed_types=("MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
-        floor_pairs, _, _ = _extract_strict_metric(
+        floor_pairs, fl_wrong, fl_untrusted, fl_invalid = _extract_strict_metric(
             obs_list,
             "transverse_floor_max_spacing_mm",
             allowed_types=("MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
-        if db_pairs and db_ocr:
+        if db_wrong or gr_wrong or fl_wrong:
+            excluded_sheets = sorted(set(db_wrong) | set(gr_wrong) | set(fl_wrong))
+            checks_not_executed.append(
+                f"Double-bottom dimensions on non-structural sheet(s) {', '.join(excluded_sheets)} excluded"
+            )
+            if not (db_pairs or girder_pairs or floor_pairs) and not (db_invalid or gr_invalid or fl_invalid):
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_WRONG_SHEET_METRIC_DOUBLE_BOTTOM",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
+                        evidence={"wrong_sheet_drawing_ids": excluded_sheets},
+                        reason=(
+                            f"Double-bottom dimension(s) supplied only on non-structural sheet(s) "
+                            f"{', '.join(excluded_sheets)} without eligible MCN/KCCB evidence."
+                        ),
+                    )
+                )
+        mk09_invalid = db_invalid + gr_invalid + fl_invalid
+        mk09_untrusted = sorted(set(db_untrusted) | set(gr_untrusted) | set(fl_untrusted))
+        mk09_exceptions = [
+            "Evaluated: Clause 2.4.3-1 floor spacing (1800/2000/2400 mm), 2.4.3-2 DB height (700/900 mm), 2.4.3-3 girder spacing (<= 3000 mm)",
+            "Not evaluated in V0: Single-bottom ships (where double bottom is not required)",
+        ]
+        if mk09_invalid:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_INVALID_DOUBLE_BOTTOM_METRIC",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
+                    evidence={"invalid_metrics": mk09_invalid},
+                    reason=f"Invalid non-finite/non-positive double-bottom metrics: {', '.join(mk09_invalid)}.",
+                    exceptions_checked=mk09_exceptions,
+                )
+            )
+        elif (db_pairs or girder_pairs or floor_pairs) and mk09_untrusted:
             findings.append(
                 _make_finding(
                     rules_by_id,
                     finding_id="F_OCR_METRIC_DOUBLE_BOTTOM",
                     verdict="INSUFFICIENT_EVIDENCE",
                     rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
-                    evidence={"ocr_drawing_ids": db_ocr},
-                    reason="Double-bottom dimensions from unverified OCR text cannot produce PASS.",
+                    evidence={"untrusted_drawing_ids": mk09_untrusted},
+                    reason="Double-bottom height or girder/floor spacing lacks verified provenance and cannot produce PASS.",
+                    exceptions_checked=mk09_exceptions,
                 )
             )
-        elif db_pairs:
-            worst_db_id, min_db_mm = min(db_pairs, key=lambda pair: pair[1])
-            max_girder_pair = max(girder_pairs, key=lambda pair: pair[1]) if girder_pairs else None
-            max_floor_pair = max(floor_pairs, key=lambda pair: pair[1]) if floor_pairs else None
-            girder_fail = max_girder_pair is not None and max_girder_pair[1] > 3000.0
-            floor_fail = max_floor_pair is not None and max_floor_pair[1] > 2400.0
-            if length_unproven:
-                if min_db_mm < 700.0 or girder_fail or floor_fail:
-                    checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT (length-invariant floor)")
-                    structural_checks_ran += 1
-                    db_reason = (
-                        f"Double bottom at CL observed {min_db_mm:.1f} mm on {worst_db_id} violates "
-                        "QCVN 72 length-invariant minimum requirements (700.0 mm floor / girder <= 3000.0 / floor <= 2400.0)"
-                    )
-                    findings.append(
-                        _make_finding(
-                            rules_by_id,
-                            finding_id="F_DOUBLE_BOTTOM_HEIGHT",
-                            verdict="CONFLICT",
-                            rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
-                            evidence={
-                                "drawing_id": worst_db_id,
-                                "observed_db_height_mm": min_db_mm,
-                                "required_min_db_height_mm": 700.0,
-                                "invariant_minimum": True,
-                                "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
-                                "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
-                            },
-                            reason=db_reason,
-                        )
-                    )
-                    proposals.append(
-                        build_marine_core_proposal(
-                            target_drawing_id=worst_db_id,
-                            action_kind="REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
-                            evidence={"observed_db_height_mm": min_db_mm, "required_min_mm": 700.0},
-                        )
-                    )
-                else:
-                    checks_not_executed.append("RULE_MK_09 double-bottom L > 120m check deferred (proven regulatory L required)")
-            else:
-                assert l_lo is not None and l_hi is not None
-                straddles_120 = l_lo <= 120.0 < l_hi
-                invariant_db_fail = min_db_mm < 700.0 or girder_fail or floor_fail
-                if straddles_120 and not invariant_db_fail:
-                    checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT (threshold interval check)")
-                    findings.append(
-                        _make_finding(
-                            rules_by_id,
-                            finding_id="F_LENGTH_LWL_INTERVAL_STRADDLES_THRESHOLD",
-                            verdict="INSUFFICIENT_EVIDENCE",
-                            rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
-                            evidence={
-                                "drawing_id": worst_db_id,
-                                "l_interval_m": [l_lo, l_hi],
-                                "rule_threshold_m": 120.0,
-                                "observed_db_height_mm": min_db_mm,
-                            },
-                            reason=(
-                                f"Clause 1.4.43-1 interval [{l_lo:.2f}, {l_hi:.2f}]m straddles 120 m double-bottom "
-                                "height threshold (700 mm vs 900 mm); explicit regulatory L required."
-                            ),
-                        )
-                    )
-                else:
-                    checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT")
-                    structural_checks_ran += 1
-                    req_db_mm = 700.0 if l_hi <= 120.0 else 900.0
-                    db_verdict = "CONFLICT" if (min_db_mm < req_db_mm or girder_fail or floor_fail) else "PASS"
-                    db_reason = (
-                        f"Double bottom at CL observed {min_db_mm:.1f} mm on {worst_db_id} "
-                        f"(min required {req_db_mm:.1f} mm for L in [{l_lo:.2f}, {l_hi:.2f}]m)"
-                    )
-                    if max_girder_pair is not None:
-                        db_reason += f"; max girder spacing {max_girder_pair[1]:.1f} mm (limit <= 3000.0 mm)"
-                    if max_floor_pair is not None:
-                        db_reason += f"; max floor spacing {max_floor_pair[1]:.1f} mm (upper limit <= 2400.0 mm)"
-                    findings.append(
-                        _make_finding(
-                            rules_by_id,
-                            finding_id="F_DOUBLE_BOTTOM_HEIGHT",
-                            verdict=db_verdict,
-                            rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
-                            evidence={
-                                "drawing_id": worst_db_id,
-                                "l_interval_m": [l_lo, l_hi],
-                                "observed_db_height_mm": min_db_mm,
-                                "required_min_db_height_mm": req_db_mm,
-                                "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
-                                "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
-                            },
-                            reason=db_reason,
-                        )
-                    )
-                    if db_verdict == "CONFLICT":
-                        proposals.append(
-                            build_marine_core_proposal(
-                                target_drawing_id=worst_db_id,
-                                action_kind="REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
-                                evidence={"observed_db_height_mm": min_db_mm, "required_min_mm": req_db_mm},
-                            )
-                        )
+        elif db_pairs or girder_pairs or floor_pairs:
+            checks_executed.append("RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT")
+            structural_checks_ran += 1
+            worst_db_pair = min(db_pairs, key=lambda item: item[1]) if db_pairs else None
+            max_girder_pair = max(girder_pairs, key=lambda item: item[1]) if girder_pairs else None
+            max_floor_pair = max(floor_pairs, key=lambda item: item[1]) if floor_pairs else None
+            target_db_did = (
+                worst_db_pair[0]
+                if worst_db_pair
+                else (max_girder_pair[0] if max_girder_pair else max_floor_pair[0])  # type: ignore[index]
+            )
 
-        # Check RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (only L < 20 m on MIDSHIP/BASIC)
-        plate_pairs, pl_wrong, pl_ocr = _extract_strict_metric(
+            # Evaluate floor spacing per QCVN 72 Clause 2.4.3-1 (1.8 / 2.0 / 2.4 m)
+            is_passenger_or_liquid = any(
+                any(tok in st for tok in ("TANKER", "LIQUID", "HÀNG LỎNG", "HANG LONG", "CHỞ DẦU", "CHO DAU", "CHỞ HÓA CHẤT", "PASSENGER", "KHÁCH", "KHACH"))
+                for st in scope["ship_types"]
+            )
+            is_dry_cargo_db = bool(scope["ship_types"]) and not is_passenger_or_liquid and any(
+                any(tok in st for tok in ("DRY CARGO", "HÀNG KHÔ", "HANG KHO", "GENERAL CARGO", "TỔNG HỢP", "TONG HOP"))
+                for st in scope["ship_types"]
+            )
+            floor_status = "MISSING"
+            floor_limit_mm: float | None = None
+            floor_regions: list[str] = []
+            if max_floor_pair is not None:
+                floor_val = max_floor_pair[1]
+                for _fdid, _fval, fobs in floor_pairs:
+                    reg_raw = str(fobs.get("structural_metrics", {}).get("floor_spacing_region") or "").strip().upper()
+                    if reg_raw in _UNDER_HATCH_REGIONS:
+                        floor_regions.append("UNDER_CARGO_HATCH")
+                    elif reg_raw in _OUTSIDE_HATCH_REGIONS:
+                        floor_regions.append("OUTSIDE_CARGO_HATCH")
+                    else:
+                        floor_regions.append("UNSPECIFIED")
+                if is_passenger_or_liquid:
+                    floor_limit_mm = 2400.0
+                    floor_status = "CONFLICT" if floor_val > 2400.0 else "PASS"
+                elif is_dry_cargo_db:
+                    if floor_val > 2000.0:
+                        floor_limit_mm = 2000.0
+                        floor_status = "CONFLICT"
+                    elif any(r == "UNDER_CARGO_HATCH" for r in floor_regions):
+                        floor_limit_mm = 1800.0
+                        floor_status = "CONFLICT" if floor_val > 1800.0 else "PASS"
+                    elif all(r == "OUTSIDE_CARGO_HATCH" for r in floor_regions):
+                        floor_limit_mm = 2000.0
+                        floor_status = "PASS"
+                    elif floor_val <= 1800.0:
+                        floor_limit_mm = 1800.0
+                        floor_status = "PASS"
+                    else:
+                        floor_limit_mm = 1800.0
+                        floor_status = "INSUFFICIENT_EVIDENCE"
+                else:
+                    if floor_val > 2400.0:
+                        floor_limit_mm = 2400.0
+                        floor_status = "CONFLICT"
+                    else:
+                        floor_status = "INSUFFICIENT_EVIDENCE"
+
+            # Evaluate girder spacing per Clause 2.4.3-3 (<= 3000 mm)
+            if max_girder_pair is None:
+                girder_status = "MISSING"
+            elif max_girder_pair[1] > 3000.0:
+                girder_status = "CONFLICT"
+            else:
+                girder_status = "PASS"
+
+            # Evaluate DB height per Clause 2.4.3-2 (>= 700 mm if L <= 120 m, >= 900 mm if L > 120 m)
+            straddles_120 = False
+            req_db_mm: float | None = None
+            if worst_db_pair is None:
+                db_height_status = "MISSING"
+            else:
+                min_db_mm = worst_db_pair[1]
+                if min_db_mm < 700.0:
+                    req_db_mm = 700.0
+                    db_height_status = "CONFLICT"
+                elif length_unproven:
+                    db_height_status = "INSUFFICIENT_EVIDENCE"
+                else:
+                    assert l_lo is not None and l_hi is not None
+                    straddles_120 = l_lo <= 120.0 < l_hi
+                    if straddles_120:
+                        db_height_status = "INSUFFICIENT_EVIDENCE"
+                    else:
+                        req_db_mm = 700.0 if l_hi <= 120.0 else 900.0
+                        db_height_status = "CONFLICT" if min_db_mm < req_db_mm else "PASS"
+
+            sub_statuses = (db_height_status, girder_status, floor_status)
+            if "CONFLICT" in sub_statuses:
+                mk09_verdict = "CONFLICT"
+            elif non_steel_materials:
+                mk09_verdict = "NOT_APPLICABLE"
+            elif not steel_verified or any(s != "PASS" for s in sub_statuses):
+                mk09_verdict = "INSUFFICIENT_EVIDENCE"
+            else:
+                mk09_verdict = "PASS"
+
+            reason_parts = []
+            if worst_db_pair is not None:
+                req_s = f"{req_db_mm:.1f}" if req_db_mm is not None else "700.0/900.0"
+                reason_parts.append(
+                    f"DB height={worst_db_pair[1]:.1f} mm on {worst_db_pair[0]} (min {req_s} mm, status={db_height_status})"
+                )
+            else:
+                reason_parts.append("DB height=MISSING")
+            if max_girder_pair is not None:
+                reason_parts.append(
+                    f"girder spacing={max_girder_pair[1]:.1f} mm (limit <= 3000.0 mm, status={girder_status})"
+                )
+            else:
+                reason_parts.append("girder spacing=MISSING")
+            if max_floor_pair is not None:
+                lim_s = f"<= {floor_limit_mm:.1f}" if floor_limit_mm is not None else "1800/2000/2400"
+                reason_parts.append(
+                    f"floor spacing={max_floor_pair[1]:.1f} mm (limit {lim_s} mm, regions={floor_regions}, status={floor_status})"
+                )
+            else:
+                reason_parts.append("floor spacing=MISSING")
+
+            finding_id_09 = (
+                "F_LENGTH_LWL_INTERVAL_STRADDLES_THRESHOLD"
+                if (mk09_verdict == "INSUFFICIENT_EVIDENCE" and straddles_120)
+                else "F_DOUBLE_BOTTOM_HEIGHT"
+            )
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=finding_id_09,
+                    verdict=mk09_verdict,
+                    rule_id="RULE_MK_09_DOUBLE_BOTTOM_MIN_HEIGHT",
+                    evidence={
+                        "drawing_id": target_db_did,
+                        "l_interval_m": [l_lo, l_hi] if l_lo is not None and l_hi is not None else None,
+                        "observed_db_height_mm": worst_db_pair[1] if worst_db_pair else None,
+                        "required_min_db_height_mm": req_db_mm,
+                        "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
+                        "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
+                        "floor_spacing_limit_mm": floor_limit_mm,
+                        "floor_regions": floor_regions,
+                        "sub_statuses": {
+                            "db_height": db_height_status,
+                            "girder_spacing": girder_status,
+                            "floor_spacing": floor_status,
+                        },
+                    },
+                    reason="; ".join(reason_parts) + ".",
+                    exceptions_checked=mk09_exceptions,
+                )
+            )
+            if mk09_verdict == "CONFLICT":
+                proposals.append(
+                    build_marine_core_proposal(
+                        target_drawing_id=target_db_did,
+                        action_kind="REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
+                        evidence={
+                            "observed_db_height_mm": worst_db_pair[1] if worst_db_pair else None,
+                            "required_min_mm": req_db_mm,
+                            "max_girder_spacing_mm": max_girder_pair[1] if max_girder_pair else None,
+                            "max_floor_spacing_mm": max_floor_pair[1] if max_floor_pair else None,
+                        },
+                    )
+                )
+
+        # Check RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (only L < 20 m steel hull on MIDSHIP/BASIC)
+        plate_pairs, pl_wrong, pl_untrusted, pl_invalid = _extract_strict_metric(
             obs_list,
             "min_plate_thickness_mm",
             allowed_types=("MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
-        bot_pairs, _, _ = _extract_strict_metric(
+        bot_pairs, bot_wrong, bot_untrusted, bot_invalid = _extract_strict_metric(
             obs_list,
             "min_bottom_plate_mm",
             allowed_types=("MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
-        bilge_pairs, _, _ = _extract_strict_metric(
+        bilge_pairs, bil_wrong, bil_untrusted, bil_invalid = _extract_strict_metric(
             obs_list,
             "min_bilge_plate_mm",
             allowed_types=("MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"),
-            drawing_types=scope["drawing_types_by_id"],
+            obs_drawing_types=obs_drawing_types,
         )
-        if pl_wrong:
+        if pl_wrong or bot_wrong or bil_wrong:
+            wrong_pl_sheets = sorted(set(pl_wrong) | set(bot_wrong) | set(bil_wrong))
             checks_not_executed.append(
-                f"Small-hull plate thickness on non-structural sheet(s) {', '.join(pl_wrong)} excluded"
+                f"Small-hull plate thickness on non-structural sheet(s) {', '.join(wrong_pl_sheets)} excluded"
             )
+            if not length_unproven and l_hi is not None and l_hi < 20.0 and not (plate_pairs or bot_pairs or bilge_pairs):
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_WRONG_SHEET_METRIC_PLATE",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                        evidence={"wrong_sheet_drawing_ids": wrong_pl_sheets},
+                        reason=f"Small-hull plate thickness supplied only on non-structural sheet(s) {', '.join(wrong_pl_sheets)}.",
+                    )
+                )
         unbound_pl_ids = [
             obs["drawing_id"]
-            for obs in obs_list
+            for idx, obs in enumerate(obs_list)
             if obs.get("min_plate_from_unbound_text")
-            and scope["drawing_types_by_id"].get(obs["drawing_id"]) in {"MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"}
+            and obs_drawing_types[idx] in {"MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"}
         ]
-        if length_unproven:
-            if plate_pairs or unbound_pl_ids:
+        mk10_invalid = pl_invalid + bot_invalid + bil_invalid
+        mk10_untrusted = sorted(set(pl_untrusted) | set(bot_untrusted) | set(bil_untrusted))
+        has_any_plate_metric = bool(plate_pairs or bot_pairs or bilge_pairs)
+        mk10_exceptions = [
+            "Evaluated: Steel Ch.3 Clause 3.7.2 (>= 2.5 mm) and 3.7.3 (bottom >= 3.0 mm, bilge >= 4.0 mm) applicability vs non-steel hulls",
+            "Not evaluated in V0: Ch.3 formula calculations using frame spacing a, draft d, ReH (3.7.3..3.7.9)",
+        ]
+
+        if mk10_invalid:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_INVALID_PLATE_METRIC",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                    evidence={"invalid_metrics": mk10_invalid},
+                    reason=f"Invalid non-finite/non-positive plate thickness metrics: {', '.join(mk10_invalid)}.",
+                    exceptions_checked=mk10_exceptions,
+                )
+            )
+        elif non_steel_materials and (has_any_plate_metric or unbound_pl_ids or (not length_unproven and l_lo is not None and l_lo < 20.0)):
+            checks_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (material applicability exclusion)")
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_SMALL_HULL_STEEL_RULE_NOT_APPLICABLE_MATERIAL",
+                    verdict="NOT_APPLICABLE",
+                    rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
+                    evidence={"hull_materials": hull_materials},
+                    reason=(
+                        f"Steel small-hull plate rule (QCVN 72 3.7.2-3.7.3) is NOT_APPLICABLE to non-steel "
+                        f"hull material {', '.join(non_steel_materials)}."
+                    ),
+                    exceptions_checked=mk10_exceptions,
+                )
+            )
+        elif length_unproven:
+            if has_any_plate_metric or unbound_pl_ids:
                 checks_not_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL deferred (proven L < 20m required)")
         else:
             assert l_lo is not None and l_hi is not None
             straddles_20 = l_lo < 20.0 <= l_hi
-            if straddles_20 and (plate_pairs or unbound_pl_ids):
+            if straddles_20 and (has_any_plate_metric or unbound_pl_ids):
                 checks_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (threshold interval check)")
                 findings.append(
                     _make_finding(
@@ -1731,13 +2088,14 @@ def evaluate_regulation_applicability_and_submittal(
                         rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
                         evidence={"l_interval_m": [l_lo, l_hi], "rule_threshold_m": 20.0},
                         reason=(
-                            f"Clause 1.4.43-1 interval [{l_lo:.2f}, {l_hi:.2f}]m straddles 20 m Ch.3 applicability "
+                            f"Length interval [{l_lo:.2f}, {l_hi:.2f}]m straddles 20 m Ch.3 applicability "
                             "boundary; explicit regulatory L required."
                         ),
+                        exceptions_checked=mk10_exceptions,
                     )
                 )
-            else:
-                if unbound_pl_ids and l_hi < 20.0:
+            elif l_hi < 20.0:
+                if unbound_pl_ids:
                     findings.append(
                         _make_finding(
                             rules_by_id,
@@ -1749,38 +2107,52 @@ def evaluate_regulation_applicability_and_submittal(
                                 "Unbound plate thickness text without bottom/bilge/hull structural label cannot verify "
                                 "RULE_MK_10."
                             ),
+                            exceptions_checked=mk10_exceptions,
                         )
                     )
-                if plate_pairs and pl_ocr and l_hi < 20.0:
+                if has_any_plate_metric and mk10_untrusted:
                     findings.append(
                         _make_finding(
                             rules_by_id,
                             finding_id="F_OCR_METRIC_PLATE",
                             verdict="INSUFFICIENT_EVIDENCE",
                             rule_id="RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL",
-                            evidence={"ocr_drawing_ids": pl_ocr},
-                            reason="Plate thickness values from unverified OCR text cannot produce PASS.",
+                            evidence={"untrusted_drawing_ids": mk10_untrusted},
+                            reason="Plate thickness values lack verified CAD/fixture provenance and cannot produce PASS.",
+                            exceptions_checked=mk10_exceptions,
                         )
                     )
-                elif plate_pairs and l_hi < 20.0:
+                elif has_any_plate_metric:
                     checks_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL")
                     structural_checks_ran += 1
-                    worst_pl_id, min_pl_mm = min(plate_pairs, key=lambda pair: pair[1])
-                    min_bot = min(bot_pairs, key=lambda pair: pair[1])[1] if bot_pairs else None
-                    min_bilge = min(bilge_pairs, key=lambda pair: pair[1])[1] if bilge_pairs else None
+                    min_pl_pair = min(plate_pairs, key=lambda item: item[1]) if plate_pairs else None
+                    min_bot_pair = min(bot_pairs, key=lambda item: item[1]) if bot_pairs else None
+                    min_bilge_pair = min(bilge_pairs, key=lambda item: item[1]) if bilge_pairs else None
+                    worst_pl_id = (
+                        min_pl_pair[0]
+                        if min_pl_pair
+                        else (min_bot_pair[0] if min_bot_pair else min_bilge_pair[0])  # type: ignore[index]
+                    )
+                    min_pl_mm = min_pl_pair[1] if min_pl_pair else None
+                    min_bot = min_bot_pair[1] if min_bot_pair else None
+                    min_bilge = min_bilge_pair[1] if min_bilge_pair else None
                     pl_fail = (
-                        min_pl_mm < 2.5
+                        (min_pl_mm is not None and min_pl_mm < 2.5)
                         or (min_bot is not None and min_bot < 3.0)
                         or (min_bilge is not None and min_bilge < 4.0)
                     )
                     pl_incomplete = (
                         not pl_fail
-                        and min_pl_mm < 4.0
-                        and (min_bot is None or min_bilge is None)
+                        and (
+                            min_pl_mm is None
+                            or (min_pl_mm < 4.0 and (min_bot is None or min_bilge is None))
+                            or min_bot is None
+                            or min_bilge is None
+                        )
                     )
                     if pl_fail:
                         pl_verdict = "CONFLICT"
-                    elif pl_incomplete:
+                    elif pl_incomplete or not steel_verified:
                         pl_verdict = "INSUFFICIENT_EVIDENCE"
                     else:
                         pl_verdict = "PASS"
@@ -1801,13 +2173,15 @@ def evaluate_regulation_applicability_and_submittal(
                                 "bilge_floor_mm": 4.0,
                             },
                             reason=(
-                                f"L in [{l_lo:.2f}, {l_hi:.2f}]m (<20m) plating min={min_pl_mm:.2f} mm "
-                                "(3.7.2 floor 2.5 mm; 3.7.3 bottom>=3.0 mm and bilge>=4.0 mm required unless all hull plates >= 4.0 mm)."
+                                f"L in [{l_lo:.2f}, {l_hi:.2f}]m (<20m) plating min={min_pl_mm}, "
+                                f"bottom={min_bot}, bilge={min_bilge} mm "
+                                "(3.7.2 floor 2.5 mm; 3.7.3 bottom>=3.0 mm and bilge>=4.0 mm required)."
                             ),
+                            exceptions_checked=mk10_exceptions,
                         )
                     )
-                elif l_lo >= 20.0:
-                    checks_not_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (L >= 20m outside Ch.3 <20m floor rule)")
+            elif l_lo >= 20.0:
+                checks_not_executed.append("RULE_MK_10_STEEL_MIN_THICKNESS_SMALL_HULL (L >= 20m outside Ch.3 <20m floor rule)")
 
         if structural_checks_ran == 0 and not length_unproven:
             findings.append(
@@ -1878,7 +2252,7 @@ def _norm_engine(raw: str) -> str:
 def _collect_cross_sheet_values(
     obs_list: list[dict[str, Any]],
     *,
-    drawing_types: Mapping[str, str] | None = None,
+    obs_drawing_types: Sequence[str] | None = None,
 ) -> dict[str, dict[str, list[str]]]:
     engines: dict[str, list[str]] = {}
     service_areas: dict[str, list[str]] = {}
@@ -1890,16 +2264,17 @@ def _collect_cross_sheet_values(
     depth_map: dict[str, list[str]] = {}
     draft_map: dict[str, list[str]] = {}
     ship_types: dict[str, list[str]] = {}
+    hull_materials: dict[str, list[str]] = {}
     hull_nos: dict[str, list[str]] = {}
     db_map: dict[str, list[str]] = {}
     bh_map: dict[str, list[str]] = {}
 
-    if drawing_types is None:
-        drawing_types = {obs["drawing_id"]: _classify_observation(obs)["predicted_drawing_type"] for obs in obs_list}
+    if obs_drawing_types is None:
+        obs_drawing_types = [_classify_observation(obs)["predicted_drawing_type"] for obs in obs_list]
 
-    for obs in obs_list:
+    for idx, obs in enumerate(obs_list):
         did = obs["drawing_id"]
-        dtype = drawing_types.get(did, "UNKNOWN")
+        dtype = obs_drawing_types[idx] if idx < len(obs_drawing_types) else "UNKNOWN"
         part = obs["particulars"]
         for eng in part["main_engine_values"]:
             engines.setdefault(_norm_engine(eng), []).append(f"{did}:{eng}")
@@ -1921,23 +2296,19 @@ def _collect_cross_sheet_values(
             draft_map.setdefault(f"{val:.2f}", []).append(did)
         for st in part["ship_types"]:
             ship_types.setdefault(st, []).append(did)
+        for hm in part.get("hull_materials", []):
+            hull_materials.setdefault(hm, []).append(did)
         for hno in part.get("hull_nos", []):
             hull_nos.setdefault(hno.upper(), []).append(f"{did}:{hno}")
         sm = obs.get("structural_metrics", {})
         db_val = sm.get("double_bottom_height_mm")
-        if (
-            isinstance(db_val, (int, float))
-            and not isinstance(db_val, bool)
-            and dtype in {"MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"}
-        ):
-            db_map.setdefault(f"{float(db_val):.1f}", []).append(did)
+        db_ok, db_f = _is_valid_finite_metric("double_bottom_height_mm", db_val)
+        if db_ok and db_f is not None and dtype in {"MIDSHIP_STRUCTURAL", "BASIC_STRUCTURAL"}:
+            db_map.setdefault(f"{db_f:.1f}", []).append(did)
         bh_val = sm.get("transverse_watertight_bulkhead_count")
-        if (
-            isinstance(bh_val, (int, float))
-            and not isinstance(bh_val, bool)
-            and dtype in {"GENERAL_ARRANGEMENT", "BASIC_STRUCTURAL"}
-        ):
-            bh_map.setdefault(str(int(bh_val)), []).append(did)
+        bh_ok, bh_f = _is_valid_finite_metric("transverse_watertight_bulkhead_count", bh_val)
+        if bh_ok and bh_f is not None and dtype in {"GENERAL_ARRANGEMENT", "BASIC_STRUCTURAL"}:
+            bh_map.setdefault(str(int(bh_f)), []).append(did)
 
     return {
         "engines": engines,
@@ -1950,6 +2321,7 @@ def _collect_cross_sheet_values(
         "depth_m": depth_map,
         "draft_m": draft_map,
         "ship_types": ship_types,
+        "hull_materials": hull_materials,
         "hull_nos": hull_nos,
         "double_bottom_height_mm": db_map,
         "transverse_watertight_bulkhead_count": bh_map,
@@ -2102,18 +2474,47 @@ def detect_drawing_gaps_and_conflicts(
             )
         )
 
-    # Per-drawing coherence checks: geometry, corrupted numbers, title mismatch, blanks, bow orientation, text heights, Z compression, 1000x span
-    checks_executed.extend(
-        [
-            "CAD entity & numeric integrity audit",
-            "Title-block vs content check",
-            "Blank title-block field audit",
-            "Bow direction (A.P vs F.P) and 1000x CAD span check",
-        ]
-    )
+    # Per-drawing coherence checks: execute only checks with actual supporting observations
+    substantive_checks_ran = 0
+    ran_numeric_integrity = False
+    ran_title_check = False
+    ran_blank_audit = False
+    ran_bow_check = False
+    ran_span_check = False
+    ran_z_scale_check = False
+
     for obs in obs_list:
         did = obs["drawing_id"]
         part = obs["particulars"]
+        if obs.get("texts") or obs.get("structural_metrics") or obs.get("entity_counts"):
+            substantive_checks_ran += 1
+        if obs.get("unsupported_insert_transforms"):
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_UNSUPPORTED_INSERT_TRANSFORM_{did}",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={"drawing_id": did, "unsupported_insert_transforms": obs["unsupported_insert_transforms"]},
+                    reason=(
+                        f"Drawing {did} contains INSERT block reference(s) with unsupported 3D/invalid transform "
+                        "(coordinates not fabricated from untransformed block text)."
+                    ),
+                )
+            )
+            ran_numeric_integrity = True
+        if obs.get("invalid_structural_metrics"):
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id=f"F_INVALID_STRUCTURAL_METRIC_{did}",
+                    verdict="CONFLICT",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={"drawing_id": did, "invalid_structural_metrics": obs["invalid_structural_metrics"]},
+                    reason=f"Non-finite or invalid structural metrics on {did}: {', '.join(obs['invalid_structural_metrics'])}.",
+                )
+            )
+            ran_numeric_integrity = True
         if obs.get("geometry_status") in {"MISSING", "CORRUPTED", "UNEDITABLE", "NO_GEOMETRY_PRIMITIVES"}:
             findings.append(
                 _make_finding(
@@ -2133,6 +2534,7 @@ def detect_drawing_gaps_and_conflicts(
                 )
             )
         if part.get("corrupted_numeric_tokens"):
+            ran_numeric_integrity = True
             findings.append(
                 _make_finding(
                     rules_by_id,
@@ -2151,6 +2553,7 @@ def detect_drawing_gaps_and_conflicts(
                 )
             )
         if part.get("unverified_unitless_particulars"):
+            ran_numeric_integrity = True
             findings.append(
                 _make_finding(
                     rules_by_id,
@@ -2161,19 +2564,29 @@ def detect_drawing_gaps_and_conflicts(
                     reason=f"Unitless principal particulars without m/mm/cm unit on {did}: {part['unverified_unitless_particulars']}.",
                 )
             )
-        if not has_ocr_only and any(v == "UNVERIFIED_OCR_TEXT" for v in obs.get("metric_provenance", {}).values()):
+        untrusted_obs_provs = {
+            k: v
+            for k, v in obs.get("metric_provenance", {}).items()
+            if str(v).strip() not in _VERIFIED_PROVENANCES
+        }
+        if not has_ocr_only and untrusted_obs_provs:
+            ran_numeric_integrity = True
             findings.append(
                 _make_finding(
                     rules_by_id,
                     finding_id=f"F_OCR_ONLY_METRIC_{did}",
                     verdict="INSUFFICIENT_EVIDENCE",
                     rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
-                    evidence={"drawing_id": did, "metric_provenance": obs.get("metric_provenance")},
-                    reason=f"Drawing {did} contains metrics with UNVERIFIED_OCR_TEXT provenance.",
+                    evidence={"drawing_id": did, "untrusted_metric_provenance": untrusted_obs_provs},
+                    reason=f"Drawing {did} contains metrics without verified CAD/fixture provenance: {untrusted_obs_provs}.",
                 )
             )
 
         cls = _classify_observation(obs)
+        if obs.get("texts") and (cls["title_declared_type"] is not None or cls["predicted_drawing_type"] != "UNKNOWN"):
+            ran_title_check = True
+        if obs.get("texts") or obs.get("blank_fields"):
+            ran_blank_audit = True
         if obs.get("min_plate_from_unbound_text") and cls["predicted_drawing_type"] in {
             "MIDSHIP_STRUCTURAL",
             "BASIC_STRUCTURAL",
@@ -2236,6 +2649,7 @@ def detect_drawing_gaps_and_conflicts(
         ap_coords = part["ap_x_coords"]
         fp_coords = part["fp_x_coords"]
         if ap_coords and fp_coords:
+            ran_bow_check = True
             ap_mean = sum(ap_coords) / len(ap_coords)
             fp_mean = sum(fp_coords) / len(fp_coords)
             if fp_mean < ap_mean - 1.0:
@@ -2258,6 +2672,7 @@ def detect_drawing_gaps_and_conflicts(
                 )
             decl_lengths = part.get("design_length_l_m_values") or part["lpp_m_values"]
             if not has_ocr_only and unit_factor is not None and decl_lengths and decl_lengths[0] > 0:
+                ran_span_check = True
                 decl_l = decl_lengths[0]
                 dx = abs(fp_mean - ap_mean)
                 model_m = dx * unit_factor / 1000.0
@@ -2343,8 +2758,11 @@ def detect_drawing_gaps_and_conflicts(
             not has_ocr_only
             and unit_factor is not None
             and isinstance(wl_span, (int, float))
+            and not isinstance(wl_span, bool)
+            and math.isfinite(float(wl_span))
             and depths
         ):
+            ran_z_scale_check = True
             depth_mm = depths[0] * 1000.0
             ratio = wl_span / depth_mm if depth_mm > 0 else 1.0
             if ratio > 1.12 or ratio < 0.88:
@@ -2366,6 +2784,25 @@ def detect_drawing_gaps_and_conflicts(
                     )
                 )
 
+    if ran_numeric_integrity or any(o.get("texts") or o.get("structural_metrics") for o in obs_list):
+        checks_executed.append("CAD entity & numeric integrity audit")
+    else:
+        checks_not_executed.append("CAD entity & numeric integrity audit (no texts or metrics provided)")
+    if ran_title_check:
+        checks_executed.append("Title-block vs content check")
+    else:
+        checks_not_executed.append("Title-block vs content check (no title/content signals provided)")
+    if ran_blank_audit:
+        checks_executed.append("Blank title-block field audit")
+    else:
+        checks_not_executed.append("Blank title-block field audit (no text annotations provided)")
+    if ran_bow_check or ran_span_check:
+        checks_executed.append("Bow direction (A.P vs F.P) and 1000x CAD span check")
+    else:
+        checks_not_executed.append("Bow direction (A.P vs F.P) and 1000x CAD span check (A.P / F.P markers absent)")
+    if not ran_z_scale_check:
+        checks_not_executed.append("Body-plan Z-axis scale vs Depth check (body_plan_wl_span_mm or D absent)")
+
     implausible_s3 = _has_implausible_particulars(scope, obs_list)
     if implausible_s3:
         findings.append(
@@ -2380,8 +2817,24 @@ def detect_drawing_gaps_and_conflicts(
         )
 
     # Cross-drawing & intra-drawing principal particulars consistency
-    checks_executed.append("Cross-drawing principal particulars coherence check")
-    cross = _collect_cross_sheet_values(obs_list)
+    cross = _collect_cross_sheet_values(obs_list, obs_drawing_types=scope["obs_drawing_types"])
+    has_cross_inputs = any(bool(cross[k]) for k in cross)
+    if has_cross_inputs:
+        checks_executed.append("Cross-drawing principal particulars coherence check")
+    else:
+        checks_not_executed.append("Cross-drawing principal particulars coherence check (no particulars/metrics supplied)")
+
+    if len(cross["hull_materials"]) > 1:
+        findings.append(
+            _make_finding(
+                rules_by_id,
+                finding_id="F_HULL_MATERIAL_CONFLICT",
+                verdict="CONFLICT",
+                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                evidence={"hull_materials": cross["hull_materials"]},
+                reason=f"Conflicting hull material declarations across sheets: {cross['hull_materials']}.",
+            )
+        )
 
     if len(cross["engines"]) > 1:
         eng_summary = {k: v for k, v in cross["engines"].items()}
@@ -2500,8 +2953,19 @@ def detect_drawing_gaps_and_conflicts(
     verdicts = [f["verdict"] for f in findings]
     if "CONFLICT" in verdicts:
         overall = "CONFLICT"
-    elif "INSUFFICIENT_EVIDENCE" in verdicts or has_ocr_only or (unitless_ids and not calibrated):
+    elif "INSUFFICIENT_EVIDENCE" in verdicts or has_ocr_only or (unitless_ids and not calibrated) or substantive_checks_ran == 0:
         overall = "INSUFFICIENT_EVIDENCE"
+        if substantive_checks_ran == 0 and not findings:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_INSUFFICIENT_OBSERVATION_EVIDENCE",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                    evidence={"drawing_ids": [o["drawing_id"] for o in obs_list], "geometry_statuses": [o.get("geometry_status") for o in obs_list]},
+                    reason="No texts, particulars, geometric entities, or structural metrics observed; cannot emit PASS.",
+                )
+            )
     else:
         overall = "PASS"
         findings.append(

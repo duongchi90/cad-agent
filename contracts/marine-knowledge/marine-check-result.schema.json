@@ -86,7 +86,62 @@
     "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "proposal_only_actions": {
       "type": "array",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposal_id",
+          "target_drawing_id",
+          "action_kind",
+          "cad_mutation",
+          "proposal_only",
+          "requires_cad_core_admission",
+          "required_core_gates",
+          "evidence",
+          "reason"
+        ],
+        "properties": {
+          "proposal_id": { "type": "string", "minLength": 1 },
+          "target_drawing_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+          "action_kind": {
+            "enum": [
+              "FIX_TITLE_BLOCK_TYPE_MISMATCH",
+              "RECONCILE_SERVICE_AREA_SCOPE",
+              "CONFIRM_REGULATORY_SERVICE_AREA",
+              "SET_INSUNITS_AND_VERIFY_CALIBRATION",
+              "SET_INSUNITS_AND_COMPLETE_TITLE_BLOCK",
+              "REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+              "REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
+              "VERIFY_SMALL_HULL_SCANTLINGS",
+              "REQUEST_NATIVE_CAD_AND_CALIBRATION",
+              "COMPLETE_TITLE_BLOCK_FIELDS",
+              "VERIFY_LONGLINE_BOW_TO_RIGHT",
+              "STANDARDIZE_TEXT_HEIGHTS_AT_SCALE",
+              "CHECK_NON_UNIFORM_VERTICAL_SCALE",
+              "RECONCILE_MAIN_ENGINE_SPECIFICATION",
+              "RECONCILE_L_PARTICULAR",
+              "RECONCILE_LPP_PARTICULAR",
+              "RECONCILE_B_PARTICULAR",
+              "RECONCILE_D_PARTICULAR",
+              "RECONCILE_DRAFT_PARTICULAR",
+              "RECONCILE_SHIP_TYPE_AND_HULL_ID",
+              "RECONCILE_METRIC_CONFLICT",
+              "VERIFY_CORRUPTED_NUMERIC_TEXT",
+              "VERIFY_CAD_GEOMETRY_ENTITIES"
+            ]
+          },
+          "cad_mutation": { "const": false },
+          "proposal_only": { "const": true },
+          "requires_cad_core_admission": { "const": true },
+          "required_core_gates": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "evidence": { "type": "object" },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
     }
   }
 }

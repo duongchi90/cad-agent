@@ -109,3 +109,4 @@ def test_term_lookup_rule_query_text_normalization_and_disable_toggle(
     monkeypatch.setenv("CAD_AGENT_DISABLE_MARINE_PACK", "1")
     disabled_env = get_marine_pack_status()
     assert disabled_env["status"] == "DISABLED"
+    assert get_marine_pack_status(enabled=True)["status"] == "DISABLED"

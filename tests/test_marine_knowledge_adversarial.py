@@ -47,6 +47,7 @@ def _valid_ga(
         {"handle": "A7", "text": draft_line, "x": 60000.0, "y": 3000.0, "height": 250.0},
         {"handle": "A8", "text": "MAIN ENGINE : 2x550 HP", "x": 60000.0, "y": 3500.0, "height": 250.0},
         {"handle": "A9", "text": ship_type_line, "x": 60000.0, "y": 4000.0, "height": 250.0},
+        {"handle": "A9B", "text": "HULL MATERIAL : STEEL", "x": 60000.0, "y": 4250.0, "height": 250.0},
         {"handle": "A10", "text": "PORT OF REGISTRY : HAI PHONG", "x": 60000.0, "y": 4500.0, "height": 250.0},
         {"handle": "A11", "text": "A.P", "x": ap_x, "y": 0.0, "height": 300.0},
         {"handle": "A12", "text": "F.P", "x": fp_x, "y": 0.0, "height": 300.0},
@@ -83,6 +84,7 @@ def _valid_mcn(
     ship_type_line: str = "SHIP TYPE : DRY CARGO",
     db_mm: float | None = 750.0,
     girder_spacing_mm: float | None = 2200.0,
+    floor_spacing_mm: float | None = 1800.0,
     extra_texts: list[dict[str, object]] | None = None,
     extra_metrics: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -96,6 +98,7 @@ def _valid_mcn(
         {"handle": "M7", "text": draft_line, "x": 4000.0, "y": 2000.0, "height": 150.0},
         {"handle": "M8", "text": "MAIN ENGINE : 2x550 HP", "x": 4000.0, "y": 2250.0, "height": 150.0},
         {"handle": "M9", "text": ship_type_line, "x": 4000.0, "y": 2500.0, "height": 150.0},
+        {"handle": "M10", "text": "HULL MATERIAL : STEEL", "x": 4000.0, "y": 2750.0, "height": 150.0},
     ]
     if extra_texts:
         texts.extend(extra_texts)
@@ -104,6 +107,8 @@ def _valid_mcn(
         metrics["double_bottom_height_mm"] = db_mm
     if girder_spacing_mm is not None:
         metrics["bottom_girder_max_spacing_mm"] = girder_spacing_mm
+    if floor_spacing_mm is not None:
+        metrics["transverse_floor_max_spacing_mm"] = floor_spacing_mm
     if extra_metrics:
         metrics.update(extra_metrics)
     return {

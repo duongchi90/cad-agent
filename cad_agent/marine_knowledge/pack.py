@@ -48,11 +48,13 @@ _SEALED_PACK = seal_knowledge_pack(
 
 
 def is_marine_pack_enabled(enabled: bool | None = None) -> bool:
-    """Return False when explicitly disabled or when env disable flag is set."""
+    """Return False when env kill-switch is set or explicitly disabled."""
+    raw = os.environ.get(_DISABLE_ENV_VAR, "").strip().lower()
+    if raw in {"1", "true", "yes", "on", "disabled"}:
+        return False
     if enabled is not None:
         return bool(enabled)
-    raw = os.environ.get(_DISABLE_ENV_VAR, "").strip().lower()
-    return raw not in {"1", "true", "yes", "on", "disabled"}
+    return True
 
 
 def get_marine_pack_status(*, enabled: bool | None = None) -> dict[str, Any]:

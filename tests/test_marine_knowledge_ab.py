@@ -39,6 +39,7 @@ def _ga_vrsb(
         {"handle": "6", "text": "D = 4.20 m", "x": 50000.0, "y": 2500.0, "height": 250.0},
         {"handle": "7", "text": engine_line, "x": 50000.0, "y": 3000.0, "height": 250.0},
         {"handle": "8", "text": "SHIP TYPE : DRY CARGO", "x": 50000.0, "y": 3500.0, "height": 250.0},
+        {"handle": "8B", "text": "HULL MATERIAL : STEEL", "x": 50000.0, "y": 3750.0, "height": 250.0},
         {"handle": "9", "text": "A.P", "x": 1000.0, "y": 0.0, "height": 300.0},
         {"handle": "10", "text": "F.P", "x": 53000.0, "y": 0.0, "height": 300.0},
     ]
@@ -57,6 +58,7 @@ def _ga_vrsb(
             "transverse_watertight_bulkhead_count": bulkheads,
             "double_bottom_height_mm": 760.0,
             "bottom_girder_max_spacing_mm": 2400.0,
+            "transverse_floor_max_spacing_mm": 1800.0,
         },
         "blank_fields": [],
     }
@@ -82,10 +84,13 @@ def _mcn_vrsb(
             {"handle": "M5", "text": "B = 9.60 m", "x": 4000.0, "y": 1500.0, "height": 150.0},
             {"handle": "M6", "text": "D = 4.20 m", "x": 4000.0, "y": 1750.0, "height": 150.0},
             {"handle": "M7", "text": engine_line, "x": 4000.0, "y": 2000.0, "height": 150.0},
+            {"handle": "M8", "text": "SHIP TYPE : DRY CARGO", "x": 4000.0, "y": 2250.0, "height": 150.0},
+            {"handle": "M9", "text": "HULL MATERIAL : STEEL", "x": 4000.0, "y": 2500.0, "height": 150.0},
         ],
         "structural_metrics": {
             "double_bottom_height_mm": db_mm,
             "bottom_girder_max_spacing_mm": 2200.0,
+            "transverse_floor_max_spacing_mm": 1800.0,
         },
         "blank_fields": [],
     }
@@ -233,6 +238,7 @@ def test_marine_regression_bow_z_compression_small_hull_and_empty_inputs(
             {"handle": "S2", "text": "CẤP TÀU : VR-SII", "x": 200.0, "y": 200.0, "height": 150.0},
             {"handle": "S3", "text": "Chiều dài tàu L = 18.00 m", "x": 200.0, "y": 400.0, "height": 150.0},
             {"handle": "S4", "text": "tôn đáy s=2.0 mm", "x": 200.0, "y": 600.0, "height": 150.0},
+            {"handle": "S5", "text": "HULL MATERIAL : STEEL", "x": 200.0, "y": 800.0, "height": 150.0},
         ],
         "structural_metrics": {"double_bottom_height_mm": 750.0},
     }
@@ -380,8 +386,15 @@ def _build_16_ground_truth_cases() -> list[tuple[str, str, list[dict[str, Any]],
             {"handle": "2", "text": "CẤP TÀU : VR-SII", "x": 200.0, "y": 200.0, "height": 150.0},
             {"handle": "3", "text": "Chiều dài tàu L = 18.00 m", "x": 200.0, "y": 400.0, "height": 150.0},
             {"handle": "4", "text": "tôn đáy s=4.5 mm", "x": 200.0, "y": 600.0, "height": 150.0},
+            {"handle": "5", "text": "tôn hông s=4.5 mm", "x": 200.0, "y": 750.0, "height": 150.0},
+            {"handle": "6", "text": "SHIP TYPE : DRY CARGO", "x": 200.0, "y": 900.0, "height": 150.0},
+            {"handle": "7", "text": "HULL MATERIAL : STEEL", "x": 200.0, "y": 1050.0, "height": 150.0},
         ],
-        "structural_metrics": {"double_bottom_height_mm": 750.0},
+        "structural_metrics": {
+            "double_bottom_height_mm": 750.0,
+            "bottom_girder_max_spacing_mm": 2200.0,
+            "transverse_floor_max_spacing_mm": 1800.0,
+        },
     }
     small_bad_plate = {
         **small_valid,
@@ -389,6 +402,8 @@ def _build_16_ground_truth_cases() -> list[tuple[str, str, list[dict[str, Any]],
         "texts": [
             *small_valid["texts"][:3],
             {"handle": "4", "text": "tôn đáy s=2.0 mm", "x": 200.0, "y": 600.0, "height": 150.0},
+            {"handle": "6", "text": "SHIP TYPE : DRY CARGO", "x": 200.0, "y": 900.0, "height": 150.0},
+            {"handle": "7", "text": "HULL MATERIAL : STEEL", "x": 200.0, "y": 1050.0, "height": 150.0},
         ],
     }
 

@@ -551,50 +551,357 @@ def _normalize_ws(text: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip().casefold()
 
 
-_PDF_OUTLINE_CACHE: dict[str, dict[int, tuple[str, ...]]] = {}
+_PDF_OUTLINE_CACHE: dict[str, tuple[tuple[int, int, str], ...]] = {}
+
+_PREPOSITION_REF_RE = re.compile(
+    r"(?:\b(?:tại|theo|trong|xem|ở|đến|từ|nêu\s+ở|nêu\s+tại|quy\s+định\s+ở|quy\s+định\s+tại|mục|clause|clauses|section)\s+)$",
+    re.IGNORECASE,
+)
 
 
-def _walk_pdf_outline(reader: PdfReader, items: Any, acc: dict[int, list[str]]) -> None:
+def _walk_pdf_outline(
+    reader: PdfReader,
+    items: Any,
+    acc: list[tuple[int, int, str]],
+    level: int = 1,
+) -> None:
     for item in items:
         if isinstance(item, list):
-            _walk_pdf_outline(reader, item, acc)
+            _walk_pdf_outline(reader, item, acc, level=level + 1)
         else:
             try:
                 pno = int(reader.get_destination_page_number(item)) + 1
-                title = str(getattr(item, "title", "") or "").strip()
+                title = re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(getattr(item, "title", "") or ""))).strip()
                 if title:
-                    acc.setdefault(pno, []).append(title)
+                    acc.append((pno, level, title))
             except Exception:
                 continue
 
 
-def _get_pdf_outline_by_page(reader: PdfReader, source_sha256: str) -> dict[int, tuple[str, ...]]:
+def _get_pdf_outline_entries(reader: PdfReader, source_sha256: str) -> tuple[tuple[int, int, str], ...]:
     cached = _PDF_OUTLINE_CACHE.get(source_sha256)
     if cached is not None:
         return cached
-    acc: dict[int, list[str]] = {}
+    acc: list[tuple[int, int, str]] = []
     try:
         outline = reader.outline
     except Exception:
         outline = []
     if outline:
-        _walk_pdf_outline(reader, outline, acc)
-    frozen = {pno: tuple(titles) for pno, titles in acc.items()}
+        _walk_pdf_outline(reader, outline, acc, level=1)
+    frozen = tuple(acc)
     if len(_PDF_OUTLINE_CACHE) >= 8:
         _PDF_OUTLINE_CACHE.clear()
     _PDF_OUTLINE_CACHE[source_sha256] = frozen
     return frozen
 
 
-def _extract_clause_anchors(clause: str, *, document_kind: str) -> tuple[list[str], list[str]]:
+def _normalize_preserve_lines(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        cleaned = re.sub(r"\s+", " ", unicodedata.normalize("NFC", raw_line)).strip().casefold()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines)
+
+
+def _extract_clause_anchors(
+    clause: str,
+    *,
+    document_kind: str,
+) -> tuple[list[tuple[str, str | None]], list[str], list[str]]:
     head = clause.split(";", 1)[0] if document_kind == "TEXTBOOK" else clause
     head_no_parens = re.sub(r"\([^)]*\)", " ", head)
-    dotted = list(dict.fromkeys(re.findall(r"\b\d+\.\d+(?:\.\d+)?\b", head_no_parens)))
-    chapters = [
-        m.group(1)
-        for m in re.finditer(r"(?:\bchương|\bch\.)\s*(\d+)\b", head_no_parens, re.IGNORECASE)
-    ]
-    return dotted, list(dict.fromkeys(chapters))
+
+    clause_items: list[tuple[str, str | None]] = []
+    seen_items: set[tuple[str, str | None]] = set()
+
+    def _add_item(base: str, sub: str | None) -> None:
+        key = (base, sub)
+        if key not in seen_items:
+            seen_items.add(key)
+            clause_items.append(key)
+
+    # Expand explicit sub-item ranges like "2.4.3-1 đến 2.4.3-3"
+    for rm in re.finditer(
+        r"\b(\d+\.\d+(?:\.\d+)?)-(\d+)\s*(?:đến|to|[-–—])\s*(?:\1-)?(\d+)\b",
+        head_no_parens,
+        re.IGNORECASE,
+    ):
+        base, lo_s, hi_s = rm.group(1), rm.group(2), rm.group(3)
+        lo_i, hi_i = int(lo_s), int(hi_s)
+        if 0 < lo_i <= hi_i and (hi_i - lo_i) <= 20:
+            for k in range(lo_i, hi_i + 1):
+                _add_item(base, str(k))
+
+    # Expand explicit dotted clause ranges like "3.7.2–3.7.3" or "2.2.1–2.2.2"
+    for rm in re.finditer(
+        r"\b(\d+\.\d+\.)(\d+)\s*(?:đến|to|[-–—])\s*(?:\1)(\d+)\b",
+        head_no_parens,
+        re.IGNORECASE,
+    ):
+        prefix, lo_s, hi_s = rm.group(1), rm.group(2), rm.group(3)
+        lo_i, hi_i = int(lo_s), int(hi_s)
+        if 0 <= lo_i <= hi_i and (hi_i - lo_i) <= 20:
+            for k in range(lo_i, hi_i + 1):
+                _add_item(f"{prefix}{k}", None)
+
+    for m in re.finditer(r"\b(\d+\.\d+(?:\.\d+)?)(?:-(\d+))?\b", head_no_parens):
+        _add_item(m.group(1), m.group(2))
+
+    chapters = list(
+        dict.fromkeys(
+            m.group(1)
+            for m in re.finditer(r"(?:\bchương|\bch\.)\s*(\d+)\b", head_no_parens, re.IGNORECASE)
+        )
+    )
+
+    text_anchors: list[str] = []
+    if document_kind == "TEXTBOOK":
+        for seg in re.split(r"\s*(?:-|&|:|/|,|\+|–|—)\s*", head_no_parens):
+            norm_seg = _normalize_ws(seg)
+            if not norm_seg or len(norm_seg) < 6:
+                continue
+            if re.fullmatch(r"(?:chương|ch\.|pdf)?\s*(?:p\.?)?\d+(?:\s*p\.?\d+)?", norm_seg):
+                continue
+            if norm_seg not in text_anchors:
+                text_anchors.append(norm_seg)
+
+    return clause_items, chapters, text_anchors
+
+
+def _clause_depth(clause_num: str) -> int:
+    return len(clause_num.split("."))
+
+
+def _strip_outline_prefix(title_norm: str) -> str:
+    return re.sub(r"^\d+(?:\.\d+)*\s+", "", title_norm).strip()
+
+
+def _find_heading_offset_in_lines(text_lines: str, heading_body: str, *, min_pos: int = 0) -> int | None:
+    if not heading_body:
+        return None
+    for probe_len in (len(heading_body), 55, 40, 28, 18):
+        probe = heading_body[:probe_len].strip()
+        if len(probe) < 6:
+            continue
+        idx = text_lines.find(probe, min_pos)
+        if idx != -1:
+            return idx
+        # Also allow space/newline differences across wrapped PDF lines by regex \s+
+        parts = probe.split()
+        if len(parts) >= 2:
+            pat = r"\s+".join(re.escape(tok) for tok in parts[: min(len(parts), 7)])
+            m = re.search(pat, text_lines[min_pos:])
+            if m:
+                return min_pos + m.start()
+    return None
+
+
+def _resolve_regulation_clause_slices(
+    *,
+    clause_items: list[tuple[str, str | None]],
+    ch_anchors: list[str],
+    pdf_pages: list[int],
+    extracted_pages_lines: list[str],
+    outline_entries: tuple[tuple[int, int, str], ...],
+) -> list[str]:
+    merged_lines = "\n".join(extracted_pages_lines)
+    page_offsets: dict[int, tuple[int, int]] = {}
+    cursor = 0
+    for idx_p, pno in enumerate(pdf_pages):
+        plen = len(extracted_pages_lines[idx_p])
+        page_offsets[pno] = (cursor, cursor + plen)
+        cursor += plen + 1
+
+    cited_set = set(pdf_pages)
+    min_cited = min(pdf_pages)
+    max_cited = max(pdf_pages)
+    outline_norm = [(pno, lvl, _normalize_ws(title)) for pno, lvl, title in outline_entries]
+
+    slices: list[str] = []
+    if clause_items:
+        for base_clause, sub_item in clause_items:
+            base_depth = _clause_depth(base_clause)
+            matched_slice: str | None = None
+
+            # 1. Try body line-start clause heading match first
+            body_start: int | None = None
+            for bm in re.finditer(
+                rf"(?m)(?:^|\n)\s*{re.escape(base_clause)}(?=\s|$)",
+                merged_lines,
+            ):
+                candidate = bm.start()
+                if merged_lines[candidate : candidate + 1] == "\n":
+                    candidate += 1
+                prefix_ctx = merged_lines[max(0, candidate - 40) : candidate].replace("\n", " ")
+                if _PREPOSITION_REF_RE.search(prefix_ctx):
+                    continue
+                body_start = candidate
+                break
+
+            if body_start is not None:
+                body_end = len(merged_lines)
+                for nm in re.finditer(r"(?m)(?:^|\n)\s*(\d+\.\d+(?:\.\d+)?)(?=\s|$)", merged_lines[body_start + len(base_clause) :]):
+                    cand_num = nm.group(1)
+                    rel_pos = body_start + len(base_clause) + nm.start()
+                    if merged_lines[rel_pos : rel_pos + 1] == "\n":
+                        rel_pos += 1
+                    prefix_ctx = merged_lines[max(0, rel_pos - 40) : rel_pos].replace("\n", " ")
+                    if _PREPOSITION_REF_RE.search(prefix_ctx):
+                        continue
+                    if cand_num != base_clause and _clause_depth(cand_num) <= base_depth:
+                        body_end = rel_pos
+                        break
+                matched_slice = merged_lines[body_start:body_end]
+
+            # 2. Try outline-numbered clause match (e.g. QCVN 72 omits 1.4.43 / 1.1.1 / 3.2.1 in body)
+            if matched_slice is None and outline_norm:
+                match_idx: int | None = None
+                for oi, (o_pno, _o_lvl, o_title) in enumerate(outline_norm):
+                    if re.match(rf"^{re.escape(base_clause)}(?=\s|$)", o_title):
+                        next_same_or_higher_pno = max_cited + 1
+                        for nj in range(oi + 1, len(outline_norm)):
+                            n_pno, n_lvl, _n_title = outline_norm[nj]
+                            if n_lvl <= _o_lvl:
+                                next_same_or_higher_pno = n_pno
+                                break
+                        if o_pno in cited_set or (o_pno <= min_cited <= next_same_or_higher_pno):
+                            match_idx = oi
+                            break
+                if match_idx is not None:
+                    o_pno, o_lvl, o_title = outline_norm[match_idx]
+                    heading_body = _strip_outline_prefix(o_title)
+                    if o_pno in cited_set:
+                        p_start = page_offsets[o_pno][0]
+                        found_s = _find_heading_offset_in_lines(merged_lines, heading_body, min_pos=p_start)
+                        o_start = found_s if found_s is not None else p_start
+                    else:
+                        o_start = 0
+
+                    o_end = len(merged_lines)
+                    for nj in range(match_idx + 1, len(outline_norm)):
+                        n_pno, n_lvl, n_title = outline_norm[nj]
+                        if n_lvl > o_lvl:
+                            continue
+                        if n_pno in cited_set:
+                            n_body = _strip_outline_prefix(n_title)
+                            n_min = max(o_start + 5, page_offsets[n_pno][0])
+                            found_e = _find_heading_offset_in_lines(merged_lines, n_body, min_pos=n_min)
+                            if found_e is None:
+                                m_num = re.match(r"^(\d+\.\d+(?:\.\d+)?)\b", n_title)
+                                if m_num:
+                                    bm_e = re.search(
+                                        rf"(?m)(?:^|\n)\s*{re.escape(m_num.group(1))}(?=\s|$)",
+                                        merged_lines[n_min:],
+                                    )
+                                    if bm_e:
+                                        found_e = n_min + bm_e.start()
+                            if found_e is not None and found_e > o_start:
+                                o_end = found_e
+                                break
+                        elif n_pno > max_cited:
+                            break
+                    matched_slice = merged_lines[o_start:o_end]
+
+            # 3. Last-resort direct clause match inside body text (only when line-start & outline missed)
+            if matched_slice is None:
+                direct_start: int | None = None
+                for dm in re.finditer(rf"(?<!\d\.){re.escape(base_clause)}(?![.\d-])", merged_lines):
+                    cand = dm.start()
+                    prefix_ctx = merged_lines[max(0, cand - 40) : cand].replace("\n", " ")
+                    if not _PREPOSITION_REF_RE.search(prefix_ctx):
+                        direct_start = cand
+                        break
+                if direct_start is not None:
+                    direct_end = len(merged_lines)
+                    for nm in re.finditer(r"(?<!\d\.)(\d+\.\d+(?:\.\d+)?)(?![.\d-])", merged_lines[direct_start + len(base_clause) :]):
+                        cand_num = nm.group(1)
+                        rel_pos = direct_start + len(base_clause) + nm.start()
+                        prefix_ctx = merged_lines[max(0, rel_pos - 40) : rel_pos].replace("\n", " ")
+                        if _PREPOSITION_REF_RE.search(prefix_ctx):
+                            continue
+                        if cand_num != base_clause and _clause_depth(cand_num) <= base_depth:
+                            direct_end = rel_pos
+                            break
+                    matched_slice = merged_lines[direct_start:direct_end]
+
+            if matched_slice is None:
+                _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+
+            if sub_item is not None:
+                sub_k = int(sub_item)
+                sm = re.search(rf"(?m)(?:^|\n)\s*{sub_k}(?:\s+[^\d,.]|$)", matched_slice)
+                if sm is None:
+                    sm = re.search(rf"(?:^|\s){sub_k}\s+[^\d,.]", matched_slice)
+                if sm is None:
+                    _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+                s_start = sm.start()
+                next_k = sub_k + 1
+                s_end = len(matched_slice)
+                em = re.search(rf"(?m)(?:^|\n)\s*{next_k}(?:\s+[^\d,.]|$)", matched_slice[s_start + 2 :])
+                if em is not None:
+                    s_end = s_start + 2 + em.start()
+                matched_slice = matched_slice[s_start:s_end]
+
+            slices.append(re.sub(r"\s+", " ", matched_slice).strip())
+        return slices
+
+    if ch_anchors:
+        merged_flat = re.sub(r"\s+", " ", merged_lines).strip()
+        for ch in ch_anchors:
+            m_ch = re.search(rf"\bchương\s*{re.escape(ch)}\b", merged_flat)
+            if m_ch is None:
+                _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+            slices.append(merged_flat[m_ch.start() :])
+        return slices
+
+    _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+    return []
+
+
+def _resolve_textbook_clause_slices(
+    *,
+    clause_items: list[tuple[str, str | None]],
+    ch_anchors: list[str],
+    text_anchors: list[str],
+    extracted_pages_lines: list[str],
+) -> list[str]:
+    merged_flat = re.sub(r"\s+", " ", "\n".join(extracted_pages_lines)).strip()
+    matched_positions: list[int] = []
+
+    for base_clause, _sub in clause_items:
+        m = re.search(rf"(?<!\d\.){re.escape(base_clause)}(?![.\d])", merged_flat)
+        if m is None:
+            _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+        matched_positions.append(m.start())
+
+    if ch_anchors and not clause_items:
+        for ch in ch_anchors:
+            m = re.search(rf"\bchương\s*{re.escape(ch)}\b", merged_flat)
+            if m is not None:
+                matched_positions.append(m.start())
+
+    for heading in text_anchors:
+        pos = merged_flat.find(heading)
+        if pos != -1:
+            matched_positions.append(pos)
+        else:
+            words = [w for w in heading.split() if len(w) >= 2]
+            if len(words) >= 3:
+                prefix = " ".join(words[:4])
+                pos2 = merged_flat.find(prefix)
+                if pos2 != -1:
+                    matched_positions.append(pos2)
+
+    if not matched_positions:
+        _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+
+    # Bind to page slices containing verified anchors (each matched anchor contributes its page/slice)
+    slices: list[str] = []
+    for pos in sorted(set(matched_positions)):
+        slices.append(merged_flat[pos:])
+    return slices
 
 
 def verify_source_citation(
@@ -679,43 +986,50 @@ def verify_source_citation(
         if raw_bytes.lstrip().startswith(b"%PDF") and pdf_pages:
             reader = PdfReader(BytesIO(raw_bytes))
             total_pdf_pages = len(reader.pages)
-            outline_by_page = _get_pdf_outline_by_page(reader, actual_sha)
-            extracted_pages: list[str] = []
-            clause_corpus_parts: list[str] = []
+            outline_entries = _get_pdf_outline_entries(reader, actual_sha)
+            extracted_pages_lines: list[str] = []
             for idx_pos, pdf_p in enumerate(pdf_pages):
                 if pdf_p < 1 or pdf_p > total_pdf_pages:
                     _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
                 page_txt = reader.pages[pdf_p - 1].extract_text() or ""
-                extracted_pages.append(page_txt)
-                toc_txt = " ".join(outline_by_page.get(pdf_p, ()))
-                clause_corpus_parts.append(f"{page_txt} {toc_txt}")
+                extracted_pages_lines.append(_normalize_preserve_lines(page_txt))
                 if idx_pos < len(reg_pages):
                     if str(reg_pages[idx_pos]) not in page_txt[:300]:
                         _fail("CITATION_PAGE_MISMATCH")
 
-            dotted_anchors, ch_anchors = _extract_clause_anchors(
+            doc_kind = str(source_entry["document_kind"])
+            clause_items, ch_anchors, text_anchors = _extract_clause_anchors(
                 clause,
-                document_kind=str(source_entry["document_kind"]),
+                document_kind=doc_kind,
             )
-            clause_corpus_norm = _normalize_ws(" ".join(clause_corpus_parts))
-            for anchor in dotted_anchors:
-                if not re.search(rf"(?<!\d\.){re.escape(anchor)}(?![.\d])", clause_corpus_norm):
-                    _fail("CITATION_CLAUSE_PAGE_MISMATCH")
-            if not dotted_anchors and ch_anchors:
-                if not any(f"chương {ch}" in clause_corpus_norm for ch in ch_anchors):
-                    _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+            if doc_kind == "TEXTBOOK":
+                bound_slices = _resolve_textbook_clause_slices(
+                    clause_items=clause_items,
+                    ch_anchors=ch_anchors,
+                    text_anchors=text_anchors,
+                    extracted_pages_lines=extracted_pages_lines,
+                )
+            else:
+                bound_slices = _resolve_regulation_clause_slices(
+                    clause_items=clause_items,
+                    ch_anchors=ch_anchors,
+                    pdf_pages=pdf_pages,
+                    extracted_pages_lines=extracted_pages_lines,
+                    outline_entries=outline_entries,
+                )
 
             states.append("PAGE_VERIFIED")
 
             excerpt = record.get("verbatim_excerpt")
             if isinstance(excerpt, str) and excerpt.strip():
-                merged_norm = _normalize_ws(" ".join(extracted_pages))
                 segments = [
                     _normalize_ws(seg)
                     for seg in excerpt.split("...")
                     if len(_normalize_ws(seg)) >= 10
                 ]
-                if not segments or not all(seg in merged_norm for seg in segments):
+                if not segments or not bound_slices or not all(
+                    any(seg in sl for sl in bound_slices) for seg in segments
+                ):
                     _fail("CITATION_EXCERPT_CONTENT_MISMATCH")
                 states.append("CLAUSE_CONTENT_VERIFIED")
 

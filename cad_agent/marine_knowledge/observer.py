@@ -56,9 +56,11 @@ _DEPTH_RE = re.compile(
     r"(?:^|\b)(?:depth(?:\s*\(?d\)?)?|chieu\s+cao\s+man(?:\s*\(?d\)?)?|d)\s*[:=]\s*"
     r"([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
 )
-_DRAFT_RE = re.compile(
+_DRAFT_WORD_RE = re.compile(
     r"(?:^|\b)(?:draught|draft|chieu\s+chim(?:\s*\(?t\)?)?|mon\s+nuoc)\s*[:=]?\s*"
-    r"([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b|"
+    r"([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
+)
+_DRAFT_SYMBOL_T_RE = re.compile(
     r"(?:^|\b)T\s*[:=]\s*([0-9]+(?:[.,][0-9]+)?)(?![.,]?[a-z0-9])\s*(mm|cm|m)?\b"
 )
 _CORRUPTED_NUMBER_RE = re.compile(
@@ -98,7 +100,38 @@ _STRUCTURAL_PLATE_CTX_RE = re.compile(
     r"ket\s+cau|song\s+day|da\s+ngang|vach|bottom|bilge|keel|side\s+shell|deck|shell\s+plate|hull\s+plate)\b"
 )
 
+_EQUIPMENT_ACCESSORY_RE = re.compile(
+    r"\b(?:xuong\s+cuu\s+sinh|lifeboat|liferaft|phao\s+cuu\s+sinh|lifebuoy|lifejacket|"
+    r"locker|cabinet|enclosure|extinguisher|binh\s+chua\s+chay|fire\s+hose|fire\s+station|"
+    r"davit|seat|chair|furniture|console|hatch\s+cover|door|window|decal|nameplate|"
+    r"tu\s+dung|hop\s+dung|tu\s+chua|hop\s+chua)\b"
+)
+_VESSEL_FRP_RE = re.compile(
+    r"\bqcvn\s*56(?:\s*[:/]\s*\d{4})?\b|"
+    r"\b(?:hull\s+material|vat\s+lieu\s+(?:vo|than\s+tau)|material)\s*[:=]\s*(?:frp|chat\s+deo\s+cot\s+soi\s+thuy\s+tinh)\b|"
+    r"\b(?:vo\s+frp|tau\s+(?:vo\s+)?(?:frp|chat\s+deo\s+cot\s+soi\s+thuy\s+tinh)|frp\s+(?:hull|vessel|craft|boat|ship)|"
+    r"vr\s*-?\s*(?:sb|si|sii|siii)\s+frp)\b"
+)
+_ALUMINUM_HULL_RE = re.compile(
+    r"\bvr\s*-?\s*(?:sb|si|sii|siii)\s+al\b|"
+    r"\b(?:hull\s+material|vat\s+lieu\s+(?:vo|than\s+tau)|material)\s*[:=]\s*"
+    r"(?:aluminum(?:\s+alloy)?|aluminium(?:\s+alloy)?|al\b|nhom|hop\s+kim\s+nhom|hop\s+kim\s+nhe)\b|"
+    r"\b(?:vo\s+nhom|tau\s+(?:vo\s+)?(?:nhom|hop\s+kim\s+nhom|hop\s+kim\s+nhe)|"
+    r"(?:aluminum|aluminium)\s+(?:alloy\s+)?(?:hull|vessel|craft))\b"
+)
+_STEEL_HULL_RE = re.compile(
+    r"\b(?:hull\s+material|vat\s+lieu\s+(?:vo|than\s+tau)|material)\s*[:=]\s*"
+    r"(?:welded\s+steel|shipbuilding\s+steel|steel|thep\s+han|thep\s+dong\s+tau|thep|grade\s+[abde]\b|ah3[26]\b)|"
+    r"\b(?:vo\s+thep|tau\s+(?:vo\s+)?thep(?:\s+han)?|(?:welded\s+)?steel\s+hull)\b"
+)
+_CONCRETE_HULL_RE = re.compile(
+    r"\bvr\s*-?\s*(?:sb|si|sii|siii)\s+btct\b|"
+    r"\b(?:hull\s+material|vat\s+lieu\s+(?:vo|than\s+tau)|material)\s*[:=]\s*(?:btct|be\s+tong\s+cot\s+thep|reinforced\s+concrete)\b|"
+    r"\b(?:vo\s+btct|tau\s+(?:vo\s+)?be\s+tong\s+cot\s+thep|reinforced\s+concrete\s+hull)\b"
+)
+
 _MAX_BLOCK_TEXT_ITEMS = 250
+_MAX_INSERT_RECURSION_DEPTH = 8
 
 
 def _to_float(value: object) -> float | None:
@@ -157,7 +190,7 @@ def _extract_style_font_hints(doc: Any) -> dict[str, str]:
     return hints
 
 
-def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str], *, dx: float = 0.0, dy: float = 0.0) -> dict[str, Any] | None:
+def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str]) -> dict[str, Any] | None:
     dxftype = entity.dxftype()
     if dxftype == "MTEXT":
         raw_text = entity.plain_text() if hasattr(entity, "plain_text") else str(getattr(entity.dxf, "text", "") or "")
@@ -172,8 +205,8 @@ def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str], *, dx: flo
     style_name = str(getattr(entity.dxf, "style", "") or "")
     font_hint = style_fonts.get(style_name, "")
     insert = getattr(entity.dxf, "insert", None)
-    x = (_to_float(getattr(insert, "x", None)) or 0.0) + dx
-    y = (_to_float(getattr(insert, "y", None)) or 0.0) + dy
+    x = _to_float(getattr(insert, "x", None)) or 0.0
+    y = _to_float(getattr(insert, "y", None)) or 0.0
     return {
         "handle": str(getattr(entity.dxf, "handle", "") or ""),
         "text": normalize_marine_cad_text(raw_text, font_hint=font_hint),
@@ -186,10 +219,111 @@ def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str], *, dx: flo
     }
 
 
-def _collect_dxf_texts(doc: Any, style_fonts: Mapping[str, str]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _check_supported_insert_transform(entity: Any) -> str | None:
+    ext = getattr(entity.dxf, "extrusion", (0.0, 0.0, 1.0))
+    try:
+        ex, ey, ez = float(ext[0]), float(ext[1]), float(ext[2])
+    except Exception:
+        return "INVALID_EXTRUSION"
+    if not (math.isfinite(ex) and math.isfinite(ey) and math.isfinite(ez)):
+        return "NON_FINITE_EXTRUSION"
+    if abs(ex) > 1e-6 or abs(ey) > 1e-6 or abs(ez - 1.0) > 1e-6:
+        return f"NON_PLANAR_3D_EXTRUSION({round(ex, 4)},{round(ey, 4)},{round(ez, 4)})"
+
+    ins = getattr(entity.dxf, "insert", None)
+    for coord in (
+        getattr(ins, "x", 0.0),
+        getattr(ins, "y", 0.0),
+        getattr(ins, "z", 0.0),
+        getattr(entity.dxf, "xscale", 1.0),
+        getattr(entity.dxf, "yscale", 1.0),
+        getattr(entity.dxf, "zscale", 1.0),
+        getattr(entity.dxf, "rotation", 0.0),
+    ):
+        try:
+            if not math.isfinite(float(coord)):
+                return "NON_FINITE_INSERT_TRANSFORM"
+        except Exception:
+            return "INVALID_INSERT_TRANSFORM"
+    return None
+
+
+def _expand_insert_texts(
+    insert_entity: Any,
+    style_fonts: Mapping[str, str],
+    *,
+    depth: int,
+    ancestor_blocks: frozenset[str],
+    collected: list[dict[str, Any]],
+    unsupported: list[dict[str, Any]],
+    root_handle: str,
+) -> None:
+    if len(collected) >= _MAX_BLOCK_TEXT_ITEMS:
+        return
+    block_name = str(getattr(insert_entity.dxf, "name", "") or "")
+    if depth > _MAX_INSERT_RECURSION_DEPTH:
+        unsupported.append(
+            {"handle": root_handle, "block_name": block_name, "reason": "INSERT_NESTING_TOO_DEEP"}
+        )
+        return
+    if block_name and block_name in ancestor_blocks:
+        unsupported.append(
+            {"handle": root_handle, "block_name": block_name, "reason": "CYCLIC_BLOCK_REFERENCE"}
+        )
+        return
+    unsupported_reason = _check_supported_insert_transform(insert_entity)
+    if unsupported_reason is not None:
+        unsupported.append(
+            {"handle": root_handle, "block_name": block_name, "reason": unsupported_reason}
+        )
+        return
+
+    try:
+        virtuals = list(insert_entity.virtual_entities())
+    except Exception as exc:
+        unsupported.append(
+            {
+                "handle": root_handle,
+                "block_name": block_name,
+                "reason": f"VIRTUAL_TRANSFORM_ERROR:{type(exc).__name__}",
+            }
+        )
+        return
+
+    next_ancestors = ancestor_blocks | ({block_name} if block_name else frozenset())
+    for ve in virtuals:
+        if len(collected) >= _MAX_BLOCK_TEXT_ITEMS:
+            break
+        vtype = ve.dxftype()
+        if vtype == "INSERT":
+            for attrib in getattr(ve, "attribs", ()):
+                attr_item = _entity_text_payload(attrib, style_fonts)
+                if attr_item is not None and len(collected) < _MAX_BLOCK_TEXT_ITEMS:
+                    collected.append(attr_item)
+            _expand_insert_texts(
+                ve,
+                style_fonts,
+                depth=depth + 1,
+                ancestor_blocks=next_ancestors,
+                collected=collected,
+                unsupported=unsupported,
+                root_handle=root_handle,
+            )
+            continue
+        item = _entity_text_payload(ve, style_fonts)
+        if item is not None:
+            if not item["handle"]:
+                item["handle"] = root_handle
+            collected.append(item)
+
+
+def _collect_dxf_texts(
+    doc: Any,
+    style_fonts: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
     texts: list[dict[str, Any]] = []
     entity_counts: dict[str, int] = {}
-    referenced_blocks: dict[str, tuple[float, float]] = {}
+    unsupported_insert_transforms: list[dict[str, Any]] = []
 
     msp = doc.modelspace()
     for entity in msp:
@@ -200,32 +334,26 @@ def _collect_dxf_texts(doc: Any, style_fonts: Mapping[str, str]) -> tuple[list[d
             texts.append(item)
             continue
         if dxftype == "INSERT":
+            root_handle = str(getattr(entity.dxf, "handle", "") or "")
             for attrib in getattr(entity, "attribs", ()):
                 attr_item = _entity_text_payload(attrib, style_fonts)
                 if attr_item is not None:
                     texts.append(attr_item)
             block_name = str(getattr(entity.dxf, "name", "") or "")
-            if block_name and block_name not in referenced_blocks and not block_name.startswith("*"):
-                ins = getattr(entity.dxf, "insert", None)
-                bx = _to_float(getattr(ins, "x", None)) or 0.0
-                by = _to_float(getattr(ins, "y", None)) or 0.0
-                referenced_blocks[block_name] = (bx, by)
+            if block_name and not block_name.startswith("*"):
+                ins_items: list[dict[str, Any]] = []
+                _expand_insert_texts(
+                    entity,
+                    style_fonts,
+                    depth=0,
+                    ancestor_blocks=frozenset(),
+                    collected=ins_items,
+                    unsupported=unsupported_insert_transforms,
+                    root_handle=root_handle,
+                )
+                texts.extend(ins_items)
 
-    for block_name, (bx, by) in referenced_blocks.items():
-        if block_name not in doc.blocks:
-            continue
-        block = doc.blocks.get(block_name)
-        block_items: list[dict[str, Any]] = []
-        for entity in block:
-            item = _entity_text_payload(entity, style_fonts, dx=bx, dy=by)
-            if item is not None:
-                block_items.append(item)
-            if len(block_items) > _MAX_BLOCK_TEXT_ITEMS:
-                block_items.clear()
-                break
-        texts.extend(block_items)
-
-    return texts, entity_counts
+    return texts, entity_counts, unsupported_insert_transforms
 
 
 def observe_dxf_bytes(
@@ -239,7 +367,7 @@ def observe_dxf_bytes(
     """Read raw DXF bytes via ``dxf_builder_lib._dxf_snapshot`` into normalized observation."""
     doc, _styles = read_dxf_snapshot(data, observe_styles=True)
     style_fonts = _extract_style_font_hints(doc)
-    texts, entity_counts = _collect_dxf_texts(doc, style_fonts)
+    texts, entity_counts, unsupported_insert_transforms = _collect_dxf_texts(doc, style_fonts)
 
     insunits_raw = doc.header.get("$INSUNITS", 0)
     measurement_raw = doc.header.get("$MEASUREMENT", 0)
@@ -256,6 +384,7 @@ def observe_dxf_bytes(
             "ocr_only": bool(ocr_only),
             "source_mode": "OCR_ONLY" if ocr_only else "NATIVE_DXF_SNAPSHOT",
             "entity_counts": entity_counts,
+            "unsupported_insert_transforms": unsupported_insert_transforms,
             "texts": texts,
         }
     )
@@ -445,7 +574,9 @@ def _extract_particulars(
     class_notations: list[str] = []
     service_areas: list[str] = []
     explicit_exclusion_evidences: list[str] = []
+    incidental_equipment_mentions: list[str] = []
     ship_types: list[str] = []
+    hull_materials: list[str] = []
     claimed_scales: list[float] = []
     ap_coords: list[float] = []
     fp_coords: list[float] = []
@@ -536,9 +667,20 @@ def _extract_particulars(
                 else:
                     _append_unique(unverified_unitless_particulars, f"D:{nb}")
 
-        for m in _DRAFT_RE.finditer(text if "T" in text else folded):
-            raw_num = m.group(1) or m.group(3)
-            raw_unit = m.group(2) if m.group(1) else m.group(4)
+        for m in _DRAFT_WORD_RE.finditer(folded):
+            raw_num = m.group(1)
+            raw_unit = m.group(2)
+            if raw_num:
+                val, verified = _unit_value_to_meters(raw_num, raw_unit, insunits=insunits)
+                if val is not None:
+                    if verified:
+                        _append_unique(draft_values, val)
+                    else:
+                        _append_unique(unverified_unitless_particulars, f"T:{raw_num}")
+
+        for m in _DRAFT_SYMBOL_T_RE.finditer(text):
+            raw_num = m.group(1)
+            raw_unit = m.group(2)
             if raw_num:
                 val, verified = _unit_value_to_meters(raw_num, raw_unit, insunits=insunits)
                 if val is not None:
@@ -587,32 +729,41 @@ def _extract_particulars(
 
             if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
                 _append_unique(service_areas, "INLAND_WATERWAY")
-            if any(
-                tok in clause_clean
-                for tok in ("ocean going", "vien duong", "tau bien", "qcvn 21", "unrestricted service")
-            ) or re.search(r"\bvrh\b", clause_clean):
-                _append_unique(service_areas, "OCEAN_GOING")
+            is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
+            if is_equipment_item:
+                if re.search(r"\b(?:frp|solas|imo|iacs|qcvn\s*(?:21|25|50|51|54|55|56|84))\b", clause_clean):
+                    _append_unique(incidental_equipment_mentions, clause_clean)
+            else:
+                if any(
+                    tok in clause_clean
+                    for tok in ("ocean going", "vien duong", "tau bien", "qcvn 21", "unrestricted service")
+                ) or re.search(r"\bvrh\b", clause_clean):
+                    _append_unique(service_areas, "OCEAN_GOING")
 
-            if re.search(r"\bqcvn\s*21(?:\s*[:/]\s*\d{4})?\b", clause_clean):
-                _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_21_SEA_SHIP")
-            if re.search(r"(?:^|[^a-z0-9])\*?\s*vrh\b", clause_clean) or re.search(
-                r"\b(?:class|classification|cap\s+tau)\s*[:=]\s*\*?(?:vrh|dnv|abs|nk|lr|bv|rina|ccs|kr)\b",
-                clause_clean,
-            ) or re.search(r"\b(?:dnv\s*\+?1a1|solas|iacs)\b", clause_clean):
-                _append_unique(explicit_exclusion_evidences, "STATUTORY_SEA_CLASS_NOTATION")
+                if re.search(r"\bqcvn\s*21(?:\s*[:/]\s*\d{4})?\b", clause_clean):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_QCVN_21_SEA_SHIP")
+                if re.search(r"(?:^|[^a-z0-9])\*?\s*vrh\b", clause_clean) or re.search(
+                    r"\b(?:class|classification|cap\s+tau)\s*[:=]\s*\*?(?:vrh|dnv|abs|nk|lr|bv|rina|ccs|kr)\b",
+                    clause_clean,
+                ) or re.search(r"\bdnv\s*\+?1a1\b", clause_clean) or (
+                    re.search(r"\b(?:solas|iacs)\b", clause_clean)
+                    and re.search(r"\b(?:class|classification|cap\s+tau|regulation|quy\s+chuan|convention|vessel|ship|tau)\b", clause_clean)
+                ):
+                    _append_unique(explicit_exclusion_evidences, "STATUTORY_SEA_CLASS_NOTATION")
 
-            is_lifeboat_item = "xuong cuu sinh" in clause_clean or "lifeboat" in clause_clean
-            if not is_lifeboat_item:
                 if re.search(r"\bqcvn\s*25(?:\s*[:/]\s*\d{4})?\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_1_QCVN_25_SMALL_CRAFT")
                 if re.search(r"\b(?:qcvn\s*50|tau\s+the\s+thao|vui\s+choi\s+giai\s+tri|leisure\s+craft)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_50_LEISURE")
                 if re.search(r"\b(?:qcvn\s*51|ferrocement|xi\s+mang\s+luoi\s+thep)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_51_FERROCEMENT")
-                if re.search(r"\b(?:qcvn\s*56|frp|chat\s+deo\s+cot\s+soi\s+thuy\s+tinh)\b", clause_clean):
+                    _append_unique(hull_materials, "FERROCEMENT")
+                if _VESSEL_FRP_RE.search(clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_56_FRP")
+                    _append_unique(hull_materials, "FRP")
                 if re.search(r"\b(?:qcvn\s*84|tau\s+vo\s+go|tau\s+go|wooden\s+hull|wooden\s+craft)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_84_WOOD")
+                    _append_unique(hull_materials, "WOOD")
                 if re.search(r"\b(?:qcvn\s*54|high[-\s]?speed\s+craft|tau\s+cao\s+toc)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_54_HSC")
                 if re.search(r"\b(?:qcvn\s*55|floating\s+dock|u\s+noi)\b", clause_clean):
@@ -621,6 +772,13 @@ def _extract_particulars(
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_4_DEFENSE_SECURITY")
                 if re.search(r"\b(?:tau\s+ca|fishing\s+vessel)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_4_FISHING_VESSEL")
+
+                if _ALUMINUM_HULL_RE.search(clause_clean):
+                    _append_unique(hull_materials, "ALUMINUM")
+                if _STEEL_HULL_RE.search(clause_clean):
+                    _append_unique(hull_materials, "STEEL")
+                if _CONCRETE_HULL_RE.search(clause_clean):
+                    _append_unique(hull_materials, "CONCRETE")
 
         ship_m = _SHIP_TYPE_RE.search(folded)
         if ship_m:
@@ -665,7 +823,9 @@ def _extract_particulars(
         "class_notations": class_notations,
         "service_areas": service_areas,
         "explicit_exclusion_evidences": explicit_exclusion_evidences,
+        "incidental_equipment_mentions": incidental_equipment_mentions,
         "ship_types": ship_types,
+        "hull_materials": hull_materials,
         "claimed_scales": claimed_scales,
         "ap_x_coords": ap_coords,
         "fp_x_coords": fp_coords,
@@ -774,9 +934,35 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         ("depth_m", "depth_m_values"),
         ("draft_m", "draft_m_values"),
         ("main_engine", "main_engine_values"),
+        ("ship_type", "ship_types"),
+        ("hull_material", "hull_materials"),
     ):
         if p_key not in metric_provenance and particulars.get(p_list_key):
             metric_provenance[p_key] = "UNVERIFIED_OCR_TEXT" if is_ocr else "NATIVE_CAD_TEXT"
+
+    unsupported_insert_transforms = [
+        deepcopy(item)
+        for item in (raw.get("unsupported_insert_transforms") or [])
+        if isinstance(item, (Mapping, str))
+    ]
+
+    invalid_structural_metrics: list[str] = []
+    _non_dim_metric_keys = {"floor_spacing_region"}
+    for mkey, mval in list(structural_metrics.items()):
+        if mkey in _non_dim_metric_keys:
+            continue
+        if isinstance(mval, bool) or not isinstance(mval, (int, float)):
+            invalid_structural_metrics.append(f"{mkey}={mval!r}")
+            continue
+        fval = float(mval)
+        if not math.isfinite(fval):
+            invalid_structural_metrics.append(f"{mkey}={mval!r}")
+            continue
+        if mkey == "transverse_watertight_bulkhead_count":
+            if fval < 0 or not fval.is_integer():
+                invalid_structural_metrics.append(f"{mkey}={mval!r}")
+        elif fval <= 0.0:
+            invalid_structural_metrics.append(f"{mkey}={mval!r}")
 
     return {
         "_normalized_marine_obs": True,
@@ -790,6 +976,8 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         "geometry_status": geometry_status,
         "observed_handles": observed_handles,
         "entity_counts": entity_counts,
+        "unsupported_insert_transforms": unsupported_insert_transforms,
+        "invalid_structural_metrics": invalid_structural_metrics,
         "texts": entries,
         "particulars": particulars,
         "structural_metrics": structural_metrics,
