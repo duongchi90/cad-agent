@@ -5296,6 +5296,89 @@ def test_native_pdf_observation_thin_stroke_at_glyph_bounds(
     assert {record["content"] for record in records} == expected
 
 
+def _native_pdf_font_resource_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[int, str, str, int]],
+):
+    from types import SimpleNamespace
+
+    import fontTools.ttLib
+
+    resources = [
+        (xref, "ttf", "Type0", name, f"F{xref}", encoding, 0)
+        for xref, name, encoding, _ in rows
+    ]
+    programs = {xref: program for xref, _, _, program in rows}
+    metadata = {}
+    for xref, _, _, program in rows:
+        metadata[xref, "DescendantFonts"] = ("array", f"[{xref + 100} 0 R]")
+        metadata[xref + 100, "CIDToGIDMap"] = ("name", "/Identity")
+        metadata[xref + 100, "FontDescriptor"] = ("xref", f"{xref + 200} 0 R")
+        metadata[xref + 200, "FontFile2"] = ("xref", f"{program} 0 R")
+        metadata[program, "Length1"] = ("int", "8")
+
+    extracted = []
+
+    def extract_font(xref):
+        extracted.append(xref)
+        return ("Fixture", "ttf", "Type0", bytes([programs[xref]]) * 8)
+
+    document = SimpleNamespace(
+        xref_get_key=lambda xref, key: metadata.get((xref, key), ("null", "null")),
+        xref_is_stream=lambda xref: xref in programs.values(),
+        extract_font=extract_font,
+    )
+    page = SimpleNamespace(parent=document, get_fonts=lambda **_: resources)
+    # The fixture observes extraction and identity handling before real font parsing.
+    monkeypatch.setattr(fontTools.ttLib, "TTFont", lambda stream, **_: stream.read())
+    return fidelity_module._NativePdfThinStrokeCheck(page, ()), extracted
+
+
+def test_native_pdf_preparation_extracts_shared_font_program_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, extracted = _native_pdf_font_resource_probe(monkeypatch, [
+        (1, "First+Fixture", "Identity-H", 41),
+        (2, "Second+Fixture", "Identity-H", 41),
+    ])
+
+    assert observer._embedded_font("Fixture") is not None
+    assert len(extracted) == 1
+
+
+def test_native_pdf_preparation_rejects_unsupported_shared_font_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, _ = _native_pdf_font_resource_probe(monkeypatch, [
+        (1, "First+Fixture", "Identity-H", 41),
+        (2, "Second+Fixture", "Identity-V", 41),
+    ])
+
+    assert observer._embedded_font("Fixture") is None
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit"),
+    [("_FONT_PROGRAM_LIMIT", 1), ("_FONT_BYTES_LIMIT", 8)],
+    ids=["distinct-programs", "retained-decoded-bytes"],
+)
+def test_native_pdf_preparation_stops_font_work_at_page_budget(
+    monkeypatch: pytest.MonkeyPatch, limit_name: str, limit: int,
+) -> None:
+    monkeypatch.setattr(fidelity_module._NativePdfThinStrokeCheck, limit_name, limit, raising=False)
+    observer, extracted = _native_pdf_font_resource_probe(monkeypatch, [
+        (1, "First", "Identity-H", 41),
+        (2, "Second", "Identity-H", 42),
+        (3, "Third", "Identity-H", 43),
+    ])
+
+    assert observer._embedded_font("First") is not None
+    later = [observer._embedded_font(name) for name in ("Second", "Third", "Second")]
+    assert later == [None, None, None]
+    assert extracted == [1]
+
+
+
 @pytest.mark.real_data
 @pytest.mark.parametrize(
     ("swap_svg_strokes", "expected_target_retained"),

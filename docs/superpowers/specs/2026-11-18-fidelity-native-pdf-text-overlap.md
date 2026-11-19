@@ -15,3 +15,11 @@
 - Files forbidden to duplicate: `cad_agent/fidelity.py`, `primitive_ir_lib/ocr.py`, `dxf_builder_lib/builder.py`, `dxf_builder_lib/reviewer.py`, `scripts/verify.ps1`.
 - Compatibility behavior: Preserves the existing `displayed-page-box-v1` schema, `visibility="unverified"`, `semantic_role=None`, hash-bound per-span approval requirement, raster `glyph_render` revalidation, and all existing `test_cad_agent_fidelity.py` fail-closed exclusions (including synthetic mock `get_bboxlog()` entries without matching `get_drawings()` records).
 - Migration and rollback path: Single-module refinement in `cad_agent/fidelity.py` with no schema, dependency, or persistence changes; cleanly revertible via `git revert`.
+
+## Thin-stroke preparation limits
+
+The optional below-baseline veto preserves the R7 observation decision on unsupported evidence or exhausted preparation. It validates each matching font-resource alias before sharing a decoded program by stream reference. Distinct references must still supply identical bytes for a trace font name.
+
+Per page, preparation examines at most 16 font-resource rows and attempts at most eight distinct program references. It retains at most 4 MiB of decoded program data and charges up to 10,000 stroke and outline operations before recording or forwarding them. It stops XML tree construction at the existing 10,000-node boundary and preserves the 4 MiB SVG output check, 64 attempted pairs and per-pair/page raster ceilings.
+
+PyMuPDF materializes the full-page SVG and decoded font before their output sizes can be checked. FontTools can perform internal work before it emits metered operations. These in-owner limits bound the work and data they count. The upstream native memory and runtime residual remains Security finding SEC-578-R8-A1-02 pending independent disposition. The dark-fill finding SEC-578-R7-A2-01 remains separate.

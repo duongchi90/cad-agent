@@ -1759,6 +1759,12 @@ class _NativePdfThinStrokeCheck:
     _PAIR_LIMIT = 64
     _PAIR_PIXELS = 2_000_000
     _PAGE_PIXELS = 8_000_000
+    _SVG_BYTES_LIMIT = 4 * 1024 * 1024
+    _SVG_NODE_LIMIT = 10_000
+    _FONT_ROW_LIMIT = 16
+    _FONT_PROGRAM_LIMIT = 8
+    _FONT_BYTES_LIMIT = 4 * 1024 * 1024
+    _PATH_OPERATION_LIMIT = 10_000
     _SVG_NS = "{http://www.w3.org/2000/svg}"
     _HREF = "{http://www.w3.org/1999/xlink}href"
 
@@ -1770,6 +1776,11 @@ class _NativePdfThinStrokeCheck:
         self.glyphs: dict[tuple[str, int], list[tuple[Any, tuple[float, ...]]]] = {}
         self.definitions: dict[str, Any] = {}
         self.fonts: dict[str, Any] = {}
+        self.font_resources: dict[str, list[tuple[Any, ...]]] | None = None
+        self.font_programs: dict[int, bytes | None] = {}
+        self.font_bytes = 0
+        self.path_operations = 0
+        self.preparation_exhausted = False
         self.strokes: dict[int, str | None] = {}
         self.masks: dict[tuple[Any, ...], np.ndarray | None] = {}
         self.pairs = 0
@@ -1806,17 +1817,31 @@ class _NativePdfThinStrokeCheck:
 
         self.export_ready = True
         svg = self.page.get_svg_image(text_as_path=True)
-        if len(svg.encode("utf-8")) > 4 * 1024 * 1024 or "<!" in svg:
+        if (len(svg) > self._SVG_BYTES_LIMIT
+                or not svg.isascii() and len(svg.encode("utf-8")) > self._SVG_BYTES_LIMIT
+                or "<!" in svg):
             return
-        root = ElementTree.fromstring(svg)
+
+        class BoundedTreeBuilder(ElementTree.TreeBuilder):
+            def __init__(self, limit: int) -> None:
+                super().__init__()
+                self.limit = limit
+                self.nodes = 0
+
+            def start(self, tag, attrs):
+                if self.nodes >= self.limit:
+                    raise ValueError("SVG node budget exhausted")
+                self.nodes += 1
+                return super().start(tag, attrs)
+
+        parser = ElementTree.XMLParser(target=BoundedTreeBuilder(self._SVG_NODE_LIMIT))
+        root = ElementTree.fromstring(svg, parser=parser)
         ns = self._SVG_NS
         if root.tag != ns + "svg" or not set(root.attrib) <= {"width", "height", "viewBox", "version"}:
             return
         if tuple(map(float, root.attrib["viewBox"].split())) != (
             0.0, 0.0, round(self.page.rect.width, 3), round(self.page.rect.height, 3),
         ):
-            return
-        if sum(1 for _ in root.iter()) > 10_000:
             return
         if any(child.tag not in {ns + "defs", ns + "path", ns + "use"} for child in root):
             return
@@ -1875,7 +1900,7 @@ class _NativePdfThinStrokeCheck:
 
         path = self._path_data(node)
         pen = RecordingPen()
-        parse_path(path, pen)
+        parse_path(path, self._metered_pen(pen))
         transform = fitz.Matrix(a, b, c, d, e, f)
         previous = None
         segments = []
@@ -1902,48 +1927,138 @@ class _NativePdfThinStrokeCheck:
         return (f'<path d="{path}" transform="matrix({matrix})" fill="none" stroke="{stroke}" '
                 f'stroke-width="{width}" stroke-linecap="round" stroke-linejoin="round"/>')
 
+    def _charge_path_operations(self, count: int = 1) -> None:
+        if self.path_operations + count > self._PATH_OPERATION_LIMIT:
+            self.preparation_exhausted = True
+            raise ValueError("SVG path operation budget exhausted")
+        self.path_operations += count
+
+    def _metered_pen(self, output_pen: Any, glyph_set: Any = None) -> Any:
+        from fontTools.pens.filterPen import DecomposingFilterPen
+
+        charge = self._charge_path_operations
+
+        class MeteredPen(DecomposingFilterPen):
+            def moveTo(self, point):
+                charge()
+                super().moveTo(point)
+
+            def lineTo(self, point):
+                charge()
+                super().lineTo(point)
+
+            def curveTo(self, *points):
+                charge(max(1, len(points) - 2))
+                super().curveTo(*points)
+
+            def qCurveTo(self, *points):
+                charge(max(1, len(points) - 1))
+                super().qCurveTo(*points)
+
+            def closePath(self):
+                charge()
+                super().closePath()
+
+            def endPath(self):
+                charge()
+                super().endPath()
+
+            def addComponent(self, glyph_name, transform):
+                charge()
+                super().addComponent(glyph_name, transform)
+
+        return MeteredPen(output_pen, glyph_set, skipMissingComponents=False)
+
+    @staticmethod
+    def _object_reference(kind: str, value: str) -> int | None:
+        if kind != "xref":
+            return None
+        match = re.fullmatch(r"(\d+) 0 R", value)
+        return int(match[1]) if match is not None else None
+
+    def _font_program_reference(self, document: fitz.Document, resource: tuple[Any, ...]) -> int | None:
+        if resource[1:3] != ("ttf", "Type0") or resource[5] != "Identity-H" or resource[6] != 0:
+            return None
+        kind, descendant = document.xref_get_key(resource[0], "DescendantFonts")
+        if kind == "xref":
+            reference = self._object_reference(kind, descendant)
+            if reference is None:
+                return None
+            descendant = document.xref_object(reference)
+        elif kind != "array":
+            return None
+        descendant_ref = re.fullmatch(r"\s*\[\s*(\d+) 0 R\s*\]\s*", descendant)
+        if descendant_ref is None:
+            return None
+        descendant_xref = int(descendant_ref[1])
+        if document.xref_get_key(descendant_xref, "CIDToGIDMap") != ("name", "/Identity"):
+            return None
+        descriptor = self._object_reference(*document.xref_get_key(descendant_xref, "FontDescriptor"))
+        if descriptor is None:
+            return None
+        # Bind to the exact stream that the pinned extractor would select.
+        if any(document.xref_get_key(descriptor, key)[0] != "null" for key in ("FontFile", "FontFile3")):
+            return None
+        reference = self._object_reference(*document.xref_get_key(descriptor, "FontFile2"))
+        return reference if reference is not None and document.xref_is_stream(reference) else None
+
+    def _load_font_program(self, document: fitz.Document, reference: int, font_xref: int) -> bytes | None:
+        if reference in self.font_programs:
+            return self.font_programs[reference]
+        if len(self.font_programs) >= self._FONT_PROGRAM_LIMIT or self.font_bytes >= self._FONT_BYTES_LIMIT:
+            self.preparation_exhausted = True
+            return None
+        self.font_programs[reference] = None
+        # Native extraction can allocate before returning. Charge only actual bytes.
+        program = document.extract_font(font_xref)[3]
+        if not program:
+            return None
+        if self.font_bytes + len(program) > self._FONT_BYTES_LIMIT:
+            self.preparation_exhausted = True
+            return None
+        self.font_bytes += len(program)
+        self.font_programs[reference] = program
+        return program
+
     def _embedded_font(self, name: str) -> Any:
         from io import BytesIO
 
         from fontTools.ttLib import TTFont
 
         document = self.page.parent
-        if document is None:
+        if document is None or self.preparation_exhausted:
             return None
-        # Subset resource aliases of the same font are equivalent only when
-        # every usable program for this trace name has identical bytes.
-        programs = set()
-        for resource in self.page.get_fonts(full=True):
-            if resource[3].split("+", 1)[-1] != name:
-                continue
-            if resource[1:3] != ("ttf", "Type0") or resource[5] != "Identity-H" or resource[6] != 0:
+        if self.font_resources is None:
+            resources = self.page.get_fonts(full=True)
+            if len(resources) > self._FONT_ROW_LIMIT:
+                self.preparation_exhausted = True
                 return None
-            kind, descendant = document.xref_get_key(resource[0], "DescendantFonts")
-            if kind == "xref":
-                ref = re.fullmatch(r"(\d+) 0 R", descendant)
-                if ref is None:
-                    return None
-                descendant = document.xref_object(int(ref[1]))
-            elif kind != "array":
+            self.font_resources = {}
+            for resource in resources:
+                trace_name = resource[3].split("+", 1)[-1]
+                self.font_resources.setdefault(trace_name, []).append(resource)
+
+        references = {}
+        for resource in self.font_resources.get(name, ()):
+            reference = self._font_program_reference(document, resource)
+            if reference is None:
                 return None
-            descendant_ref = re.fullmatch(r"\s*\[\s*(\d+) 0 R\s*\]\s*", descendant)
-            if descendant_ref is None or document.xref_get_key(
-                int(descendant_ref[1]), "CIDToGIDMap",
-            ) != ("name", "/Identity"):
+            references.setdefault(reference, resource[0])
+        program = None
+        for reference, font_xref in references.items():
+            data = self._load_font_program(document, reference, font_xref)
+            if data is None or program is not None and data != program:
                 return None
-            program = document.extract_font(resource[0])[3]
-            if not program or len(program) > 4 * 1024 * 1024:
-                return None
-            programs.add(program)
-            if len(programs) > 1:
-                return None
-        return TTFont(BytesIO(next(iter(programs))), lazy=True) if programs else None
+            program = data
+        return TTFont(BytesIO(program), lazy=True) if program is not None else None
 
     def _glyph_paths(
         self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
     ) -> tuple[str, str] | None:
+        from fontTools.pens.basePen import NullPen
         from fontTools.pens.svgPathPen import SVGPathPen
         from fontTools.pens.transformPen import TransformPen
+        from fontTools.svgLib.path import parse_path
 
         code, gid, (ox, oy), _ = glyph
         if trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer") or trace.get("wmode") != 0:
@@ -1969,6 +2084,7 @@ class _NativePdfThinStrokeCheck:
             return None
         font_name = trace["font"]
         if font_name not in self.fonts:
+            self.fonts[font_name] = None
             self.fonts[font_name] = self._embedded_font(font_name)
         font = self.fonts[font_name]
         if font is None:
@@ -1980,13 +2096,16 @@ class _NativePdfThinStrokeCheck:
         glyph_set = font.getGlyphSet()
         pen = SVGPathPen(glyph_set)
         unit = 1.0 / units
-        glyph_set[order[gid]].draw(TransformPen(pen, (unit, 0, 0, unit, 0, 0)))
+        source_path = self._path_data(definition)
+        parse_path(source_path, self._metered_pen(NullPen()))
+        metered = self._metered_pen(pen, glyph_set)
+        glyph_set[order[gid]].draw(TransformPen(metered, (unit, 0, 0, unit, 0, 0)))
         font_path = pen.getCommands()
         if not font_path:
             return None
         matrix = f"{a} {b} {c} {d} {e} {f}"
         return tuple(f'<path d="{path}" transform="matrix({matrix})" fill="{fill}"/>'
-                     for path in (self._path_data(definition), font_path))
+                     for path in (source_path, font_path))
 
     def _dark_mask(self, markup: str, bounds: fitz.IRect) -> np.ndarray:
         scale = self._SCALE
@@ -2007,7 +2126,8 @@ class _NativePdfThinStrokeCheck:
         glyph: tuple[Any, ...], span_size: Any, clip: fitz.Rect,
     ) -> bool:
         if (
-            self.pairs >= self._PAIR_LIMIT
+            self.preparation_exhausted
+            or self.pairs >= self._PAIR_LIMIT
             or not isinstance(span_size, (int, float))
             or not math.isfinite(span_size) or span_size <= 0
         ):
@@ -2019,6 +2139,7 @@ class _NativePdfThinStrokeCheck:
             if not self.paths or not self.page.rect.contains(clip):
                 return False
             if sequence not in self.strokes:
+                self.strokes[sequence] = None
                 self.strokes[sequence] = self._bound_stroke(sequence, drawing)
             stroke = self.strokes[sequence]
             if stroke is None:
@@ -2032,6 +2153,7 @@ class _NativePdfThinStrokeCheck:
                 return False
             self.pixels += pair_pixels
             if not cached:
+                self.masks[key] = None
                 paths = self._glyph_paths(trace, glyph, span_size)
                 bound_mask = None
                 if paths is not None:
