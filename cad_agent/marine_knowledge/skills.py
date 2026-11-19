@@ -459,7 +459,10 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
     main_engine_hp_values: list[float] = []
     passenger_count_values: list[int] = []
     double_hull_or_double_side = False
+    single_side_or_non_double_hull = False
     is_container_ship = False
+    non_container_ship = False
+    explicit_2_4_6_9_applicable = False
     drawing_types: dict[str, str] = {}
     obs_drawing_types: list[str] = []
     seen_types_by_id: dict[str, set[str]] = {}
@@ -493,8 +496,14 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
         passenger_count_values.extend(part.get("passenger_count_values", []))
         if part.get("double_hull_or_double_side"):
             double_hull_or_double_side = True
+        if part.get("single_side_or_non_double_hull"):
+            single_side_or_non_double_hull = True
         if part.get("is_container_ship"):
             is_container_ship = True
+        if part.get("non_container_ship"):
+            non_container_ship = True
+        if part.get("explicit_2_4_6_9_applicable"):
+            explicit_2_4_6_9_applicable = True
         for val in part.get("hull_nos", []):
             if val not in hull_nos:
                 hull_nos.append(val)
@@ -545,7 +554,10 @@ def _aggregate_package_scope(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
         "main_engine_hp_values": sorted(set(main_engine_hp_values)),
         "passenger_count_values": sorted(set(passenger_count_values)),
         "double_hull_or_double_side": double_hull_or_double_side,
+        "single_side_or_non_double_hull": single_side_or_non_double_hull,
         "is_container_ship": is_container_ship,
+        "non_container_ship": non_container_ship,
+        "explicit_2_4_6_9_applicable": explicit_2_4_6_9_applicable,
         "marine_evidence_score": marine_score,
         "cad_geometry_verified": False,
     }
@@ -2042,103 +2054,240 @@ def evaluate_regulation_applicability_and_submittal(
                         conditions_applied=[f"Confirmed QCVN 72 STEEL DRY CARGO; interval [{l_lo:.2f}, {l_hi:.2f}]m straddles bulkhead band"],
                     )
                 )
-            elif min_bh_int < req_lo and l_lo > 20.0 and min_bh_int >= 2 and (scope["double_hull_or_double_side"] or scope["is_container_ship"]):
-                checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (Clause 2.4.6-9 double-hull/container exception)")
-                findings.append(
-                    _make_finding(
-                        rules_by_id,
-                        finding_id="F_WATERTIGHT_BULKHEAD_2_4_6_9_EXCEPTION_QUALIFIED",
-                        verdict="INSUFFICIENT_EVIDENCE",
-                        rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                        evidence={
-                            "drawing_id": worst_did,
-                            "l_interval_m": [l_lo, l_hi],
-                            "observed_bulkheads": min_bh_int,
-                            "base_table_required_min": req_lo,
-                            "exception_clause": "2.4.6-9",
-                            "double_hull_or_double_side": scope["double_hull_or_double_side"],
-                            "is_container_ship": scope["is_container_ship"],
-                            "coverage_scope": "COUNT_ONLY",
-                            "unverified_subconditions": mk08_unverified + ["double_side_bulkhead_spacing_le_15a_2_4_6_9", "torsional_strength_approval_2_4_6_9"],
-                        },
-                        reason=(
-                            f"Observed {min_bh_int} bulkheads vs base table >= {req_lo}, but double-hull/container markers "
-                            "qualify this design under QCVN 72 Clause 2.4.6-9 cargo-hold reduction (Registry torsional/spacing approval required)."
-                        ),
-                        exceptions_checked=[
-                            "Evaluated Clause 2.4.6-9 candidate: double-hull / container cargo-hold reduction noted; requires Registry approval",
-                            "Evaluated: Clause 3.7.21 (< 20 m) vs Clause 2.4.6-8 (20 m < L <= 140 m)",
-                        ],
-                        conditions_applied=[f"Confirmed QCVN 72 STEEL DRY CARGO; Clause 2.4.6-9 double-hull/container reduction candidate triggered ({min_bh_int} vs {req_lo})"],
-                    )
-                )
-            elif min_bh_int < req_lo:
-                checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
-                structural_checks_ran += 1
-                findings.append(
-                    _make_finding(
-                        rules_by_id,
-                        finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
-                        verdict="CONFLICT",
-                        rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                        evidence={
-                            "drawing_id": worst_did,
-                            "effective_l_m": effective_l_m,
-                            "l_interval_m": [l_lo, l_hi],
-                            "length_basis": length_basis,
-                            "observed_bulkheads": min_bh_int,
-                            "required_min": req_lo,
-                            "coverage_scope": "COUNT_ONLY",
-                            "unverified_subconditions": mk08_unverified,
-                        },
-                        reason=(
-                            f"Interval L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires at least {req_lo} "
-                            f"transverse watertight bulkheads (COUNT_ONLY); observed {min_bh_int} on {worst_did}."
-                        ),
-                        exceptions_checked=mk08_exceptions,
-                        conditions_applied=[
-                            f"Confirmed QCVN 72 STEEL DRY CARGO (L=[{l_lo:.2f}, {l_hi:.2f}]m)",
-                            f"Checked COUNT_ONLY threshold: observed {min_bh_int} < required {req_lo} (Clause 2.4.6-8 / 3.7.21)",
-                        ],
-                    )
-                )
-                proposals.append(
-                    build_marine_core_proposal(
-                        target_drawing_id=worst_did,
-                        action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
-                        evidence={"observed": min_bh_int, "required_min": req_lo, "l_interval_m": [l_lo, l_hi]},
-                    )
-                )
             else:
-                checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
-                structural_checks_ran += 1
-                findings.append(
-                    _make_finding(
-                        rules_by_id,
-                        finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
-                        verdict="PASS",
-                        rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
-                        evidence={
-                            "drawing_id": worst_did,
-                            "effective_l_m": effective_l_m,
-                            "l_interval_m": [l_lo, l_hi],
-                            "length_basis": length_basis,
-                            "observed_bulkheads": min_bh_int,
-                            "required_min": req_hi,
-                            "coverage_scope": "COUNT_ONLY",
-                            "unverified_subconditions": mk08_unverified,
-                        },
-                        reason=(
-                            f"L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires >= {req_hi} transverse "
-                            f"watertight bulkheads (COUNT_ONLY); observed {min_bh_int} on {worst_did}."
-                        ),
-                        exceptions_checked=mk08_exceptions,
-                        conditions_applied=[
-                            f"Confirmed QCVN 72 STEEL DRY CARGO (L=[{l_lo:.2f}, {l_hi:.2f}]m)",
-                            f"Checked COUNT_ONLY minimum: observed {min_bh_int} >= required {req_hi}",
-                        ],
-                    )
+                has_exc_yes = bool(
+                    scope["double_hull_or_double_side"]
+                    or scope["is_container_ship"]
+                    or scope["explicit_2_4_6_9_applicable"]
                 )
+                has_exc_no = bool(
+                    scope["single_side_or_non_double_hull"] and scope["non_container_ship"]
+                )
+                has_side_conflict = bool(
+                    scope["double_hull_or_double_side"] and scope["single_side_or_non_double_hull"]
+                )
+                has_cont_conflict = bool(
+                    scope["is_container_ship"] and scope["non_container_ship"]
+                )
+                has_explicit_exc_conflict = bool(
+                    scope["explicit_2_4_6_9_applicable"] and has_exc_no
+                )
+                if l_hi < 20.0:
+                    exc_2_4_6_9_status = "NOT_APPLICABLE_UNDER_20M"
+                elif has_side_conflict or has_cont_conflict or has_explicit_exc_conflict:
+                    exc_2_4_6_9_status = "CONFLICTING_OR_UNKNOWN"
+                elif has_exc_yes:
+                    exc_2_4_6_9_status = "APPLICABLE"
+                elif has_exc_no:
+                    exc_2_4_6_9_status = "INAPPLICABLE"
+                else:
+                    exc_2_4_6_9_status = "UNKNOWN"
+
+                if min_bh_int >= req_hi:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+                    structural_checks_ran += 1
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                            verdict="PASS",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "effective_l_m": effective_l_m,
+                                "l_interval_m": [l_lo, l_hi],
+                                "length_basis": length_basis,
+                                "observed_bulkheads": min_bh_int,
+                                "required_min": req_hi,
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                                "coverage_scope": "COUNT_ONLY",
+                                "unverified_subconditions": mk08_unverified,
+                            },
+                            reason=(
+                                f"L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires >= {req_hi} transverse "
+                                f"watertight bulkheads (COUNT_ONLY); observed {min_bh_int} on {worst_did}."
+                            ),
+                            exceptions_checked=mk08_exceptions,
+                            conditions_applied=[
+                                f"Confirmed QCVN 72 STEEL DRY CARGO (L=[{l_lo:.2f}, {l_hi:.2f}]m)",
+                                f"Checked COUNT_ONLY minimum: observed {min_bh_int} >= required {req_hi}",
+                            ],
+                        )
+                    )
+                elif min_bh_int < 2 or l_hi < 20.0:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+                    structural_checks_ran += 1
+                    floor_reason = (
+                        f"Interval L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) violates unconditional "
+                        f"minimum bulkhead requirement (observed {min_bh_int} < {2 if min_bh_int < 2 else req_lo}) "
+                        f"on {worst_did}."
+                    )
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                            verdict="CONFLICT",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "effective_l_m": effective_l_m,
+                                "l_interval_m": [l_lo, l_hi],
+                                "length_basis": length_basis,
+                                "observed_bulkheads": min_bh_int,
+                                "required_min": req_lo,
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                                "coverage_scope": "COUNT_ONLY",
+                                "unverified_subconditions": mk08_unverified,
+                            },
+                            reason=floor_reason,
+                            exceptions_checked=mk08_exceptions,
+                            conditions_applied=[
+                                f"Confirmed QCVN 72 STEEL DRY CARGO (L=[{l_lo:.2f}, {l_hi:.2f}]m)",
+                                f"Checked COUNT_ONLY floor/threshold: observed {min_bh_int} < required {req_lo} (Clause 2.4.6-2 / 2.4.6-8 / 3.7.21)",
+                            ],
+                        )
+                    )
+                    proposals.append(
+                        build_marine_core_proposal(
+                            target_drawing_id=worst_did,
+                            action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                            evidence={"observed": min_bh_int, "required_min": req_lo, "l_interval_m": [l_lo, l_hi]},
+                        )
+                    )
+                elif exc_2_4_6_9_status == "APPLICABLE":
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (Clause 2.4.6-9 double-hull/container exception)")
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_2_4_6_9_EXCEPTION_QUALIFIED",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "l_interval_m": [l_lo, l_hi],
+                                "observed_bulkheads": min_bh_int,
+                                "base_table_required_min": req_lo,
+                                "exception_clause": "2.4.6-9",
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                                "double_hull_or_double_side": scope["double_hull_or_double_side"],
+                                "is_container_ship": scope["is_container_ship"],
+                                "coverage_scope": "COUNT_ONLY",
+                                "unverified_subconditions": mk08_unverified + ["double_side_bulkhead_spacing_le_15a_2_4_6_9", "torsional_strength_approval_2_4_6_9"],
+                            },
+                            reason=(
+                                f"Observed {min_bh_int} bulkheads vs base table >= {req_lo}, but double-hull/container markers "
+                                "qualify this design under QCVN 72 Clause 2.4.6-9 cargo-hold reduction (Registry torsional/spacing approval required)."
+                            ),
+                            exceptions_checked=[
+                                "Evaluated Clause 2.4.6-9 candidate: double-hull / container cargo-hold reduction noted; requires Registry approval",
+                                "Evaluated: Clause 3.7.21 (< 20 m) vs Clause 2.4.6-8 (20 m < L <= 140 m)",
+                            ],
+                            conditions_applied=[f"Confirmed QCVN 72 STEEL DRY CARGO; Clause 2.4.6-9 double-hull/container reduction candidate triggered ({min_bh_int} vs {req_lo})"],
+                        )
+                    )
+                elif exc_2_4_6_9_status in {"UNKNOWN", "CONFLICTING_OR_UNKNOWN"}:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT (Clause 2.4.6-8 conditional; 2.4.6-9 eligibility unresolved)")
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_2_4_6_9_ELIGIBILITY_UNKNOWN",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "effective_l_m": effective_l_m,
+                                "l_interval_m": [l_lo, l_hi],
+                                "length_basis": length_basis,
+                                "observed_bulkheads": min_bh_int,
+                                "base_table_required_min": req_lo,
+                                "exception_clause": "2.4.6-9",
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                                "double_hull_or_double_side": scope["double_hull_or_double_side"],
+                                "single_side_or_non_double_hull": scope["single_side_or_non_double_hull"],
+                                "is_container_ship": scope["is_container_ship"],
+                                "non_container_ship": scope["non_container_ship"],
+                                "coverage_scope": "COUNT_ONLY",
+                                "unverified_subconditions": mk08_unverified + [
+                                    "clause_2_4_6_9_double_side_or_container_eligibility_unverified",
+                                ],
+                            },
+                            reason=(
+                                f"Observed {min_bh_int} bulkheads vs Clause 2.4.6-8 base table >= {req_lo} at "
+                                f"L=[{l_lo:.2f}, {l_hi:.2f}]m, while Clause 2.4.6-9 double-side/container exception "
+                                f"eligibility is {exc_2_4_6_9_status}; verify side construction and container service "
+                                "before emitting definitive count CONFLICT."
+                            ),
+                            exceptions_checked=[
+                                "Evaluated: Clause 3.7.21 (< 20 m >= 2 bulkheads) vs Clause 2.4.6-8 (20 m..140 m dry-cargo band)",
+                                f"Unresolved in V0: Clause 2.4.6-9 double-hull / container eligibility ({exc_2_4_6_9_status})",
+                                "Not evaluated in V0: Engine-room boundary bulkhead placement (2.4.6-4) and collision bulkhead position (2.4.6-2)",
+                            ],
+                            conditions_applied=[
+                                f"Confirmed QCVN 72 STEEL DRY CARGO (L=[{l_lo:.2f}, {l_hi:.2f}]m)",
+                                f"Base table threshold is {req_lo} vs observed {min_bh_int}; Clause 2.4.6-9 exception eligibility={exc_2_4_6_9_status} pauses definitive CONFLICT",
+                            ],
+                        )
+                    )
+                    proposals.append(
+                        build_marine_core_proposal(
+                            target_drawing_id=worst_did,
+                            action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                            evidence={
+                                "observed": min_bh_int,
+                                "base_table_required_min": req_lo,
+                                "l_interval_m": [l_lo, l_hi],
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                            },
+                        )
+                    )
+                else:
+                    checks_executed.append("RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+                    structural_checks_ran += 1
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id="F_WATERTIGHT_BULKHEAD_COUNT",
+                            verdict="CONFLICT",
+                            rule_id="RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT",
+                            evidence={
+                                "drawing_id": worst_did,
+                                "effective_l_m": effective_l_m,
+                                "l_interval_m": [l_lo, l_hi],
+                                "length_basis": length_basis,
+                                "observed_bulkheads": min_bh_int,
+                                "required_min": req_lo,
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                                "coverage_scope": "COUNT_ONLY",
+                                "unverified_subconditions": mk08_unverified,
+                            },
+                            reason=(
+                                f"Interval L in [{l_lo:.2f}, {l_hi:.2f}]m ({length_basis}) requires at least {req_lo} "
+                                f"transverse watertight bulkheads (COUNT_ONLY; Clause 2.4.6-9 verified INAPPLICABLE); "
+                                f"observed {min_bh_int} on {worst_did}."
+                            ),
+                            exceptions_checked=[
+                                "Evaluated: Clause 3.7.21 (< 20 m >= 2 bulkheads) vs Clause 2.4.6-8 (20 m..140 m dry-cargo band)",
+                                "Evaluated Clause 2.4.6-9: verified non-double-side and non-container hull (exception INAPPLICABLE)",
+                                "Not evaluated in V0: Engine-room boundary bulkhead placement (2.4.6-4) and collision bulkhead position (2.4.6-2)",
+                            ],
+                            conditions_applied=[
+                                f"Confirmed QCVN 72 STEEL DRY CARGO (L=[{l_lo:.2f}, {l_hi:.2f}]m); Clause 2.4.6-9 verified INAPPLICABLE",
+                                f"Checked COUNT_ONLY threshold: observed {min_bh_int} < required {req_lo} (Clause 2.4.6-8)",
+                            ],
+                        )
+                    )
+                    proposals.append(
+                        build_marine_core_proposal(
+                            target_drawing_id=worst_did,
+                            action_kind="REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+                            evidence={
+                                "observed": min_bh_int,
+                                "required_min": req_lo,
+                                "l_interval_m": [l_lo, l_hi],
+                                "exception_2_4_6_9_eligibility": exc_2_4_6_9_status,
+                            },
+                        )
+                    )
     elif "GENERAL_ARRANGEMENT" in observed_types or "BASIC_STRUCTURAL" in observed_types:
         checks_not_executed.append("Watertight bulkhead count (transverse_watertight_bulkhead_count not annotated/extracted)")
 
@@ -2974,8 +3123,12 @@ def detect_drawing_gaps_and_conflicts(
     ran_numeric_integrity = False
     ran_title_check = False
     ran_blank_audit = False
-    ran_bow_check = False
+    bow_orientation_verified_ran = False
+    bow_unresolved_dids: list[str] = []
+    bow_missing_dids: list[str] = []
     ran_span_check = False
+    span_unavailable_dids: list[str] = []
+    span_unavailable_reasons: list[str] = []
     ran_text_height_check = False
     ran_z_scale_check = False
 
@@ -3183,7 +3336,6 @@ def detect_drawing_gaps_and_conflicts(
             {"x": x, "y": None, "handle": "", "occurrence_id": "MODELSPACE"} for x in part["fp_x_coords"]
         ]
         if ap_anchors and fp_anchors:
-            ran_bow_check = True
             grouped_aps: dict[str, list[dict[str, Any]]] = {}
             grouped_fps: dict[str, list[dict[str, Any]]] = {}
             for a in ap_anchors:
@@ -3246,20 +3398,25 @@ def detect_drawing_gaps_and_conflicts(
                         evidence={"reversed_occurrences": reversed_occ},
                     )
                 )
-            elif unresolved_occ:
-                findings.append(
-                    _make_finding(
-                        rules_by_id,
-                        finding_id=f"F_BOW_ORIENTATION_UNRESOLVED_{did}",
-                        verdict="INSUFFICIENT_EVIDENCE",
-                        rule_id="RULE_MK_04_BOW_RIGHT_AND_BODY_PLAN_HALVES",
-                        evidence={"drawing_id": did, "unresolved_anchor_groups": unresolved_occ},
-                        reason=(
-                            f"Multiple or unpaired A.P/F.P anchors on {did} without explicit view partitioning "
-                            "prevent unambiguous bow orientation check."
-                        ),
+            if reversed_occ or paired_spans:
+                bow_orientation_verified_ran = True
+            if unresolved_occ:
+                if did not in bow_unresolved_dids:
+                    bow_unresolved_dids.append(did)
+                if not reversed_occ:
+                    findings.append(
+                        _make_finding(
+                            rules_by_id,
+                            finding_id=f"F_BOW_ORIENTATION_UNRESOLVED_{did}",
+                            verdict="INSUFFICIENT_EVIDENCE",
+                            rule_id="RULE_MK_04_BOW_RIGHT_AND_BODY_PLAN_HALVES",
+                            evidence={"drawing_id": did, "unresolved_anchor_groups": unresolved_occ},
+                            reason=(
+                                f"Multiple or unpaired A.P/F.P anchors on {did} without explicit view partitioning "
+                                "prevent unambiguous bow orientation check."
+                            ),
+                        )
                     )
-                )
 
             decl_lengths = part.get("design_length_l_m_values") or part["lpp_m_values"]
             if not has_ocr_only and unit_factor is not None and decl_lengths and decl_lengths[0] > 0 and paired_spans:
@@ -3304,6 +3461,34 @@ def detect_drawing_gaps_and_conflicts(
                             evidence={"declared_length_m": decl_l, "model_span_m": round(model_m, 4)},
                         )
                     )
+            else:
+                if did not in span_unavailable_dids:
+                    span_unavailable_dids.append(did)
+                miss_bits: list[str] = []
+                if has_ocr_only:
+                    miss_bits.append("OCR-only input")
+                if unit_factor is None:
+                    miss_bits.append("drawing units ($INSUNITS) unverified and no verified calibration")
+                if not paired_spans:
+                    miss_bits.append("paired A.P / F.P view anchors absent or unresolved")
+                if not (decl_lengths and decl_lengths[0] > 0):
+                    miss_bits.append("declared vessel length (L / Lpp) absent")
+                span_unavailable_reasons.append(f"{did}: {', '.join(miss_bits)}")
+        else:
+            if did not in bow_missing_dids:
+                bow_missing_dids.append(did)
+            if did not in span_unavailable_dids:
+                span_unavailable_dids.append(did)
+            miss_bits = []
+            if has_ocr_only:
+                miss_bits.append("OCR-only input")
+            if unit_factor is None:
+                miss_bits.append("drawing units ($INSUNITS) unverified and no verified calibration")
+            miss_bits.append("A.P / F.P markers absent or incomplete")
+            decl_lengths = part.get("design_length_l_m_values") or part["lpp_m_values"]
+            if not (decl_lengths and decl_lengths[0] > 0):
+                miss_bits.append("declared vessel length (L / Lpp) absent")
+            span_unavailable_reasons.append(f"{did}: {', '.join(miss_bits)}")
 
         # Text height check only when scale and calibrated units are known and not OCR-only
         if (
@@ -3391,10 +3576,35 @@ def detect_drawing_gaps_and_conflicts(
         checks_executed.append("Blank title-block field audit")
     else:
         checks_not_executed.append("Blank title-block field audit (no title/colon field annotations provided)")
-    if ran_bow_check or ran_span_check:
-        checks_executed.append("Bow direction (A.P vs F.P) and 1000x CAD span check")
+    if bow_orientation_verified_ran:
+        checks_executed.append("Bow direction (A.P vs F.P) orientation check")
+        if bow_unresolved_dids:
+            checks_not_executed.append(
+                f"Bow direction (A.P vs F.P) orientation check unresolved on {', '.join(bow_unresolved_dids)} "
+                "(unproven A.P/F.P view association)"
+            )
+    elif bow_unresolved_dids:
+        checks_not_executed.append(
+            f"Bow direction (A.P vs F.P) orientation check (unresolved: unproven A.P/F.P view association on "
+            f"{', '.join(bow_unresolved_dids)})"
+        )
     else:
-        checks_not_executed.append("Bow direction (A.P vs F.P) and 1000x CAD span check (A.P / F.P markers absent)")
+        checks_not_executed.append(
+            "Bow direction (A.P vs F.P) orientation check (A.P / F.P markers absent or incomplete)"
+        )
+
+    if ran_span_check:
+        checks_executed.append("1000x CAD A.P-to-F.P span vs declared length check")
+        if span_unavailable_dids:
+            checks_not_executed.append(
+                f"1000x CAD A.P-to-F.P span check unavailable on {', '.join(span_unavailable_dids)} "
+                f"({'; '.join(span_unavailable_reasons)})"
+            )
+    else:
+        checks_not_executed.append(
+            f"1000x CAD A.P-to-F.P span check ({'; '.join(span_unavailable_reasons) or 'prerequisites absent'})"
+        )
+
     if not ran_z_scale_check:
         checks_not_executed.append("Body-plan Z-axis scale vs Depth check (body_plan_wl_span_mm or D absent)")
 
@@ -3403,7 +3613,7 @@ def detect_drawing_gaps_and_conflicts(
         for flag in (
             ran_title_check,
             ran_blank_audit,
-            ran_bow_check,
+            bow_orientation_verified_ran,
             ran_span_check,
             ran_text_height_check,
             ran_z_scale_check,

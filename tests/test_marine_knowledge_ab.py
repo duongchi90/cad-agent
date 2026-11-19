@@ -129,7 +129,16 @@ def test_marine_pack_ab_benchmark_beats_baseline_and_stays_isolated() -> None:
         (
             "S2_INLAND_SCANTLING_DEFECT",
             lambda en: evaluate_regulation_applicability_and_submittal(
-                [_ga_vrsb(bulkheads=3), _mcn_vrsb(db_mm=550.0)], partial_package=True, enabled=en
+                [
+                    {
+                        **_ga_vrsb(bulkheads=3),
+                        "texts": _ga_vrsb(bulkheads=3)["texts"]
+                        + [{"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 50000.0, "y": 4250.0, "height": 250.0}],
+                    },
+                    _mcn_vrsb(db_mm=550.0),
+                ],
+                partial_package=True,
+                enabled=en,
             ),
             "CONFLICT",
         ),
@@ -337,8 +346,16 @@ def test_marine_7000_real_dxf_ab_validation() -> None:
     assert reg["status"] == "INSUFFICIENT_EVIDENCE"
     assert "QCVN 21:2025/BGTVT" in reg["summary"]
 
+    gap_ga = detect_drawing_gaps_and_conflicts([ga_obs], partial_package=True)
+    assert not any("1000x" in chk or "Bow direction" in chk for chk in gap_ga["checks_executed"])
+    assert any("1000x" in chk for chk in gap_ga["checks_not_executed"])
+    assert any("Bow direction" in chk and "unresolved" in chk.lower() for chk in gap_ga["checks_not_executed"])
+
     gap = detect_drawing_gaps_and_conflicts([thlt_obs, ga_obs], partial_package=True)
     assert gap["status"] == "CONFLICT"
+    assert not any("1000x" in chk or "Bow direction" in chk for chk in gap["checks_executed"])
+    assert any("1000x" in chk for chk in gap["checks_not_executed"])
+    assert any("Bow direction" in chk and "unresolved" in chk.lower() for chk in gap["checks_not_executed"])
     assert gap["cad_mutation"] is False
     assert gap["regulatory_compliance_proven"] is False
 

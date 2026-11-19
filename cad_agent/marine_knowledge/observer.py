@@ -99,8 +99,18 @@ _VESSEL_BOUND_PREFIX_RE = re.compile(
 _PASSENGER_COUNT_RE = re.compile(
     r"\b(?:passengers?|so\s+khach|hanh\s+khach|suc\s+cho\s+nguoi)\s*[:=]?\s*(\d+)\b"
 )
+_NON_DOUBLE_SIDE_RE = re.compile(
+    r"\b(?:man\s+don|vo\s+don|mot\s+lop\s+vo|single[\s-]side|single[\s-]hull|"
+    r"non[\s-]double[\s-]side|non[\s-]double[\s-]hull|"
+    r"khong\s+(?:co\s+)?(?:day\s+doi\s+)?man\s+kep|khong\s+phai\s+(?:day\s+doi\s+)?man\s+kep|"
+    r"day\s+don|single[\s-]bottom)\b"
+)
 _DOUBLE_HULL_RE = re.compile(
     r"\b(?:day\s+doi\s+man\s+kep|man\s+kep|vo\s+kep|double[\s-]hull|double[\s-]side)\b"
+)
+_NON_CONTAINER_RE = re.compile(
+    r"\b(?:non[\s-]container|khong\s+(?:cho\s+)?(?:container|cong\s*[- ]?te\s*[- ]?no)|"
+    r"khong\s+phai\s+tau\s+(?:container|cong\s*[- ]?te\s*[- ]?no)|tau\s+(?:cho\s+)?hang\s+roi|bulk\s+carrier)\b"
 )
 _CONTAINER_SHIP_RE = re.compile(
     r"\b(?:container|cong\s*[- ]?te\s*[- ]?no)\b"
@@ -767,7 +777,9 @@ def _extract_particulars(
     ap_anchors: list[dict[str, Any]] = []
     fp_anchors: list[dict[str, Any]] = []
     double_hull_or_double_side = False
+    single_side_or_non_double_hull = False
     is_container_ship = False
+    non_container_ship = False
     extracted_plate_mm: list[float] = []
     bottom_plate_mm: list[float] = []
     bilge_plate_mm: list[float] = []
@@ -928,9 +940,13 @@ def _extract_particulars(
 
             if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
                 _append_unique(service_areas, "INLAND_WATERWAY")
-            if _DOUBLE_HULL_RE.search(clause_clean):
+            if _NON_DOUBLE_SIDE_RE.search(clause_clean):
+                single_side_or_non_double_hull = True
+            elif _DOUBLE_HULL_RE.search(clause_clean):
                 double_hull_or_double_side = True
-            if _CONTAINER_SHIP_RE.search(clause_clean):
+            if _NON_CONTAINER_RE.search(clause_clean):
+                non_container_ship = True
+            elif _CONTAINER_SHIP_RE.search(clause_clean):
                 is_container_ship = True
             is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
             if is_equipment_item:
@@ -988,7 +1004,10 @@ def _extract_particulars(
             stype = ship_m.group(1).strip().upper()
             if stype:
                 _append_unique(ship_types, stype)
-                if "CONTAINER" in stype or "CONG TE NO" in stype:
+                stype_folded = fold_marine_search_text(stype)
+                if _NON_CONTAINER_RE.search(stype_folded):
+                    non_container_ship = True
+                elif "CONTAINER" in stype or "CONG TE NO" in stype:
                     is_container_ship = True
         elif "tau hang kho" in folded or "dry cargo" in folded:
             _append_unique(ship_types, "DRY CARGO")
@@ -1044,7 +1063,10 @@ def _extract_particulars(
         "ship_types": ship_types,
         "hull_materials": hull_materials,
         "double_hull_or_double_side": double_hull_or_double_side,
+        "single_side_or_non_double_hull": single_side_or_non_double_hull,
         "is_container_ship": is_container_ship,
+        "non_container_ship": non_container_ship,
+        "explicit_2_4_6_9_applicable": False,
         "claimed_scales": claimed_scales,
         "ap_x_coords": ap_coords,
         "fp_x_coords": fp_coords,
@@ -1178,7 +1200,13 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
     ]
 
     invalid_structural_metrics: list[str] = []
-    _non_dim_metric_keys = {"floor_spacing_region", "floor_spacing_measurements"}
+    _bool_exception_metric_keys = {
+        "double_hull_or_double_side",
+        "is_container_ship",
+        "single_side_or_non_double_hull",
+        "bulkhead_2_4_6_9_exception_applicable",
+    }
+    _non_dim_metric_keys = {"floor_spacing_region", "floor_spacing_measurements"} | _bool_exception_metric_keys
     for mkey, mval in list(structural_metrics.items()):
         if mkey == "floor_spacing_measurements":
             if not isinstance(mval, list) or not mval:
@@ -1192,6 +1220,28 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
                 sp_f = _to_float(sp) if not isinstance(sp, bool) else None
                 if sp_f is None or sp_f <= 0.0:
                     invalid_structural_metrics.append(f"{mkey}[{meas_idx}].spacing_mm={sp!r}")
+            continue
+        if mkey in _bool_exception_metric_keys:
+            if not isinstance(mval, bool):
+                invalid_structural_metrics.append(f"{mkey}={mval!r}")
+            elif mkey == "double_hull_or_double_side":
+                if mval:
+                    particulars["double_hull_or_double_side"] = True
+                else:
+                    particulars["single_side_or_non_double_hull"] = True
+            elif mkey == "single_side_or_non_double_hull" and mval:
+                particulars["single_side_or_non_double_hull"] = True
+            elif mkey == "is_container_ship":
+                if mval:
+                    particulars["is_container_ship"] = True
+                else:
+                    particulars["non_container_ship"] = True
+            elif mkey == "bulkhead_2_4_6_9_exception_applicable":
+                if mval:
+                    particulars["explicit_2_4_6_9_applicable"] = True
+                else:
+                    particulars["single_side_or_non_double_hull"] = True
+                    particulars["non_container_ship"] = True
             continue
         if mkey in _non_dim_metric_keys:
             continue

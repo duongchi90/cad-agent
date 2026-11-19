@@ -293,6 +293,7 @@ def test_mk574_03_incidental_equipment_does_not_suppress_inland_defects() -> Non
         extra_texts=[
             {"handle": "EQ1", "text": "FRP LIFERAFT LOCKER ON POOP DECK", "x": 15000.0, "y": 5000.0, "height": 200.0},
             {"handle": "EQ2", "text": "DECK CABINET MATERIAL : FRP", "x": 16000.0, "y": 5200.0, "height": 200.0},
+            {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0, "height": 200.0},
         ],
     )
     res_frp_eq = evaluate_regulation_applicability_and_submittal([ga_frp_locker, _base_mcn()], partial_package=True)
@@ -308,6 +309,7 @@ def test_mk574_03_incidental_equipment_does_not_suppress_inland_defects() -> Non
         extra_texts=[
             {"handle": "EQ3", "text": "FIRE EXTINGUISHER SOLAS APPROVED", "x": 17000.0, "y": 5200.0, "height": 200.0},
             {"handle": "EQ4", "text": "LIFEBUOY IMO / SOLAS TYPE", "x": 18000.0, "y": 5200.0, "height": 200.0},
+            {"handle": "NS2", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0, "height": 200.0},
         ],
     )
     res_solas_eq = evaluate_regulation_applicability_and_submittal([ga_solas_ext, _base_mcn()], partial_package=True)

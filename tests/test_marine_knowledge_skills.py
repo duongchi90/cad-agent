@@ -122,9 +122,13 @@ def test_skill2_submittal_and_regulation_pass_conflict_missing_and_out_of_scope(
     assert res_ok["partial_package"] is True
     assert res_ok["checks_not_executed"]  # stability/freeboard not supplied yet
 
-    # 2. Violation: 40m < L=52m <= 60m requires >= 4 transverse bulkheads, given 3 -> CONFLICT
+    # 2. Violation: 40m < L=52m <= 60m requires >= 4 transverse bulkheads, given 3 with verified non-2.4.6-9 hull -> CONFLICT
+    ga_bad_bh = _inland_vrsb_ga_obs(bulkheads=3)
+    ga_bad_bh["texts"].append(
+        {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "layer": "0", "x": 60000.0, "y": 5500.0, "height": 250.0}
+    )
     res_bad_bh = evaluate_regulation_applicability_and_submittal(
-        [_inland_vrsb_ga_obs(bulkheads=3), _inland_midship_obs(double_bottom_height_mm=550.0)],
+        [ga_bad_bh, _inland_midship_obs(double_bottom_height_mm=550.0)],
         partial_package=True,
     )
     assert res_bad_bh["status"] == "CONFLICT"

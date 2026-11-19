@@ -569,7 +569,12 @@ def test_mv0_04_bulkhead_20m_boundary_steel_gate_and_2_4_6_9_exception() -> None
     mk08_ok = next(f for f in res_20_5_ok["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
     assert mk08_ok["evidence"]["coverage_scope"] == "COUNT_ONLY"
 
-    ga_20_5_bad = _ga(drawing_id="GA_20_5_BAD", length_line="Chiều dài tàu L = 20.50 m", bulkheads=2)
+    ga_20_5_bad = _ga(
+        drawing_id="GA_20_5_BAD",
+        length_line="Chiều dài tàu L = 20.50 m",
+        bulkheads=2,
+        extra_texts=[{"handle": "NS0", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0, "height": 250.0}],
+    )
     assert evaluate_regulation_applicability_and_submittal([ga_20_5_bad, mcn_20_5])["status"] == "CONFLICT"
 
 
@@ -898,3 +903,129 @@ def test_p2_schema_python_proposal_gate_parity() -> None:
         evidence={"blank_fields": ["OWNER"]},
     )
     assert prop["cad_mutation"] is False and prop["proposal_only"] is True
+
+
+def test_mv0_04_followup_unknown_exception_eligibility_and_tristate_controls() -> None:
+    """Luna PR #574 follow-up P1: unknown 2.4.6-9 eligibility must stay INSUFFICIENT_EVIDENCE, never CONFLICT."""
+    # 1. Exact Luna acceptance replay: steel dry cargo, L=42.00m, 3 bulkheads, NO 2.4.6-9 facts -> INSUFFICIENT_EVIDENCE
+    ga_42_unknown = _ga(drawing_id="GA_42_UNKNOWN", length_line="Chiều dài tàu L = 42.00 m", bulkheads=3)
+    res_unknown = evaluate_regulation_applicability_and_submittal([ga_42_unknown])
+    assert res_unknown["status"] == "INSUFFICIENT_EVIDENCE"
+    mk08_u = next(f for f in res_unknown["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+    assert mk08_u["verdict"] == "INSUFFICIENT_EVIDENCE"
+    assert mk08_u["finding_id"] == "F_WATERTIGHT_BULKHEAD_2_4_6_9_ELIGIBILITY_UNKNOWN"
+    assert mk08_u["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
+    assert "2.4.6-9" in mk08_u["clause"]
+
+    # 2. Partial exception negation (single-side ONLY, container still unknown) -> still INSUFFICIENT_EVIDENCE
+    ga_42_partial = _ga(
+        drawing_id="GA_42_SINGLE_ONLY",
+        length_line="Chiều dài tàu L = 42.00 m",
+        bulkheads=3,
+        extra_texts=[{"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5400.0}],
+    )
+    res_partial = evaluate_regulation_applicability_and_submittal([ga_42_partial])
+    assert res_partial["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(
+        f["finding_id"] == "F_WATERTIGHT_BULKHEAD_2_4_6_9_ELIGIBILITY_UNKNOWN" and f["verdict"] == "INSUFFICIENT_EVIDENCE"
+        for f in res_partial["findings"]
+    )
+
+    # 3. Verified INAPPLICABLE (single-side AND non-container, or negated phrase) -> hard CONFLICT
+    ga_42_inapp = _ga(
+        drawing_id="GA_42_INAPP",
+        length_line="Chiều dài tàu L = 42.00 m",
+        bulkheads=3,
+        extra_texts=[
+            {"handle": "NS2", "text": "KHÔNG CÓ MẠN KÉP - KHÔNG CHỞ CONTAINER", "x": 60000.0, "y": 5400.0},
+        ],
+    )
+    res_inapp = evaluate_regulation_applicability_and_submittal([ga_42_inapp])
+    assert res_inapp["status"] == "CONFLICT"
+    mk08_c = next(f for f in res_inapp["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+    assert mk08_c["verdict"] == "CONFLICT"
+    assert mk08_c["finding_id"] == "F_WATERTIGHT_BULKHEAD_COUNT"
+    assert mk08_c["evidence"]["exception_2_4_6_9_eligibility"] == "INAPPLICABLE"
+
+    # 4. Contradictory double-side vs single-side markers -> CONFLICTING_OR_UNKNOWN (paused, not false count CONFLICT)
+    ga_42_contra = _ga(
+        drawing_id="GA_42_CONTRA_EXC",
+        length_line="Chiều dài tàu L = 42.00 m",
+        bulkheads=3,
+        extra_texts=[
+            {"handle": "C1", "text": "ĐÁY ĐÔI MẠN KÉP", "x": 60000.0, "y": 5400.0},
+            {"handle": "C2", "text": "SINGLE SIDE HULL", "x": 60000.0, "y": 5600.0},
+        ],
+    )
+    res_contra = evaluate_regulation_applicability_and_submittal([ga_42_contra])
+    assert res_contra["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(
+        f["evidence"].get("exception_2_4_6_9_eligibility") == "CONFLICTING_OR_UNKNOWN"
+        for f in res_contra["findings"]
+        if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT"
+    )
+
+    # 5. Unconditional Clause 2.4.6-2 floor (<2 bulkheads at L=42m) -> hard CONFLICT regardless of unknown 2.4.6-9
+    ga_42_one = _ga(drawing_id="GA_42_ONE_BH", length_line="Chiều dài tàu L = 42.00 m", bulkheads=1)
+    assert evaluate_regulation_applicability_and_submittal([ga_42_one])["status"] == "CONFLICT"
+
+    # 6. Positive control: L=40.00m with 3 bulkheads and unknown exception -> PASS
+    ga_40_ok = _ga(drawing_id="GA_40_OK", length_line="Chiều dài tàu L = 40.00 m", bulkheads=3)
+    assert evaluate_regulation_applicability_and_submittal([ga_40_ok, _mcn(length_line="Chiều dài tàu L = 40.00 m")])["status"] == "PASS"
+
+    # 7. Positive control: container ship via SHIP TYPE at L=42m with 3 bulkheads -> APPLICABLE -> INSUFFICIENT_EVIDENCE
+    ga_42_cont = _ga(
+        drawing_id="GA_42_CONT",
+        length_line="Chiều dài tàu L = 42.00 m",
+        ship_type_line="SHIP TYPE : DRY CARGO CONTAINER",
+        bulkheads=3,
+    )
+    res_cont = evaluate_regulation_applicability_and_submittal([ga_42_cont])
+    assert res_cont["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(f["finding_id"] == "F_WATERTIGHT_BULKHEAD_2_4_6_9_EXCEPTION_QUALIFIED" for f in res_cont["findings"])
+
+
+def test_mv0_06_followup_independent_orientation_and_1000x_span_coverage() -> None:
+    """Luna PR #574 follow-up P1: split bow orientation and 1000x span coverage accurately."""
+    # 1. Unitless ($INSUNITS=0) with clean single A.P + F.P pair -> orientation ran, 1000x span did NOT
+    ga_unitless_clean_apfp = _ga(drawing_id="GA_U0_CLEAN_APFP", insunits=0)
+    res_u0 = detect_drawing_gaps_and_conflicts([ga_unitless_clean_apfp], partial_package=True)
+    assert res_u0["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any("Bow direction (A.P vs F.P) orientation check" == chk for chk in res_u0["checks_executed"])
+    assert not any("1000x" in chk for chk in res_u0["checks_executed"])
+    assert any("1000x CAD A.P-to-F.P span check" in chk for chk in res_u0["checks_not_executed"])
+
+    # 2. Unitless with unpaired 1 A.P + 4 F.P (Marine-7000 GA7000 pattern) -> NEITHER orientation NOR span in checks_executed
+    ga_unpaired = _ga(
+        drawing_id="GA_U0_UNPAIRED",
+        insunits=0,
+        extra_texts=[
+            {"handle": "FP2", "text": "F.P", "x": 52500.0, "y": 500.0, "height": 300.0},
+            {"handle": "FP3", "text": "F.P", "x": 52800.0, "y": 900.0, "height": 300.0},
+        ],
+    )
+    res_unpaired = detect_drawing_gaps_and_conflicts([ga_unpaired], partial_package=True)
+    assert res_unpaired["status"] == "INSUFFICIENT_EVIDENCE"
+    assert not any("Bow direction" in chk for chk in res_unpaired["checks_executed"])
+    assert not any("1000x" in chk for chk in res_unpaired["checks_executed"])
+    assert any("Bow direction" in chk and "unresolved" in chk.lower() for chk in res_unpaired["checks_not_executed"])
+    assert any("1000x" in chk for chk in res_unpaired["checks_not_executed"])
+
+    # 3. Calibrated ($INSUNITS=4) with clean single A.P + F.P pair -> BOTH orientation and 1000x span in checks_executed -> PASS
+    ga_ok = _ga(drawing_id="GA_MM_OK", insunits=4)
+    res_ok = detect_drawing_gaps_and_conflicts([ga_ok], partial_package=True)
+    assert res_ok["status"] == "PASS"
+    assert any("Bow direction (A.P vs F.P) orientation check" == chk for chk in res_ok["checks_executed"])
+    assert any("1000x CAD A.P-to-F.P span vs declared length check" == chk for chk in res_ok["checks_executed"])
+
+    # 4. Reversed single A.P > F.P -> F_BOW_ORIENTATION CONFLICT + orientation in checks_executed
+    ga_rev = _ga(drawing_id="GA_MM_REV", insunits=4)
+    for t in ga_rev["texts"]:
+        if t["text"] == "A.P":
+            t["x"] = 55000.0
+        elif t["text"] == "F.P":
+            t["x"] = 1000.0
+    res_rev = detect_drawing_gaps_and_conflicts([ga_rev], partial_package=True)
+    assert res_rev["status"] == "CONFLICT"
+    assert any("F_BOW_ORIENTATION" in f["finding_id"] and f["verdict"] == "CONFLICT" for f in res_rev["findings"])
+    assert any("Bow direction (A.P vs F.P) orientation check" == chk for chk in res_rev["checks_executed"])
