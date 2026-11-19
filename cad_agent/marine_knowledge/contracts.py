@@ -72,6 +72,7 @@ _PROPOSAL_FIELDS = frozenset(
 
 _ALLOWED_DRAFT_STATUSES = frozenset({"CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY"})
 _ALLOWED_RESULT_PACK_STATUSES = _ALLOWED_DRAFT_STATUSES | frozenset({"DISABLED"})
+_ALLOWED_EXCERPT_DISPOSITIONS = frozenset({"PUBLIC_VERBATIM_EXCERPT", "PRIVATE_SOURCE_SUMMARY_ONLY"})
 _ALLOWED_DOC_KINDS = frozenset(
     {
         "REGULATION",
@@ -135,6 +136,8 @@ _TERM_FIELDS = frozenset(
         "pdf_page",
         "reg_page",
         "verbatim_excerpt",
+        "excerpt_disposition",
+        "technical_summary",
         "applicable_drawing_types",
         "approval_status",
     }
@@ -153,6 +156,8 @@ _RULE_FIELDS = frozenset(
         "conditions",
         "exceptions",
         "verbatim_excerpt",
+        "excerpt_disposition",
+        "technical_summary",
         "verification_method",
         "confidence_default",
         "limitation",
@@ -329,7 +334,7 @@ def validate_source_manifest(payload: object) -> dict[str, Any]:
     return deepcopy(data)
 
 
-def _validate_term(raw_term: object, known_sources: set[str]) -> str:
+def _validate_term(raw_term: object, sources_by_id: Mapping[str, Mapping[str, Any]]) -> str:
     term = _require_mapping(raw_term, "TERM_SCHEMA_INVALID")
     if set(term) != _TERM_FIELDS:
         _fail("TERM_SCHEMA_INVALID")
@@ -339,27 +344,41 @@ def _validate_term(raw_term: object, known_sources: set[str]) -> str:
     _require_str_list(term["aliases"], "TERM_ALIASES_INVALID", min_items=1)
     _require_non_empty_str(term["category"], "TERM_CATEGORY_INVALID")
     sid = _require_id(term["source_id"], "TERM_SOURCE_ID_INVALID")
-    if sid not in known_sources:
+    src_entry = sources_by_id.get(sid)
+    if src_entry is None:
         _fail("TERM_UNKNOWN_SOURCE_ID")
     _require_non_empty_str(term["source_version"], "TERM_SOURCE_VERSION_INVALID")
     _require_non_empty_str(term["clause"], "TERM_CLAUSE_INVALID")
     _require_pos_int_list(term["pdf_page"], "TERM_PDF_PAGE_INVALID", min_items=1)
     _require_pos_int_list(term["reg_page"], "TERM_REG_PAGE_INVALID", min_items=0)
-    _require_non_empty_str(term["verbatim_excerpt"], "TERM_EXCERPT_INVALID")
+    disp = term["excerpt_disposition"]
+    if disp not in _ALLOWED_EXCERPT_DISPOSITIONS:
+        _fail("TERM_EXCERPT_DISPOSITION_INVALID")
+    _require_non_empty_str(term["technical_summary"], "TERM_SUMMARY_INVALID")
+    excerpt = term["verbatim_excerpt"]
+    if src_entry.get("usage_rights") == "PRIVATE_LOCAL_NO_COMMIT":
+        if disp != "PRIVATE_SOURCE_SUMMARY_ONLY" or excerpt is not None:
+            _fail("TERM_PRIVATE_VERBATIM_EXCERPT_FORBIDDEN")
+    elif disp == "PRIVATE_SOURCE_SUMMARY_ONLY":
+        if excerpt is not None:
+            _fail("TERM_EXCERPT_INVALID")
+    else:
+        _require_non_empty_str(excerpt, "TERM_EXCERPT_INVALID")
     _require_str_list(term["applicable_drawing_types"], "TERM_DRAWING_TYPES_INVALID", min_items=1)
     if term["approval_status"] not in _ALLOWED_DRAFT_STATUSES:
         _fail("TERM_UNAPPROVED_ESCALATION_FORBIDDEN")
     return tid
 
 
-def _validate_rule(raw_rule: object, known_sources: set[str]) -> str:
+def _validate_rule(raw_rule: object, sources_by_id: Mapping[str, Mapping[str, Any]]) -> str:
     rule = _require_mapping(raw_rule, "RULE_SCHEMA_INVALID")
     if set(rule) != _RULE_FIELDS:
         _fail("RULE_SCHEMA_INVALID")
     rid = _require_id(rule["rule_id"], "RULE_ID_INVALID")
     _require_non_empty_str(rule["title"], "RULE_TITLE_INVALID")
     sid = _require_id(rule["source_id"], "RULE_SOURCE_ID_INVALID")
-    if sid not in known_sources:
+    src_entry = sources_by_id.get(sid)
+    if src_entry is None:
         _fail("RULE_UNKNOWN_SOURCE_ID")
     _require_non_empty_str(rule["source_version"], "RULE_SOURCE_VERSION_INVALID")
     _require_non_empty_str(rule["clause"], "RULE_CLAUSE_INVALID")
@@ -369,7 +388,19 @@ def _validate_rule(raw_rule: object, known_sources: set[str]) -> str:
     _require_str_list(rule["applicable_drawing_types"], "RULE_DRAWING_TYPES_INVALID", min_items=1)
     _require_str_list(rule["conditions"], "RULE_CONDITIONS_INVALID", min_items=1)
     _require_str_list(rule["exceptions"], "RULE_EXCEPTIONS_INVALID", min_items=0)
-    _require_non_empty_str(rule["verbatim_excerpt"], "RULE_EXCERPT_INVALID")
+    disp = rule["excerpt_disposition"]
+    if disp not in _ALLOWED_EXCERPT_DISPOSITIONS:
+        _fail("RULE_EXCERPT_DISPOSITION_INVALID")
+    _require_non_empty_str(rule["technical_summary"], "RULE_SUMMARY_INVALID")
+    excerpt = rule["verbatim_excerpt"]
+    if src_entry.get("usage_rights") == "PRIVATE_LOCAL_NO_COMMIT":
+        if disp != "PRIVATE_SOURCE_SUMMARY_ONLY" or excerpt is not None:
+            _fail("RULE_PRIVATE_VERBATIM_EXCERPT_FORBIDDEN")
+    elif disp == "PRIVATE_SOURCE_SUMMARY_ONLY":
+        if excerpt is not None:
+            _fail("RULE_EXCERPT_INVALID")
+    else:
+        _require_non_empty_str(excerpt, "RULE_EXCERPT_INVALID")
     _require_non_empty_str(rule["verification_method"], "RULE_VERIFICATION_METHOD_INVALID")
     if rule["confidence_default"] not in _ALLOWED_CONFIDENCES:
         _fail("RULE_CONFIDENCE_INVALID")
@@ -400,8 +431,8 @@ def validate_knowledge_pack(
 ) -> dict[str, Any]:
     """Validate ``marine-knowledge-pack-1.0`` against its source manifest."""
     manifest = validate_source_manifest(source_manifest)
-    known_sources = {
-        src["source_id"]
+    sources_by_id = {
+        src["source_id"]: src
         for src in manifest["sources"]
         if src["usage_status"] != "EXCLUDED_NON_MARINE"
     }
@@ -440,7 +471,7 @@ def validate_knowledge_pack(
         _fail("PACK_TERMS_BELOW_MINIMUM")
     seen_terms: set[str] = set()
     for term in terms:
-        tid = _validate_term(term, known_sources)
+        tid = _validate_term(term, sources_by_id)
         if tid in seen_terms:
             _fail("PACK_DUPLICATE_TERM_ID")
         seen_terms.add(tid)
@@ -450,7 +481,7 @@ def validate_knowledge_pack(
         _fail("PACK_RULES_BELOW_MINIMUM")
     seen_rules: set[str] = set()
     for rule in rules:
-        rid = _validate_rule(rule, known_sources)
+        rid = _validate_rule(rule, sources_by_id)
         if rid in seen_rules:
             _fail("PACK_DUPLICATE_RULE_ID")
         seen_rules.add(rid)
@@ -471,7 +502,12 @@ def validate_check_result(payload: object) -> dict[str, Any]:
         _fail("RESULT_SCHEMA_INVALID")
     _require_id(data["skill_id"], "RESULT_SKILL_ID_INVALID")
     _require_non_empty_str(data["pack_id"], "RESULT_PACK_ID_INVALID")
-    if data["pack_sha256"] is not None:
+    if data["status"] not in _ALLOWED_RESULT_STATUSES:
+        _fail("RESULT_STATUS_INVALID")
+    if data["status"] == "DISABLED":
+        if data["pack_sha256"] is not None:
+            _require_sha256(data["pack_sha256"], "RESULT_PACK_SHA_INVALID")
+    else:
         _require_sha256(data["pack_sha256"], "RESULT_PACK_SHA_INVALID")
     if data["pack_status"] not in _ALLOWED_RESULT_PACK_STATUSES:
         _fail("RESULT_PACK_STATUS_INVALID")
@@ -479,8 +515,6 @@ def validate_check_result(payload: object) -> dict[str, Any]:
         _fail("RESULT_CAD_MUTATION_FORBIDDEN")
     if data["regulatory_compliance_proven"] is not False:
         _fail("RESULT_REGULATORY_PROOF_FORBIDDEN")
-    if data["status"] not in _ALLOWED_RESULT_STATUSES:
-        _fail("RESULT_STATUS_INVALID")
     _require_non_empty_str(data["summary"], "RESULT_SUMMARY_INVALID")
     _require_mapping(data["observed_scope"], "RESULT_OBSERVED_SCOPE_INVALID")
     _require_mapping(data["applicable_regulation_scope"], "RESULT_REG_SCOPE_INVALID")
@@ -539,7 +573,9 @@ def validate_check_result(payload: object) -> dict[str, Any]:
         gates = _require_str_list(prop["required_core_gates"], "PROPOSAL_GATES_INVALID", min_items=2)
         if "CAD_CORE_SOURCE_SUPPORT" not in gates or "CAD_CORE_REVIEW" not in gates:
             _fail("PROPOSAL_GATES_INVALID")
-        _require_mapping(prop["evidence"], "PROPOSAL_EVIDENCE_INVALID")
+        prop_ev = _require_mapping(prop["evidence"], "PROPOSAL_EVIDENCE_INVALID")
+        if prop_ev.get("cad_mutation") is True or prop_ev.get("proposal_only") is False:
+            _fail("PROPOSAL_EVIDENCE_INVALID")
         _require_non_empty_str(prop["reason"], "PROPOSAL_REASON_INVALID")
     return deepcopy(data)
 
@@ -698,6 +734,41 @@ def _find_heading_offset_in_lines(text_lines: str, heading_body: str, *, min_pos
     return None
 
 
+def _has_same_page_following_outline(
+    outline_norm: list[tuple[int, int, str]],
+    cited_set: set[int],
+    *,
+    after_page: int,
+    exclude_title_prefix: str = "",
+) -> bool:
+    for o_pno, _o_lvl, o_title in outline_norm:
+        if o_pno in cited_set and o_pno >= after_page:
+            if exclude_title_prefix and o_title.startswith(exclude_title_prefix):
+                continue
+            return True
+    return False
+
+
+def _outline_has_next_page_exit(
+    outline_norm: list[tuple[int, int, str]],
+    cited_set: set[int],
+    max_cited: int,
+    *,
+    clause_num: str | None = None,
+) -> bool:
+    for oi, (o_pno, o_lvl, o_title) in enumerate(outline_norm):
+        if o_pno not in cited_set:
+            continue
+        if clause_num is not None and not re.match(rf"^{re.escape(clause_num)}(?=\s|$)", o_title):
+            continue
+        for nj in range(oi + 1, len(outline_norm)):
+            n_pno, n_lvl, _ = outline_norm[nj]
+            if n_lvl <= o_lvl:
+                return n_pno > max_cited
+        return False
+    return False
+
+
 def _resolve_regulation_clause_slices(
     *,
     clause_items: list[tuple[str, str | None]],
@@ -705,7 +776,7 @@ def _resolve_regulation_clause_slices(
     pdf_pages: list[int],
     extracted_pages_lines: list[str],
     outline_entries: tuple[tuple[int, int, str], ...],
-) -> list[str]:
+) -> tuple[list[str], bool, str]:
     merged_lines = "\n".join(extracted_pages_lines)
     page_offsets: dict[int, tuple[int, int]] = {}
     cursor = 0
@@ -720,10 +791,14 @@ def _resolve_regulation_clause_slices(
     outline_norm = [(pno, lvl, _normalize_ws(title)) for pno, lvl, title in outline_entries]
 
     slices: list[str] = []
+    all_bounded = True
+    modes: list[str] = []
     if clause_items:
         for base_clause, sub_item in clause_items:
             base_depth = _clause_depth(base_clause)
             matched_slice: str | None = None
+            item_bounded = False
+            item_mode = "UNRESOLVED"
 
             # 1. Try body line-start clause heading match first
             body_start: int | None = None
@@ -742,6 +817,7 @@ def _resolve_regulation_clause_slices(
 
             if body_start is not None:
                 body_end = len(merged_lines)
+                closing_found = False
                 for nm in re.finditer(r"(?m)(?:^|\n)\s*(\d+\.\d+(?:\.\d+)?)(?=\s|$)", merged_lines[body_start + len(base_clause) :]):
                     cand_num = nm.group(1)
                     rel_pos = body_start + len(base_clause) + nm.start()
@@ -752,26 +828,58 @@ def _resolve_regulation_clause_slices(
                         continue
                     if cand_num != base_clause and _clause_depth(cand_num) <= base_depth:
                         body_end = rel_pos
+                        closing_found = True
                         break
                 matched_slice = merged_lines[body_start:body_end]
+                toc_next_page = _outline_has_next_page_exit(
+                    outline_norm,
+                    cited_set,
+                    max_cited,
+                    clause_num=base_clause,
+                )
+                item_bounded = closing_found or toc_next_page
+                item_mode = "BODY_BOUNDED" if item_bounded else "BODY_UNBOUNDED_END"
 
-            # 2. Try outline-numbered clause match (e.g. QCVN 72 omits 1.4.43 / 1.1.1 / 3.2.1 in body)
+            # 2. Try outline-numbered clause match (Pass A exact cited page first, then Pass B continuation)
             if matched_slice is None and outline_norm:
                 match_idx: int | None = None
+                pass_kind = ""
+                next_same_or_higher_pno = max_cited + 1
+                # Pass A: outline entry lands on an explicitly cited page
                 for oi, (o_pno, _o_lvl, o_title) in enumerate(outline_norm):
-                    if re.match(rf"^{re.escape(base_clause)}(?=\s|$)", o_title):
-                        next_same_or_higher_pno = max_cited + 1
+                    if o_pno in cited_set and re.match(rf"^{re.escape(base_clause)}(?=\s|$)", o_title):
+                        next_p = max_cited + 1
+                        has_next_same = False
                         for nj in range(oi + 1, len(outline_norm)):
                             n_pno, n_lvl, _n_title = outline_norm[nj]
                             if n_lvl <= _o_lvl:
-                                next_same_or_higher_pno = n_pno
+                                next_p = n_pno
+                                has_next_same = True
                                 break
-                        if o_pno in cited_set or (o_pno <= min_cited <= next_same_or_higher_pno):
-                            match_idx = oi
-                            break
+                        match_idx = oi
+                        next_same_or_higher_pno = next_p if has_next_same else -1
+                        pass_kind = "PASS_A"
+                        break
+                # Pass B: continuation into sub-item from immediately preceding heading
+                if match_idx is None and sub_item is not None:
+                    for oi, (o_pno, _o_lvl, o_title) in enumerate(outline_norm):
+                        if re.match(rf"^{re.escape(base_clause)}(?=\s|$)", o_title):
+                            next_p = -1
+                            for nj in range(oi + 1, len(outline_norm)):
+                                n_pno, n_lvl, _n_title = outline_norm[nj]
+                                if n_lvl <= _o_lvl:
+                                    next_p = n_pno
+                                    break
+                            if o_pno < min_cited <= (next_p if next_p != -1 else max_cited + 1):
+                                match_idx = oi
+                                next_same_or_higher_pno = next_p
+                                pass_kind = "PASS_B"
+                                break
+
                 if match_idx is not None:
                     o_pno, o_lvl, o_title = outline_norm[match_idx]
                     heading_body = _strip_outline_prefix(o_title)
+                    found_s: int | None = None
                     if o_pno in cited_set:
                         p_start = page_offsets[o_pno][0]
                         found_s = _find_heading_offset_in_lines(merged_lines, heading_body, min_pos=p_start)
@@ -780,10 +888,13 @@ def _resolve_regulation_clause_slices(
                         o_start = 0
 
                     o_end = len(merged_lines)
+                    closing_bounded = False
+                    found_closing_outline = False
                     for nj in range(match_idx + 1, len(outline_norm)):
                         n_pno, n_lvl, n_title = outline_norm[nj]
                         if n_lvl > o_lvl:
                             continue
+                        found_closing_outline = True
                         if n_pno in cited_set:
                             n_body = _strip_outline_prefix(n_title)
                             n_min = max(o_start + 5, page_offsets[n_pno][0])
@@ -799,12 +910,25 @@ def _resolve_regulation_clause_slices(
                                         found_e = n_min + bm_e.start()
                             if found_e is not None and found_e > o_start:
                                 o_end = found_e
+                                closing_bounded = True
                                 break
-                        elif n_pno > max_cited:
+                            closing_bounded = False
                             break
+                        if n_pno > max_cited:
+                            closing_bounded = True
+                            break
+                    if not found_closing_outline and sub_item is None:
+                        closing_bounded = False
                     matched_slice = merged_lines[o_start:o_end]
+                    if pass_kind == "PASS_A":
+                        item_bounded = (found_s is not None) and closing_bounded
+                        item_mode = "OUTLINE_PASS_A_BOUNDED" if item_bounded else "OUTLINE_PASS_A_UNBOUNDED"
+                    else:
+                        # Pass B continuation is provisionally bounded by next outline page if sub_item resolves cleanly below
+                        item_bounded = closing_bounded or (next_same_or_higher_pno > max_cited)
+                        item_mode = "OUTLINE_PASS_B_SUBITEM"
 
-            # 3. Last-resort direct clause match inside body text (only when line-start & outline missed)
+            # 3. Last-resort direct clause match inside body text (requires closing bound)
             if matched_slice is None:
                 direct_start: int | None = None
                 for dm in re.finditer(rf"(?<!\d\.){re.escape(base_clause)}(?![.\d-])", merged_lines):
@@ -815,6 +939,7 @@ def _resolve_regulation_clause_slices(
                         break
                 if direct_start is not None:
                     direct_end = len(merged_lines)
+                    closing_direct = False
                     for nm in re.finditer(r"(?<!\d\.)(\d+\.\d+(?:\.\d+)?)(?![.\d-])", merged_lines[direct_start + len(base_clause) :]):
                         cand_num = nm.group(1)
                         rel_pos = direct_start + len(base_clause) + nm.start()
@@ -823,8 +948,11 @@ def _resolve_regulation_clause_slices(
                             continue
                         if cand_num != base_clause and _clause_depth(cand_num) <= base_depth:
                             direct_end = rel_pos
+                            closing_direct = True
                             break
                     matched_slice = merged_lines[direct_start:direct_end]
+                    item_bounded = closing_direct
+                    item_mode = "INLINE_BOUNDED" if item_bounded else "INLINE_UNBOUNDED"
 
             if matched_slice is None:
                 _fail("CITATION_CLAUSE_PAGE_MISMATCH")
@@ -842,10 +970,16 @@ def _resolve_regulation_clause_slices(
                 em = re.search(rf"(?m)(?:^|\n)\s*{next_k}(?:\s+[^\d,.]|$)", matched_slice[s_start + 2 :])
                 if em is not None:
                     s_end = s_start + 2 + em.start()
+                    if item_mode == "OUTLINE_PASS_B_SUBITEM":
+                        item_bounded = True
                 matched_slice = matched_slice[s_start:s_end]
+            elif item_mode == "OUTLINE_PASS_B_SUBITEM":
+                item_bounded = False
 
+            all_bounded = all_bounded and item_bounded
+            modes.append(item_mode)
             slices.append(re.sub(r"\s+", " ", matched_slice).strip())
-        return slices
+        return slices, bool(slices) and all_bounded, ",".join(modes)
 
     if ch_anchors:
         merged_flat = re.sub(r"\s+", " ", merged_lines).strip()
@@ -854,10 +988,42 @@ def _resolve_regulation_clause_slices(
             if m_ch is None:
                 _fail("CITATION_CLAUSE_PAGE_MISMATCH")
             slices.append(merged_flat[m_ch.start() :])
-        return slices
+        return slices, False, "CHAPTER_ONLY_UNBOUNDED"
 
     _fail("CITATION_CLAUSE_PAGE_MISMATCH")
-    return []
+    return [], False, "UNRESOLVED"
+
+
+_TB_BOUNDARY_RE = re.compile(
+    r"(?m)(?:^|\n)\s*(?:\d+\.\d+(?:\.\d+)?(?=\s|$)|(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
+)
+
+
+def _find_textbook_next_boundary(
+    merged_lines: str,
+    *,
+    start_after: int,
+    outline_norm: list[tuple[int, int, str]],
+    cited_pages_count: int,
+) -> tuple[int, bool]:
+    """Find next line-anchored section/outline heading after start_after; return (end_pos, is_bounded)."""
+    m_num = _TB_BOUNDARY_RE.search(merged_lines[start_after:])
+    candidates: list[int] = []
+    if m_num is not None:
+        pos = start_after + m_num.start()
+        if merged_lines[pos : pos + 1] == "\n":
+            pos += 1
+        candidates.append(pos)
+
+    if candidates:
+        return min(candidates), True
+
+    # If outline confirms next section starts beyond cited page range, page boundary cleanly closes span
+    if outline_norm:
+        return len(merged_lines), False
+    if cited_pages_count >= 1:
+        return len(merged_lines), False
+    return len(merged_lines), False
 
 
 def _resolve_textbook_clause_slices(
@@ -866,42 +1032,78 @@ def _resolve_textbook_clause_slices(
     ch_anchors: list[str],
     text_anchors: list[str],
     extracted_pages_lines: list[str],
-) -> list[str]:
-    merged_flat = re.sub(r"\s+", " ", "\n".join(extracted_pages_lines)).strip()
-    matched_positions: list[int] = []
+    pdf_pages: list[int] | None = None,
+    outline_entries: tuple[tuple[int, int, str], ...] = (),
+) -> tuple[list[str], bool, str]:
+    merged_lines = "\n".join(extracted_pages_lines)
+    merged_flat = re.sub(r"\s+", " ", merged_lines).strip()
+    outline_norm = [(pno, lvl, _normalize_ws(title)) for pno, lvl, title in outline_entries]
+    cited_set = set(pdf_pages or [])
+    max_cited = max(cited_set) if cited_set else 0
 
-    for base_clause, _sub in clause_items:
-        m = re.search(rf"(?<!\d\.){re.escape(base_clause)}(?![.\d])", merged_flat)
-        if m is None:
-            _fail("CITATION_CLAUSE_PAGE_MISMATCH")
-        matched_positions.append(m.start())
+    slices: list[str] = []
+    all_bounded = True
+    modes: list[str] = []
 
-    if ch_anchors and not clause_items:
-        for ch in ch_anchors:
-            m = re.search(rf"\bchương\s*{re.escape(ch)}\b", merged_flat)
-            if m is not None:
-                matched_positions.append(m.start())
+    if clause_items:
+        for base_clause, _sub in clause_items:
+            m = re.search(rf"(?m)(?:^|\n)\s*{re.escape(base_clause)}(?![.\d])", merged_lines)
+            if m is None:
+                m = re.search(rf"(?<!\d\.){re.escape(base_clause)}(?![.\d])", merged_lines)
+                start_pos = m.start() if m is not None else -1
+            else:
+                start_pos = m.start() + (1 if merged_lines[m.start() : m.start() + 1] == "\n" else 0)
+            if start_pos < 0:
+                _fail("CITATION_CLAUSE_PAGE_MISMATCH")
 
+            end_pos, found_end = _find_textbook_next_boundary(
+                merged_lines,
+                start_after=start_pos + len(base_clause),
+                outline_norm=outline_norm,
+                cited_pages_count=len(extracted_pages_lines),
+            )
+            if not found_end and outline_norm and cited_set:
+                found_end = _outline_has_next_page_exit(
+                    outline_norm,
+                    cited_set,
+                    max_cited,
+                    clause_num=base_clause,
+                )
+            slices.append(re.sub(r"\s+", " ", merged_lines[start_pos:end_pos]).strip())
+            all_bounded = all_bounded and found_end
+            modes.append("TB_CLAUSE_BOUNDED" if found_end else "TB_CLAUSE_UNBOUNDED")
+        return slices, bool(slices) and all_bounded, ",".join(modes)
+
+    anchor_positions: list[int] = []
     for heading in text_anchors:
-        pos = merged_flat.find(heading)
-        if pos != -1:
-            matched_positions.append(pos)
-        else:
-            words = [w for w in heading.split() if len(w) >= 2]
-            if len(words) >= 3:
-                prefix = " ".join(words[:4])
-                pos2 = merged_flat.find(prefix)
-                if pos2 != -1:
-                    matched_positions.append(pos2)
+        pos = _find_heading_offset_in_lines(merged_lines, heading, min_pos=0)
+        if pos is not None:
+            anchor_positions.append(pos)
+    if ch_anchors and not anchor_positions:
+        for ch in ch_anchors:
+            m_ch = re.search(rf"\bchương\s*{re.escape(ch)}\b", merged_lines)
+            if m_ch is not None:
+                anchor_positions.append(m_ch.start())
 
-    if not matched_positions:
+    if not anchor_positions:
+        # Fallback check against flat text in case PDF wraps line breaks across heading
+        for heading in text_anchors:
+            pos_f = merged_flat.find(heading)
+            if pos_f != -1:
+                return [merged_flat[pos_f:]], False, "TB_TEXT_UNBOUNDED"
         _fail("CITATION_CLAUSE_PAGE_MISMATCH")
 
-    # Bind to page slices containing verified anchors (each matched anchor contributes its page/slice)
-    slices: list[str] = []
-    for pos in sorted(set(matched_positions)):
-        slices.append(merged_flat[pos:])
-    return slices
+    for pos in sorted(set(anchor_positions)):
+        end_pos, found_end = _find_textbook_next_boundary(
+            merged_lines,
+            start_after=pos + 6,
+            outline_norm=outline_norm,
+            cited_pages_count=len(extracted_pages_lines),
+        )
+        slices.append(re.sub(r"\s+", " ", merged_lines[pos:end_pos]).strip())
+        all_bounded = all_bounded and found_end
+        modes.append("TB_TEXT_BOUNDED" if found_end else "TB_TEXT_UNBOUNDED")
+    return slices, bool(slices) and all_bounded, ",".join(modes)
 
 
 def verify_source_citation(
@@ -912,6 +1114,7 @@ def verify_source_citation(
     source_file_path: str | Path | None = None,
     source_bytes: bytes | None = None,
     page_texts: Mapping[int, str] | Sequence[str] | None = None,
+    allow_local_private_verbatim: bool = False,
 ) -> dict[str, Any]:
     """Fail-closed citation verification binding bytes, page, clause, and excerpt strictly to SHA-256."""
     valid_manifest = validate_source_manifest(manifest)
@@ -927,6 +1130,16 @@ def verify_source_citation(
         r"^(?:qcvn\s*(?!72)\d+|solas|tcvn)\b", clause, re.IGNORECASE
     ):
         _fail("CITATION_CLAUSE_SOURCE_MISMATCH")
+
+    disp = record.get("excerpt_disposition")
+    if disp is not None and disp not in _ALLOWED_EXCERPT_DISPOSITIONS:
+        _fail("CITATION_EXCERPT_DISPOSITION_INVALID")
+    is_summary_only = disp == "PRIVATE_SOURCE_SUMMARY_ONLY"
+    if not allow_local_private_verbatim:
+        if source_entry.get("usage_rights") == "PRIVATE_LOCAL_NO_COMMIT" and record.get("verbatim_excerpt") is not None:
+            _fail("CITATION_PRIVATE_VERBATIM_FORBIDDEN")
+        if is_summary_only and record.get("verbatim_excerpt") is not None:
+            _fail("CITATION_PRIVATE_VERBATIM_FORBIDDEN")
 
     if "source_version" in record and record["source_version"] is not None:
         cited_ver = _require_non_empty_str(record["source_version"], "CITATION_VERSION_MISMATCH")
@@ -966,6 +1179,8 @@ def verify_source_citation(
         _fail("CITATION_SHA_STALE_OR_MISMATCH")
 
     states: list[str] = ["MANIFEST_MATCH"]
+    clause_span_status = "NOT_EVALUATED"
+    clause_match_mode = "NOT_EVALUATED"
     raw_bytes: bytes | None = source_bytes
     if raw_bytes is None and source_file_path is not None:
         fpath = Path(source_file_path)
@@ -1003,14 +1218,16 @@ def verify_source_citation(
                 document_kind=doc_kind,
             )
             if doc_kind == "TEXTBOOK":
-                bound_slices = _resolve_textbook_clause_slices(
+                bound_slices, span_bounded, clause_match_mode = _resolve_textbook_clause_slices(
                     clause_items=clause_items,
                     ch_anchors=ch_anchors,
                     text_anchors=text_anchors,
                     extracted_pages_lines=extracted_pages_lines,
+                    pdf_pages=pdf_pages,
+                    outline_entries=outline_entries,
                 )
             else:
-                bound_slices = _resolve_regulation_clause_slices(
+                bound_slices, span_bounded, clause_match_mode = _resolve_regulation_clause_slices(
                     clause_items=clause_items,
                     ch_anchors=ch_anchors,
                     pdf_pages=pdf_pages,
@@ -1018,10 +1235,11 @@ def verify_source_citation(
                     outline_entries=outline_entries,
                 )
 
+            clause_span_status = "CLAUSE_SPAN_BOUNDED" if span_bounded else "CLAUSE_BOUNDARY_UNBOUNDED"
             states.append("PAGE_VERIFIED")
 
             excerpt = record.get("verbatim_excerpt")
-            if isinstance(excerpt, str) and excerpt.strip():
+            if isinstance(excerpt, str) and excerpt.strip() and not is_summary_only:
                 segments = [
                     _normalize_ws(seg)
                     for seg in excerpt.split("...")
@@ -1031,7 +1249,8 @@ def verify_source_citation(
                     any(seg in sl for sl in bound_slices) for seg in segments
                 ):
                     _fail("CITATION_EXCERPT_CONTENT_MISMATCH")
-                states.append("CLAUSE_CONTENT_VERIFIED")
+                if span_bounded:
+                    states.append("CLAUSE_CONTENT_VERIFIED")
 
     if "CLAUSE_CONTENT_VERIFIED" in states and "PAGE_VERIFIED" in states and "SOURCE_BYTES_VERIFIED" in states:
         verification_level = "SOURCE_CONTENT_VERIFIED"
@@ -1045,4 +1264,6 @@ def verify_source_citation(
     out = deepcopy(dict(record))
     out["verification_states"] = states
     out["verification_level"] = verification_level
+    out["clause_span_status"] = clause_span_status
+    out["clause_match_mode"] = clause_match_mode
     return out

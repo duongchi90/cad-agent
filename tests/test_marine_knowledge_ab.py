@@ -228,7 +228,7 @@ def test_marine_regression_bow_z_compression_small_hull_and_empty_inputs(
     assert "F_BOW_ORIENTATION_GA_REVERSED_BOW" in finding_ids
     assert "F_Z_SCALE_DISTORTION_GA_REVERSED_BOW" in finding_ids
 
-    # Small hull L < 20m plate thickness < 2.5 mm must trigger RULE_MK_10 conflict
+    # Small hull L < 20m (>=50 HP outside QCVN 25) plate thickness < 2.5 mm must trigger RULE_MK_10 conflict
     small_hull = {
         "drawing_id": "MCN_18M_STEEL",
         "drawing_code": "KC-01",
@@ -239,6 +239,7 @@ def test_marine_regression_bow_z_compression_small_hull_and_empty_inputs(
             {"handle": "S3", "text": "Chiều dài tàu L = 18.00 m", "x": 200.0, "y": 400.0, "height": 150.0},
             {"handle": "S4", "text": "tôn đáy s=2.0 mm", "x": 200.0, "y": 600.0, "height": 150.0},
             {"handle": "S5", "text": "HULL MATERIAL : STEEL", "x": 200.0, "y": 800.0, "height": 150.0},
+            {"handle": "S6", "text": "MAIN ENGINE : 120 HP", "x": 200.0, "y": 950.0, "height": 150.0},
         ],
         "structural_metrics": {"double_bottom_height_mm": 750.0},
     }
@@ -334,7 +335,7 @@ def test_marine_7000_real_dxf_ab_validation() -> None:
     # Step 3 requires fail-closed INSUFFICIENT_EVIDENCE instead of definitive legal NOT_APPLICABLE.
     reg = evaluate_regulation_applicability_and_submittal([thlt_obs, ga_obs], partial_package=True)
     assert reg["status"] == "INSUFFICIENT_EVIDENCE"
-    assert "QCVN 21:2015/BGTVT" in reg["summary"]
+    assert "QCVN 21:2025/BGTVT" in reg["summary"]
 
     gap = detect_drawing_gaps_and_conflicts([thlt_obs, ga_obs], partial_package=True)
     assert gap["status"] == "CONFLICT"
@@ -389,6 +390,7 @@ def _build_16_ground_truth_cases() -> list[tuple[str, str, list[dict[str, Any]],
             {"handle": "5", "text": "tôn hông s=4.5 mm", "x": 200.0, "y": 750.0, "height": 150.0},
             {"handle": "6", "text": "SHIP TYPE : DRY CARGO", "x": 200.0, "y": 900.0, "height": 150.0},
             {"handle": "7", "text": "HULL MATERIAL : STEEL", "x": 200.0, "y": 1050.0, "height": 150.0},
+            {"handle": "8", "text": "MAIN ENGINE : 120 HP", "x": 200.0, "y": 1200.0, "height": 150.0},
         ],
         "structural_metrics": {
             "double_bottom_height_mm": 750.0,
@@ -404,6 +406,7 @@ def _build_16_ground_truth_cases() -> list[tuple[str, str, list[dict[str, Any]],
             {"handle": "4", "text": "tôn đáy s=2.0 mm", "x": 200.0, "y": 600.0, "height": 150.0},
             {"handle": "6", "text": "SHIP TYPE : DRY CARGO", "x": 200.0, "y": 900.0, "height": 150.0},
             {"handle": "7", "text": "HULL MATERIAL : STEEL", "x": 200.0, "y": 1050.0, "height": 150.0},
+            {"handle": "8", "text": "MAIN ENGINE : 120 HP", "x": 200.0, "y": 1200.0, "height": 150.0},
         ],
     }
 

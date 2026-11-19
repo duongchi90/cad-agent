@@ -90,6 +90,28 @@ _FP_ONLY_RE = re.compile(r"^(?:f\.?p\.?|vuong\s+goc\s+mui|forward\s+perpendicula
 _NEGATED_SCOPE_RE = re.compile(
     r"\b(?:khong\s+ap\s+dung|khong\s+phai|not\s+applicable|ngoai\s+tru|loai\s+tru)\b"
 )
+_INCIDENTAL_REF_RE = re.compile(
+    r"\b(?:tham\s+khao|tham\s+chieu|doi\s+chieu|so\s+sanh|vi\s+du|reference\s+only|for\s+reference|example)\b"
+)
+_VESSEL_BOUND_PREFIX_RE = re.compile(
+    r"\b(?:cap\s+tau|class(?:ification)?|service\s+area|vung\s+hoat\s+dong|hull\s+material|vat\s+lieu\s+(?:vo|than\s+tau)|ship\s+type|loai\s+tau)\s*[:=]"
+)
+_PASSENGER_COUNT_RE = re.compile(
+    r"\b(?:passengers?|so\s+khach|hanh\s+khach|suc\s+cho\s+nguoi)\s*[:=]?\s*(\d+)\b"
+)
+_DOUBLE_HULL_RE = re.compile(
+    r"\b(?:day\s+doi\s+man\s+kep|man\s+kep|vo\s+kep|double[\s-]hull|double[\s-]side)\b"
+)
+_CONTAINER_SHIP_RE = re.compile(
+    r"\b(?:container|cong\s*[- ]?te\s*[- ]?no)\b"
+)
+_ENGINE_POWER_TERM_RE = re.compile(
+    r"(?:(\d+(?:\.\d+)?)\s*[x*]\s*)?(\d+(?:[.,]\d+)?)\s*(kw|hp|cv|ps|bhp|suc\s+ngua|ma\s+luc)\b",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_SKIPPED_ENTITY_TYPES = frozenset(
+    {"ACAD_PROXY_ENTITY", "OLE2FRAME", "ACAD_TABLE", "MULTILEADER", "MLEADER"}
+)
 _NON_MARINE_DOMAIN_RE = re.compile(
     r"\b(?:truc\s+bac|chi\s+tiet\s+truc|banh\s+rang|chi\s+tiet\s+may|xe\s+o\s+to|o\s+to\s+tai|"
     r"xe\s+co\s+gioi|so\s+mi\s+ro\s+mooc|kiem\s+dinh\s+xe|may\s+tien|thep\s+c45|mechanical\s+shaft)\b"
@@ -190,7 +212,54 @@ def _extract_style_font_hints(doc: Any) -> dict[str, str]:
     return hints
 
 
-def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str]) -> dict[str, Any] | None:
+def _parse_engine_hp(rhs_text: str) -> float | None:
+    folded = fold_marine_search_text(rhs_text)
+    total_hp = 0.0
+    matched = False
+    for m in _ENGINE_POWER_TERM_RE.finditer(folded):
+        count = float(m.group(1)) if m.group(1) else 1.0
+        val = _to_float(m.group(2))
+        if val is None or val <= 0.0:
+            continue
+        unit = re.sub(r"\s+", " ", m.group(3).lower().strip())
+        hp_val = val * 1.341022 if unit == "kw" else val
+        total_hp += count * hp_val
+        matched = True
+    return round(total_hp, 2) if matched and total_hp > 0.0 else None
+
+
+def _check_supported_text_transform(entity: Any) -> str | None:
+    dxftype = entity.dxftype()
+    if dxftype in {"TEXT", "ATTRIB"}:
+        gen_flag = int(getattr(entity.dxf, "text_generation_flag", 0) or 0)
+        if gen_flag & 6 != 0:
+            return f"UNSUPPORTED_TEXT_GENERATION_FLAG({gen_flag})"
+    ext = getattr(entity.dxf, "extrusion", (0.0, 0.0, 1.0))
+    try:
+        ex, ey, ez = float(ext[0]), float(ext[1]), float(ext[2])
+    except Exception:
+        return "INVALID_TEXT_EXTRUSION"
+    if not (math.isfinite(ex) and math.isfinite(ey) and math.isfinite(ez)):
+        return "NON_FINITE_TEXT_EXTRUSION"
+    if abs(ex) > 1e-6 or abs(ey) > 1e-6 or abs(ez - 1.0) > 1e-6:
+        return f"NON_PLANAR_TEXT_EXTRUSION({round(ex, 4)},{round(ey, 4)},{round(ez, 4)})"
+    insert = getattr(entity.dxf, "insert", None)
+    for coord in (getattr(insert, "x", 0.0), getattr(insert, "y", 0.0), getattr(insert, "z", 0.0)):
+        try:
+            if not math.isfinite(float(coord)):
+                return "NON_FINITE_TEXT_COORDS"
+        except Exception:
+            return "INVALID_TEXT_COORDS"
+    return None
+
+
+def _entity_text_payload(
+    entity: Any,
+    style_fonts: Mapping[str, str],
+    *,
+    occurrence_id: str = "MODELSPACE",
+    view_id: str | None = None,
+) -> dict[str, Any] | None:
     dxftype = entity.dxftype()
     if dxftype == "MTEXT":
         raw_text = entity.plain_text() if hasattr(entity, "plain_text") else str(getattr(entity.dxf, "text", "") or "")
@@ -207,7 +276,7 @@ def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str]) -> dict[st
     insert = getattr(entity.dxf, "insert", None)
     x = _to_float(getattr(insert, "x", None)) or 0.0
     y = _to_float(getattr(insert, "y", None)) or 0.0
-    return {
+    payload: dict[str, Any] = {
         "handle": str(getattr(entity.dxf, "handle", "") or ""),
         "text": normalize_marine_cad_text(raw_text, font_hint=font_hint),
         "raw_text": raw_text,
@@ -216,10 +285,45 @@ def _entity_text_payload(entity: Any, style_fonts: Mapping[str, str]) -> dict[st
         "x": round(x, 3),
         "y": round(y, 3),
         "height": round(height, 4),
+        "occurrence_id": occurrence_id,
     }
+    if view_id:
+        payload["view_id"] = view_id
+    return payload
+
+
+def _block_contains_text_or_insert(
+    doc: Any,
+    block_name: str,
+    visited: frozenset[str] = frozenset(),
+) -> tuple[bool, bool]:
+    blocks = getattr(doc, "blocks", None)
+    if blocks is None or not block_name:
+        return False, False
+    blk = blocks.get(block_name)
+    if blk is None:
+        return False, False
+    for be in blk:
+        bt = be.dxftype()
+        if bt in {"TEXT", "MTEXT", "ATTRIB"}:
+            return True, True
+        if bt in {"INSERT", "MINSERT"}:
+            if list(getattr(be, "attribs", ())):
+                return True, True
+            nested = str(getattr(be.dxf, "name", "") or "")
+            if nested and nested not in visited:
+                has_sub, _ = _block_contains_text_or_insert(doc, nested, visited | {block_name})
+                if has_sub:
+                    return True, True
+    return False, True
 
 
 def _check_supported_insert_transform(entity: Any) -> str | None:
+    row_count = int(getattr(entity.dxf, "row_count", 1) or 1)
+    col_count = int(getattr(entity.dxf, "column_count", 1) or 1)
+    if entity.dxftype() == "MINSERT" or row_count > 1 or col_count > 1:
+        return f"MINSERT_ARRAY_NOT_EXPANDED({row_count}x{col_count})"
+
     ext = getattr(entity.dxf, "extrusion", (0.0, 0.0, 1.0))
     try:
         ex, ey, ez = float(ext[0]), float(ext[1]), float(ext[2])
@@ -245,6 +349,16 @@ def _check_supported_insert_transform(entity: Any) -> str | None:
                 return "NON_FINITE_INSERT_TRANSFORM"
         except Exception:
             return "INVALID_INSERT_TRANSFORM"
+
+    sx = float(getattr(entity.dxf, "xscale", 1.0) or 0.0)
+    sy = float(getattr(entity.dxf, "yscale", 1.0) or 0.0)
+    sz = float(getattr(entity.dxf, "zscale", 1.0) or 0.0)
+    if abs(sx) < 1e-9 or abs(sy) < 1e-9 or abs(sz) < 1e-9:
+        return f"ZERO_SCALE_INSERT({sx},{sy},{sz})"
+    if sx < 0.0 or sy < 0.0 or sz < 0.0:
+        return f"NEGATIVE_OR_MIRRORED_SCALE_INSERT({round(sx, 4)},{round(sy, 4)})"
+    if abs(sx - sy) > 1e-3 * max(abs(sx), abs(sy), 1.0):
+        return f"NON_UNIFORM_XY_SCALE_INSERT({round(sx, 4)},{round(sy, 4)})"
     return None
 
 
@@ -256,9 +370,13 @@ def _expand_insert_texts(
     ancestor_blocks: frozenset[str],
     collected: list[dict[str, Any]],
     unsupported: list[dict[str, Any]],
+    unsupported_text: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
     root_handle: str,
+    occurrence_id: str,
 ) -> None:
     if len(collected) >= _MAX_BLOCK_TEXT_ITEMS:
+        skipped.append({"handle": root_handle, "dxftype": "INSERT", "reason": "INSERT_TEXT_LIMIT_REACHED"})
         return
     block_name = str(getattr(insert_entity.dxf, "name", "") or "")
     if depth > _MAX_INSERT_RECURSION_DEPTH:
@@ -293,11 +411,16 @@ def _expand_insert_texts(
     next_ancestors = ancestor_blocks | ({block_name} if block_name else frozenset())
     for ve in virtuals:
         if len(collected) >= _MAX_BLOCK_TEXT_ITEMS:
+            skipped.append({"handle": root_handle, "dxftype": "INSERT", "reason": "INSERT_TEXT_LIMIT_REACHED"})
             break
         vtype = ve.dxftype()
-        if vtype == "INSERT":
+        if vtype in {"INSERT", "MINSERT"}:
             for attrib in getattr(ve, "attribs", ()):
-                attr_item = _entity_text_payload(attrib, style_fonts)
+                t_err = _check_supported_text_transform(attrib)
+                if t_err is not None:
+                    unsupported_text.append({"handle": str(getattr(attrib.dxf, "handle", "") or root_handle), "dxftype": "ATTRIB", "reason": t_err})
+                    continue
+                attr_item = _entity_text_payload(attrib, style_fonts, occurrence_id=occurrence_id)
                 if attr_item is not None and len(collected) < _MAX_BLOCK_TEXT_ITEMS:
                     collected.append(attr_item)
             _expand_insert_texts(
@@ -307,10 +430,18 @@ def _expand_insert_texts(
                 ancestor_blocks=next_ancestors,
                 collected=collected,
                 unsupported=unsupported,
+                unsupported_text=unsupported_text,
+                skipped=skipped,
                 root_handle=root_handle,
+                occurrence_id=f"{occurrence_id}/{getattr(ve.dxf, 'name', '')}",
             )
             continue
-        item = _entity_text_payload(ve, style_fonts)
+        if vtype in {"TEXT", "MTEXT", "ATTRIB"}:
+            t_err = _check_supported_text_transform(ve)
+            if t_err is not None:
+                unsupported_text.append({"handle": str(getattr(ve.dxf, "handle", "") or root_handle), "dxftype": vtype, "reason": t_err})
+                continue
+        item = _entity_text_payload(ve, style_fonts, occurrence_id=occurrence_id)
         if item is not None:
             if not item["handle"]:
                 item["handle"] = root_handle
@@ -320,40 +451,86 @@ def _expand_insert_texts(
 def _collect_dxf_texts(
     doc: Any,
     style_fonts: Mapping[str, str],
-) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], dict[str, int], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     texts: list[dict[str, Any]] = []
     entity_counts: dict[str, int] = {}
     unsupported_insert_transforms: list[dict[str, Any]] = []
+    unsupported_text_transforms: list[dict[str, Any]] = []
+    skipped_entities: list[dict[str, Any]] = []
 
     msp = doc.modelspace()
-    for entity in msp:
+    for ent_idx, entity in enumerate(msp):
         dxftype = entity.dxftype()
         entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
-        item = _entity_text_payload(entity, style_fonts)
-        if item is not None:
-            texts.append(item)
+        handle = str(getattr(entity.dxf, "handle", "") or f"E{ent_idx}")
+
+        if dxftype in _UNSUPPORTED_SKIPPED_ENTITY_TYPES:
+            skipped_entities.append({"handle": handle, "dxftype": dxftype, "reason": "UNSUPPORTED_TEXT_CARRIER_ENTITY"})
             continue
-        if dxftype == "INSERT":
-            root_handle = str(getattr(entity.dxf, "handle", "") or "")
-            for attrib in getattr(entity, "attribs", ()):
-                attr_item = _entity_text_payload(attrib, style_fonts)
+
+        if dxftype in {"TEXT", "MTEXT", "ATTRIB"}:
+            text_err = _check_supported_text_transform(entity)
+            if text_err is not None:
+                unsupported_text_transforms.append({"handle": handle, "dxftype": dxftype, "reason": text_err})
+                continue
+            try:
+                item = _entity_text_payload(entity, style_fonts, occurrence_id="MODELSPACE")
+            except Exception as exc:
+                skipped_entities.append({"handle": handle, "dxftype": dxftype, "reason": f"TEXT_READ_ERROR:{type(exc).__name__}"})
+                continue
+            if item is not None:
+                texts.append(item)
+            continue
+
+        if dxftype in {"INSERT", "MINSERT"}:
+            block_name = str(getattr(entity.dxf, "name", "") or "")
+            occ_id = f"INSERT:{handle}:{block_name}"
+            attribs = list(getattr(entity, "attribs", ()))
+            for attrib in attribs:
+                t_err = _check_supported_text_transform(attrib)
+                if t_err is not None:
+                    unsupported_text_transforms.append({"handle": str(getattr(attrib.dxf, "handle", "") or handle), "dxftype": "ATTRIB", "reason": t_err})
+                    continue
+                attr_item = _entity_text_payload(attrib, style_fonts, occurrence_id=occ_id)
                 if attr_item is not None:
                     texts.append(attr_item)
-            block_name = str(getattr(entity.dxf, "name", "") or "")
-            if block_name and not block_name.startswith("*"):
-                ins_items: list[dict[str, Any]] = []
-                _expand_insert_texts(
-                    entity,
-                    style_fonts,
-                    depth=0,
-                    ancestor_blocks=frozenset(),
-                    collected=ins_items,
-                    unsupported=unsupported_insert_transforms,
-                    root_handle=root_handle,
-                )
-                texts.extend(ins_items)
 
-    return texts, entity_counts, unsupported_insert_transforms
+            if block_name.startswith("*"):
+                has_txt, blk_found = _block_contains_text_or_insert(doc, block_name)
+                if blk_found and has_txt and not re.match(r"^\*[Dd]", block_name):
+                    skipped_entities.append({"handle": handle, "dxftype": dxftype, "block_name": block_name, "reason": "ANONYMOUS_TEXT_BLOCK_SKIPPED"})
+                continue
+
+            has_txt, blk_found = _block_contains_text_or_insert(doc, block_name)
+            if not blk_found:
+                skipped_entities.append({"handle": handle, "dxftype": dxftype, "block_name": block_name, "reason": "MISSING_BLOCK_DEFINITION"})
+                continue
+            if not has_txt and not attribs:
+                # Pure-geometry block (e.g. AUTARROW, _OPEN) carries no text/attributes; negative/non-uniform arrow scale is benign.
+                continue
+
+            if not has_txt and attribs:
+                ins_err = _check_supported_insert_transform(entity)
+                if ins_err is not None:
+                    unsupported_insert_transforms.append({"handle": handle, "block_name": block_name, "reason": ins_err})
+                continue
+
+            ins_items: list[dict[str, Any]] = []
+            _expand_insert_texts(
+                entity,
+                style_fonts,
+                depth=0,
+                ancestor_blocks=frozenset(),
+                collected=ins_items,
+                unsupported=unsupported_insert_transforms,
+                unsupported_text=unsupported_text_transforms,
+                skipped=skipped_entities,
+                root_handle=handle,
+                occurrence_id=occ_id,
+            )
+            texts.extend(ins_items)
+
+    return texts, entity_counts, unsupported_insert_transforms, unsupported_text_transforms, skipped_entities
 
 
 def observe_dxf_bytes(
@@ -367,7 +544,7 @@ def observe_dxf_bytes(
     """Read raw DXF bytes via ``dxf_builder_lib._dxf_snapshot`` into normalized observation."""
     doc, _styles = read_dxf_snapshot(data, observe_styles=True)
     style_fonts = _extract_style_font_hints(doc)
-    texts, entity_counts, unsupported_insert_transforms = _collect_dxf_texts(doc, style_fonts)
+    texts, entity_counts, unsupported_insert_transforms, unsupported_text_transforms, skipped_entities = _collect_dxf_texts(doc, style_fonts)
 
     insunits_raw = doc.header.get("$INSUNITS", 0)
     measurement_raw = doc.header.get("$MEASUREMENT", 0)
@@ -385,6 +562,8 @@ def observe_dxf_bytes(
             "source_mode": "OCR_ONLY" if ocr_only else "NATIVE_DXF_SNAPSHOT",
             "entity_counts": entity_counts,
             "unsupported_insert_transforms": unsupported_insert_transforms,
+            "unsupported_text_transforms": unsupported_text_transforms,
+            "skipped_entities": skipped_entities,
             "texts": texts,
         }
     )
@@ -448,6 +627,8 @@ def _normalize_text_entries(raw_texts: object) -> list[dict[str, Any]]:
                 "x": _to_float(item.get("x")),
                 "y": _to_float(item.get("y")),
                 "height": _to_float(item.get("height")),
+                "occurrence_id": str(item.get("occurrence_id") or "MODELSPACE"),
+                **({"view_id": str(item["view_id"]).strip()} if item.get("view_id") else {}),
             }
         )
     return entries
@@ -570,16 +751,23 @@ def _extract_particulars(
     depth_values: list[float] = []
     draft_values: list[float] = []
     main_engines: list[str] = []
+    main_engine_hp_values: list[float] = []
+    passenger_count_values: list[int] = []
     hull_nos: list[str] = []
     class_notations: list[str] = []
     service_areas: list[str] = []
     explicit_exclusion_evidences: list[str] = []
     incidental_equipment_mentions: list[str] = []
+    incidental_reference_mentions: list[str] = []
     ship_types: list[str] = []
     hull_materials: list[str] = []
     claimed_scales: list[float] = []
     ap_coords: list[float] = []
     fp_coords: list[float] = []
+    ap_anchors: list[dict[str, Any]] = []
+    fp_anchors: list[dict[str, Any]] = []
+    double_hull_or_double_side = False
+    is_container_ship = False
     extracted_plate_mm: list[float] = []
     bottom_plate_mm: list[float] = []
     bilge_plate_mm: list[float] = []
@@ -694,11 +882,19 @@ def _extract_particulars(
             rhs = re.sub(r"\s+", " ", eng_match.group(1)).strip(" :-=")
             if rhs and rhs != "?":
                 _append_unique(main_engines, rhs)
+                hp_val = _parse_engine_hp(rhs)
+                if hp_val is not None:
+                    _append_unique(main_engine_hp_values, hp_val)
 
         for hull_m in _HULL_NO_RE.finditer(text):
             hno = hull_m.group(1).strip()
             if hno and hno != "?":
                 _append_unique(hull_nos, hno)
+
+        for pm in _PASSENGER_COUNT_RE.finditer(folded):
+            p_cnt = int(pm.group(1))
+            if p_cnt > 0:
+                _append_unique(passenger_count_values, p_cnt)
 
         for m in _SCALE_RE.finditer(folded):
             sc = _to_float(m.group(1))
@@ -717,6 +913,9 @@ def _extract_particulars(
             if _NEGATED_SCOPE_RE.search(clause_clean):
                 _append_unique(negated_scope_texts, clause_clean)
                 continue
+            if _INCIDENTAL_REF_RE.search(clause_clean) and not _VESSEL_BOUND_PREFIX_RE.search(clause_clean):
+                _append_unique(incidental_reference_mentions, clause_clean)
+                continue
 
             for m in _CLASS_NOTATION_RE.finditer(clause_clean):
                 tag = f"VR-{m.group(1).upper()}"
@@ -729,9 +928,13 @@ def _extract_particulars(
 
             if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
                 _append_unique(service_areas, "INLAND_WATERWAY")
+            if _DOUBLE_HULL_RE.search(clause_clean):
+                double_hull_or_double_side = True
+            if _CONTAINER_SHIP_RE.search(clause_clean):
+                is_container_ship = True
             is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
             if is_equipment_item:
-                if re.search(r"\b(?:frp|solas|imo|iacs|qcvn\s*(?:21|25|50|51|54|55|56|84))\b", clause_clean):
+                if re.search(r"\b(?:frp|solas|imo|iacs|qcvn\s*(?:21|25|50|51|54|55|56|84|127))\b", clause_clean):
                     _append_unique(incidental_equipment_mentions, clause_clean)
             else:
                 if any(
@@ -764,7 +967,7 @@ def _extract_particulars(
                 if re.search(r"\b(?:qcvn\s*84|tau\s+vo\s+go|tau\s+go|wooden\s+hull|wooden\s+craft)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_84_WOOD")
                     _append_unique(hull_materials, "WOOD")
-                if re.search(r"\b(?:qcvn\s*54|high[-\s]?speed\s+craft|tau\s+cao\s+toc)\b", clause_clean):
+                if re.search(r"\b(?:qcvn\s*(?:54|127)|high[-\s]?speed\s+craft|tau\s+cao\s+toc)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_54_HSC")
                 if re.search(r"\b(?:qcvn\s*55|floating\s+dock|u\s+noi)\b", clause_clean):
                     _append_unique(explicit_exclusion_evidences, "STATUTORY_CLAUSE_1_1_2_QCVN_55_DOCK")
@@ -785,16 +988,27 @@ def _extract_particulars(
             stype = ship_m.group(1).strip().upper()
             if stype:
                 _append_unique(ship_types, stype)
+                if "CONTAINER" in stype or "CONG TE NO" in stype:
+                    is_container_ship = True
         elif "tau hang kho" in folded or "dry cargo" in folded:
             _append_unique(ship_types, "DRY CARGO")
 
         x_coord = entry.get("x")
         if x_coord is not None:
             stripped_folded = folded.strip()
+            anchor_rec = {
+                "x": x_coord,
+                "y": entry.get("y"),
+                "handle": entry.get("handle", ""),
+                "occurrence_id": entry.get("occurrence_id", "MODELSPACE"),
+                **({"view_id": entry["view_id"]} if entry.get("view_id") else {}),
+            }
             if _AP_ONLY_RE.fullmatch(stripped_folded):
                 ap_coords.append(x_coord)
+                ap_anchors.append(anchor_rec)
             elif _FP_ONLY_RE.fullmatch(stripped_folded):
                 fp_coords.append(x_coord)
+                fp_anchors.append(anchor_rec)
 
         has_plate_ctx = bool(_STRUCTURAL_PLATE_CTX_RE.search(folded))
         for m in _PLATE_THICK_RE.finditer(folded):
@@ -819,16 +1033,23 @@ def _extract_particulars(
         "depth_m_values": depth_values,
         "draft_m_values": draft_values,
         "main_engine_values": main_engines,
+        "main_engine_hp_values": main_engine_hp_values,
+        "passenger_count_values": passenger_count_values,
         "hull_nos": hull_nos,
         "class_notations": class_notations,
         "service_areas": service_areas,
         "explicit_exclusion_evidences": explicit_exclusion_evidences,
         "incidental_equipment_mentions": incidental_equipment_mentions,
+        "incidental_reference_mentions": incidental_reference_mentions,
         "ship_types": ship_types,
         "hull_materials": hull_materials,
+        "double_hull_or_double_side": double_hull_or_double_side,
+        "is_container_ship": is_container_ship,
         "claimed_scales": claimed_scales,
         "ap_x_coords": ap_coords,
         "fp_x_coords": fp_coords,
+        "ap_anchors": ap_anchors,
+        "fp_anchors": fp_anchors,
         "extracted_plate_thicknesses_mm": extracted_plate_mm,
         "bottom_plate_thicknesses_mm": bottom_plate_mm,
         "bilge_plate_thicknesses_mm": bilge_plate_mm,
@@ -945,10 +1166,33 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         for item in (raw.get("unsupported_insert_transforms") or [])
         if isinstance(item, (Mapping, str))
     ]
+    unsupported_text_transforms = [
+        deepcopy(item)
+        for item in (raw.get("unsupported_text_transforms") or [])
+        if isinstance(item, (Mapping, str))
+    ]
+    skipped_entities = [
+        deepcopy(item)
+        for item in (raw.get("skipped_entities") or [])
+        if isinstance(item, (Mapping, str))
+    ]
 
     invalid_structural_metrics: list[str] = []
-    _non_dim_metric_keys = {"floor_spacing_region"}
+    _non_dim_metric_keys = {"floor_spacing_region", "floor_spacing_measurements"}
     for mkey, mval in list(structural_metrics.items()):
+        if mkey == "floor_spacing_measurements":
+            if not isinstance(mval, list) or not mval:
+                invalid_structural_metrics.append(f"{mkey}={mval!r}")
+                continue
+            for meas_idx, meas in enumerate(mval):
+                if not isinstance(meas, Mapping):
+                    invalid_structural_metrics.append(f"{mkey}[{meas_idx}]={meas!r}")
+                    continue
+                sp = meas.get("spacing_mm")
+                sp_f = _to_float(sp) if not isinstance(sp, bool) else None
+                if sp_f is None or sp_f <= 0.0:
+                    invalid_structural_metrics.append(f"{mkey}[{meas_idx}].spacing_mm={sp!r}")
+            continue
         if mkey in _non_dim_metric_keys:
             continue
         if isinstance(mval, bool) or not isinstance(mval, (int, float)):
@@ -977,6 +1221,8 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         "observed_handles": observed_handles,
         "entity_counts": entity_counts,
         "unsupported_insert_transforms": unsupported_insert_transforms,
+        "unsupported_text_transforms": unsupported_text_transforms,
+        "skipped_entities": skipped_entities,
         "invalid_structural_metrics": invalid_structural_metrics,
         "texts": entries,
         "particulars": particulars,

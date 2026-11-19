@@ -151,9 +151,9 @@ def test_skill2_submittal_and_regulation_pass_conflict_missing_and_out_of_scope(
     }
     res_unverified_ocean = evaluate_regulation_applicability_and_submittal([ocean_unverified], partial_package=True)
     assert res_unverified_ocean["status"] == "INSUFFICIENT_EVIDENCE"
-    assert "QCVN 21:2015/BGTVT" in res_unverified_ocean["summary"]
+    assert "QCVN 21:2025/BGTVT" in res_unverified_ocean["summary"]
 
-    # 5. Explicit statutory exclusion with valid evidence -> NOT_APPLICABLE
+    # 5. Explicit statutory exclusion with valid evidence -> NOT_APPLICABLE (current successor QCVN 21:2025/BGTVT)
     ocean_verified = {
         "drawing_id": "GA7000_OCEAN_VRH",
         "insunits": 4,
@@ -166,7 +166,7 @@ def test_skill2_submittal_and_regulation_pass_conflict_missing_and_out_of_scope(
     }
     res_oos = evaluate_regulation_applicability_and_submittal([ocean_verified], partial_package=True)
     assert res_oos["status"] == "NOT_APPLICABLE"
-    assert "QCVN 21:2015/BGTVT" in res_oos["summary"]
+    assert "QCVN 21:2025/BGTVT" in res_oos["summary"]
 
     # 6. Unsupported regulation version and mismatched source SHA-256 fail closed
     res_unsupported_reg = evaluate_regulation_applicability_and_submittal(

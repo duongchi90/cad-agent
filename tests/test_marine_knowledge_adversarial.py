@@ -370,8 +370,10 @@ def test_group_g_h_ocr_corruption_draft_confusion_and_rule_conditions() -> None:
     assert res_small_incomplete["status"] in {"INSUFFICIENT_EVIDENCE", "CONFLICT"}
 
     # 4. Non-dry-cargo vessel (OIL TANKER) must not get PASS under 2.4.6-8 dry-cargo table alone
-    tanker_ga = _valid_ga(ship_type_line="SHIP TYPE : OIL TANKER", bulkheads=4)
-    res_tanker = evaluate_regulation_applicability_and_submittal([tanker_ga, _valid_mcn(ship_type_line="SHIP TYPE : OIL TANKER")])
+    tanker_ga = _valid_ga(length_line="Chiều dài tàu L = 52.00 m", ship_type_line="SHIP TYPE : OIL TANKER", bulkheads=4)
+    res_tanker = evaluate_regulation_applicability_and_submittal(
+        [tanker_ga, _valid_mcn(length_line="Chiều dài tàu L = 52.00 m", ship_type_line="SHIP TYPE : OIL TANKER")]
+    )
     assert any(
         f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT" and f["verdict"] == "INSUFFICIENT_EVIDENCE"
         for f in res_tanker["findings"]

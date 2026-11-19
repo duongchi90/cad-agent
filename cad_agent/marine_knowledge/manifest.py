@@ -32,7 +32,7 @@ _RAW_SOURCES: tuple[dict[str, Any], ...] = (
         "usage_rights": "PUBLIC_REGULATION_NO_REDISTRIBUTION",
         "commit_prohibited": True,
         "usage_status": "ACTIVE_INDEXED",
-        "notes": "Governs inland waterway ships only; sea-going ships refer to QCVN 21:2015/BGTVT per Clause 1.1.1.",
+        "notes": "Governs inland waterway ships only. Historical pinned citations in QCVN 72:2025/BGTVT (QCVN 21:2015/BGTVT for sea-going steel ships and QCVN 54:2013/BGTVT for high-speed craft) are superseded effective 2025-09-01 by QCVN 21:2025/BGTVT (Circular 09/2025/TT-BGTVT) and QCVN 127:2025/BGTVT (Circular 06/2025/TT-BGTVT). Separate Sua doi 1:2026 QCVN 72:2025/BGTVT (Circular 78/2026/TT-BXD) takes effect 2027-05-01.",
     },
     {
         "source_id": "VIMARU_VETAU_CH1",

@@ -60,6 +60,8 @@
           "pdf_page",
           "reg_page",
           "verbatim_excerpt",
+          "excerpt_disposition",
+          "technical_summary",
           "applicable_drawing_types",
           "approval_status"
         ],
@@ -74,10 +76,24 @@
           "clause": { "type": "string", "minLength": 1 },
           "pdf_page": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 } },
           "reg_page": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
-          "verbatim_excerpt": { "type": "string", "minLength": 1 },
+          "verbatim_excerpt": { "type": ["string", "null"] },
+          "excerpt_disposition": {
+            "enum": ["PUBLIC_VERBATIM_EXCERPT", "PRIVATE_SOURCE_SUMMARY_ONLY"]
+          },
+          "technical_summary": { "type": "string", "minLength": 1 },
           "applicable_drawing_types": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
           "approval_status": { "enum": ["CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY"] }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "excerpt_disposition": { "const": "PRIVATE_SOURCE_SUMMARY_ONLY" } } },
+            "then": { "properties": { "verbatim_excerpt": { "type": "null" } } }
+          },
+          {
+            "if": { "properties": { "excerpt_disposition": { "const": "PUBLIC_VERBATIM_EXCERPT" } } },
+            "then": { "properties": { "verbatim_excerpt": { "type": "string", "minLength": 1 } } }
+          }
+        ]
       }
     },
     "rules": {
@@ -99,6 +115,8 @@
           "conditions",
           "exceptions",
           "verbatim_excerpt",
+          "excerpt_disposition",
+          "technical_summary",
           "verification_method",
           "confidence_default",
           "limitation",
@@ -116,12 +134,26 @@
           "applicable_drawing_types": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
           "conditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
           "exceptions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-          "verbatim_excerpt": { "type": "string", "minLength": 1 },
+          "verbatim_excerpt": { "type": ["string", "null"] },
+          "excerpt_disposition": {
+            "enum": ["PUBLIC_VERBATIM_EXCERPT", "PRIVATE_SOURCE_SUMMARY_ONLY"]
+          },
+          "technical_summary": { "type": "string", "minLength": 1 },
           "verification_method": { "type": "string", "minLength": 1 },
           "confidence_default": { "enum": ["HIGH", "MEDIUM", "LOW"] },
           "limitation": { "type": "string", "minLength": 1 },
           "approval_status": { "enum": ["CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY"] }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "excerpt_disposition": { "const": "PRIVATE_SOURCE_SUMMARY_ONLY" } } },
+            "then": { "properties": { "verbatim_excerpt": { "type": "null" } } }
+          },
+          {
+            "if": { "properties": { "excerpt_disposition": { "const": "PUBLIC_VERBATIM_EXCERPT" } } },
+            "then": { "properties": { "verbatim_excerpt": { "type": "string", "minLength": 1 } } }
+          }
+        ]
       }
     },
     "pack_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }

@@ -34,13 +34,26 @@ def test_pack_contains_26_sourced_terms_and_10_conditional_rules() -> None:
         assert term["source_id"] in active_ids
         assert term["source_id"] not in excluded_ids
         assert term["approval_status"] in {"CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY"}
-        assert term["verbatim_excerpt"]
+        assert isinstance(term["technical_summary"], str) and term["technical_summary"].strip()
+        if term["source_id"].startswith("VIMARU_"):
+            assert term["excerpt_disposition"] == "PRIVATE_SOURCE_SUMMARY_ONLY"
+            assert term["verbatim_excerpt"] is None
+        else:
+            assert term["excerpt_disposition"] == "PUBLIC_VERBATIM_EXCERPT"
+            assert term["verbatim_excerpt"]
         assert term["pdf_page"]
 
     for rule in pack["rules"]:
         assert rule["source_id"] in active_ids
         assert rule["source_id"] not in excluded_ids
         assert rule["approval_status"] in {"CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY"}
+        assert isinstance(rule["technical_summary"], str) and rule["technical_summary"].strip()
+        if rule["source_id"].startswith("VIMARU_"):
+            assert rule["excerpt_disposition"] == "PRIVATE_SOURCE_SUMMARY_ONLY"
+            assert rule["verbatim_excerpt"] is None
+        else:
+            assert rule["excerpt_disposition"] == "PUBLIC_VERBATIM_EXCERPT"
+            assert rule["verbatim_excerpt"]
         assert rule["conditions"]
         assert rule["limitation"]
         assert rule["verification_method"]

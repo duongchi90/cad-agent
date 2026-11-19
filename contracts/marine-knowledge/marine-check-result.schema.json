@@ -27,7 +27,12 @@
     "schema_version": { "const": "marine-check-result-1.0" },
     "skill_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
     "pack_id": { "type": "string", "minLength": 1 },
-    "pack_sha256": { "type": ["string", "null"] },
+    "pack_sha256": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        { "type": "null" }
+      ]
+    },
     "pack_status": { "enum": ["CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY", "DISABLED"] },
     "cad_mutation": { "const": false },
     "regulatory_compliance_proven": { "const": false },
@@ -78,7 +83,11 @@
           "reason": { "type": "string", "minLength": 1 },
           "confidence": { "enum": ["HIGH", "MEDIUM", "LOW"] },
           "limitation": { "type": "string", "minLength": 1 }
-        }
+        },
+        "anyOf": [
+          { "properties": { "pdf_page": { "minItems": 1 } } },
+          { "properties": { "reg_page": { "minItems": 1 } } }
+        ]
       }
     },
     "checks_executed": { "type": "array", "items": { "type": "string", "minLength": 1 } },
@@ -136,12 +145,24 @@
           "required_core_gates": {
             "type": "array",
             "minItems": 2,
-            "items": { "type": "string", "minLength": 1 }
+            "items": { "type": "string", "minLength": 1 },
+            "allOf": [
+              { "contains": { "const": "CAD_CORE_SOURCE_SUPPORT" } },
+              { "contains": { "const": "CAD_CORE_REVIEW" } }
+            ]
           },
-          "evidence": { "type": "object" },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "cad_mutation": { "not": { "const": true } },
+              "proposal_only": { "not": { "const": false } }
+            }
+          },
           "reason": { "type": "string", "minLength": 1 }
         }
       }
     }
-  }
+  },
+  "if": { "properties": { "status": { "not": { "const": "DISABLED" } } } },
+  "then": { "properties": { "pack_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } }
 }
