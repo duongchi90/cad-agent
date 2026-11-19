@@ -3937,6 +3937,43 @@ def _native_pdf_text_span_records(
             return True
         return False
 
+    # Candidate trace lookup for span binding. The exact validator below is
+    # intentionally strict, but scanning every paint trace for every source
+    # span makes ordinary pages quadratic (and expensive because it constructs
+    # PyMuPDF rectangles for obviously remote traces). Bucket each validated
+    # trace bbox across every horizontal cell it touches; queries are
+    # deliberately over-inclusive and the exact bbox predicate remains the
+    # authority. Very wide or malformed traces use the conservative fallback.
+    trace_bucket_width = 64.0
+    max_trace_bucket_span = 64
+    trace_indices_by_font_x_bucket: dict[tuple[str, int], list[int]] = {}
+    wide_trace_indices_by_font: dict[str, list[int]] = {}
+    trace_bounds: list[tuple[float, float, float, float] | None] = []
+    for trace_index, trace in enumerate(paint_traces):
+        bbox = trace.get("bbox")
+        if (
+            not isinstance(bbox, (tuple, list)) or len(bbox) != 4
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in bbox)
+        ):
+            trace_bounds.append(None)
+            continue
+        bounds = tuple(float(value) for value in bbox)
+        x0, y0, x1, y1 = bounds
+        trace_bounds.append(bounds)
+        trace_font = trace.get("font")
+        if not isinstance(trace_font, str):
+            continue
+        if x1 <= x0 or y1 <= y0:
+            wide_trace_indices_by_font.setdefault(trace_font, []).append(trace_index)
+            continue
+        first_bucket = math.floor(x0 / trace_bucket_width)
+        last_bucket = math.floor(x1 / trace_bucket_width)
+        if last_bucket - first_bucket > max_trace_bucket_span:
+            wide_trace_indices_by_font.setdefault(trace_font, []).append(trace_index)
+            continue
+        for bucket in range(first_bucket, last_bucket + 1):
+            trace_indices_by_font_x_bucket.setdefault((trace_font, bucket), []).append(trace_index)
+
     span_trace_ranges: dict[tuple[int, int, int], tuple[int, dict[str, Any]]] = {}
     trace_range_coverage: dict[int, list[tuple[int, int]]] = {}
     for block_index, block in enumerate(source_text_blocks):
@@ -3951,11 +3988,34 @@ def _native_pdf_text_span_records(
                 span_rect = fitz.Rect(bbox)
                 if span_rect.is_empty or not span_rect.is_valid:
                     continue
-                candidates = [
-                    (trace_index, mapped)
-                    for trace_index, trace in enumerate(paint_traces)
-                    if (mapped := exact_source_span_trace_range(span, span_rect, line_direction, trace)) is not None
-                ]
+                first_bucket = math.floor(span_rect.x0 / trace_bucket_width)
+                last_bucket = math.floor(span_rect.x1 / trace_bucket_width)
+                span_font = span.get("font")
+                if not isinstance(span_font, str):
+                    continue
+                if last_bucket - first_bucket > max_trace_bucket_span:
+                    possible_trace_indices = (
+                        trace_index for trace_index, trace in enumerate(paint_traces)
+                        if trace.get("font") == span_font
+                    )
+                else:
+                    possible_trace_indices = sorted({
+                        *wide_trace_indices_by_font.get(span_font, ()),
+                        *(trace_index
+                          for bucket in range(first_bucket, last_bucket + 1)
+                          for trace_index in trace_indices_by_font_x_bucket.get((span_font, bucket), ())),
+                    })
+                candidates = []
+                for trace_index in possible_trace_indices:
+                    bounds = trace_bounds[trace_index]
+                    if bounds is None:
+                        continue
+                    x0, y0, x1, y1 = bounds
+                    if x1 <= span_rect.x0 or x0 >= span_rect.x1 or y1 <= span_rect.y0 or y0 >= span_rect.y1:
+                        continue
+                    mapped = exact_source_span_trace_range(span, span_rect, line_direction, paint_traces[trace_index])
+                    if mapped is not None:
+                        candidates.append((trace_index, mapped))
                 if len(candidates) != 1:
                     continue
                 trace_index, mapped = candidates[0]
