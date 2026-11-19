@@ -5543,20 +5543,58 @@ def test_native_pdf_dark_fill_rejects_nonunique_glyph_use() -> None:
         check._glyph_control_bounds(trace, glyph, 10.0)
 
 
-def test_native_pdf_dark_fill_reuses_unavailable_binding_and_shared_attempt_budget(
+def test_native_pdf_dark_fill_reuses_unavailable_binding_and_keeps_stroke_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     check = fidelity_module._NativePdfThinStrokeCheck(None, [])
     check.export_ready = True
     calls = []
-    monkeypatch.setattr(check, "_PAIR_LIMIT", 2)
     monkeypatch.setattr(check, "_bound_fill_components", lambda sequence, *_: calls.append(sequence))
-    check.pairs = 1  # A prior stroke proof consumed one attempt from this page.
+    check.pairs = check._PAIR_LIMIT  # The protected stroke phase spent its full allowance.
 
-    for sequence in (5, 5, 6):
+    for sequence in (5, 5, 6, 7):
         assert not check.separates_dark_fill(sequence, {}, [], {"_trace_order_idx": 0}, 1.0)
-    assert calls == [5]
-    assert check.pairs == 2
+    assert calls == [5, 6]
+    assert check.pairs == check._PAIR_LIMIT
+    assert check.fill_attempts == 2
+    assert check.pixels == 0
+
+
+@pytest.mark.parametrize("compare_whole", [False, True])
+def test_native_pdf_dark_fill_keeps_binding_receipts_per_character_scope(
+    compare_whole: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    lookups = []
+    monkeypatch.setattr(check, "_bound_fill_components", lambda sequence, *_: lookups.append(sequence))
+
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text((40, 80), "CAD NOTES", fontsize=18)
+        trace, = page.get_texttrace()
+    whole = {**trace, "_trace_order_idx": 0}
+    chars = whole["chars"]
+    split = 3
+
+    def selected(start: int, end: int) -> dict[str, Any]:
+        return {
+            **whole,
+            "chars": chars[start:end],
+            "_source_character_range": (start, end),
+            "_aggregate_trace_char_count": len(chars),
+        }
+
+    first = selected(0, split)
+    second = selected(split, len(chars))
+    malformed = {**second, "_source_character_range": (split, len(chars) + 1)}
+    for scope in (first, first, whole if compare_whole else second, malformed):
+        assert not check.separates_dark_fill(5, {}, [], scope, 18.0)
+
+    assert len(check.fill_separations) == 2
+    assert check.fill_attempts == 2
+    assert check.pairs == 0
+    assert lookups == [5]
 
 
 @pytest.mark.parametrize(

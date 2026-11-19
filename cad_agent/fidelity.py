@@ -1757,6 +1757,7 @@ class _NativePdfThinStrokeCheck:
 
     _SCALE = 24
     _PAIR_LIMIT = 64
+    _FILL_PAIR_LIMIT = 2
     _FILL_PADDING_PT = 0.002
     _PAIR_PIXELS = 2_000_000
     _PAGE_PIXELS = 8_000_000
@@ -1784,10 +1785,11 @@ class _NativePdfThinStrokeCheck:
         self.preparation_exhausted = False
         self.strokes: dict[int, str | None] = {}
         self.fill_bounds: dict[int, list[tuple[float, ...]] | None] = {}
-        self.ink_bounds: dict[tuple[int, float], list[tuple[float, ...]] | None] = {}
-        self.fill_separations: dict[tuple[int, int, float], bool] = {}
+        self.ink_bounds: dict[tuple[int, float, tuple[int, int] | None], list[tuple[float, ...]] | None] = {}
+        self.fill_separations: dict[tuple[int, int, float, tuple[int, int] | None], bool] = {}
         self.masks: dict[tuple[Any, ...], np.ndarray | None] = {}
         self.pairs = 0
+        self.fill_attempts = 0
         self.pixels = 0
 
     @staticmethod
@@ -2262,13 +2264,36 @@ class _NativePdfThinStrokeCheck:
     ) -> bool:
         if not isinstance(span_size, (int, float)) or not math.isfinite(span_size) or span_size <= 0:
             return False
-        trace_key = (trace["_trace_order_idx"], span_size)
+        trace_index = trace.get("_trace_order_idx")
+        if type(trace_index) is not int or trace_index < 0:
+            return False
+        if "_source_character_range" in trace:
+            character_range = trace["_source_character_range"]
+            aggregate_count = trace.get("_aggregate_trace_char_count")
+            chars = trace.get("chars")
+            if (
+                not isinstance(character_range, (tuple, list)) or len(character_range) != 2
+                or type(aggregate_count) is not int or not isinstance(chars, (tuple, list))
+            ):
+                return False
+            start, end = character_range
+            if (
+                type(start) is not int or type(end) is not int
+                or not 0 <= start < end <= aggregate_count or len(chars) != end - start
+            ):
+                return False
+            scope = (start, end)
+        elif "_aggregate_trace_char_count" in trace or "_aggregate_trace_bbox" in trace:
+            return False
+        else:
+            scope = None  # Whole-trace proofs are distinct even from a full-length selection.
+        trace_key = (trace_index, span_size, scope)
         pair_key = (sequence, *trace_key)
         if pair_key in self.fill_separations:
             return self.fill_separations[pair_key]
-        if self.preparation_exhausted or self.pairs >= self._PAIR_LIMIT:
+        if self.preparation_exhausted or self.fill_attempts >= self._FILL_PAIR_LIMIT:
             return False
-        self.pairs += 1
+        self.fill_attempts += 1
         self.fill_separations[pair_key] = False
         try:
             if not self.export_ready:
@@ -2309,33 +2334,33 @@ class _NativePdfThinStrokeCheck:
     def overlaps_below_baseline(
         self, sequence: int, drawing: dict[str, Any], trace: dict[str, Any],
         glyph: tuple[Any, ...], span_size: Any, clip: fitz.Rect,
-    ) -> bool:
+    ) -> bool | None:
         if (
             self.preparation_exhausted
             or self.pairs >= self._PAIR_LIMIT
             or not isinstance(span_size, (int, float))
             or not math.isfinite(span_size) or span_size <= 0
         ):
-            return False
+            return None
         self.pairs += 1
         try:
             if not self.export_ready:
                 self._prepare_export()
             if not self.paths or not self.page.rect.contains(clip):
-                return False
+                return None
             if sequence not in self.strokes:
                 self.strokes[sequence] = None
                 self.strokes[sequence] = self._bound_stroke(sequence, drawing)
             stroke = self.strokes[sequence]
             if stroke is None:
-                return False
+                return None
             bounds = (clip * fitz.Matrix(self._SCALE, self._SCALE)).irect
             key = (trace["_trace_order_idx"], glyph[0], glyph[1], tuple(glyph[2]), span_size, tuple(bounds))
             cached = key in self.masks
             pixels = bounds.width * bounds.height
             pair_pixels = pixels * (2 if cached else 3)
             if pixels <= 0 or pair_pixels > self._PAIR_PIXELS or self.pixels + pair_pixels > self._PAGE_PIXELS:
-                return False
+                return None
             self.pixels += pair_pixels
             if not cached:
                 self.masks[key] = None
@@ -2348,14 +2373,14 @@ class _NativePdfThinStrokeCheck:
                 self.masks[key] = bound_mask
             glyph_mask = self.masks[key]
             if glyph_mask is None or not np.any(glyph_mask):
-                return False
+                return None
             # Exclude boundary samples whose centers could straddle the baseline.
             baseline = glyph[2][1]
             rows = (bounds.y0 + np.arange(bounds.height) + 0.5) / self._SCALE
             return bool(np.any(glyph_mask & self._dark_mask(stroke, bounds) & (rows[:, None] > baseline + 0.5 / self._SCALE)))
         except Exception:
-            # Renderer and font parser failures leave the R7 observation decision intact.
-            return False
+            # Absence of a completed proof is distinct from verified separation.
+            return None
 
 
 def _native_pdf_text_span_records(
@@ -2563,6 +2588,7 @@ def _native_pdf_text_span_records(
         narrowed["chars"] = list(chars[start:end])
         narrowed["bbox"] = tuple(float(value) for value in selected_bbox)
         narrowed["_source_character_range"] = (start, end)
+        narrowed["_aggregate_trace_char_count"] = len(chars)
         narrowed["_aggregate_trace_bbox"] = tuple(float(value) for value in trace_bbox)
         narrowed["_later_intra_trace_chars"] = list(chars[end:])
         return narrowed
@@ -2839,6 +2865,22 @@ def _native_pdf_text_span_records(
                     if ov_u > 0.18:
                         return False
         return True
+
+    def protected_stroke_glyph_rect(
+        cp: int, origin_pt: tuple[float, float], grect: fitz.Rect, trace_dir: tuple[float, float],
+    ) -> fitz.Rect:
+        """Reproduce stroke eligibility only. This rectangle does not clear a fill."""
+        if chr(cp) in below_baseline_ink_glyphs or cp >= 0x80:
+            return grect
+        ox, oy = origin_pt
+        dx, dy = trace_dir
+        if abs(dx - 1.0) <= 1e-3 and abs(dy) <= 1e-3 and grect.y0 < oy < grect.y1:
+            return fitz.Rect(grect.x0, grect.y0, grect.x1, oy)
+        if abs(dx) <= 1e-3 and abs(dy + 1.0) <= 1e-3 and grect.x0 < ox < grect.x1:
+            return fitz.Rect(grect.x0, grect.y0, ox, grect.y1)
+        if abs(dx) <= 1e-3 and abs(dy - 1.0) <= 1e-3 and grect.x0 < ox < grect.x1:
+            return fitz.Rect(ox, grect.y0, grect.x1, grect.y1)
+        return grect
 
     def extract_fill_subpath_rects(drawing: dict[str, Any]) -> list[fitz.Rect] | None:
         items = drawing.get("items")
@@ -3419,11 +3461,14 @@ def _native_pdf_text_span_records(
         return entries_out
 
     thin_stroke_check = _NativePdfThinStrokeCheck(source_page, paint_log)
+    protected_stroke_results: dict[tuple[Any, ...], bool] = {}
 
     def has_later_paint_overlap(
         trace: dict[str, Any],
-        member_trace_order_ids: tuple[int, ...] = (),
-        span_font_size: Any = None,
+        member_trace_order_ids: tuple[int, ...],
+        span_font_size: Any,
+        *,
+        deferred_fills: list[bool] | None = None,
     ) -> bool:
         sequence_number = trace.get("seqno")
         trace_bbox = trace.get("bbox")
@@ -3718,14 +3763,25 @@ def _native_pdf_text_span_records(
                             for _, _, glyph_rect in target_glyphs
                         )
                         if metric_hit:
-                            fill_drawings = drawings_by_sequence.get(index, [])
-                            if (
-                                not all_dark_opaque_fills or len(fill_drawings) != 1
-                                or not thin_stroke_check.separates_dark_fill(
-                                    index, fill_drawings[0], flat_subs, trace, span_font_size,
-                                )
-                            ):
+                            if not all_dark_opaque_fills:
                                 return True
+                            if deferred_fills is not None:
+                                if not deferred_fills:
+                                    deferred_fills.append(True)
+                                direction = (ux, uy) if dir_ok else (1.0, 0.0)
+                                if any(
+                                    not (protected_stroke_glyph_rect(cp, origin, rect, direction) & subpath).is_empty
+                                    for subpath in flat_subs
+                                    if not (trace_rect & subpath).is_empty
+                                    for cp, origin, rect in target_glyphs
+                                ):
+                                    return True
+                            else:
+                                fill_drawings = drawings_by_sequence.get(index, [])
+                                if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
+                                    index, fill_drawings[0], flat_subs, trace, span_font_size,
+                                ):
+                                    return True
                         continue
 
                 if (
@@ -3841,6 +3897,8 @@ def _native_pdf_text_span_records(
                         if stroke_hit:
                             return True
                         seq_drawings = drawings_by_sequence.get(index, [])
+                        if deferred_fills is None and below_baseline_candidates and len(seq_drawings) != 1:
+                            return True
                         if below_baseline_candidates and len(seq_drawings) == 1:
                             checked_glyphs = set()
                             for cp, ox, oy, glyph_rect in below_baseline_candidates:
@@ -3852,12 +3910,25 @@ def _native_pdf_text_span_records(
                                     glyph for glyph in trace["chars"] if glyph[0] == cp and tuple(glyph[2]) == (ox, oy)
                                 ]
                                 if len(matches) != 1:
+                                    if deferred_fills is None:
+                                        return True
                                     continue
                                 clip = fitz.Rect(glyph_rect.x0 - 0.25, oy, glyph_rect.x1 + 0.25, glyph_rect.y1 + 0.25)
-                                if thin_stroke_check.overlaps_below_baseline(
-                                    index, seq_drawings[0], trace, matches[0], span_font_size, clip,
-                                ):
-                                    return True
+                                glyph = matches[0]
+                                proof_key = (index, trace_order_id, trace.get("_source_character_range"),
+                                             glyph[0], glyph[1], tuple(glyph[2]), span_font_size, tuple(clip))
+                                if deferred_fills is None:
+                                    # Optional fill work can use only a completed protected stroke proof.
+                                    if protected_stroke_results.get(proof_key) is not False:
+                                        return True
+                                else:
+                                    decision = thin_stroke_check.overlaps_below_baseline(
+                                        index, seq_drawings[0], trace, glyph, span_font_size, clip,
+                                    )
+                                    if decision is not None:
+                                        protected_stroke_results[proof_key] = decision
+                                    if decision:
+                                        return True
                         continue
 
                 if overlap_ratio(trace_rect, paint_rect) > 0:
@@ -3908,6 +3979,7 @@ def _native_pdf_text_span_records(
     scale_x = render_width / displayed.width
     scale_y = render_height / displayed.height
     records: list[dict[str, Any]] = []
+    pending_fill_checks: dict[int, tuple[list[dict[str, Any]], tuple[int, ...], Any]] = {}
     for block_index, block in enumerate(source_text_blocks):
         for line_index, line in enumerate(block.get("lines", [])):
             direction = line.get("dir", (1.0, 0.0))
@@ -4059,11 +4131,16 @@ def _native_pdf_text_span_records(
                     or not math.isfinite(float(paint_opacity))
                     or paint_opacity <= 0
                     or paint_wmode != 0
-                    or any(
-                        has_later_paint_overlap(trace, member_trace_order_ids, span.get("size"))
-                        for trace in member_traces
-                    )
                 ):
+                    continue
+                deferred_fills: list[bool] = []
+                blocked = any(
+                    has_later_paint_overlap(
+                        trace, member_trace_order_ids, span.get("size"), deferred_fills=deferred_fills,
+                    )
+                    for trace in member_traces
+                )
+                if blocked and not deferred_fills:
                     continue
                 corners = [
                     fitz.Point(rect.x0, rect.y0), fitz.Point(rect.x1, rect.y0),
@@ -4118,7 +4195,15 @@ def _native_pdf_text_span_records(
                 })
                 if glyph_observation is not None:
                     records[-1].update(glyph_observation)
-    return records
+                if deferred_fills:
+                    pending_fill_checks[len(records) - 1] = (member_traces, member_trace_order_ids, font_size)
+
+    # Preserve source order and finish the original stroke traversal before optional fill work.
+    rejected = {
+        index for index, (traces, trace_ids, font_size) in pending_fill_checks.items()
+        if any(has_later_paint_overlap(trace, trace_ids, font_size) for trace in traces)
+    }
+    return [record for index, record in enumerate(records) if index not in rejected]
 
 
 def run_fidelity_text_observations(
