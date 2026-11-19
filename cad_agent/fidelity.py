@@ -1753,10 +1753,11 @@ def _fresh_fidelity_ocr_candidates(
 
 
 class _NativePdfThinStrokeCheck:
-    """Confirm contact in the lower margin of a glyph using independently bound paint."""
+    """Bind PDF glyph and paint evidence for narrow stroke and fill decisions."""
 
     _SCALE = 24
     _PAIR_LIMIT = 64
+    _FILL_PADDING_PT = 0.002
     _PAIR_PIXELS = 2_000_000
     _PAGE_PIXELS = 8_000_000
     _SVG_BYTES_LIMIT = 4 * 1024 * 1024
@@ -1782,6 +1783,9 @@ class _NativePdfThinStrokeCheck:
         self.path_operations = 0
         self.preparation_exhausted = False
         self.strokes: dict[int, str | None] = {}
+        self.fill_bounds: dict[int, list[tuple[float, ...]] | None] = {}
+        self.ink_bounds: dict[tuple[int, float], list[tuple[float, ...]] | None] = {}
+        self.fill_separations: dict[tuple[int, int, float], bool] = {}
         self.masks: dict[tuple[Any, ...], np.ndarray | None] = {}
         self.pairs = 0
         self.pixels = 0
@@ -2052,18 +2056,14 @@ class _NativePdfThinStrokeCheck:
             program = data
         return TTFont(BytesIO(program), lazy=True) if program is not None else None
 
-    def _glyph_paths(
-        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
-    ) -> tuple[str, str] | None:
-        from fontTools.pens.basePen import NullPen
-        from fontTools.pens.svgPathPen import SVGPathPen
-        from fontTools.pens.transformPen import TransformPen
-        from fontTools.svgLib.path import parse_path
-
+    def _bound_glyph(
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float, *,
+        allow_quarter_turn: bool = False,
+    ) -> tuple[Any, str, tuple[float, ...], str, Any, float] | None:
         code, gid, (ox, oy), _ = glyph
         if trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer") or trace.get("wmode") != 0:
             return None
-        if tuple(trace.get("dir", ())) != (1.0, 0.0) or not isinstance(gid, int) or gid < 0:
+        if not isinstance(gid, int) or gid < 0:
             return None
         candidates = [(node, matrix) for node, matrix in self.glyphs.get((chr(code), gid), ())
                       if abs(matrix[4] - ox) <= 0.001 and abs(matrix[5] - oy) <= 0.001]
@@ -2072,9 +2072,16 @@ class _NativePdfThinStrokeCheck:
         node, (a, b, c, d, e, f) = candidates[0]
         if not set(node.attrib) <= {"data-text", self._HREF, "transform", "fill"}:
             return None
-        if b != 0 or c != 0 or a <= 0 or d >= 0:
+        direction = tuple(trace.get("dir", ()))
+        if direction == (1.0, 0.0) and b == 0 and c == 0:
+            advance, cross = a, -d
+        elif allow_quarter_turn and direction in ((0.0, -1.0), (0.0, 1.0)) and a == 0 and d == 0:
+            advance, cross = b * direction[1], c * direction[1]
+        else:
             return None
-        if abs(a - trace["size"]) > 0.001 or abs(math.sqrt(-a * d) - span_size) > 0.001:
+        if advance <= 0 or cross <= 0:
+            return None
+        if abs(advance - trace["size"]) > 0.001 or abs(math.sqrt(advance * cross) - span_size) > 0.001:
             return None
         fill = node.get("fill", "#000000")
         if not self._color_matches(fill, trace.get("color")):
@@ -2093,19 +2100,197 @@ class _NativePdfThinStrokeCheck:
         order = font.getGlyphOrder()
         if gid >= len(order) or units <= 0:
             return None
-        glyph_set = font.getGlyphSet()
+        return font.getGlyphSet(), order[gid], (a, b, c, d, e, f), fill, definition, 1.0 / units
+
+    def _glyph_paths(
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
+    ) -> tuple[str, str] | None:
+        from fontTools.pens.basePen import NullPen
+        from fontTools.pens.svgPathPen import SVGPathPen
+        from fontTools.pens.transformPen import TransformPen
+        from fontTools.svgLib.path import parse_path
+
+        bound = self._bound_glyph(trace, glyph, span_size)
+        if bound is None:
+            return None
+        glyph_set, name, matrix, fill, definition, unit = bound
         pen = SVGPathPen(glyph_set)
-        unit = 1.0 / units
         source_path = self._path_data(definition)
         parse_path(source_path, self._metered_pen(NullPen()))
         metered = self._metered_pen(pen, glyph_set)
-        glyph_set[order[gid]].draw(TransformPen(metered, (unit, 0, 0, unit, 0, 0)))
+        glyph_set[name].draw(TransformPen(metered, (unit, 0, 0, unit, 0, 0)))
         font_path = pen.getCommands()
         if not font_path:
             return None
-        matrix = f"{a} {b} {c} {d} {e} {f}"
-        return tuple(f'<path d="{path}" transform="matrix({matrix})" fill="{fill}"/>'
+        transform = " ".join(map(str, matrix))
+        return tuple(f'<path d="{path}" transform="matrix({transform})" fill="{fill}"/>'
                      for path in (source_path, font_path))
+
+    def _glyph_control_bounds(
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
+    ) -> tuple[float, ...]:
+        from fontTools.pens.basePen import BasePen
+        from fontTools.pens.boundsPen import ControlBoundsPen
+        from fontTools.pens.teePen import TeePen
+        from fontTools.pens.transformPen import TransformPen
+        from fontTools.svgLib.path import parse_path
+
+        class CubicOutlinePen(BasePen):
+            """Normalize quadratic and cubic encodings for outline comparison."""
+
+            def __init__(self) -> None:
+                super().__init__(None)
+                self.operations = []
+                self.start = None
+
+            def _moveTo(self, point):
+                self.start = point
+                self.operations.append(("move", (point,)))
+
+            def _lineTo(self, point):
+                if point != self._getCurrentPoint():
+                    self.operations.append(("line", (point,)))
+
+            def _curveToOne(self, *points):
+                self.operations.append(("curve", points))
+
+            def _closePath(self):
+                self._lineTo(self.start)
+                self.operations.append(("close", ()))
+
+            def _endPath(self):
+                self.operations.append(("end", ()))
+
+        bound = self._bound_glyph(trace, glyph, span_size, allow_quarter_turn=True)
+        if bound is None:
+            raise ValueError("Glyph cannot be uniquely bound to the embedded font and SVG")
+        glyph_set, name, matrix, _, definition, unit = bound
+        svg_outline, font_outline = CubicOutlinePen(), CubicOutlinePen()
+        svg_bounds, font_bounds = ControlBoundsPen(None), ControlBoundsPen(None)
+        if definition.get("d"):
+            path = self._path_data(definition)
+            if "A" in path or "a" in path:
+                raise ValueError("Arc conversion does not prove complete glyph bounds")
+            output = TeePen(svg_outline, TransformPen(svg_bounds, matrix))
+            parse_path(path, self._metered_pen(output))
+        output = TeePen(font_outline, TransformPen(font_bounds, matrix))
+        glyph_set[name].draw(TransformPen(self._metered_pen(output, glyph_set), (unit, 0, 0, unit, 0, 0)))
+        svg_ops, font_ops = svg_outline.operations, font_outline.operations
+        if not svg_ops and not font_ops:
+            return ()  # Both independently bound outlines are empty.
+        if (
+            svg_bounds.bounds is None or font_bounds.bounds is None
+            or len(svg_ops) != len(font_ops)
+            or any(
+                svg_op != font_op or len(svg_points) != len(font_points)
+                or any(
+                    not math.isfinite(s) or not math.isfinite(f) or abs(s - f) > 2e-6
+                    for svg_point, font_point in zip(svg_points, font_points)
+                    for s, f in zip(svg_point, font_point)
+                )
+                for (svg_op, svg_points), (font_op, font_points) in zip(svg_ops, font_ops)
+            )
+        ):
+            raise ValueError("Glyph outlines disagree")
+        svg_box, font_box = svg_bounds.bounds, font_bounds.bounds
+        if not all(math.isfinite(value) for value in (*svg_box, *font_box)):
+            raise ValueError("Glyph bounds must be finite")
+        return (
+            min(svg_box[0], font_box[0]), min(svg_box[1], font_box[1]),
+            max(svg_box[2], font_box[2]), max(svg_box[3], font_box[3]),
+        )
+
+    def _bound_fill_components(
+        self, sequence: int, drawing: dict[str, Any], components: list[fitz.Rect],
+    ) -> list[tuple[float, ...]] | None:
+        from fontTools.pens.recordingPen import RecordingPen
+        from fontTools.pens.transformPen import TransformPen
+        from fontTools.svgLib.path import parse_path
+
+        node = self.paths.get(sequence)
+        allowed = {"d", "transform", "fill", "fill-opacity", "fill-rule", "opacity"}
+        if node is None or not set(node.attrib) <= allowed or drawing.get("type") != "f":
+            return None
+        rule = node.get("fill-rule", "nonzero")
+        if (
+            drawing.get("seqno") != sequence or drawing.get("layer") or drawing.get("fill_opacity") != 1
+            or float(node.get("fill-opacity", "1")) != 1 or float(node.get("opacity", "1")) != 1
+            or rule not in ("nonzero", "evenodd") or (rule == "evenodd") != drawing.get("even_odd")
+            or not self._color_matches(node.get("fill", "#000000"), drawing.get("fill"))
+        ):
+            return None
+
+        path = self._path_data(node)
+        if "A" in path or "a" in path:
+            return None
+        pen = RecordingPen()
+        parse_path(path, self._metered_pen(TransformPen(pen, self._matrix(node))))
+        svg_components: list[list[tuple[float, float]]] = []
+        for operation, points in pen.value:
+            if operation == "moveTo":
+                svg_components.append([])
+            if not svg_components:
+                return None
+            svg_components[-1].extend(points)
+        if len(svg_components) != len(components):
+            return None
+
+        bounds = []
+        for points, drawing_box in zip(svg_components, components):
+            if not points or not all(math.isfinite(v) for point in points for v in point):
+                return None
+            xs, ys = zip(*points)
+            svg_box = (min(xs), min(ys), max(xs), max(ys))
+            if not all(abs(s - d) <= self._FILL_PADDING_PT for s, d in zip(svg_box, drawing_box)):
+                return None
+            bounds.extend((svg_box, tuple(drawing_box)))
+        return bounds or None
+
+    @classmethod
+    def _strict_fill_separation(cls, ink: tuple[float, ...], fill: tuple[float, ...]) -> bool:
+        padding = cls._FILL_PADDING_PT
+        return any(
+            left_end + padding < right_start - padding
+            for left_end, right_start in (
+                (ink[2], fill[0]), (fill[2], ink[0]), (ink[3], fill[1]), (fill[3], ink[1]),
+            )
+        )
+
+    def separates_dark_fill(
+        self, sequence: int, drawing: dict[str, Any], components: list[fitz.Rect],
+        trace: dict[str, Any], span_size: Any,
+    ) -> bool:
+        if not isinstance(span_size, (int, float)) or not math.isfinite(span_size) or span_size <= 0:
+            return False
+        trace_key = (trace["_trace_order_idx"], span_size)
+        pair_key = (sequence, *trace_key)
+        if pair_key in self.fill_separations:
+            return self.fill_separations[pair_key]
+        if self.preparation_exhausted or self.pairs >= self._PAIR_LIMIT:
+            return False
+        self.pairs += 1
+        self.fill_separations[pair_key] = False
+        try:
+            if not self.export_ready:
+                self._prepare_export()
+            if sequence not in self.fill_bounds:
+                self.fill_bounds[sequence] = None
+                self.fill_bounds[sequence] = self._bound_fill_components(sequence, drawing, components)
+            fills = self.fill_bounds[sequence]
+            if fills is None:
+                return False
+            if trace_key not in self.ink_bounds:
+                self.ink_bounds[trace_key] = None
+                boxes = [self._glyph_control_bounds(trace, glyph, span_size) for glyph in trace["chars"]]
+                self.ink_bounds[trace_key] = [box for box in boxes if box]
+            ink = self.ink_bounds[trace_key]
+            separated = bool(ink) and all(self._strict_fill_separation(glyph_box, fill_box)
+                                          for glyph_box in ink for fill_box in fills)
+            self.fill_separations[pair_key] = separated
+            return separated
+        except Exception:
+            # Unavailable fill evidence leaves the conservative metric veto in place.
+            return False
 
     def _dark_mask(self, markup: str, bounds: fitz.IRect) -> np.ndarray:
         scale = self._SCALE
@@ -2654,21 +2839,6 @@ def _native_pdf_text_span_records(
                     if ov_u > 0.18:
                         return False
         return True
-
-    def glyph_above_baseline_rect(
-        cp: int, origin_pt: tuple[float, float], grect: fitz.Rect, trace_dir: tuple[float, float],
-    ) -> fitz.Rect:
-        if chr(cp) in below_baseline_ink_glyphs or cp >= 0x80:
-            return grect
-        ox, oy = origin_pt
-        dx, dy = trace_dir
-        if abs(dx - 1.0) <= 1e-3 and abs(dy) <= 1e-3 and grect.y0 < oy < grect.y1:
-            return fitz.Rect(grect.x0, grect.y0, grect.x1, oy)
-        if abs(dx) <= 1e-3 and abs(dy + 1.0) <= 1e-3 and grect.x0 < ox < grect.x1:
-            return fitz.Rect(grect.x0, grect.y0, ox, grect.y1)
-        if abs(dx) <= 1e-3 and abs(dy - 1.0) <= 1e-3 and grect.x0 < ox < grect.x1:
-            return fitz.Rect(ox, grect.y0, grect.x1, grect.y1)
-        return grect
 
     def extract_fill_subpath_rects(drawing: dict[str, Any]) -> list[fitz.Rect] | None:
         items = drawing.get("items")
@@ -3541,17 +3711,21 @@ def _native_pdf_text_span_records(
                     verified_fill = get_verified_fill_seq(index, paint_rect)
                     if verified_fill is not None:
                         flat_subs, all_dark_opaque_fills = verified_fill
-                        t_dir = (ux, uy) if dir_ok else (1.0, 0.0)
-                        if any(
-                            not (
-                                (glyph_above_baseline_rect(cp, org, gr, t_dir) if all_dark_opaque_fills else gr)
-                                & sr
-                            ).is_empty
-                            for sr in flat_subs
-                            if not (trace_rect & sr).is_empty
-                            for cp, org, gr in target_glyphs
-                        ):
-                            return True
+                        metric_hit = any(
+                            not (glyph_rect & subpath).is_empty
+                            for subpath in flat_subs
+                            if not (trace_rect & subpath).is_empty
+                            for _, _, glyph_rect in target_glyphs
+                        )
+                        if metric_hit:
+                            fill_drawings = drawings_by_sequence.get(index, [])
+                            if (
+                                not all_dark_opaque_fills or len(fill_drawings) != 1
+                                or not thin_stroke_check.separates_dark_fill(
+                                    index, fill_drawings[0], flat_subs, trace, span_font_size,
+                                )
+                            ):
+                                return True
                         continue
 
                 if (

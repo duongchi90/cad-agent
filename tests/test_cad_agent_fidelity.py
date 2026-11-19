@@ -5442,6 +5442,123 @@ def test_native_pdf_observation_jxs_below_baseline_stroke_binding(
     assert target_retained is expected_target_retained
 
 
+@pytest.mark.real_data
+@pytest.mark.parametrize(
+    ("font_row_limit", "expected_target_retained"),
+    [
+        pytest.param(None, True, id="ordinary-source-with-proof"),
+        pytest.param(1, False, id="lowered-font-row-budget"),
+    ],
+)
+def test_native_pdf_observation_jxs_dark_fill_requires_glyph_separation(
+    monkeypatch: pytest.MonkeyPatch,
+    font_row_limit: int | None,
+    expected_target_retained: bool,
+) -> None:
+    import hashlib
+
+    source_value = os.environ.get("CAD_AGENT_PR578_JXS_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_PR578_JXS_PDF is not configured")
+    source_path = Path(source_value)
+    source = source_path.read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    assert source_sha == "622cb0e63817026bb2d680c8c2e7cb265b9fe3a5c8a6b86e5390e15bf86e8f05"
+
+    if font_row_limit is not None:
+        monkeypatch.setattr(fidelity_module._NativePdfThinStrokeCheck, "_FONT_ROW_LIMIT", font_row_limit)
+
+    with fitz.open(stream=source, filetype="pdf") as document:
+        page = document[0]
+        assert len(page.get_fonts(full=True)) == 6
+        raster = page.get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, source_sha, hashlib.sha256(raster.samples).hexdigest(),
+            raster.width, raster.height, "displayed-page-box-v1",
+        )
+
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_sha
+    spans = {span["id"]: span for span in records}
+    assert "native-pdf-p01-b041-l004-s000" in spans  # Unrelated clear dimension.
+    assert "native-pdf-p01-b028-l000-s000" not in spans  # Existing stroke rejection.
+    target_retained = "native-pdf-p01-b009-l000-s000" in spans
+    assert target_retained is expected_target_retained
+
+
+@pytest.mark.parametrize(
+    ("fill_left", "separated"),
+    [(0.0, False), (0.003, False), (0.004, False), (0.005, True)],
+    ids=["touching", "grazing", "touching-after-padding", "positive-padded-gap"],
+)
+def test_native_pdf_dark_fill_requires_strict_padded_separation(fill_left: float, separated: bool) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck
+    assert check._strict_fill_separation((-2.0, 0.0, 0.0, 1.0), (fill_left, 0.0, 2.0, 1.0)) is separated
+
+
+@pytest.mark.parametrize(
+    ("svg_path", "embedded_has_ink", "expected"),
+    [
+        ("", False, ()),
+        ("", True, None),
+        ("M0 0 L1 0 L1 1 Z", False, None),
+        ("M0 0 L1 0 L1 1 Z", True, (0.0, 0.0, 1.0, 1.0)),
+    ],
+    ids=["both-empty", "embedded-only-ink", "svg-only-ink", "both-ink"],
+)
+def test_native_pdf_dark_fill_checks_both_glyph_outlines(
+    monkeypatch: pytest.MonkeyPatch, svg_path: str, embedded_has_ink: bool, expected: tuple | None,
+) -> None:
+    from xml.etree.ElementTree import Element
+
+    from fontTools.pens.recordingPen import RecordingPen
+
+    embedded = RecordingPen()
+    if embedded_has_ink:
+        embedded.moveTo((0.0, 0.0))
+        embedded.lineTo((1.0, 0.0))
+        embedded.lineTo((1.0, 1.0))
+        embedded.closePath()
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    definition = Element("path", d=svg_path)
+    glyph_set = {"glyph": type("Glyph", (), {"draw": staticmethod(embedded.replay)})()}
+    binding = (glyph_set, "glyph", (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), "#000000", definition, 1.0)
+    monkeypatch.setattr(check, "_bound_glyph", lambda *args, **kwargs: binding)
+
+    if expected is None:
+        with pytest.raises(ValueError, match="Glyph outlines disagree"):
+            check._glyph_control_bounds({}, (), 1.0)
+    else:
+        assert check._glyph_control_bounds({}, (), 1.0) == expected
+
+
+def test_native_pdf_dark_fill_rejects_nonunique_glyph_use() -> None:
+    from xml.etree.ElementTree import Element
+
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    matrix = (10.0, 0.0, 0.0, -10.0, 20.0, 40.0)
+    check.glyphs[("A", 7)] = [(Element("use"), matrix), (Element("use"), matrix)]
+    trace = {"type": 0, "opacity": 1, "wmode": 0, "dir": (1.0, 0.0), "size": 10.0}
+    glyph = (ord("A"), 7, (20.0, 40.0), (20.0, 30.0, 26.0, 40.0))
+    with pytest.raises(ValueError, match="Glyph cannot be uniquely bound"):
+        check._glyph_control_bounds(trace, glyph, 10.0)
+
+
+def test_native_pdf_dark_fill_reuses_unavailable_binding_and_shared_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    calls = []
+    monkeypatch.setattr(check, "_PAIR_LIMIT", 2)
+    monkeypatch.setattr(check, "_bound_fill_components", lambda sequence, *_: calls.append(sequence))
+    check.pairs = 1  # A prior stroke proof consumed one attempt from this page.
+
+    for sequence in (5, 5, 6):
+        assert not check.separates_dark_fill(sequence, {}, [], {"_trace_order_idx": 0}, 1.0)
+    assert calls == [5]
+    assert check.pairs == 2
+
+
 @pytest.mark.parametrize(
     "r5_case",
     [
