@@ -3985,6 +3985,11 @@ def _native_pdf_text_span_records(
                 bbox = span.get("bbox")
                 if not isinstance(bbox, (tuple, list)) or len(bbox) != 4:
                     continue
+                if not all(
+                    isinstance(value, (int, float)) and math.isfinite(float(value))
+                    for value in bbox
+                ):
+                    continue
                 span_rect = fitz.Rect(bbox)
                 if span_rect.is_empty or not span_rect.is_valid:
                     continue

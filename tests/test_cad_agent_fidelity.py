@@ -1027,6 +1027,42 @@ def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace()
     assert records[0]["bbox_px"][2] > records[0]["bbox_px"][0]
 
 
+def test_native_pdf_observation_skips_nonfinite_span_bbox_without_aborting_siblings() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "BROKEN", fontsize=18)
+    page.insert_text((190, 80), "CONTROL", fontsize=18)
+
+    class NonFiniteSpanPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            result = page.get_text(*args, **kwargs)
+            if args and args[0] == "dict":
+                for block in result.get("blocks", []):
+                    for line in block.get("lines", []):
+                        spans = line.get("spans", [])
+                        if spans:
+                            bbox = list(spans[0]["bbox"])
+                            bbox[2] = float("inf")
+                            spans[0]["bbox"] = tuple(bbox)
+                            return result
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            NonFiniteSpanPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == ["CONTROL"]
+
+
 @pytest.mark.parametrize(
     ("case", "expected_contents"),
     [
