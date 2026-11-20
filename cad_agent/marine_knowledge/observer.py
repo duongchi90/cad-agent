@@ -365,6 +365,16 @@ def _block_contains_text_or_insert(
         ):
             return False, True, True
         bt = block_entity.dxftype()
+        if bt in _UNSUPPORTED_SKIPPED_ENTITY_TYPES:
+            skipped.append(
+                {
+                    "handle": root_handle,
+                    "dxftype": bt,
+                    "block_name": block_name,
+                    "reason": "UNSUPPORTED_TEXT_CARRIER_IN_BLOCK",
+                }
+            )
+            return True, True, False
         if bt in {"TEXT", "MTEXT", "ATTRIB"}:
             return True, True, False
         if bt in {"INSERT", "MINSERT"}:
@@ -942,21 +952,24 @@ def _extract_particulars(
                     _append_unique(unverified_unitless_particulars, f"L:{m.group(1)}")
 
         lpp_matched = False
-        for m in _LPP_RE.finditer(folded):
-            val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
-            if val is not None:
-                if verified:
-                    _append_unique(lpp_values, val)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"Lpp:{m.group(1)}")
-                lpp_matched = True
-        if not lpp_matched and any(tok in folded for tok in ("length (l.p.p)", "chieu dai giua 2 tru")):
-            nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
-            if nb is not None:
-                if nb_ok:
-                    _append_unique(lpp_values, nb)
-                else:
-                    _append_unique(unverified_unitless_particulars, f"Lpp:{nb}")
+        if _INCIDENTAL_REF_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
+            _append_unique(incidental_reference_mentions, re.sub(r"\s+", " ", text).strip())
+        else:
+            for m in _LPP_RE.finditer(folded):
+                val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
+                if val is not None:
+                    if verified:
+                        _append_unique(lpp_values, val)
+                    else:
+                        _append_unique(unverified_unitless_particulars, f"Lpp:{m.group(1)}")
+                    lpp_matched = True
+            if not lpp_matched and any(tok in folded for tok in ("length (l.p.p)", "chieu dai giua 2 tru")):
+                nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
+                if nb is not None:
+                    if nb_ok:
+                        _append_unique(lpp_values, nb)
+                    else:
+                        _append_unique(unverified_unitless_particulars, f"Lpp:{nb}")
 
         for m in _LWL_RE.finditer(folded):
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
@@ -1062,7 +1075,8 @@ def _extract_particulars(
                 _append_unique(incidental_reference_mentions, clause_clean)
                 continue
 
-            ship_m = _SHIP_TYPE_RE.search(clause_clean)
+            is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
+            ship_m = None if is_equipment_item else _SHIP_TYPE_RE.search(clause_clean)
             if ship_m:
                 stype = ship_m.group(1).strip().upper()
                 if stype:
@@ -1072,7 +1086,7 @@ def _extract_particulars(
                         non_container_ship = True
                     elif "CONTAINER" in stype or "CONG TE NO" in stype:
                         is_container_ship = True
-            elif "tau hang kho" in clause_clean or "dry cargo" in clause_clean:
+            elif not is_equipment_item and ("tau hang kho" in clause_clean or "dry cargo" in clause_clean):
                 _append_unique(ship_types, "DRY CARGO")
 
             for m in _CLASS_NOTATION_RE.finditer(clause_clean):
@@ -1096,7 +1110,6 @@ def _extract_particulars(
                     single_side_or_non_double_hull = True
                 elif _DOUBLE_HULL_RE.search(clause_clean):
                     double_hull_or_double_side = True
-            is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
             if is_equipment_item:
                 if re.search(r"\b(?:frp|solas|imo|iacs|qcvn\s*(?:21|25|50|51|54|55|56|84|127))\b", clause_clean):
                     _append_unique(incidental_equipment_mentions, clause_clean)

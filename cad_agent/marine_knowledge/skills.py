@@ -50,6 +50,19 @@ _BOOL_EXCEPTION_METRIC_KEYS = frozenset(
 _NON_DIM_METRIC_KEYS = frozenset({"floor_spacing_region", "floor_spacing_measurements"}) | _BOOL_EXCEPTION_METRIC_KEYS
 _UNDER_HATCH_REGIONS = frozenset({"UNDER_CARGO_HATCH", "UNDER_HATCH", "CARGO_HATCH", "CARGO_HOLD", "DUOI_MIENG_KHOANG_HANG"})
 _OUTSIDE_HATCH_REGIONS = frozenset({"OUTSIDE_CARGO_HATCH", "OUTSIDE_HATCH", "NGOAI_MIENG_KHOANG_HANG", "NGOAI_KHOANG_HANG"})
+_INCOMPLETE_OBSERVATION_FIELDS = (
+    "skipped_entities",
+    "unsupported_insert_transforms",
+    "unsupported_text_transforms",
+)
+
+
+def _incomplete_observation_fields(obs: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        field: deepcopy(obs[field])
+        for field in _INCOMPLETE_OBSERVATION_FIELDS
+        if obs.get(field)
+    }
 
 
 def _validate_scale_arg(verified_scale_to_mm: object) -> float | None:
@@ -427,7 +440,8 @@ def classify_marine_drawing(
             )
         )
 
-    if obs.get("skipped_entities"):
+    incomplete_fields = _incomplete_observation_fields(obs)
+    if incomplete_fields:
         status = "INSUFFICIENT_EVIDENCE"
         summary = (
             f"Classification of {obs['drawing_id']} is incomplete because some CAD entities could not be read."
@@ -439,7 +453,7 @@ def classify_marine_drawing(
                 finding_id=f"F_CLASSIFICATION_INCOMPLETE_{obs['drawing_id']}",
                 verdict="INSUFFICIENT_EVIDENCE",
                 rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
-                evidence={"drawing_id": obs["drawing_id"], "skipped_entities": obs["skipped_entities"]},
+                evidence={"drawing_id": obs["drawing_id"], "incomplete_observation_fields": incomplete_fields},
                 reason="Skipped or unresolved CAD entities may change the drawing classification.",
             )
         ]
@@ -916,6 +930,52 @@ def evaluate_regulation_applicability_and_submittal(
     scale_mm = _validate_scale_arg(verified_scale_to_mm)
     pack, rules_by_id = _pack_context()
     obs_list = _to_obs_list(observations)
+    incomplete_observations = {
+        obs["drawing_id"]: _incomplete_observation_fields(obs)
+        for obs in obs_list
+        if _incomplete_observation_fields(obs)
+    }
+    if incomplete_observations:
+        summary = "Marine scope and structural evaluation are incomplete because CAD traversal skipped or could not transform entities."
+        return validate_check_result(
+            {
+                "schema_version": MARINE_CHECK_RESULT_SCHEMA_VERSION,
+                "skill_id": skill_id,
+                "pack_id": pack["id"],
+                "pack_sha256": pack["pack_sha256"],
+                "pack_status": pack["status"],
+                "cad_mutation": False,
+                "regulatory_compliance_proven": False,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "summary": summary,
+                "observed_scope": {
+                    "drawing_count": len(obs_list),
+                    "observation_complete": False,
+                    "incomplete_observations": incomplete_observations,
+                },
+                "applicable_regulation_scope": {
+                    "target_regulation": target_regulation,
+                    "supported_regulation": target_regulation in SUPPORTED_REGULATIONS,
+                    "in_scope": None,
+                    "upcoming_amendment": _UPCOMING_AMENDMENT_NOTICE,
+                },
+                "partial_package": bool(partial_package),
+                "findings": [
+                    _make_finding(
+                        rules_by_id,
+                        finding_id="F_INCOMPLETE_CAD_TRAVERSAL",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                        evidence={"incomplete_observations": incomplete_observations},
+                        reason="Unsupported or unread CAD entities may conceal Marine scope and structural evidence.",
+                    )
+                ],
+                "checks_executed": [],
+                "checks_not_executed": ["QCVN 72 scope and structural evaluation (incomplete CAD traversal)"],
+                "limitations": ["Unsupported INSERT/text transforms or carriers may hide source annotations."],
+                "proposal_only_actions": [],
+            }
+        )
     if target_regulation not in SUPPORTED_REGULATIONS:
         unsupported_reason = (
             f"Unsupported regulation version {target_regulation!r}; "
@@ -3474,7 +3534,8 @@ def detect_drawing_gaps_and_conflicts(
                     )
 
             decl_lengths = part["lpp_m_values"]
-            if not has_ocr_only and unit_factor is not None and decl_lengths and decl_lengths[0] > 0 and paired_spans:
+            lpp_values_unambiguous = len({round(float(value), 6) for value in decl_lengths}) == 1 if decl_lengths else False
+            if not has_ocr_only and unit_factor is not None and lpp_values_unambiguous and decl_lengths[0] > 0 and paired_spans:
                 ran_span_check = True
                 decl_l = decl_lengths[0]
                 span_measurements: list[dict[str, Any]] = []

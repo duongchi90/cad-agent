@@ -261,6 +261,58 @@ def test_mk574_01_citation_binds_excerpt_to_clause_span() -> None:
     )
     assert good_outline["verification_level"] == "SOURCE_CONTENT_VERIFIED"
 
+    # Caller-provided clause order cannot redefine document order in the PDF.
+    ordered_multi = verify_source_citation(
+        {
+            "source_id": "SYNTH_REG_CLAUSE_SPAN",
+            "source_sha256": sha,
+            "source_version": "2025",
+            "clause": "2.1.1 Alpha rule; 2.1.2 Beta rule",
+            "pdf_page": [1],
+            "reg_page": [19],
+            "verbatim_excerpt": (
+                "Alpha rule requires double bottom minimum height 700 mm..."
+                "Beta rule governs totally separate rudder shaft torque limits."
+            ),
+        },
+        manifest,
+        source_bytes=pdf_bytes,
+    )
+    assert ordered_multi["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+    with pytest.raises(MarineKnowledgeError, match="CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH"):
+        verify_source_citation(
+            {
+                "source_id": "SYNTH_REG_CLAUSE_SPAN",
+                "source_sha256": sha,
+                "source_version": "2025",
+                "clause": "2.1.2 Beta rule; 2.1.1 Alpha rule",
+                "pdf_page": [1],
+                "reg_page": [19],
+                "verbatim_excerpt": (
+                    "Beta rule governs totally separate rudder shaft torque limits..."
+                    "Alpha rule requires double bottom minimum height 700 mm."
+                ),
+            },
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+
+    with pytest.raises(MarineKnowledgeError, match="CITATION_PDF_PAGE_ORDER_INVALID"):
+        verify_source_citation(
+            {
+                "source_id": "SYNTH_REG_CLAUSE_SPAN",
+                "source_sha256": sha,
+                "source_version": "2025",
+                "clause": "2.1.1 Alpha rule",
+                "pdf_page": [2, 1],
+                "reg_page": [20, 19],
+                "verbatim_excerpt": "Alpha rule requires double bottom minimum height 700 mm.",
+            },
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+
 
 def test_mk574_02_pack_term_and_rule_citations_metadata_integrity() -> None:
     """MK574-02: every term (incl. midship_plane) and rule passes verify_source_citation metadata checks cleanly."""

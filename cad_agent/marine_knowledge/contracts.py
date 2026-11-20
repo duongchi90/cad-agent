@@ -1157,6 +1157,8 @@ def verify_source_citation(
     reg_pages = _require_pos_int_list(record.get("reg_page", []), "CITATION_REG_PAGE_INVALID")
     if not pdf_pages and not reg_pages:
         _fail("CITATION_PAGE_MISSING")
+    if len(pdf_pages) > 1 and pdf_pages != sorted(set(pdf_pages)):
+        _fail("CITATION_PDF_PAGE_ORDER_INVALID")
 
     page_count = source_entry.get("page_count")
     if isinstance(page_count, int) and any(p > page_count for p in pdf_pages):
@@ -1234,6 +1236,15 @@ def verify_source_citation(
                     extracted_pages_lines=extracted_pages_lines,
                     outline_entries=outline_entries,
                 )
+
+            normalized_source = _normalize_ws("\n".join(extracted_pages_lines))
+            source_cursor = 0
+            for bound_slice in bound_slices:
+                normalized_slice = _normalize_ws(bound_slice)
+                source_position = normalized_source.find(normalized_slice, source_cursor)
+                if not normalized_slice or source_position < 0:
+                    _fail("CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH")
+                source_cursor = source_position + len(normalized_slice)
 
             clause_span_status = "CLAUSE_SPAN_BOUNDED" if span_bounded else "CLAUSE_BOUNDARY_UNBOUNDED"
             states.append("PAGE_VERIFIED")

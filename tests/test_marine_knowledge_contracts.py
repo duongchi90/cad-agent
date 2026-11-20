@@ -71,6 +71,16 @@ def test_marine_contracts_reject_unapproved_promotion_and_tampered_hashes() -> N
     assert validated["cad_mutation"] is False
 
 
+def test_manifest_excludes_private_sample_and_archive_identity_records() -> None:
+    from cad_agent.marine_knowledge.manifest import get_marine_source_manifest
+
+    manifest = get_marine_source_manifest()
+    assert not any(
+        src["document_kind"] in {"PRIVATE_SAMPLE", "ARCHIVE_BUNDLE"}
+        for src in manifest["sources"]
+    )
+
+
 def test_citation_verification_rejects_missing_stale_and_out_of_range_pages() -> None:
     from cad_agent.marine_knowledge.contracts import MarineKnowledgeError, verify_source_citation
     from cad_agent.marine_knowledge.manifest import get_marine_source_manifest

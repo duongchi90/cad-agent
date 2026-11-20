@@ -722,7 +722,10 @@ def test_mv0_05_double_bottom_per_region_pairing_provenance_steel_and_truthful_c
         assert not any("steel vessel" in c.lower() for c in mk09_nomat["conditions_applied"])
 
 
-def _dxf_with_special_entities(*entities: list[str]) -> bytes:
+def _dxf_with_special_entities(
+    *entities: list[str],
+    carrier_block_entities: list[str] | None = None,
+) -> bytes:
     lines = [
         "0", "SECTION", "2", "HEADER",
         "9", "$ACADVER", "1", "AC1015",
@@ -730,6 +733,12 @@ def _dxf_with_special_entities(*entities: list[str]) -> bytes:
         "9", "$MEASUREMENT", "70", "1",
         "0", "ENDSEC",
         "0", "SECTION", "2", "BLOCKS",
+        "0", "BLOCK", "8", "0", "2", "CARRIER_BLK", "70", "0", "10", "0.0", "20", "0.0", "30", "0.0", "3", "CARRIER_BLK",
+    ]
+    if carrier_block_entities:
+        lines.extend(carrier_block_entities)
+    lines.extend([
+        "0", "ENDBLK",
         "0", "BLOCK", "8", "0", "2", "BOW_BLK", "70", "0", "10", "0.0", "20", "0.0", "30", "0.0", "3", "BOW_BLK",
         "0", "TEXT", "8", "0", "10", "1000.0", "20", "0.0", "30", "0.0", "40", "300.0", "1", "A.P",
         "0", "TEXT", "8", "0", "10", "53000.0", "20", "0.0", "30", "0.0", "40", "300.0", "1", "F.P",
@@ -742,7 +751,7 @@ def _dxf_with_special_entities(*entities: list[str]) -> bytes:
         "0", "TEXT", "8", "0", "10", "500.0", "20", "500.0", "30", "0.0", "40", "350.0", "1", "BAN VE BO TRI CHUNG",
         "0", "TEXT", "8", "0", "10", "500.0", "20", "1000.0", "30", "0.0", "40", "250.0", "1", "L = 52.00 m",
         "0", "LINE", "8", "0", "10", "0.0", "20", "0.0", "30", "0.0", "11", "52000.0", "21", "0.0", "31", "0.0",
-    ]
+    ])
     for block in entities:
         lines.extend(block)
     lines.extend(["0", "ENDSEC", "0", "EOF", ""])
@@ -1278,6 +1287,19 @@ def test_mv0_06_checks_every_paired_span_independent_of_order_and_uses_lpp() -> 
     assert unavailable["status"] == "INSUFFICIENT_EVIDENCE"
     assert any(f["finding_id"] == "F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_SPAN_True" for f in unavailable["findings"])
 
+    reference_only = paired(large_first=True, lpp_line="FOR REFERENCE: Lpp = 52.00 m")
+    reference_result = detect_drawing_gaps_and_conflicts([reference_only])
+    assert reference_result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(f["finding_id"] == "F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_SPAN_True" for f in reference_result["findings"])
+
+    conflicting_lpp = paired(large_first=True, lpp_line="Lpp = 52.00 m")
+    conflicting_lpp["texts"].append({"handle": "LPP2", "text": "Lpp = 100.00 m", "x": 60000.0, "y": 6500.0})
+    reversed_lpp = {**conflicting_lpp, "texts": list(reversed(conflicting_lpp["texts"]))}
+    first = detect_drawing_gaps_and_conflicts([conflicting_lpp])
+    second = detect_drawing_gaps_and_conflicts([reversed_lpp])
+    assert first["status"] == second["status"] == "CONFLICT"
+    assert first["proposal_only_actions"] == second["proposal_only_actions"]
+
 
 def test_mv0_04_non_vessel_and_reference_notes_cannot_resolve_exception_scope() -> None:
     """Equipment-only hull wording and a reference-only ship type leave eligibility unknown."""
@@ -1380,3 +1402,43 @@ def test_skipped_entities_cannot_leave_skills_1_or_2_definitive() -> None:
     evaluated = evaluate_regulation_applicability_and_submittal([obs])
     assert classified["status"] == "INSUFFICIENT_EVIDENCE"
     assert evaluated["status"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_unsupported_transform_collections_cannot_leave_skills_1_or_2_definitive() -> None:
+    from cad_agent.marine_knowledge.skills import classify_marine_drawing
+
+    for field in ("unsupported_insert_transforms", "unsupported_text_transforms"):
+        obs = _ga(drawing_id=f"GA_{field}")
+        obs[field] = [{"handle": "BAD1", "reason": "unsupported transform"}]
+        assert classify_marine_drawing(obs)["status"] == "INSUFFICIENT_EVIDENCE"
+        assert evaluate_regulation_applicability_and_submittal([obs])["status"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_equipment_scoped_ship_type_cannot_establish_vessel_exception() -> None:
+    from cad_agent.marine_knowledge import observer
+
+    ga = _ga(
+        drawing_id="GA_42_LIFEBOAT_NOTE",
+        length_line="Chiều dài tàu L = 42.00 m",
+        ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER LIFEBOAT",
+        bulkheads=3,
+    )
+    normalized = observer.normalize_observation(ga)
+    assert not normalized["particulars"]["non_container_ship"]
+    result = evaluate_regulation_applicability_and_submittal([ga])
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert not any(f["verdict"] == "CONFLICT" for f in result["findings"])
+    assert any(f["finding_id"] == "F_BULKHEAD_SHIP_TYPE_SPECIAL_REVIEW" for f in result["findings"])
+
+
+def test_named_block_unsupported_carrier_marks_observation_incomplete() -> None:
+    from cad_agent.marine_knowledge.skills import classify_marine_drawing
+
+    dxf = _dxf_with_special_entities(
+        ["0", "INSERT", "8", "0", "2", "CARRIER_BLK", "10", "0.0", "20", "0.0", "30", "0.0"],
+        carrier_block_entities=["0", "OLE2FRAME", "8", "0"],
+    )
+    obs = observe_dxf_bytes(dxf, drawing_id="GA_NAMED_OLE")
+    assert obs["skipped_entities"]
+    assert classify_marine_drawing(obs)["status"] == "INSUFFICIENT_EVIDENCE"
+    assert evaluate_regulation_applicability_and_submittal([obs])["status"] == "INSUFFICIENT_EVIDENCE"
