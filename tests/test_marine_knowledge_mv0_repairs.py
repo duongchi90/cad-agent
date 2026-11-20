@@ -518,6 +518,60 @@ def test_custody_disposition_14_textbook_summaries_only_and_schema_parity() -> N
         )
 
 
+def test_manifest_does_not_publish_unused_private_local_source_identities() -> None:
+    """Private local drawing and unrelated archive identities have no V0 check and stay out of the public manifest."""
+    manifest = get_marine_source_manifest()
+    published = json.dumps(manifest, ensure_ascii=False)
+    assert "PRIVATE_HOMEWORK_DWG_20261109" not in published
+    assert "bai ve nha 09.11.2026_recover.dwg" not in published
+    assert "fca179cc8b89791560268a6da5251853914283b630d40317342aec6a4b057bde" not in published
+    assert "EXCLUDED_CDK_VEHICLE_CIRCULARS" not in published
+    assert "HỌC PHÍ" not in published
+    assert "13855f2999a1bc8e6d879c6111a1cd16dc92afe56756f7c624b52d1833eeffc1" not in published
+
+
+def test_dxf_insert_entity_budget_streams_and_marks_incomplete_observation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Geometry-heavy blocks cannot evade the observer work budget merely by carrying one text entity."""
+    from cad_agent.marine_knowledge import observer
+
+    monkeypatch.setattr(observer, "_MAX_DXF_ENTITY_TRAVERSAL", 12, raising=False)
+    lines = [
+        "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
+        "9", "$INSUNITS", "70", "4", "0", "ENDSEC",
+        "0", "SECTION", "2", "BLOCKS",
+        "0", "BLOCK", "8", "0", "2", "GEOMETRY_HEAVY_WITH_TEXT", "70", "0",
+        "10", "0", "20", "0", "30", "0", "3", "GEOMETRY_HEAVY_WITH_TEXT",
+    ]
+    for idx in range(30):
+        lines.extend(
+            [
+                "0", "LINE", "8", "0", "10", str(idx), "20", "0", "30", "0",
+                "11", str(idx), "21", "10", "31", "0",
+            ]
+        )
+    lines.extend(
+        [
+            "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
+            "1", "HULL STRUCTURE : DOUBLE HULL", "0", "ENDBLK", "0", "ENDSEC",
+            "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0",
+            "2", "GEOMETRY_HEAVY_WITH_TEXT", "10", "1000", "20", "1000", "30", "0",
+            "0", "ENDSEC", "0", "EOF", "",
+        ]
+    )
+
+    observation = observe_dxf_bytes("\n".join(lines).encode("ascii"), drawing_id="BUDGETED_INSERT")
+    assert any(
+        item.get("reason") == "DXF_ENTITY_TRAVERSAL_LIMIT_REACHED"
+        for item in observation["skipped_entities"]
+    )
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
+    assert any(
+        finding["finding_id"] == "F_SKIPPED_CAD_ENTITIES_BUDGETED_INSERT"
+        and finding["verdict"] == "INSUFFICIENT_EVIDENCE"
+        for finding in result["findings"]
+    )
+
+
 def test_mv0_04_bulkhead_20m_boundary_steel_gate_and_2_4_6_9_exception() -> None:
     """MV0-04: 2.4.6-8 begins strictly at L > 20m; gate steel before CONFLICT; qualify 2.4.6-9 double-hull/container."""
     # 1. Exact L = 20.00 m -> ambiguous boundary between 3.7.21 (<20m) and 2.4.6-8 (>20m) -> INSUFFICIENT_EVIDENCE
@@ -1057,6 +1111,68 @@ def test_mv0_06_every_supported_ap_fp_view_span_is_checked_order_independently()
         assert mismatch["verdict"] == "CONFLICT"
         assert mismatch["evidence"]["cad_ap_fp_dx"] == 52.0
         assert result["status"] == "CONFLICT"
+
+
+def test_mv0_06_title_scale_cannot_reconcile_modelspace_span_mismatch() -> None:
+    """A title scale without view-space binding cannot turn conflicting modelspace geometry into PASS."""
+    ga = _ga(drawing_id="GA_SCALE_CANNOT_HIDE_MODEL_MISMATCH", length_line="Chiều dài tàu L = 52.00 m", bulkheads=4)
+    ga.pop("claimed_scale", None)
+    ga["texts"] = [text for text in ga["texts"] if text["handle"] not in {"G10", "G11"}]
+    ga["texts"].append({"handle": "SCALE1", "text": "SCALE 1:1000", "x": 60000.0, "y": 5500.0, "height": 250.0})
+    for view_id, fp_x in (("INSERT_LARGE", 53000.0), ("INSERT_SMALL", 1052.0)):
+        ga["texts"].extend(
+            [
+                {"handle": f"{view_id}_AP", "text": "A.P", "x": 1000.0, "y": 0.0, "height": 300.0, "view_id": view_id},
+                {"handle": f"{view_id}_FP", "text": "F.P", "x": fp_x, "y": 0.0, "height": 300.0, "view_id": view_id},
+            ]
+        )
+    # A 1:1000 title scale needs modelspace text heights scaled accordingly to
+    # keep the independent printed-text gate valid; only the scale note varies.
+    for text in ga["texts"]:
+        text["height"] = float(text.get("height", 0.0)) * 10.0
+
+    result = detect_drawing_gaps_and_conflicts([ga], partial_package=True)
+    assert result["status"] == "CONFLICT"
+    assert any(f["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X" for f in result["findings"])
+
+
+def test_mv0_04_incidental_hull_text_and_unverified_boolean_cannot_decide_exception() -> None:
+    """Equipment/reference hull text and OCR-provenance booleans do not establish vessel exception eligibility."""
+    for idx, note in enumerate(
+        (
+            "LIFEBOAT HULL STRUCTURE : DOUBLE HULL",
+            "REFERENCE ONLY: HULL STRUCTURE : DOUBLE HULL",
+        ),
+        start=1,
+    ):
+        ga = _ga(
+            drawing_id=f"GA_42_NON_VESSEL_HULL_{idx}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            bulkheads=3,
+            extra_texts=[{"handle": f"REF{idx}", "text": note, "x": 60000.0, "y": 5400.0}],
+        )
+        result = evaluate_regulation_applicability_and_submittal([ga])
+        finding = next(
+            f for f in result["findings"]
+            if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT"
+        )
+        assert result["status"] == "INSUFFICIENT_EVIDENCE"
+        assert finding["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
+
+    unverified_boolean = _ga(
+        drawing_id="GA_42_UNVERIFIED_BOOLEAN",
+        length_line="Chiều dài tàu L = 42.00 m",
+        bulkheads=3,
+        extra_metrics={"bulkhead_2_4_6_9_exception_applicable": False},
+        metric_provenance={"bulkhead_2_4_6_9_exception_applicable": "UNVERIFIED_OCR_TEXT"},
+    )
+    result = evaluate_regulation_applicability_and_submittal([unverified_boolean])
+    finding = next(
+        f for f in result["findings"]
+        if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT"
+    )
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert finding["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
 
 
 def test_mv0_06_followup_independent_orientation_and_1000x_span_coverage() -> None:

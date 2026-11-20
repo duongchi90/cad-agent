@@ -233,6 +233,24 @@ def test_group_d_unit_and_calibration_attacks() -> None:
     )
     assert res_unverified_scale_skill2["status"] == "INSUFFICIENT_EVIDENCE"
 
+    # Truthy strings/integers are not an authorization to promote a scale as verified.
+    for forged_flag in ("false", 1):
+        res_forged_skill3 = detect_drawing_gaps_and_conflicts(
+            [unitless_ga], calibration_verified=forged_flag, verified_scale_to_mm=1.0  # type: ignore[arg-type]
+        )
+        assert res_forged_skill3["status"] == "INSUFFICIENT_EVIDENCE"
+        res_forged_skill2 = evaluate_regulation_applicability_and_submittal(
+            [unitless_ga, unitless_mcn], calibration_verified=forged_flag, verified_scale_to_mm=1.0  # type: ignore[arg-type]
+        )
+        assert res_forged_skill2["status"] == "INSUFFICIENT_EVIDENCE"
+
+    with pytest.raises(MarineKnowledgeError, match="PROPOSAL_UNCALIBRATED_DIM_EDIT"):
+        build_marine_core_proposal(
+            target_drawing_id="GA_UNITLESS_FORGED_CALIBRATION",
+            action_kind="SET_INSUNITS_AND_VERIFY_CALIBRATION",
+            evidence={"insunits": 0, "proposed_value_mm": 52000.0, "calibration_verified": "false"},
+        )
+
     # 2. calibration_verified=True WITHOUT positive verified_scale_to_mm still fails closed
     res_no_scale_val = detect_drawing_gaps_and_conflicts(
         [unitless_ga], calibration_verified=True, verified_scale_to_mm=None
@@ -568,6 +586,14 @@ def test_p1a_citation_verification_binds_to_verified_sha256_bytes_only() -> None
         "PAGE_VERIFIED",
         "CLAUSE_CONTENT_VERIFIED",
     ]
+
+    # Every nonempty quoted fragment must be checked; a short forged middle fragment cannot be ignored.
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(
+            {**base_cite, "verbatim_excerpt": base_cite["verbatim_excerpt"] + "... x ..."},
+            synth_manifest,
+            source_bytes=pdf_bytes,
+        )
 
 
 def test_p1b_qcvn72_clauses_1_1_1_1_1_2_1_1_4_and_1_4_43_l_vs_lpp() -> None:

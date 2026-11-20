@@ -1243,7 +1243,7 @@ def verify_source_citation(
                 segments = [
                     _normalize_ws(seg)
                     for seg in excerpt.split("...")
-                    if len(_normalize_ws(seg)) >= 10
+                    if _normalize_ws(seg)
                 ]
                 if not segments or not bound_slices or not all(
                     any(seg in sl for sl in bound_slices) for seg in segments

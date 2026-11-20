@@ -98,7 +98,7 @@ _VESSEL_BOUND_PREFIX_RE = re.compile(
     r"vat\s+lieu\s+(?:vo|than\s+tau)|ship\s+type|loai\s+tau)\s*[:=]"
 )
 _VESSEL_HULL_CONFIGURATION_RE = re.compile(
-    r"\b(?:hull\s+(?:structure|configuration)|ket\s+cau\s+(?:vo|than\s+tau))\s*[:=]"
+    r"^\s*(?:hull\s+(?:structure|configuration)|ket\s+cau\s+(?:vo|than\s+tau))\s*[:=]"
 )
 _PASSENGER_COUNT_RE = re.compile(
     r"\b(?:passengers?|so\s+khach|hanh\s+khach|suc\s+cho\s+nguoi)\s*[:=]?\s*(\d+)\b"
@@ -168,6 +168,30 @@ _CONCRETE_HULL_RE = re.compile(
 
 _MAX_BLOCK_TEXT_ITEMS = 250
 _MAX_INSERT_RECURSION_DEPTH = 8
+_MAX_DXF_ENTITY_TRAVERSAL = 100_000
+
+
+def _reserve_dxf_entity_visit(
+    budget: dict[str, Any],
+    *,
+    handle: str,
+    dxftype: str,
+    skipped: list[dict[str, Any]],
+) -> bool:
+    if budget["visited"] >= _MAX_DXF_ENTITY_TRAVERSAL:
+        if not budget["exhausted"]:
+            skipped.append(
+                {
+                    "handle": handle,
+                    "dxftype": dxftype,
+                    "reason": "DXF_ENTITY_TRAVERSAL_LIMIT_REACHED",
+                    "limit": _MAX_DXF_ENTITY_TRAVERSAL,
+                }
+            )
+        budget["exhausted"] = True
+        return False
+    budget["visited"] += 1
+    return True
 
 
 def _to_float(value: object) -> float | None:
@@ -310,26 +334,75 @@ def _block_contains_text_or_insert(
     doc: Any,
     block_name: str,
     visited: frozenset[str] = frozenset(),
-) -> tuple[bool, bool]:
+    *,
+    budget: dict[str, Any],
+    skipped: list[dict[str, Any]],
+    root_handle: str,
+) -> tuple[bool, bool, bool]:
     blocks = getattr(doc, "blocks", None)
     if blocks is None or not block_name:
-        return False, False
+        return False, False, False
     blk = blocks.get(block_name)
     if blk is None:
-        return False, False
-    for be in blk:
-        bt = be.dxftype()
+        return False, False, False
+    for block_entity in blk:
+        if not _reserve_dxf_entity_visit(
+            budget,
+            handle=root_handle,
+            dxftype=block_entity.dxftype(),
+            skipped=skipped,
+        ):
+            return False, True, True
+        bt = block_entity.dxftype()
         if bt in {"TEXT", "MTEXT", "ATTRIB"}:
-            return True, True
+            return True, True, False
         if bt in {"INSERT", "MINSERT"}:
-            if list(getattr(be, "attribs", ())):
-                return True, True
-            nested = str(getattr(be.dxf, "name", "") or "")
+            has_attributes = False
+            for attrib in getattr(block_entity, "attribs", ()):
+                has_attributes = True
+                if not _reserve_dxf_entity_visit(
+                    budget,
+                    handle=root_handle,
+                    dxftype="ATTRIB",
+                    skipped=skipped,
+                ):
+                    return False, True, True
+            if has_attributes:
+                return True, True, False
+            nested = str(getattr(block_entity.dxf, "name", "") or "")
             if nested and nested not in visited:
-                has_sub, _ = _block_contains_text_or_insert(doc, nested, visited | {block_name})
+                has_sub, _, exhausted = _block_contains_text_or_insert(
+                    doc,
+                    nested,
+                    visited | {block_name},
+                    budget=budget,
+                    skipped=skipped,
+                    root_handle=root_handle,
+                )
+                if exhausted:
+                    return False, True, True
                 if has_sub:
-                    return True, True
-    return False, True
+                    return True, True, False
+    return False, True, False
+
+
+def _iter_virtual_entities(
+    insert_entity: Any,
+    *,
+    block_name: str,
+    root_handle: str,
+    unsupported: list[dict[str, Any]],
+) -> Any:
+    try:
+        yield from insert_entity.virtual_entities()
+    except Exception as exc:
+        unsupported.append(
+            {
+                "handle": root_handle,
+                "block_name": block_name,
+                "reason": f"VIRTUAL_TRANSFORM_ERROR:{type(exc).__name__}",
+            }
+        )
 
 
 def _check_supported_insert_transform(entity: Any) -> str | None:
@@ -386,6 +459,7 @@ def _expand_insert_texts(
     unsupported: list[dict[str, Any]],
     unsupported_text: list[dict[str, Any]],
     skipped: list[dict[str, Any]],
+    budget: dict[str, Any],
     root_handle: str,
     occurrence_id: str,
 ) -> None:
@@ -410,26 +484,35 @@ def _expand_insert_texts(
         )
         return
 
-    try:
-        virtuals = list(insert_entity.virtual_entities())
-    except Exception as exc:
-        unsupported.append(
-            {
-                "handle": root_handle,
-                "block_name": block_name,
-                "reason": f"VIRTUAL_TRANSFORM_ERROR:{type(exc).__name__}",
-            }
-        )
-        return
+    virtuals = _iter_virtual_entities(
+        insert_entity,
+        block_name=block_name,
+        root_handle=root_handle,
+        unsupported=unsupported,
+    )
 
     next_ancestors = ancestor_blocks | ({block_name} if block_name else frozenset())
     for ve in virtuals:
         if len(collected) >= _MAX_BLOCK_TEXT_ITEMS:
             skipped.append({"handle": root_handle, "dxftype": "INSERT", "reason": "INSERT_TEXT_LIMIT_REACHED"})
             break
+        if not _reserve_dxf_entity_visit(
+            budget,
+            handle=root_handle,
+            dxftype=ve.dxftype(),
+            skipped=skipped,
+        ):
+            break
         vtype = ve.dxftype()
         if vtype in {"INSERT", "MINSERT"}:
             for attrib in getattr(ve, "attribs", ()):
+                if not _reserve_dxf_entity_visit(
+                    budget,
+                    handle=root_handle,
+                    dxftype="ATTRIB",
+                    skipped=skipped,
+                ):
+                    break
                 t_err = _check_supported_text_transform(attrib)
                 if t_err is not None:
                     unsupported_text.append({"handle": str(getattr(attrib.dxf, "handle", "") or root_handle), "dxftype": "ATTRIB", "reason": t_err})
@@ -446,6 +529,7 @@ def _expand_insert_texts(
                 unsupported=unsupported,
                 unsupported_text=unsupported_text,
                 skipped=skipped,
+                budget=budget,
                 root_handle=root_handle,
                 occurrence_id=f"{occurrence_id}/{getattr(ve.dxf, 'name', '')}",
             )
@@ -471,12 +555,20 @@ def _collect_dxf_texts(
     unsupported_insert_transforms: list[dict[str, Any]] = []
     unsupported_text_transforms: list[dict[str, Any]] = []
     skipped_entities: list[dict[str, Any]] = []
+    entity_budget: dict[str, Any] = {"visited": 0, "exhausted": False}
 
     msp = doc.modelspace()
     for ent_idx, entity in enumerate(msp):
         dxftype = entity.dxftype()
-        entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
         handle = str(getattr(entity.dxf, "handle", "") or f"E{ent_idx}")
+        if not _reserve_dxf_entity_visit(
+            entity_budget,
+            handle=handle,
+            dxftype=dxftype,
+            skipped=skipped_entities,
+        ):
+            break
+        entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
 
         if dxftype in _UNSUPPORTED_SKIPPED_ENTITY_TYPES:
             skipped_entities.append({"handle": handle, "dxftype": dxftype, "reason": "UNSUPPORTED_TEXT_CARRIER_ENTITY"})
@@ -499,8 +591,16 @@ def _collect_dxf_texts(
         if dxftype in {"INSERT", "MINSERT"}:
             block_name = str(getattr(entity.dxf, "name", "") or "")
             occ_id = f"INSERT:{handle}:{block_name}"
-            attribs = list(getattr(entity, "attribs", ()))
-            for attrib in attribs:
+            has_attribs = False
+            for attrib in getattr(entity, "attribs", ()):
+                has_attribs = True
+                if not _reserve_dxf_entity_visit(
+                    entity_budget,
+                    handle=handle,
+                    dxftype="ATTRIB",
+                    skipped=skipped_entities,
+                ):
+                    break
                 t_err = _check_supported_text_transform(attrib)
                 if t_err is not None:
                     unsupported_text_transforms.append({"handle": str(getattr(attrib.dxf, "handle", "") or handle), "dxftype": "ATTRIB", "reason": t_err})
@@ -510,20 +610,36 @@ def _collect_dxf_texts(
                     texts.append(attr_item)
 
             if block_name.startswith("*"):
-                has_txt, blk_found = _block_contains_text_or_insert(doc, block_name)
+                has_txt, blk_found, exhausted = _block_contains_text_or_insert(
+                    doc,
+                    block_name,
+                    budget=entity_budget,
+                    skipped=skipped_entities,
+                    root_handle=handle,
+                )
+                if exhausted:
+                    continue
                 if blk_found and has_txt and not re.match(r"^\*[Dd]", block_name):
                     skipped_entities.append({"handle": handle, "dxftype": dxftype, "block_name": block_name, "reason": "ANONYMOUS_TEXT_BLOCK_SKIPPED"})
                 continue
 
-            has_txt, blk_found = _block_contains_text_or_insert(doc, block_name)
+            has_txt, blk_found, exhausted = _block_contains_text_or_insert(
+                doc,
+                block_name,
+                budget=entity_budget,
+                skipped=skipped_entities,
+                root_handle=handle,
+            )
+            if exhausted:
+                continue
             if not blk_found:
                 skipped_entities.append({"handle": handle, "dxftype": dxftype, "block_name": block_name, "reason": "MISSING_BLOCK_DEFINITION"})
                 continue
-            if not has_txt and not attribs:
+            if not has_txt and not has_attribs:
                 # Pure-geometry block (e.g. AUTARROW, _OPEN) carries no text/attributes; negative/non-uniform arrow scale is benign.
                 continue
 
-            if not has_txt and attribs:
+            if not has_txt and has_attribs:
                 ins_err = _check_supported_insert_transform(entity)
                 if ins_err is not None:
                     unsupported_insert_transforms.append({"handle": handle, "block_name": block_name, "reason": ins_err})
@@ -539,6 +655,7 @@ def _collect_dxf_texts(
                 unsupported=unsupported_insert_transforms,
                 unsupported_text=unsupported_text_transforms,
                 skipped=skipped_entities,
+                budget=entity_budget,
                 root_handle=handle,
                 occurrence_id=occ_id,
             )
@@ -929,7 +1046,7 @@ def _extract_particulars(
             if _NEGATED_SCOPE_RE.search(clause_clean):
                 _append_unique(negated_scope_texts, clause_clean)
                 continue
-            if _INCIDENTAL_REF_RE.search(clause_clean) and not _VESSEL_BOUND_PREFIX_RE.search(clause_clean):
+            if _INCIDENTAL_REF_RE.search(clause_clean):
                 _append_unique(incidental_reference_mentions, clause_clean)
                 continue
 
@@ -1227,7 +1344,15 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         if mkey in _bool_exception_metric_keys:
             if not isinstance(mval, bool):
                 invalid_structural_metrics.append(f"{mkey}={mval!r}")
-            elif mkey == "double_hull_or_double_side":
+                continue
+            if str(metric_provenance.get(mkey, "")).strip().upper() not in {
+                "NATIVE_CAD_TEXT",
+                "FIXTURE_SUPPLIED",
+            }:
+                # Exception eligibility changes the rule outcome, so an OCR or
+                # otherwise unverified boolean cannot establish vessel scope.
+                continue
+            if mkey == "double_hull_or_double_side":
                 if mval:
                     particulars["double_hull_or_double_side"] = True
                 else:

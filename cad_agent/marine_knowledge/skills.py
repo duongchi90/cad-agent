@@ -98,7 +98,7 @@ def build_marine_core_proposal(
     if (
         "proposed_value_mm" in evidence
         and evidence.get("insunits") == 0
-        and not evidence.get("calibration_verified")
+        and evidence.get("calibration_verified") is not True
     ):
         raise MarineKnowledgeError("PROPOSAL_UNCALIBRATED_DIM_EDIT")
     if evidence.get("conflicting_measurements") is True:
@@ -1096,7 +1096,7 @@ def evaluate_regulation_applicability_and_submittal(
     unitless_ids = [
         o["drawing_id"] for o in obs_list if o["insunits"] not in _INSUNITS_TO_MM
     ]
-    units_ok = (not unitless_ids) or (bool(calibration_verified) and scale_mm is not None)
+    units_ok = (not unitless_ids) or (calibration_verified is True and scale_mm is not None)
     untrusted_deps = _collect_untrusted_dependency_provenances(obs_list)
     invalid_obs_metrics = [
         f"{obs['drawing_id']}:{item}"
@@ -3102,7 +3102,7 @@ def detect_drawing_gaps_and_conflicts(
     # Units & calibration gate (strict: both calibration_verified and positive verified_scale_to_mm)
     checks_executed.append("CAD $INSUNITS / calibration verification gate")
     unitless_ids = [o["drawing_id"] for o in obs_list if o["insunits"] not in _INSUNITS_TO_MM]
-    calibrated = bool(calibration_verified) and scale_mm is not None
+    calibrated = calibration_verified is True and scale_mm is not None
     if unitless_ids and not calibrated:
         findings.append(
             _make_finding(
@@ -3434,23 +3434,20 @@ def detect_drawing_gaps_and_conflicts(
                 mismatched_spans: list[dict[str, Any]] = []
                 for group, dx in paired_spans:
                     model_m = dx * unit_factor / 1000.0
-                    paper_m = (
-                        model_m * scale_denom
-                        if isinstance(scale_denom, (int, float)) and scale_denom > 0
-                        else None
-                    )
                     rel_model = abs(model_m - decl_l) / decl_l
-                    rel_paper = abs(paper_m - decl_l) / decl_l if paper_m is not None else rel_model
-                    best_rel = min(rel_model, rel_paper)
+                    # This observer only extracts MODELSPACE geometry. A title-block
+                    # plot scale is not bound to an individual view or coordinate
+                    # basis and must never reconcile a modelspace length mismatch.
+                    paper_m = None
                     measurement = {
                         "group": group,
                         "cad_ap_fp_dx": round(dx, 4),
                         "model_span_m": round(model_m, 4),
-                        "paper_scaled_span_m": round(paper_m, 4) if paper_m is not None else None,
-                        "relative_error": round(best_rel, 6),
+                        "paper_scaled_span_m": paper_m,
+                        "relative_error": round(rel_model, 6),
                     }
                     span_measurements.append(measurement)
-                    if best_rel > 0.25:
+                    if rel_model > 0.25:
                         mismatched_spans.append(measurement)
                 if mismatched_spans:
                     first_mismatch = mismatched_spans[0]
