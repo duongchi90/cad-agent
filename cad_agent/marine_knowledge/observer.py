@@ -929,6 +929,12 @@ def _extract_particulars(
     *,
     insunits: int = 0,
 ) -> dict[str, Any]:
+    equipment_occurrences = {
+        str(entry.get("occurrence_id") or "MODELSPACE")
+        for entry in entries
+        if str(entry.get("occurrence_id") or "MODELSPACE") != "MODELSPACE"
+        and _EQUIPMENT_ACCESSORY_RE.search(str(entry.get("folded") or ""))
+    }
     design_length_l_m_values: list[float] = []
     lpp_values: list[float] = []
     lwl_values: list[float] = []
@@ -1096,15 +1102,18 @@ def _extract_particulars(
             if cleaned_nm:
                 _append_unique(non_marine_domain_hits, cleaned_nm)
 
-        equipment_context = False
+        occurrence_id = str(entry.get("occurrence_id") or "MODELSPACE")
+        equipment_context = occurrence_id in equipment_occurrences
         for clause in re.split(r"[;\n]+", folded):
             clause_clean = clause.strip()
             if not clause_clean:
                 continue
+            # Capture scope before a negated/reference-only clause is discarded;
+            # separate TEXT entities in the same INSERT share this occurrence id.
+            equipment_context = equipment_context or bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
             if _NEGATED_SCOPE_RE.search(clause_clean):
                 _append_unique(negated_scope_texts, clause_clean)
                 continue
-            equipment_context = equipment_context or bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
             if _INCIDENTAL_REF_RE.search(clause_clean) or _REFERENCE_MARKER_RE.search(clause_clean):
                 _append_unique(incidental_reference_mentions, clause_clean)
                 continue

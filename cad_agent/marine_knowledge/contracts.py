@@ -1006,7 +1006,8 @@ def _resolve_regulation_clause_slices(
 
 
 _TB_BOUNDARY_RE = re.compile(
-    r"(?m)(?:^|\n)\s*(?:\d+\.\d+(?:\.\d+)?(?=\s|$)|(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
+    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)[.)]?(?=\s|$)|"
+    r"(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
 )
 
 
@@ -1015,26 +1016,81 @@ def _find_textbook_next_boundary(
     *,
     start_after: int,
     outline_norm: list[tuple[int, int, str]],
-    cited_pages_count: int,
+    resolver_pdf_pages: Sequence[int],
+    extracted_pages_lines: Sequence[str],
+    clause_num: str | None = None,
 ) -> tuple[int, bool]:
-    """Find next line-anchored section/outline heading after start_after; return (end_pos, is_bounded)."""
-    m_num = _TB_BOUNDARY_RE.search(merged_lines[start_after:])
+    """Find the earliest visible or outline-backed textbook section boundary."""
     candidates: list[int] = []
-    if m_num is not None:
-        pos = start_after + m_num.start()
+    clause_depth = _clause_depth(clause_num) if clause_num else None
+    for m_num in _TB_BOUNDARY_RE.finditer(merged_lines, start_after):
+        boundary_num = m_num.group("number")
+        if boundary_num and clause_depth is not None and _clause_depth(boundary_num) > clause_depth:
+            continue
+        pos = m_num.start()
         if merged_lines[pos : pos + 1] == "\n":
             pos += 1
         candidates.append(pos)
+        break
 
-    if candidates:
-        return min(candidates), True
+    page_offsets: dict[int, tuple[int, int]] = {}
+    cursor = 0
+    for page_no, page_text in zip(resolver_pdf_pages, extracted_pages_lines):
+        page_offsets[page_no] = (cursor, cursor + len(page_text))
+        cursor += len(page_text) + 1
 
-    # If outline confirms next section starts beyond cited page range, page boundary cleanly closes span
-    if outline_norm:
-        return len(merged_lines), False
-    if cited_pages_count >= 1:
-        return len(merged_lines), False
-    return len(merged_lines), False
+    start_page = next(
+        (page_no for page_no, (page_start, page_end) in page_offsets.items() if page_start <= start_after <= page_end),
+        None,
+    )
+    if start_page is not None and outline_norm:
+        active_index: int | None = None
+        if clause_num:
+            clause_re = re.compile(rf"^{re.escape(clause_num)}(?=[\s.:)]|$)", re.IGNORECASE)
+            matches = [
+                index for index, (page_no, _level, title) in enumerate(outline_norm)
+                if page_no <= start_page and clause_re.search(title)
+            ]
+            if matches:
+                active_index = matches[-1]
+        if active_index is None:
+            earlier = [index for index, (page_no, _level, _title) in enumerate(outline_norm) if page_no <= start_page]
+            if earlier:
+                active_index = earlier[-1]
+
+        if active_index is not None:
+            _active_page, active_level, _active_title = outline_norm[active_index]
+            last_resolver_page = max(page_offsets, default=0)
+            for page_no, level, title in outline_norm[active_index + 1 :]:
+                if level > active_level:
+                    continue
+                page_span = page_offsets.get(page_no)
+                if page_span is None:
+                    if page_no > last_resolver_page:
+                        candidates.append(len(merged_lines))
+                        break
+                    return len(merged_lines), False
+                page_start, page_end = page_span
+                if page_end <= start_after:
+                    continue
+                local_heading = _find_heading_offset_in_lines(
+                    merged_lines[page_start:page_end], title, min_pos=0
+                )
+                if local_heading is not None:
+                    outline_pos = page_start + local_heading
+                    if outline_pos > start_after:
+                        candidates.append(outline_pos)
+                elif page_start > start_after:
+                    # An outline page is an authoritative boundary even when its title
+                    # cannot be matched in extracted text. Bound before that page.
+                    candidates.append(page_start)
+                else:
+                    # The outline establishes a same-page boundary whose exact text
+                    # location is unavailable; abstain from content verification.
+                    return len(merged_lines), False
+                break
+
+    return (min(candidates), True) if candidates else (len(merged_lines), False)
 
 
 def _resolve_textbook_clause_slices(
@@ -1050,7 +1106,9 @@ def _resolve_textbook_clause_slices(
     merged_flat = re.sub(r"\s+", " ", merged_lines).strip()
     outline_norm = [(pno, lvl, _normalize_ws(title)) for pno, lvl, title in outline_entries]
     cited_set = set(pdf_pages or [])
-    max_cited = max(cited_set) if cited_set else 0
+    resolver_pdf_pages: Sequence[int] = (
+        range(min(cited_set), max(cited_set) + 1) if len(cited_set) > 1 else tuple(cited_set)
+    )
 
     slices: list[str] = []
     all_bounded = True
@@ -1071,15 +1129,10 @@ def _resolve_textbook_clause_slices(
                 merged_lines,
                 start_after=start_pos + len(base_clause),
                 outline_norm=outline_norm,
-                cited_pages_count=len(extracted_pages_lines),
+                resolver_pdf_pages=resolver_pdf_pages,
+                extracted_pages_lines=extracted_pages_lines,
+                clause_num=base_clause,
             )
-            if not found_end and outline_norm and cited_set:
-                found_end = _outline_has_next_page_exit(
-                    outline_norm,
-                    cited_set,
-                    max_cited,
-                    clause_num=base_clause,
-                )
             slices.append(re.sub(r"\s+", " ", merged_lines[start_pos:end_pos]).strip())
             all_bounded = all_bounded and found_end
             modes.append("TB_CLAUSE_BOUNDED" if found_end else "TB_CLAUSE_UNBOUNDED")
@@ -1109,7 +1162,8 @@ def _resolve_textbook_clause_slices(
             merged_lines,
             start_after=pos + 6,
             outline_norm=outline_norm,
-            cited_pages_count=len(extracted_pages_lines),
+            resolver_pdf_pages=resolver_pdf_pages,
+            extracted_pages_lines=extracted_pages_lines,
         )
         slices.append(re.sub(r"\s+", " ", merged_lines[pos:end_pos]).strip())
         all_bounded = all_bounded and found_end

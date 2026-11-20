@@ -585,6 +585,65 @@ def test_mk574_r21_textbook_clause_context_keeps_omitted_pages() -> None:
     assert valid_cited_page_excerpt["verification_level"] == "SOURCE_CONTENT_VERIFIED"
 
 
+def test_mk574_r22_textbook_omitted_outline_boundaries_do_not_verify_later_section_text() -> None:
+    for case_id, boundary_text in (
+        ("PUNCTUATED", "1.5. Intervening section heading."),
+        ("SECTION_PREFIX", "Section 1.5 Intervening section heading."),
+        ("OUTLINE_ONLY", ""),
+    ):
+        doc = fitz.open()
+        p1 = doc.new_page()
+        p1.insert_text((72, 72), "1.4 Applied heading.\nVALID TEXT FOR SECTION 1.4.\n")
+        p2 = doc.new_page()
+        if boundary_text:
+            p2.insert_text((72, 72), boundary_text)
+        p3 = doc.new_page()
+        p3.insert_text((72, 72), "LATER SECTION TEXT MUST NOT VERIFY AS 1.4.\n")
+        p4 = doc.new_page()
+        p4.insert_text((72, 72), "1.6 Closing section heading.\n")
+        doc.set_toc(
+            [
+                [1, "1.4 Applied heading", 1],
+                [1, "1.5 Intervening section heading", 2],
+                [1, "1.6 Closing section heading", 4],
+            ]
+        )
+        pdf_bytes = doc.tobytes()
+        doc.close()
+        sha = hashlib.sha256(pdf_bytes).hexdigest()
+        source_id = f"SYNTH_TEXTBOOK_R22_{case_id}"
+        manifest = seal_source_manifest(
+            {
+                "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+                "manifest_id": source_id,
+                "revision": "0.1.0",
+                "status": "CANDIDATE_UNAPPROVED",
+                "sources": [{
+                    "source_id": source_id, "title": "Synthetic textbook boundary PDF",
+                    "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                    "sha256": sha, "page_count": 4, "applicable_scope": ["test"],
+                    "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                    "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic omitted-section boundary regression.",
+                }],
+            }
+        )
+        base = {
+            "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+            "clause": "1.4 Applied heading", "pdf_page": [1, 3, 4],
+            "verbatim_excerpt": "LATER SECTION TEXT MUST NOT VERIFY AS 1.4.",
+        }
+
+        with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+            verify_source_citation(base, manifest, source_bytes=pdf_bytes)
+
+        positive = verify_source_citation(
+            {**base, "verbatim_excerpt": "VALID TEXT FOR SECTION 1.4."},
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+        assert positive["verification_level"] == "SOURCE_CONTENT_VERIFIED", case_id
+
+
 def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -> None:
     ga = _base_ga(
         drawing_id="GA_R20_EQUIPMENT_REF_SCOPE",
@@ -637,6 +696,58 @@ def test_mk574_r21_equipment_catalogue_scope_cannot_assert_vessel_hull_structure
         "structural_metrics": {},
     })
     assert vessel_fact["particulars"]["single_side_or_non_double_hull"] is True
+
+
+def test_mk574_r22_equipment_scope_is_shared_by_text_entities_in_one_insert() -> None:
+    from cad_agent.marine_knowledge import normalize_observation
+
+    for idx, (catalogue, hull_text) in enumerate(
+        (
+            ("STEERING GEAR CATALOGUE (REF.)", "HULL STRUCTURE : SINGLE SIDE"),
+            ("STEERING GEAR CATALOGUE (REFERENCE ONLY, NOT APPLICABLE)", "HULL CONFIGURATION=NON-DOUBLE-HULL"),
+            ("STEERING GEAR CATALOGUE", "HULL STRUCTURE : DOUBLE SIDE"),
+        ),
+        start=1,
+    ):
+        ga = _base_ga(
+            drawing_id=f"GA_R22_INSERT_EQUIPMENT_SCOPE_{idx}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
+            bulkheads=3,
+            extra_texts=[
+                {
+                    "handle": "EQCAT",
+                    "text": catalogue,
+                    "occurrence_id": "MODELSPACE/STEERING_GEAR_INSERT",
+                    "x": 60000.0,
+                    "y": 5200.0,
+                },
+                {
+                    "handle": "EQHULL",
+                    "text": hull_text,
+                    "occurrence_id": "MODELSPACE/STEERING_GEAR_INSERT",
+                    "x": 60000.0,
+                    "y": 5400.0,
+                },
+            ],
+        )
+        observed = normalize_observation(ga)
+        assert observed["particulars"]["double_hull_or_double_side"] is False
+        assert observed["particulars"]["single_side_or_non_double_hull"] is False
+        result = evaluate_regulation_applicability_and_submittal([ga], partial_package=True)
+        mk08 = next(f for f in result["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+        assert result["status"] == "INSUFFICIENT_EVIDENCE"
+        assert mk08["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
+
+    standalone = normalize_observation(
+        {
+            "drawing_id": "GA_R22_STANDALONE_HULL_FACT",
+            "insunits": 4,
+            "texts": [{"handle": "HULL", "text": "HULL STRUCTURE : SINGLE SIDE"}],
+            "structural_metrics": {},
+        }
+    )
+    assert standalone["particulars"]["single_side_or_non_double_hull"] is True
 
 
 def test_mk574_r20_equipment_prefix_does_not_mask_explicit_vessel_scope() -> None:
