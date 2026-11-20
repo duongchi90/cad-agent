@@ -2844,6 +2844,8 @@ def _native_pdf_text_span_records(
                 return False
             for cp, org, gr in entries:
                 ordered_glyphs.append((cp, org, gr, float(mt_size)))
+        if len(ordered_glyphs) * max(0, len(ordered_glyphs) - 1) // 2 > 100_000:
+            return False
         for idx_a in range(len(ordered_glyphs)):
             cp_a, (ox_a, oy_a), gr_a, sz_a = ordered_glyphs[idx_a]
             adv_a = max(0.0, (gr_a.width * abs_ux + gr_a.height * abs_uy) - sz_a * two_ux_uy)
@@ -3289,9 +3291,33 @@ def _native_pdf_text_span_records(
             res = (True, [])
             svg_stroke_safety_cache.append(res)
             return res
+        max_svg_bytes = _NativePdfThinStrokeCheck._SVG_BYTES_LIMIT
+        if not isinstance(svg_txt, str) or len(svg_txt) > max_svg_bytes:
+            res = (True, [])
+            svg_stroke_safety_cache.append(res)
+            return res
+        try:
+            if len(svg_txt.encode("utf-8")) > max_svg_bytes:
+                res = (True, [])
+                svg_stroke_safety_cache.append(res)
+                return res
+        except UnicodeError:
+            res = (True, [])
+            svg_stroke_safety_cache.append(res)
+            return res
+        max_svg_nodes = _NativePdfThinStrokeCheck._SVG_NODE_LIMIT
+        svg_node_count = 0
+        for _ in re.finditer(r"<[A-Za-z][^>]*>", svg_txt):
+            svg_node_count += 1
+            if svg_node_count > max_svg_nodes:
+                res = (True, [])
+                svg_stroke_safety_cache.append(res)
+                return res
         unsafe_rects: list[fitz.Rect] = []
         tok_re = re.compile(r"[A-Za-z]|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
-        for tag in re.findall(r"<path\b[^>]*>", svg_txt):
+        total_tokens = 0
+        for tag_match in re.finditer(r"<path\b[^>]*>", svg_txt):
+            tag = tag_match.group(0)
             if 'stroke="none"' in tag or "stroke=" not in tag:
                 continue
             a, b, c, d, e, f = 1.0, 0.0, 0.0, 1.0, 0.0, 0.0
@@ -3327,7 +3353,14 @@ def _native_pdf_text_span_records(
                 res = (True, [])
                 svg_stroke_safety_cache.append(res)
                 return res
-            tokens = tok_re.findall(m_d.group(1))
+            tokens: list[str] = []
+            for token_match in tok_re.finditer(m_d.group(1)):
+                total_tokens += 1
+                if total_tokens > 100_000:
+                    res = (True, [])
+                    svg_stroke_safety_cache.append(res)
+                    return res
+                tokens.append(token_match.group(0))
             pxs: list[float] = []
             pys: list[float] = []
             cx_u = cy_u = sx_u = sy_u = 0.0
@@ -3481,7 +3514,9 @@ def _native_pdf_text_span_records(
         ):
             return True
         trace_rect = fitz.Rect(trace_bbox)
-        raw_target_glyphs = nonspace_glyph_entries(trace)
+        # Keep paint geometry for glyphs that a ToUnicode map reports as whitespace.
+        # Such a codepoint can still be visible ink and a later fill must mask the whole span.
+        raw_target_glyphs = glyph_entries_from_chars(trace.get("chars"), skip_spaces=False)
         if raw_target_glyphs is not None and not raw_target_glyphs:
             return False
         raw_dir = trace.get("dir", (1.0, 0.0))
@@ -4055,6 +4090,11 @@ def _native_pdf_text_span_records(
                 content = span.get("text")
                 bbox = span.get("bbox")
                 if not isinstance(content, str) or not content or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    continue
+                if not all(
+                    isinstance(value, (int, float)) and math.isfinite(float(value))
+                    for value in bbox
+                ):
                     continue
                 rect = fitz.Rect(bbox)
                 if rect.is_empty or not rect.is_valid:

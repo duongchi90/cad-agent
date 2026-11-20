@@ -97,6 +97,7 @@ class VerificationContractTests(unittest.TestCase):
             "CAD_AGENT_FTC11_IMAGE",
             "CAD_AGENT_ALMA_HAER_PROFILE_ROI",
             "CAD_AGENT_PR578_JXS_PDF",
+            "CAD_AGENT_B041_PDF",
         ):
             with self.subTest(name=name):
                 self.assertIn(f'"{name}"', match.group(1))

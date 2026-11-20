@@ -1027,7 +1027,97 @@ def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace()
     assert records[0]["bbox_px"][2] > records[0]["bbox_px"][0]
 
 
-def test_native_pdf_observation_skips_nonfinite_span_bbox_without_aborting_siblings() -> None:
+def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_later_filled() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    page.clean_contents()
+    cmap_stream = (
+        b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        b"/CMapName /CustomSpaceMap def\n/CMapType 2 def\n"
+        b"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+        b"1 beginbfchar\n<4D> <0020>\nendbfchar\nendcmap\n"
+        b"CMapName currentdict /CMap defineresource pop\nend\nend\n"
+    )
+    cmap_xref = document.get_new_xref()
+    document.update_object(cmap_xref, "<< >>")
+    document.update_stream(cmap_xref, cmap_stream)
+    font_xref = document.get_new_xref()
+    document.update_object(
+        font_xref,
+        f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode {cmap_xref} 0 R >>",
+    )
+    pg_obj = document.xref_object(page.xref)
+    if "/Font <<" in pg_obj:
+        document.update_object(page.xref, pg_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+    else:
+        _, res_val = document.xref_get_key(page.xref, "Resources")
+        res_xref = int(res_val.split()[0])
+        res_obj = document.xref_object(res_xref)
+        if "/Font <<" in res_obj:
+            document.update_object(res_xref, res_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+        else:
+            _, font_val = document.xref_get_key(res_xref, "Font")
+            existing_font_xref = int(font_val.split()[0])
+            document.update_object(
+                existing_font_xref,
+                document.xref_object(existing_font_xref).replace("<<", f"<< /F99 {font_xref} 0 R ", 1),
+            )
+    content_xref = page.get_contents()[0]
+    document.update_stream(
+        content_xref,
+        document.xref_stream(content_xref) + b"\nq BT 0 0 0 rg /F99 18 Tf 1 0 0 1 58 178 Tm (M100) Tj ET Q\n",
+    )
+    assert "100" in page.get_text("text")
+    source_trace = next(trace for trace in page.get_texttrace() if any(char[0] == 0x20 for char in trace["chars"]))
+    masked_rect = next(fitz.Rect(char[3]) for char in source_trace["chars"] if char[0] == 0x20)
+    baseline_pdf = fitz.open(stream=document.tobytes(), filetype="pdf")
+    try:
+        baseline_records = fidelity_module._native_pdf_text_span_records(
+            baseline_pdf[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        baseline_pdf.close()
+    assert any(record["content"].strip() == "100" for record in baseline_records)
+    pdf_y = page.rect.height - masked_rect.y1
+    fill = f"\nq 1 1 1 rg {masked_rect.x0:.4f} {pdf_y:.4f} {masked_rect.width:.4f} {masked_rect.height:.4f} re f Q\n".encode("ascii")
+    document.update_stream(content_xref, document.xref_stream(content_xref) + fill)
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert not any(record["content"].strip() == "100" for record in records)
+    assert "CONTROL" in {record["content"] for record in records}
+
+
+def test_native_pdf_observation_fails_closed_for_excessive_glyph_pair_work() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=5000, height=300)
+    page.insert_text((30, 80), "M" * 460, fontsize=4)
+    page.insert_text((30, 140), "CONTROL", fontsize=18)
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+    assert "CONTROL" in {record["content"] for record in records}
+    assert not any(len(record["content"]) >= 400 for record in records)
+
+
+@pytest.mark.parametrize("bad_coordinate", [float("inf"), "not-a-number"])
+def test_native_pdf_observation_skips_malformed_span_bbox_without_aborting_siblings(bad_coordinate: Any) -> None:
     from cad_agent import fidelity as fidelity_module
 
     document = fitz.open()
@@ -1035,7 +1125,7 @@ def test_native_pdf_observation_skips_nonfinite_span_bbox_without_aborting_sibli
     page.insert_text((40, 80), "BROKEN", fontsize=18)
     page.insert_text((190, 80), "CONTROL", fontsize=18)
 
-    class NonFiniteSpanPage:
+    class MalformedSpanPage:
         def __getattr__(self, name: str) -> Any:
             return getattr(page, name)
 
@@ -1047,14 +1137,14 @@ def test_native_pdf_observation_skips_nonfinite_span_bbox_without_aborting_sibli
                         spans = line.get("spans", [])
                         if spans:
                             bbox = list(spans[0]["bbox"])
-                            bbox[2] = float("inf")
+                            bbox[2] = bad_coordinate
                             spans[0]["bbox"] = tuple(bbox)
                             return result
             return result
 
     try:
         records = fidelity_module._native_pdf_text_span_records(
-            NonFiniteSpanPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            MalformedSpanPage(), 1, "a" * 64, "b" * 64, 800, 600,
             "displayed-page-box-v1",
         )
     finally:
@@ -5640,6 +5730,7 @@ def test_native_pdf_dark_fill_keeps_binding_receipts_per_character_scope(
         "closed_bezier_line_start_vertex_miter_whiteout",
         "projecting_square_cap_2J_45deg_whiteout",
         "anisotropic_ctm_1M_with_diag_whiteout",
+        "oversized_svg_anisotropic_ctm_whiteout",
         "tounicode_space_mapped_glyph_whiteout",
         "expanded_1500Tz_midbody_strikethrough",
         "expanded_500Tz_10pt_thick_bar_erase",
@@ -5690,7 +5781,7 @@ def test_native_pdf_observation_r5_bezier_miter_square_cap_aniso_ctm_tounicode_s
             + b"\nq 1 1 1 RG 40.0 w 2 J 1 j 10 80 160 200 re "
             b"50.0 137.0 m 70.0 157.0 l 90.0 230.0 m 70.0 210.0 l S Q\n",
         )
-    elif r5_case == "anisotropic_ctm_1M_with_diag_whiteout":
+    elif r5_case in {"anisotropic_ctm_1M_with_diag_whiteout", "oversized_svg_anisotropic_ctm_whiteout"}:
         page.insert_text((60, 120), target, fontsize=12)
         page.clean_contents()
         xref = page.get_contents()[0]
@@ -5783,9 +5874,24 @@ def test_native_pdf_observation_r5_bezier_miter_square_cap_aniso_ctm_tounicode_s
     reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
     document.close()
     try:
+        observation_page: Any = reopened[0]
+        if r5_case == "oversized_svg_anisotropic_ctm_whiteout":
+            class OversizedSvgPage:
+                svg_calls = 0
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(reopened[0], name)
+
+                def get_svg_image(self, **kwargs: Any) -> str:
+                    self.svg_calls += 1
+                    return "<svg>" + (" " * (4 * 1024 * 1024 + 1))
+
+            observation_page = OversizedSvgPage()
         records = fidelity_module._native_pdf_text_span_records(
-            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+            observation_page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
         )
+        if r5_case == "oversized_svg_anisotropic_ctm_whiteout":
+            assert observation_page.svg_calls == 1
     finally:
         reopened.close()
 
