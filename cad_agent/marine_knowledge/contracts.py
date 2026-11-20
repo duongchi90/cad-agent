@@ -1123,7 +1123,7 @@ def _resolve_textbook_clause_slices(
         for base_clause, _sub in clause_items:
             m = re.search(
                 rf"(?im)(?:^|\n)\s*(?:(?:section|sec\.?|§)\s*)?"
-                rf"(?P<number>{re.escape(base_clause)})(?![.\d])",
+                rf"(?P<number>{re.escape(base_clause)})(?::|[.)](?=\s|$)|(?=\s|$))",
                 merged_lines,
             )
             if m is None:

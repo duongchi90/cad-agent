@@ -779,24 +779,81 @@ def test_mk574_r24_repeated_outline_sibling_title_uses_occurrence_after_clause_s
     assert "CLAUSE_CONTENT_VERIFIED" not in result["verification_states"]
 
 
+def test_mk574_r25_decimal_line_cannot_anchor_clause_and_punctuated_heading_is_valid() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "1.3 Background\n1.4% scale reference\nBACKGROUND ONLY TEXT.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "1.4. Applied method\nACTUAL SECTION TEXT.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "1.5 Closing section.\n")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R25_DECIMAL_PREFIX"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic decimal-prefix PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Decimal prefix is not a clause heading.",
+            }],
+        }
+    )
+    base = {
+        "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied method", "pdf_page": [1, 2, 3],
+    }
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(
+            {**base, "verbatim_excerpt": "BACKGROUND ONLY TEXT."},
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+    positive = verify_source_citation(
+        {**base, "verbatim_excerpt": "ACTUAL SECTION TEXT."}, manifest, source_bytes=pdf_bytes
+    )
+    assert positive["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
 def _build_nested_equipment_dxf_bytes(
-    *, catalogue_as_attribute: bool = False, include_lpp: bool = False
+    *,
+    catalogue_as_attribute: bool = False,
+    include_lpp: bool = False,
+    repeat_nested_insert: bool = False,
+    hull_text_in_nested_block: bool = False,
 ) -> bytes:
     lines = [
         "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
         "9", "$INSUNITS", "70", "4", "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS",
         "0", "BLOCK", "8", "0", "2", "VESSEL_ROOT", "70", "0",
         "10", "0", "20", "0", "30", "0", "3", "VESSEL_ROOT",
-        "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
-        "1", "HULL STRUCTURE : SINGLE SIDE",
-        "0", "INSERT", "8", "0", "2", "STEERING_GEAR", "10", "0", "20", "0", "30", "0",
-        "41", "1", "42", "1", "43", "1",
     ]
+    if not hull_text_in_nested_block:
+        lines.extend([
+            "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
+            "1", "HULL STRUCTURE : SINGLE SIDE",
+        ])
+    lines.extend([
+        "0", "INSERT", "5", "A1", "8", "0", "2", "STEERING_GEAR", "10", "0", "20", "0", "30", "0",
+        "41", "1", "42", "1", "43", "1",
+    ])
     if catalogue_as_attribute:
         lines.extend(["66", "1"])
         lines.extend([
             "0", "ATTRIB", "8", "0", "2", "ITEM", "10", "0", "20", "0", "30", "0",
             "40", "250", "1", "STEERING GEAR CATALOGUE", "0", "SEQEND", "8", "0",
+        ])
+    if repeat_nested_insert:
+        lines.extend([
+            "0", "INSERT", "5", "A2", "8", "0", "2", "STEERING_GEAR", "10", "2000", "20", "0", "30", "0",
+            "41", "1", "42", "1", "43", "1",
         ])
     lines.extend(["0", "ENDBLK", "8", "0", "2", "VESSEL_ROOT"])
     lines.extend([
@@ -807,6 +864,11 @@ def _build_nested_equipment_dxf_bytes(
         lines.extend([
             "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
             "1", "STEERING GEAR CATALOGUE",
+        ])
+    if hull_text_in_nested_block:
+        lines.extend([
+            "0", "TEXT", "8", "0", "10", "1000", "20", "0", "30", "0", "40", "250",
+            "1", "HULL STRUCTURE : SINGLE SIDE",
         ])
     if include_lpp:
         lines.extend([
@@ -837,12 +899,67 @@ def test_mk574_r24_nested_equipment_label_does_not_make_sibling_hull_a_vessel_fa
     assert child_attrib["particulars"]["single_side_or_non_double_hull"] is True
 
 
+def test_mk574_r25_repeated_nested_insert_occurrences_do_not_share_equipment_scope() -> None:
+    observed = observe_dxf_bytes(
+        _build_nested_equipment_dxf_bytes(
+            catalogue_as_attribute=True,
+            repeat_nested_insert=True,
+            hull_text_in_nested_block=True,
+        ),
+        drawing_id="GA_R25_REPEATED_NESTED_SCOPE",
+    )
+    hull_entries = [item for item in observed["texts"] if item["text"] == "HULL STRUCTURE : SINGLE SIDE"]
+    assert len(hull_entries) == 2
+    assert len({item["occurrence_id"] for item in hull_entries}) == 2
+    assert observed["particulars"]["single_side_or_non_double_hull"] is True
+
+
 def test_mk574_r24_equipment_lpp_cannot_supply_vessel_span_length() -> None:
     observed = observe_dxf_bytes(
         _build_nested_equipment_dxf_bytes(include_lpp=True), drawing_id="GA_R24_EQUIPMENT_LPP"
     )
     assert observed["particulars"]["lpp_m_values"] == []
     result = detect_drawing_gaps_and_conflicts([observed], partial_package=True)
+    assert result["status"] != "PASS"
+
+
+def test_mk574_r25_equipment_design_length_cannot_exclude_vessel() -> None:
+    observation = normalize_observation(
+        _base_ga(
+            length_line="",
+            extra_texts=[
+                {"handle": "GEAR", "text": "STEERING GEAR CATALOGUE", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+                {"handle": "GEAR_L", "text": "L = 151.00 m", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+                {"handle": "GEAR_LWL", "text": "LWL = 149.00 m", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+            ],
+        )
+    )
+    assert observation["particulars"]["design_length_l_m_values"] == []
+    assert observation["particulars"]["lwl_m_values"] == []
+    result = evaluate_regulation_applicability_and_submittal([observation], partial_package=True)
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(item["finding_id"] == "F_MISSING_VESSEL_LENGTH" for item in result["findings"])
+
+
+def test_mk574_r25_lpp_label_cannot_pair_with_equipment_occurrence_number() -> None:
+    observation = normalize_observation(
+        _base_ga(
+            length_line="",
+            extra_texts=[
+                {"handle": "LPP", "text": "LENGTH (L.P.P)", "x": 60000.0, "y": 1500.0},
+                {
+                    "handle": "GEAR", "text": "STEERING GEAR CATALOGUE", "x": 60000.0, "y": 1700.0,
+                    "occurrence_id": "MODELSPACE/INSERT:GEAR",
+                },
+                {
+                    "handle": "GEAR_VALUE", "text": "52 m", "x": 60500.0, "y": 1500.0,
+                    "occurrence_id": "MODELSPACE/INSERT:GEAR",
+                },
+            ],
+        )
+    )
+    assert observation["particulars"]["lpp_m_values"] == []
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
     assert result["status"] != "PASS"
 
 

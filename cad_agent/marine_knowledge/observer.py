@@ -547,7 +547,7 @@ def _expand_insert_texts(
     )
 
     next_ancestors = ancestor_blocks | ({block_name} if block_name else frozenset())
-    for ve in virtuals:
+    for virtual_index, ve in enumerate(virtuals):
         if len(collected) >= _MAX_BLOCK_TEXT_ITEMS:
             skipped.append({"handle": root_handle, "dxftype": "INSERT", "reason": "INSERT_TEXT_LIMIT_REACHED"})
             break
@@ -560,7 +560,8 @@ def _expand_insert_texts(
             break
         vtype = ve.dxftype()
         if vtype in {"INSERT", "MINSERT"}:
-            child_occurrence_id = f"{occurrence_id}/{getattr(ve.dxf, 'name', '')}"
+            child_name = str(getattr(ve.dxf, "name", ""))
+            child_occurrence_id = f"{occurrence_id}/{child_name}:{virtual_index}"
             for attrib in getattr(ve, "attribs", ()):
                 if not _reserve_dxf_entity_visit(
                     budget,
@@ -866,10 +867,13 @@ def _nearest_right_numeric(
     ly = label_entry.get("y")
     if lx is None or ly is None:
         return None, False
+    label_occurrence = str(label_entry.get("occurrence_id") or "MODELSPACE")
     h = label_entry.get("height") or 200.0
     candidates: list[tuple[float, float, bool]] = []
     for other in entries:
         if other is label_entry:
+            continue
+        if str(other.get("occurrence_id") or "MODELSPACE") != label_occurrence:
             continue
         ox = other.get("x")
         oy = other.get("y")
@@ -998,11 +1002,13 @@ def _extract_particulars(
         equipment_context = occurrence_id in equipment_occurrences or bool(
             _EQUIPMENT_ACCESSORY_RE.search(folded)
         )
+        measurement_text = "" if equipment_context else text
+        measurement_folded = "" if equipment_context else folded
 
         for bad_tok in _CORRUPTED_NUMBER_RE.findall(text):
             _append_unique(corrupted_numeric_tokens, str(bad_tok).strip())
 
-        for m in _L_DESIGN_RE.finditer(folded):
+        for m in _L_DESIGN_RE.finditer(measurement_folded):
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
             if val is not None:
                 if verified:
@@ -1017,7 +1023,7 @@ def _extract_particulars(
         elif _INCIDENTAL_REF_RE.search(folded) or _REFERENCE_MARKER_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
             _append_unique(incidental_reference_mentions, re.sub(r"\s+", " ", text).strip())
         else:
-            for m in _LPP_RE.finditer(folded):
+            for m in _LPP_RE.finditer(measurement_folded):
                 val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
                 if val is not None:
                     if verified:
@@ -1025,7 +1031,7 @@ def _extract_particulars(
                     else:
                         _append_unique(unverified_unitless_particulars, f"Lpp:{m.group(1)}")
                     lpp_matched = True
-            if not lpp_matched and any(tok in folded for tok in ("length (l.p.p)", "chieu dai giua 2 tru")):
+            if not lpp_matched and any(tok in measurement_folded for tok in ("length (l.p.p)", "chieu dai giua 2 tru")):
                 nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
                 if nb is not None:
                     if nb_ok:
@@ -1033,7 +1039,7 @@ def _extract_particulars(
                     else:
                         _append_unique(unverified_unitless_particulars, f"Lpp:{nb}")
 
-        for m in _LWL_RE.finditer(folded):
+        for m in _LWL_RE.finditer(measurement_folded):
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
             if val is not None:
                 if verified:
@@ -1042,7 +1048,7 @@ def _extract_particulars(
                     _append_unique(unverified_unitless_particulars, f"Lwl:{m.group(1)}")
 
         b_matched = False
-        for m in _BREADTH_RE.finditer(folded):
+        for m in _BREADTH_RE.finditer(measurement_folded):
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
             if val is not None:
                 if verified:
@@ -1050,7 +1056,7 @@ def _extract_particulars(
                 else:
                     _append_unique(unverified_unitless_particulars, f"B:{m.group(1)}")
                 b_matched = True
-        if not b_matched and folded.startswith("breadth"):
+        if not b_matched and not equipment_context and folded.startswith("breadth"):
             nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
             if nb is not None:
                 if nb_ok:
@@ -1059,7 +1065,7 @@ def _extract_particulars(
                     _append_unique(unverified_unitless_particulars, f"B:{nb}")
 
         d_matched = False
-        for m in _DEPTH_RE.finditer(folded):
+        for m in _DEPTH_RE.finditer(measurement_folded):
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
             if val is not None:
                 if verified:
@@ -1067,7 +1073,7 @@ def _extract_particulars(
                 else:
                     _append_unique(unverified_unitless_particulars, f"D:{m.group(1)}")
                 d_matched = True
-        if not d_matched and folded.startswith("depth"):
+        if not d_matched and not equipment_context and folded.startswith("depth"):
             nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
             if nb is not None:
                 if nb_ok:
@@ -1075,7 +1081,7 @@ def _extract_particulars(
                 else:
                     _append_unique(unverified_unitless_particulars, f"D:{nb}")
 
-        for m in _DRAFT_WORD_RE.finditer(folded):
+        for m in _DRAFT_WORD_RE.finditer(measurement_folded):
             raw_num = m.group(1)
             raw_unit = m.group(2)
             if raw_num:
@@ -1086,7 +1092,7 @@ def _extract_particulars(
                     else:
                         _append_unique(unverified_unitless_particulars, f"T:{raw_num}")
 
-        for m in _DRAFT_SYMBOL_T_RE.finditer(text):
+        for m in _DRAFT_SYMBOL_T_RE.finditer(measurement_text):
             raw_num = m.group(1)
             raw_unit = m.group(2)
             if raw_num:
