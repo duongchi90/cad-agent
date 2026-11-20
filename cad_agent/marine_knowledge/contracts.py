@@ -1006,17 +1006,17 @@ def _resolve_regulation_clause_slices(
 
 
 _TB_BOUNDARY_RE = re.compile(
-    r"(?im)(?:^|\n)[ \t]*(?:(?:(?:section|sec\.?|§)[ \t]*)?(?P<number>\d+\.\d+(?:\.\d+)?)|"
+    r"(?im)(?:^|\n)[ \t]*(?:(?:(?P<prefix>section|sec\.?|§)[ \t]*)?(?P<number>\d+\.\d+(?:\.\d+)?)|"
     r"(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
 )
 _TB_MEASUREMENT_UNIT_TOKEN_RE = re.compile(
     r"^(?:%|m/s|m/sec|km/h|km/hr|ft/s|ft/min|m/min|mm|cm|km|m|ft|inch|inches|"
-    r"kg|g|t|ton|tons|hp|kw|kn|knot|knots|deg|degree|degrees|psi|kpa|bar|rpm|in|c)\.?$",
+    r"kg|g|t|ton|tons|hp|kw|kn|kn/m(?:2|²)?|n/mm(?:2|²)?|mpa|knot|knots|deg|degree|degrees|psi|kpa|bar|rpm|in|c)\.?$",
     re.IGNORECASE,
 )
 
 
-def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
+def _is_textbook_clause_heading_suffix(suffix: str, *, explicit_section: bool = False) -> bool:
     """Distinguish a numbered heading from a measurement beginning with the same digits."""
     # Heading grammar is local to one extracted physical line. Whitespace
     # normalization across a newline can otherwise treat the next paragraph as
@@ -1025,6 +1025,10 @@ def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
     tail = physical_line_suffix.lstrip(" \t")
     if not tail:
         return True
+    # "In service" is a common heading title and the token "in" is also an
+    # imperial unit. An explicit section prefix disambiguates this title.
+    if explicit_section and re.match(r"(?i)^in\s+service\b", tail):
+        return True
     if tail.startswith(":"):
         content = tail[1:].lstrip()
         return not content or (not content[0].isdigit() and not content.startswith("%"))
@@ -1032,7 +1036,12 @@ def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
         return len(tail) == 1 or tail[1].isspace()
     if tail[0] in "-–—":
         content = tail[1:].lstrip(" \t")
-        return not content or (not content[0].isdigit() and not content.startswith("%"))
+        token = content.split(maxsplit=1)[0].strip(".,;:()[]{}") if content else ""
+        return not content or (
+            not content[0].isdigit()
+            and not content.startswith("%")
+            and not _TB_MEASUREMENT_UNIT_TOKEN_RE.fullmatch(token)
+        )
     if physical_line_suffix[:1] in {" ", "\t"}:
         token = tail.split(maxsplit=1)[0].strip(".,;:()[]{}")
         return bool(token) and not _TB_MEASUREMENT_UNIT_TOKEN_RE.fullmatch(token) and token[0].isalpha()
@@ -1041,11 +1050,13 @@ def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
 
 def _is_textbook_clause_heading_line(line: str, clause_num: str) -> bool:
     match = re.match(
-        rf"^\s*(?:(?:section|sec\.?|§)\s*)?{re.escape(clause_num)}",
+        rf"^\s*(?:(?P<prefix>section|sec\.?|§)\s*)?{re.escape(clause_num)}",
         line,
         re.IGNORECASE,
     )
-    return match is not None and _is_textbook_clause_heading_suffix(line[match.end() :])
+    return match is not None and _is_textbook_clause_heading_suffix(
+        line[match.end() :], explicit_section=bool(match.group("prefix"))
+    )
 
 
 def _find_textbook_next_boundary(
@@ -1064,7 +1075,9 @@ def _find_textbook_next_boundary(
         boundary_num = m_num.group("number")
         if boundary_num and clause_depth is not None and _clause_depth(boundary_num) > clause_depth:
             continue
-        if boundary_num and not _is_textbook_clause_heading_suffix(merged_lines[m_num.end("number") :]):
+        if boundary_num and not _is_textbook_clause_heading_suffix(
+            merged_lines[m_num.end("number") :], explicit_section=bool(m_num.group("prefix"))
+        ):
             continue
         pos = m_num.start()
         if merged_lines[pos : pos + 1] == "\n":
@@ -1156,14 +1169,17 @@ def _resolve_textbook_clause_slices(
     if clause_items:
         for base_clause, _sub in clause_items:
             pattern = re.compile(
-                rf"(?im)(?:^|\n)[ \t]*(?:(?:section|sec\.?|§)[ \t]*)?"
+                rf"(?im)(?:^|\n)[ \t]*(?:(?P<prefix>section|sec\.?|§)[ \t]*)?"
                 rf"(?P<number>{re.escape(base_clause)})"
             )
             m = next(
                 (
                     candidate
                     for candidate in pattern.finditer(merged_lines)
-                    if _is_textbook_clause_heading_suffix(merged_lines[candidate.end("number") :])
+                    if _is_textbook_clause_heading_suffix(
+                        merged_lines[candidate.end("number") :],
+                        explicit_section=bool(candidate.group("prefix")),
+                    )
                 ),
                 None,
             )

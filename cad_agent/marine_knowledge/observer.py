@@ -33,7 +33,10 @@ _KNOWN_BLANK_FIELD_LABELS = (
     "HULL NO",
 )
 _NUMERIC_FIELD_LABEL_RE = re.compile(
-    r"\b(?:lpp|l\.?p\.?p|lwl|length|hold\s+length|breadth|beam|width|depth|draught|draft)\b",
+    r"\b(?:lpp|l\.?p\.?p|lwl|loa|l\.?o\.?a\.?|length|hold\s+length|"
+    r"chieu\s+dai\s+ham\s+hang|chieu\s+dai\s+giua\s+2\s+tru|"
+    r"chieu\s+dai\s+tau|breadth|beam|width|chieu\s+rong(?:\s*\(?b\)?)?|depth|draught|draft)\b|"
+    r"(?<!\w)(?:l|b|d)\s*[:=]?(?!\w)",
     re.IGNORECASE,
 )
 
@@ -972,6 +975,14 @@ def _occurrence_block_name(path_segment: str) -> str:
     return path_segment.rsplit(":", 1)[0]
 
 
+def _is_named_equipment_assembly(block_name: str) -> bool:
+    """Recognize accessory blocks with bounded instance/location qualifiers."""
+    normalized = fold_marine_search_text(block_name.replace("_", " ").replace("-", " "))
+    normalized = re.sub(r"(?:\s+(?:assy|assembly|unit|equipment|\d+))+$", "", normalized)
+    normalized = re.sub(r"^(?:aft|after|fore|forward)\s+", "", normalized)
+    return bool(_EQUIPMENT_ACCESSORY_RE.fullmatch(normalized))
+
+
 def _append_unique(items: list[Any], value: Any) -> None:
     if value not in items:
         items.append(value)
@@ -997,7 +1008,7 @@ def _extract_particulars(
         path_parts = marked_occurrence.split("/")
         for depth, segment in enumerate(path_parts, start=1):
             block_name = _occurrence_block_name(segment).replace("_", " ")
-            if block_name and _EQUIPMENT_ACCESSORY_RE.fullmatch(fold_marine_search_text(block_name)):
+            if block_name and _is_named_equipment_assembly(block_name):
                 equipment_scope_roots.add("/".join(path_parts[:depth]))
 
     equipment_occurrences: set[str] = set()
@@ -1108,7 +1119,10 @@ def _extract_particulars(
                 else:
                     _append_unique(unverified_unitless_particulars, f"B:{m.group(1)}")
                 b_matched = True
-        if not b_matched and not equipment_context and folded.startswith("breadth"):
+        if not b_matched and not equipment_context and re.match(
+            r"^(?:breadth|beam|width|chieu\s+rong(?:\s*\(?b\)?)?|b\s*[:=]?)(?:\b|$)",
+            folded,
+        ):
             nb, nb_ok = _nearest_right_numeric(entry, entries, insunits=insunits)
             if nb is not None:
                 if nb_ok:
