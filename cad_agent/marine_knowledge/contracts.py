@@ -1011,7 +1011,7 @@ _TB_BOUNDARY_RE = re.compile(
 )
 _TB_MEASUREMENT_UNIT_TOKEN_RE = re.compile(
     r"^(?:%|m/s|m/sec|km/h|km/hr|ft/s|ft/min|m/min|mm|cm|km|m|ft|inch|inches|"
-    r"kg|g|t|t/m(?:\^?3|³)|ton|tons|hp|kw|kn|kn/m(?:\^?2|²)?|"
+    r"kg|g|t|t/m(?:\^?3|³)|kg/m(?:\^?3|³)|m(?:\^?2|²)|ton|tons|hp|kw|kn|kn/m(?:\^?2|²)?|"
     r"kn[-·]m|n[-·]m|n/mm(?:\^?2|²)?|mpa|knot|knots|deg|degree|degrees|psi|kpa|bar|rpm|in|c)\.?$",
     re.IGNORECASE,
 )
@@ -1030,7 +1030,7 @@ def _is_textbook_clause_heading_suffix(suffix: str, *, explicit_section: bool = 
     # imperial unit. Preserve this recognized multiword title, including when
     # a section marker or dash precedes it.
     heading_tail = re.sub(r"^[-–—][ \t]*", "", tail)
-    if re.match(r"(?i)^in\s+service\b", heading_tail):
+    if re.match(r"(?i)^in\s+(?:service|operation)\b", heading_tail):
         return True
     if tail.startswith(":"):
         content = tail[1:].lstrip()

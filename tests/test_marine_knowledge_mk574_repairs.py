@@ -910,6 +910,7 @@ def test_mk574_r26_measurement_line_does_not_end_a_textbook_clause() -> None:
         ("1.5", "5 percent margin is described here."),
         ("2.3:", "30 degrees was the starting angle."),
         ("1.5 In service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
+        ("1.5 In operation", "THE-IN-OPERATION RULE BELONGS TO SECTION 1.5."),
         ("1.5. In service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
         ("Section 1.5 In service", "THE PREFIXED IN-SERVICE RULE BELONGS TO SECTION 1.5."),
         ("Section 1.5 - In service", "THE DASHED PREFIXED IN-SERVICE RULE BELONGS TO SECTION 1.5."),
@@ -966,6 +967,8 @@ def test_mk574_r27_textbook_citation_stops_at_physical_heading_line(
         ("1.4 t/m3 cargo density applies.", "t/m3 cargo density applies."),
         ("1.4 N/mm^2 proof stress applies.", "N/mm^2 proof stress applies."),
         ("1.4 kN-m shaft torque applies.", "kN-m shaft torque applies."),
+        ("1.4 kg/m3 cargo density applies.", "kg/m3 cargo density applies."),
+        ("1.4 m^2 deck area applies.", "m^2 deck area applies."),
     ],
 )
 def test_mk574_r28_measurement_suffix_cannot_anchor_a_textbook_clause(
@@ -1191,6 +1194,7 @@ def test_mk574_r28_nested_catalogue_does_not_promote_mixed_vessel_ancestor_to_eq
     [
         "STEERING_GEAR_ASSY", "STEERING_GEAR_01", "AFT_STEERING_GEAR",
         "PORT_STEERING_GEAR", "STBD_STEERING_GEAR",
+        "AFT_PORT_STEERING_GEAR", "FORWARD_STBD_STEERING_GEAR", "STEERING_GEAR_PORT",
     ],
 )
 def test_mk574_r28_qualified_equipment_assembly_keeps_nested_catalogue_facts_out_of_vessel_scope(
@@ -1208,6 +1212,31 @@ def test_mk574_r28_qualified_equipment_assembly_keeps_nested_catalogue_facts_out
     particulars = observed["particulars"]
     assert particulars["lpp_m_values"] == []
     assert particulars["single_side_or_non_double_hull"] is False
+
+
+@pytest.mark.parametrize(
+    "equipment_block_name",
+    ["AFT_PORT_STEERING_GEAR", "FORWARD_STBD_STEERING_GEAR", "STEERING_GEAR_PORT"],
+)
+def test_mk574_r31_stacked_equipment_location_cannot_satisfy_vessel_acceptance(
+    equipment_block_name: str,
+) -> None:
+    occurrence = f"MODELSPACE/INSERT:GEAR:{equipment_block_name}"
+    catalogue_occurrence = f"{occurrence}/INSERT:LABEL:GEAR_LABEL"
+    observation = normalize_observation(
+        _base_ga(
+            length_line="",
+            extra_texts=[
+                {"handle": "GEAR_CATALOGUE", "text": "STEERING GEAR CATALOGUE", "occurrence_id": catalogue_occurrence},
+                {"handle": "GEAR_LPP", "text": "Lpp = 52.00 m", "occurrence_id": occurrence},
+                {"handle": "GEAR_HULL", "text": "HULL STRUCTURE : SINGLE SIDE", "occurrence_id": occurrence},
+            ],
+        )
+    )
+    assert observation["particulars"]["lpp_m_values"] == []
+    assert observation["particulars"]["single_side_or_non_double_hull"] is False
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
 
 
 def _build_lpp_row_pairing_dxf_bytes() -> bytes:
@@ -1281,7 +1310,10 @@ def test_mk574_r27_off_row_numeric_text_cannot_hide_a_native_ap_fp_lpp_conflict(
 
 @pytest.mark.parametrize(
     "adjacent_length_label",
-    ["HOLD LENGTH", "CHIEU DAI HAM HANG", "LOA", "T:", "CHIEU DAI DUONG NUOC", "LTK"],
+    [
+        "HOLD LENGTH", "CHIEU DAI HAM HANG", "LOA", "T:", "CHIEU DAI DUONG NUOC", "LTK",
+        "MON NUOC", "CHIEU CHIM", "CHIEU CAO MAN", "CHIEU DAI THIET KE",
+    ],
 )
 def test_mk574_r28_intervening_field_label_delimits_lpp_value_binding(adjacent_length_label: str) -> None:
     observation = observe_dxf_bytes(
