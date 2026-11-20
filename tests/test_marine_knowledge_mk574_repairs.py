@@ -822,12 +822,95 @@ def test_mk574_r25_decimal_line_cannot_anchor_clause_and_punctuated_heading_is_v
     assert positive["verification_level"] == "SOURCE_CONTENT_VERIFIED"
 
 
+@pytest.mark.parametrize(
+    "numeric_line",
+    ["1.4 m freeboard", "1.4 % freeboard margin", "1.4:1 geometric scale"],
+)
+def test_mk574_r26_measurement_lines_cannot_anchor_a_textbook_clause(numeric_line: str) -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), f"1.3 Background\n{numeric_line}\nBACKGROUND ONLY TEXT.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "1.4. Applied method\nACTUAL SECTION TEXT.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "1.5. Closing section.\n")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R26_NUMERIC_PREFIX"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic numeric-prefix PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Numeric measurement text is not a section heading.",
+            }],
+        }
+    )
+    base = {
+        "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied method", "pdf_page": [1, 2, 3],
+    }
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(
+            {**base, "verbatim_excerpt": "BACKGROUND ONLY TEXT."},
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+
+
+def test_mk574_r26_measurement_line_does_not_end_a_textbook_clause() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "1.3 Background\n")
+    p2 = doc.new_page()
+    p2.insert_text(
+        (72, 72),
+        "1.4. Applied method\nACTUAL SECTION TEXT.\n1.5 m minimum clearance\nCONTINUED METHOD TEXT.\n",
+    )
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "1.5. Closing section.\n")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R26_NUMERIC_BOUNDARY"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic numeric-boundary PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Measurement text does not end a section.",
+            }],
+        }
+    )
+    citation = {
+        "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied method", "pdf_page": [1, 2, 3],
+        "verbatim_excerpt": "ACTUAL SECTION TEXT. 1.5 m minimum clearance CONTINUED METHOD TEXT.",
+    }
+    result = verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
+    assert result["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
 def _build_nested_equipment_dxf_bytes(
     *,
     catalogue_as_attribute: bool = False,
     include_lpp: bool = False,
     repeat_nested_insert: bool = False,
     hull_text_in_nested_block: bool = False,
+    vessel_length_line: str | None = None,
 ) -> bytes:
     lines = [
         "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
@@ -839,6 +922,11 @@ def _build_nested_equipment_dxf_bytes(
         lines.extend([
             "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
             "1", "HULL STRUCTURE : SINGLE SIDE",
+        ])
+    if vessel_length_line:
+        lines.extend([
+            "0", "TEXT", "8", "0", "10", "0", "20", "500", "30", "0", "40", "250",
+            "1", vessel_length_line,
         ])
     lines.extend([
         "0", "INSERT", "5", "A1", "8", "0", "2", "STEERING_GEAR", "10", "0", "20", "0", "30", "0",
@@ -884,18 +972,18 @@ def _build_nested_equipment_dxf_bytes(
     return "\n".join(lines).encode("latin-1")
 
 
-def test_mk574_r24_nested_equipment_label_does_not_make_sibling_hull_a_vessel_fact() -> None:
+def test_mk574_r26_nested_equipment_text_and_attrib_keep_parent_hull_fact() -> None:
     def observe(catalogue_as_attribute: bool) -> dict[str, Any]:
         data = _build_nested_equipment_dxf_bytes(catalogue_as_attribute=catalogue_as_attribute)
         return observe_dxf_bytes(data, drawing_id="GA_R24_NESTED_SCOPE")
 
-    # A nested block TEXT label scopes its containing assembly; an ATTRIB attached
-    # to the nested INSERT stays on that child and cannot mask its parent vessel text.
+    # A nested equipment label scopes only its own INSERT occurrence, regardless of
+    # whether the label is a child-block TEXT or an ATTRIB attached to that INSERT.
     child_text = observe(catalogue_as_attribute=False)
     child_attrib = observe(catalogue_as_attribute=True)
     assert all("_entity_type" not in item for item in child_text["texts"])
     assert all("_entity_type" not in item for item in child_attrib["texts"])
-    assert child_text["particulars"]["single_side_or_non_double_hull"] is False
+    assert child_text["particulars"]["single_side_or_non_double_hull"] is True
     assert child_attrib["particulars"]["single_side_or_non_double_hull"] is True
 
 
@@ -912,6 +1000,23 @@ def test_mk574_r25_repeated_nested_insert_occurrences_do_not_share_equipment_sco
     assert len(hull_entries) == 2
     assert len({item["occurrence_id"] for item in hull_entries}) == 2
     assert observed["particulars"]["single_side_or_non_double_hull"] is True
+
+
+def test_mk574_r26_nested_equipment_text_does_not_mask_parent_vessel_facts() -> None:
+    child_text = observe_dxf_bytes(
+        _build_nested_equipment_dxf_bytes(vessel_length_line="L = 52.00 m"),
+        drawing_id="GA_R26_NESTED_TEXT_SCOPE",
+    )
+    child_attrib = observe_dxf_bytes(
+        _build_nested_equipment_dxf_bytes(
+            catalogue_as_attribute=True,
+            vessel_length_line="L = 52.00 m",
+        ),
+        drawing_id="GA_R26_NESTED_ATTRIB_SCOPE",
+    )
+    for observed in (child_text, child_attrib):
+        assert observed["particulars"]["design_length_l_m_values"] == [52.0]
+        assert observed["particulars"]["single_side_or_non_double_hull"] is True
 
 
 def test_mk574_r24_equipment_lpp_cannot_supply_vessel_span_length() -> None:
@@ -961,6 +1066,88 @@ def test_mk574_r25_lpp_label_cannot_pair_with_equipment_occurrence_number() -> N
     assert observation["particulars"]["lpp_m_values"] == []
     result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
     assert result["status"] != "PASS"
+
+
+def test_mk574_r26_nearest_lpp_value_must_match_an_explicit_view() -> None:
+    observation = normalize_observation(
+        _base_ga(
+            length_line="",
+            extra_texts=[
+                {"handle": "LPP_LABEL", "text": "LENGTH (L.P.P)", "x": 60000.0, "y": 6000.0, "view_id": "PROFILE"},
+                {"handle": "DETAIL_VALUE", "text": "80 m", "x": 60100.0, "y": 6000.0, "view_id": "DETAIL"},
+                {"handle": "PROFILE_VALUE", "text": "52 m", "x": 61000.0, "y": 6000.0, "view_id": "PROFILE"},
+            ],
+        )
+    )
+    assert observation["particulars"]["lpp_m_values"] == [52.0]
+
+
+def test_mk574_r26_nearest_lpp_value_is_stable_when_equal_dx_candidates_reorder() -> None:
+    values = [
+        {"handle": "ON_ROW_52", "text": "52 m", "x": 61000.0, "y": 6000.0},
+        {"handle": "ABOVE_ROW_80", "text": "80 m", "x": 61000.0, "y": 5950.0},
+    ]
+    for ordered_values in (values, list(reversed(values))):
+        observation = normalize_observation(
+            _base_ga(
+                length_line="",
+                extra_texts=[
+                    {"handle": "LPP_LABEL", "text": "LENGTH (L.P.P)", "x": 60000.0, "y": 6000.0},
+                    *ordered_values,
+                ],
+            )
+        )
+        assert observation["particulars"]["lpp_m_values"] == [52.0]
+
+
+def test_mk574_r26_blank_owner_field_ignores_value_from_another_insert() -> None:
+    observation = normalize_observation(
+        _base_ga(
+            extra_texts=[
+                {"handle": "OWNER", "text": "OWNER:", "x": 60000.0, "y": 7000.0},
+                {"handle": "GEAR", "text": "STEERING GEAR CATALOGUE", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+                {"handle": "GEAR_VALUE", "text": "52 m", "x": 60500.0, "y": 7000.0, "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+            ],
+        )
+    )
+    assert "OWNER" in observation["blank_fields"]
+
+
+@pytest.mark.parametrize("equipment_fact", ["MAIN ENGINE: EQUIPMENT BENCH 55 HP", "PASSENGERS: 15"])
+def test_mk574_r26_equipment_hp_and_capacity_cannot_resolve_vessel_scope(equipment_fact: str) -> None:
+    base = _base_ga(length_line="Chiều dài tàu L = 19.00 m", class_line="CẤP TÀU : VR-SI")
+    base["texts"] = [item for item in base["texts"] if item["handle"] != "G8"]
+    baseline = evaluate_regulation_applicability_and_submittal([base], partial_package=True)
+    assert any(item["finding_id"] == "F_SCOPE_QCVN25_UNRESOLVED" for item in baseline["findings"])
+
+    attack = {**base, "texts": list(base["texts"]) + [
+        {"handle": "GEAR", "text": "STEERING GEAR CATALOGUE", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+        {"handle": "GEAR_FACT", "text": equipment_fact, "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+    ]}
+    result = evaluate_regulation_applicability_and_submittal([attack], partial_package=True)
+    finding_ids = {item["finding_id"] for item in result["findings"]}
+    assert "F_SCOPE_QCVN25_UNRESOLVED" in finding_ids
+    assert "F_SCOPE_QCVN72_CONFIRMED" not in finding_ids
+
+
+def test_mk574_r26_equipment_bow_anchors_and_plate_are_not_vessel_facts() -> None:
+    raw = _base_ga(length_line="Chiều dài tàu L = 52.00 m")
+    raw["texts"] = [item for item in raw["texts"] if item["handle"] not in {"G10", "G11"}]
+    raw["texts"].extend([
+        {"handle": "VESSEL_LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6000.0},
+        {"handle": "GEAR", "text": "STEERING GEAR CATALOGUE", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+        {"handle": "GEAR_AP", "text": "A.P", "x": 1000.0, "y": 0.0, "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+        {"handle": "GEAR_FP", "text": "F.P", "x": 53000.0, "y": 0.0, "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+        {"handle": "GEAR_PLATE", "text": "BOTTOM PLATE t=5 mm", "occurrence_id": "MODELSPACE/INSERT:GEAR"},
+    ])
+    observation = normalize_observation(raw)
+    particulars = observation["particulars"]
+    assert particulars["ap_x_coords"] == []
+    assert particulars["fp_x_coords"] == []
+    assert particulars["extracted_plate_thicknesses_mm"] == []
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
+    assert not any("Bow direction" in check for check in result["checks_executed"])
+    assert not any("1000x CAD A.P-to-F.P span" in check for check in result["checks_executed"])
 
 
 def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -> None:

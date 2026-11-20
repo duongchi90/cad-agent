@@ -823,6 +823,14 @@ def _normalize_text_entries(raw_texts: object) -> list[dict[str, Any]]:
     return entries
 
 
+def _same_text_occurrence_and_view(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    if str(left.get("occurrence_id") or "MODELSPACE") != str(right.get("occurrence_id") or "MODELSPACE"):
+        return False
+    left_view = str(left.get("view_id") or "").strip()
+    right_view = str(right.get("view_id") or "").strip()
+    return left_view == right_view if left_view or right_view else True
+
+
 def _has_neighbor_value(label_entry: Mapping[str, Any], entries: list[dict[str, Any]]) -> bool:
     lx = label_entry.get("x")
     ly = label_entry.get("y")
@@ -834,6 +842,8 @@ def _has_neighbor_value(label_entry: Mapping[str, Any], entries: list[dict[str, 
     max_dy_below = max(h * 3.0, 600.0)
     for other in entries:
         if other is label_entry:
+            continue
+        if not _same_text_occurrence_and_view(label_entry, other):
             continue
         ox = other.get("x")
         oy = other.get("y")
@@ -869,11 +879,13 @@ def _nearest_right_numeric(
         return None, False
     label_occurrence = str(label_entry.get("occurrence_id") or "MODELSPACE")
     h = label_entry.get("height") or 200.0
-    candidates: list[tuple[float, float, bool]] = []
+    candidates: list[tuple[float, float, float, bool]] = []
     for other in entries:
         if other is label_entry:
             continue
         if str(other.get("occurrence_id") or "MODELSPACE") != label_occurrence:
+            continue
+        if not _same_text_occurrence_and_view(label_entry, other):
             continue
         ox = other.get("x")
         oy = other.get("y")
@@ -888,11 +900,15 @@ def _nearest_right_numeric(
         if m:
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
             if val is not None:
-                candidates.append((dx, val, verified))
+                candidates.append((dx, abs(oy - ly), val, verified))
     if not candidates:
         return None, False
-    candidates.sort(key=lambda pair: pair[0])
-    return candidates[0][1], candidates[0][2]
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
+    nearest_distance = candidates[0][:2]
+    nearest = [candidate for candidate in candidates if candidate[:2] == nearest_distance]
+    if any(candidate[2:] != nearest[0][2:] for candidate in nearest[1:]):
+        return None, False
+    return nearest[0][2], nearest[0][3]
 
 
 def _detect_blank_fields(entries: list[dict[str, Any]], explicit: object) -> list[str]:
@@ -937,13 +953,7 @@ def _extract_particulars(
     insunits: int = 0,
 ) -> dict[str, Any]:
     equipment_marker_occurrences = {
-        (
-            str(entry.get("occurrence_id") or "MODELSPACE").rsplit("/", 1)[0]
-            if entry.get("_entity_type") != "ATTRIB"
-            and "/" in str(entry.get("occurrence_id") or "MODELSPACE")
-            and str(entry.get("occurrence_id") or "MODELSPACE").rsplit("/", 1)[0] != "MODELSPACE"
-            else str(entry.get("occurrence_id") or "MODELSPACE")
-        )
+        str(entry.get("occurrence_id") or "MODELSPACE")
         for entry in entries
         if str(entry.get("occurrence_id") or "MODELSPACE") != "MODELSPACE"
         and _EQUIPMENT_ACCESSORY_RE.search(str(entry.get("folded") or ""))
@@ -1104,7 +1114,7 @@ def _extract_particulars(
                         _append_unique(unverified_unitless_particulars, f"T:{raw_num}")
 
         eng_match = _ENGINE_RE.search(text)
-        if eng_match:
+        if eng_match and not equipment_context:
             rhs = re.sub(r"\s+", " ", eng_match.group(1)).strip(" :-=")
             if rhs and rhs != "?":
                 _append_unique(main_engines, rhs)
@@ -1117,10 +1127,11 @@ def _extract_particulars(
             if hno and hno != "?":
                 _append_unique(hull_nos, hno)
 
-        for pm in _PASSENGER_COUNT_RE.finditer(folded):
-            p_cnt = int(pm.group(1))
-            if p_cnt > 0:
-                _append_unique(passenger_count_values, p_cnt)
+        if not equipment_context:
+            for pm in _PASSENGER_COUNT_RE.finditer(folded):
+                p_cnt = int(pm.group(1))
+                if p_cnt > 0:
+                    _append_unique(passenger_count_values, p_cnt)
 
         for m in _SCALE_RE.finditer(folded):
             sc = _to_float(m.group(1))
@@ -1161,17 +1172,18 @@ def _extract_particulars(
             elif not is_equipment_item and ("tau hang kho" in clause_clean or "dry cargo" in clause_clean):
                 _append_unique(ship_types, "DRY CARGO")
 
-            for m in _CLASS_NOTATION_RE.finditer(clause_clean):
-                tag = f"VR-{m.group(1).upper()}"
-                _append_unique(class_notations, tag)
-                _append_unique(service_areas, "INLAND_WATERWAY")
-            for m in _EXPLICIT_CAP_RE.finditer(clause_clean):
-                tag = f"VR-{m.group(1).upper()}"
-                _append_unique(class_notations, tag)
-                _append_unique(service_areas, "INLAND_WATERWAY")
+            if not is_equipment_item:
+                for m in _CLASS_NOTATION_RE.finditer(clause_clean):
+                    tag = f"VR-{m.group(1).upper()}"
+                    _append_unique(class_notations, tag)
+                    _append_unique(service_areas, "INLAND_WATERWAY")
+                for m in _EXPLICIT_CAP_RE.finditer(clause_clean):
+                    tag = f"VR-{m.group(1).upper()}"
+                    _append_unique(class_notations, tag)
+                    _append_unique(service_areas, "INLAND_WATERWAY")
 
-            if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
-                _append_unique(service_areas, "INLAND_WATERWAY")
+                if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
+                    _append_unique(service_areas, "INLAND_WATERWAY")
             # Clause 2.4.6-9 eligibility is vessel-level evidence. Do not let a
             # lifeboat/equipment note or an unlabeled detail decide hull facts.
             if (
@@ -1233,7 +1245,7 @@ def _extract_particulars(
                     _append_unique(hull_materials, "CONCRETE")
 
         x_coord = entry.get("x")
-        if x_coord is not None:
+        if x_coord is not None and not equipment_context:
             stripped_folded = folded.strip()
             anchor_rec = {
                 "x": x_coord,
@@ -1249,20 +1261,21 @@ def _extract_particulars(
                 fp_coords.append(x_coord)
                 fp_anchors.append(anchor_rec)
 
-        has_plate_ctx = bool(_STRUCTURAL_PLATE_CTX_RE.search(folded))
-        for m in _PLATE_THICK_RE.finditer(folded):
-            raw_thk = m.group(1) or m.group(3)
-            thk = _to_float(raw_thk) if raw_thk else None
-            if thk is not None and 0.5 <= thk <= 80.0:
-                rounded = round(thk, 3)
-                if has_plate_ctx:
-                    extracted_plate_mm.append(rounded)
-                    if any(tok in folded for tok in ("ton day", "bottom", "keel")):
-                        bottom_plate_mm.append(rounded)
-                    if any(tok in folded for tok in ("ton hong", "ton ha ma", "bilge")):
-                        bilge_plate_mm.append(rounded)
-                else:
-                    unbound_plate_mm.append(rounded)
+        if not equipment_context:
+            has_plate_ctx = bool(_STRUCTURAL_PLATE_CTX_RE.search(folded))
+            for m in _PLATE_THICK_RE.finditer(folded):
+                raw_thk = m.group(1) or m.group(3)
+                thk = _to_float(raw_thk) if raw_thk else None
+                if thk is not None and 0.5 <= thk <= 80.0:
+                    rounded = round(thk, 3)
+                    if has_plate_ctx:
+                        extracted_plate_mm.append(rounded)
+                        if any(tok in folded for tok in ("ton day", "bottom", "keel")):
+                            bottom_plate_mm.append(rounded)
+                        if any(tok in folded for tok in ("ton hong", "ton ha ma", "bilge")):
+                            bilge_plate_mm.append(rounded)
+                    else:
+                        unbound_plate_mm.append(rounded)
 
     return {
         "design_length_l_m_values": design_length_l_m_values,

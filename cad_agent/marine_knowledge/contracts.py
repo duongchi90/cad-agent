@@ -1006,9 +1006,39 @@ def _resolve_regulation_clause_slices(
 
 
 _TB_BOUNDARY_RE = re.compile(
-    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)(?::|[.)](?=\s|$)|(?=\s|$))|"
+    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)|"
     r"(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
 )
+_TB_MEASUREMENT_UNIT_TOKEN_RE = re.compile(
+    r"^(?:%|m|mm|cm|km|ft|in|inch|inches|kg|g|t|ton|tons|hp|kw|kn|knot|knots|"
+    r"deg|degree|degrees|psi|bar|rpm|c)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
+    """Distinguish a numbered heading from a measurement beginning with the same digits."""
+    tail = suffix.lstrip()
+    if not tail:
+        return True
+    if tail.startswith(":"):
+        content = tail[1:].lstrip()
+        return not content or (not content[0].isdigit() and not content.startswith("%"))
+    if tail[0] in ".)":
+        return len(tail) == 1 or tail[1].isspace()
+    if suffix[:1].isspace():
+        token = tail.split(maxsplit=1)[0].strip(".,;:()[]{}")
+        return bool(token) and not _TB_MEASUREMENT_UNIT_TOKEN_RE.fullmatch(token) and token[0].isalpha()
+    return False
+
+
+def _is_textbook_clause_heading_line(line: str, clause_num: str) -> bool:
+    match = re.match(
+        rf"^\s*(?:(?:section|sec\.?|§)\s*)?{re.escape(clause_num)}",
+        line,
+        re.IGNORECASE,
+    )
+    return match is not None and _is_textbook_clause_heading_suffix(line[match.end() :])
 
 
 def _find_textbook_next_boundary(
@@ -1026,6 +1056,8 @@ def _find_textbook_next_boundary(
     for m_num in _TB_BOUNDARY_RE.finditer(merged_lines, start_after):
         boundary_num = m_num.group("number")
         if boundary_num and clause_depth is not None and _clause_depth(boundary_num) > clause_depth:
+            continue
+        if boundary_num and not _is_textbook_clause_heading_suffix(merged_lines[m_num.end("number") :]):
             continue
         pos = m_num.start()
         if merged_lines[pos : pos + 1] == "\n":
@@ -1046,14 +1078,9 @@ def _find_textbook_next_boundary(
     if start_page is not None and outline_norm:
         active_index: int | None = None
         if clause_num:
-            clause_re = re.compile(
-                rf"^(?:(?:section|sec\.?|§)\s*)?{re.escape(clause_num)}"
-                r"(?=\s|:|\)|$|\.(?!\d))",
-                re.IGNORECASE,
-            )
             matches = [
                 index for index, (page_no, _level, title) in enumerate(outline_norm)
-                if page_no <= start_page and clause_re.search(title)
+                if page_no <= start_page and _is_textbook_clause_heading_line(title, clause_num)
             ]
             if matches:
                 active_index = matches[-1]
@@ -1121,10 +1148,17 @@ def _resolve_textbook_clause_slices(
 
     if clause_items:
         for base_clause, _sub in clause_items:
-            m = re.search(
+            pattern = re.compile(
                 rf"(?im)(?:^|\n)\s*(?:(?:section|sec\.?|§)\s*)?"
-                rf"(?P<number>{re.escape(base_clause)})(?::|[.)](?=\s|$)|(?=\s|$))",
-                merged_lines,
+                rf"(?P<number>{re.escape(base_clause)})"
+            )
+            m = next(
+                (
+                    candidate
+                    for candidate in pattern.finditer(merged_lines)
+                    if _is_textbook_clause_heading_suffix(merged_lines[candidate.end("number") :])
+                ),
+                None,
             )
             if m is None:
                 _fail("CITATION_CLAUSE_PAGE_MISMATCH")
