@@ -144,7 +144,8 @@ def _make_multi_clause_pdf_and_manifest() -> tuple[bytes, dict[str, Any]]:
         (72, 72),
         "19 SYNTH REG\n"
         "2.1.1 Alpha rule requires double bottom minimum height 700 mm.\n"
-        "2.1.2 Beta rule governs totally separate rudder shaft torque limits.\n",
+        "2.1.2 Beta rule governs totally separate rudder shaft torque limits.\n"
+        "Quotation: 2.1.1 Alpha rule requires double bottom minimum height 700 mm.\n",
     )
     p2 = doc.new_page()
     p2.insert_text(
@@ -308,6 +309,65 @@ def test_mk574_01_citation_binds_excerpt_to_clause_span() -> None:
                 "pdf_page": [2, 1],
                 "reg_page": [20, 19],
                 "verbatim_excerpt": "Alpha rule requires double bottom minimum height 700 mm.",
+            },
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+
+    # A later quotation that repeats Alpha cannot rebind the second resolved slice
+    # after Beta and make caller-supplied reverse clause order appear document-ordered.
+    with pytest.raises(MarineKnowledgeError, match="CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH"):
+        verify_source_citation(
+            {
+                "source_id": "SYNTH_REG_CLAUSE_SPAN",
+                "source_sha256": sha,
+                "source_version": "2025",
+                "clause": "2.1.2 Beta rule; 2.1.1 Alpha rule",
+                "pdf_page": [1],
+                "reg_page": [19],
+                "verbatim_excerpt": (
+                    "Beta rule governs totally separate rudder shaft torque limits..."
+                    "Alpha rule requires double bottom minimum height 700 mm."
+                ),
+            },
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+
+
+def test_mk574_01_regulation_citation_rejects_omitted_intervening_page() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "19 SYNTH REG\n2.1.1 Alpha rule continues on the next page.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "20 SYNTH REG\n2.1.2 Beta rule governs a different requirement.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "21 SYNTH REG\nBeta continuation states rudder shaft torque limits.\n2.2 Closing rule.\n")
+    doc.set_toc([[1, "2.1.1 Alpha rule", 1], [1, "2.1.2 Beta rule", 2], [1, "2.2 Closing rule", 3]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_PAGE_GAP_MANIFEST",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_REG_PAGE_GAP", "title": "Synthetic page-gap regulation PDF",
+                "document_kind": "REGULATION", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic citation page-gap regression.",
+            }],
+        }
+    )
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(
+            {
+                "source_id": "SYNTH_REG_PAGE_GAP", "source_sha256": sha, "source_version": "2025",
+                "clause": "2.1.1 Alpha rule", "pdf_page": [1, 3], "reg_page": [19, 21],
+                "verbatim_excerpt": "Beta continuation states rudder shaft torque limits.",
             },
             manifest,
             source_bytes=pdf_bytes,

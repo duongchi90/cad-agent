@@ -776,7 +776,7 @@ def _resolve_regulation_clause_slices(
     pdf_pages: list[int],
     extracted_pages_lines: list[str],
     outline_entries: tuple[tuple[int, int, str], ...],
-) -> tuple[list[str], bool, str]:
+) -> tuple[list[str], list[int], bool, str]:
     merged_lines = "\n".join(extracted_pages_lines)
     page_offsets: dict[int, tuple[int, int]] = {}
     cursor = 0
@@ -791,12 +791,14 @@ def _resolve_regulation_clause_slices(
     outline_norm = [(pno, lvl, _normalize_ws(title)) for pno, lvl, title in outline_entries]
 
     slices: list[str] = []
+    slice_starts: list[int] = []
     all_bounded = True
     modes: list[str] = []
     if clause_items:
         for base_clause, sub_item in clause_items:
             base_depth = _clause_depth(base_clause)
             matched_slice: str | None = None
+            matched_start: int | None = None
             item_bounded = False
             item_mode = "UNRESOLVED"
 
@@ -831,6 +833,7 @@ def _resolve_regulation_clause_slices(
                         closing_found = True
                         break
                 matched_slice = merged_lines[body_start:body_end]
+                matched_start = body_start
                 toc_next_page = _outline_has_next_page_exit(
                     outline_norm,
                     cited_set,
@@ -920,6 +923,7 @@ def _resolve_regulation_clause_slices(
                     if not found_closing_outline and sub_item is None:
                         closing_bounded = False
                     matched_slice = merged_lines[o_start:o_end]
+                    matched_start = o_start
                     if pass_kind == "PASS_A":
                         item_bounded = (found_s is not None) and closing_bounded
                         item_mode = "OUTLINE_PASS_A_BOUNDED" if item_bounded else "OUTLINE_PASS_A_UNBOUNDED"
@@ -951,6 +955,7 @@ def _resolve_regulation_clause_slices(
                             closing_direct = True
                             break
                     matched_slice = merged_lines[direct_start:direct_end]
+                    matched_start = direct_start
                     item_bounded = closing_direct
                     item_mode = "INLINE_BOUNDED" if item_bounded else "INLINE_UNBOUNDED"
 
@@ -973,13 +978,18 @@ def _resolve_regulation_clause_slices(
                     if item_mode == "OUTLINE_PASS_B_SUBITEM":
                         item_bounded = True
                 matched_slice = matched_slice[s_start:s_end]
+                if matched_start is not None:
+                    matched_start += s_start
             elif item_mode == "OUTLINE_PASS_B_SUBITEM":
                 item_bounded = False
 
             all_bounded = all_bounded and item_bounded
             modes.append(item_mode)
             slices.append(re.sub(r"\s+", " ", matched_slice).strip())
-        return slices, bool(slices) and all_bounded, ",".join(modes)
+            if matched_start is None:
+                _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+            slice_starts.append(matched_start)
+        return slices, slice_starts, bool(slices) and all_bounded, ",".join(modes)
 
     if ch_anchors:
         merged_flat = re.sub(r"\s+", " ", merged_lines).strip()
@@ -988,10 +998,11 @@ def _resolve_regulation_clause_slices(
             if m_ch is None:
                 _fail("CITATION_CLAUSE_PAGE_MISMATCH")
             slices.append(merged_flat[m_ch.start() :])
-        return slices, False, "CHAPTER_ONLY_UNBOUNDED"
+            slice_starts.append(m_ch.start())
+        return slices, slice_starts, False, "CHAPTER_ONLY_UNBOUNDED"
 
     _fail("CITATION_CLAUSE_PAGE_MISMATCH")
-    return [], False, "UNRESOLVED"
+    return [], [], False, "UNRESOLVED"
 
 
 _TB_BOUNDARY_RE = re.compile(
@@ -1204,21 +1215,28 @@ def verify_source_citation(
             reader = PdfReader(BytesIO(raw_bytes))
             total_pdf_pages = len(reader.pages)
             outline_entries = _get_pdf_outline_entries(reader, actual_sha)
+            doc_kind = str(source_entry["document_kind"])
+            resolver_pdf_pages = pdf_pages
+            if doc_kind == "REGULATION" and len(pdf_pages) > 1:
+                # Keep omitted pages in the clause-boundary context so an intervening
+                # heading or continuation cannot disappear from a multi-page citation.
+                resolver_pdf_pages = list(range(pdf_pages[0], pdf_pages[-1] + 1))
             extracted_pages_lines: list[str] = []
-            for idx_pos, pdf_p in enumerate(pdf_pages):
+            reg_pages_by_pdf = dict(zip(pdf_pages, reg_pages))
+            for pdf_p in resolver_pdf_pages:
                 if pdf_p < 1 or pdf_p > total_pdf_pages:
                     _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
                 page_txt = reader.pages[pdf_p - 1].extract_text() or ""
                 extracted_pages_lines.append(_normalize_preserve_lines(page_txt))
-                if idx_pos < len(reg_pages):
-                    if str(reg_pages[idx_pos]) not in page_txt[:300]:
+                if pdf_p in reg_pages_by_pdf:
+                    if str(reg_pages_by_pdf[pdf_p]) not in page_txt[:300]:
                         _fail("CITATION_PAGE_MISMATCH")
 
-            doc_kind = str(source_entry["document_kind"])
             clause_items, ch_anchors, text_anchors = _extract_clause_anchors(
                 clause,
                 document_kind=doc_kind,
             )
+            resolved_clause_starts: list[int] = []
             if doc_kind == "TEXTBOOK":
                 bound_slices, span_bounded, clause_match_mode = _resolve_textbook_clause_slices(
                     clause_items=clause_items,
@@ -1229,22 +1247,26 @@ def verify_source_citation(
                     outline_entries=outline_entries,
                 )
             else:
-                bound_slices, span_bounded, clause_match_mode = _resolve_regulation_clause_slices(
+                bound_slices, resolved_clause_starts, span_bounded, clause_match_mode = _resolve_regulation_clause_slices(
                     clause_items=clause_items,
                     ch_anchors=ch_anchors,
-                    pdf_pages=pdf_pages,
+                    pdf_pages=resolver_pdf_pages,
                     extracted_pages_lines=extracted_pages_lines,
                     outline_entries=outline_entries,
                 )
 
-            normalized_source = _normalize_ws("\n".join(extracted_pages_lines))
-            source_cursor = 0
-            for bound_slice in bound_slices:
-                normalized_slice = _normalize_ws(bound_slice)
-                source_position = normalized_source.find(normalized_slice, source_cursor)
-                if not normalized_slice or source_position < 0:
+            if doc_kind == "REGULATION":
+                if any(later < earlier for earlier, later in zip(resolved_clause_starts, resolved_clause_starts[1:])):
                     _fail("CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH")
-                source_cursor = source_position + len(normalized_slice)
+            else:
+                normalized_source = _normalize_ws("\n".join(extracted_pages_lines))
+                source_cursor = 0
+                for bound_slice in bound_slices:
+                    normalized_slice = _normalize_ws(bound_slice)
+                    source_position = normalized_source.find(normalized_slice, source_cursor)
+                    if not normalized_slice or source_position < 0:
+                        _fail("CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH")
+                    source_cursor = source_position + len(normalized_slice)
 
             clause_span_status = "CLAUSE_SPAN_BOUNDED" if span_bounded else "CLAUSE_BOUNDARY_UNBOUNDED"
             states.append("PAGE_VERIFIED")

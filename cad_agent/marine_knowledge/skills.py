@@ -3535,6 +3535,20 @@ def detect_drawing_gaps_and_conflicts(
 
             decl_lengths = part["lpp_m_values"]
             lpp_values_unambiguous = len({round(float(value), 6) for value in decl_lengths}) == 1 if decl_lengths else False
+            if paired_spans and decl_lengths and not lpp_values_unambiguous:
+                findings.append(
+                    _make_finding(
+                        rules_by_id,
+                        finding_id=f"F_AP_FP_SPAN_LPP_AMBIGUOUS_{did}",
+                        verdict="INSUFFICIENT_EVIDENCE",
+                        rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                        evidence={"drawing_id": did, "declared_lpp_values_m": decl_lengths},
+                        reason=(
+                            f"Distinct Lpp declarations on {did} prevent a trustworthy AP/FP modelspace span comparison; "
+                            "the span check was not executed."
+                        ),
+                    )
+                )
             if not has_ocr_only and unit_factor is not None and lpp_values_unambiguous and decl_lengths[0] > 0 and paired_spans:
                 ran_span_check = True
                 decl_l = decl_lengths[0]

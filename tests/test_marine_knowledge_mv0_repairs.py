@@ -1104,6 +1104,19 @@ def test_mv0_04_exception_facts_require_vessel_scope_and_typed_boolean_metrics()
         assert typed_finding["verdict"] == expected_verdict
         assert typed_finding["evidence"]["exception_2_4_6_9_eligibility"] == expected_eligibility
 
+    # Semicolon-separated catalogue context must remain attached to a later SHIP TYPE clause.
+    for equipment_prefix in ("LIFEBOAT EQUIPMENT", "STEERING GEAR CATALOGUE"):
+        mixed = _ga(
+            drawing_id=f"GA_42_MIXED_{equipment_prefix.split()[0]}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            bulkheads=3,
+            ship_type_line=f"{equipment_prefix}; SHIP TYPE : DRY CARGO NON-CONTAINER",
+            extra_texts=[{"handle": "HULL1", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5400.0}],
+        )
+        mixed_result = evaluate_regulation_applicability_and_submittal([mixed])
+        assert mixed_result["status"] == "INSUFFICIENT_EVIDENCE"
+        assert not any(f["verdict"] == "CONFLICT" for f in mixed_result["findings"])
+
 
 def test_mv0_06_every_supported_ap_fp_view_span_is_checked_order_independently() -> None:
     """A bad supported view span cannot be hidden by whichever AP/FP pair is visited first."""
@@ -1292,6 +1305,11 @@ def test_mv0_06_checks_every_paired_span_independent_of_order_and_uses_lpp() -> 
     assert reference_result["status"] == "INSUFFICIENT_EVIDENCE"
     assert any(f["finding_id"] == "F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_SPAN_True" for f in reference_result["findings"])
 
+    parenthesized_reference = paired(large_first=True, lpp_line="Lpp = 52.00 m (REF.)")
+    parenthesized_result = detect_drawing_gaps_and_conflicts([parenthesized_reference])
+    assert parenthesized_result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(f["finding_id"] == "F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_SPAN_True" for f in parenthesized_result["findings"])
+
     conflicting_lpp = paired(large_first=True, lpp_line="Lpp = 52.00 m")
     conflicting_lpp["texts"].append({"handle": "LPP2", "text": "Lpp = 100.00 m", "x": 60000.0, "y": 6500.0})
     reversed_lpp = {**conflicting_lpp, "texts": list(reversed(conflicting_lpp["texts"]))}
@@ -1299,6 +1317,14 @@ def test_mv0_06_checks_every_paired_span_independent_of_order_and_uses_lpp() -> 
     second = detect_drawing_gaps_and_conflicts([reversed_lpp])
     assert first["status"] == second["status"] == "CONFLICT"
     assert first["proposal_only_actions"] == second["proposal_only_actions"]
+
+    near_conflict = paired(large_first=True, lpp_line="Lpp = 52.00 m")
+    near_conflict["texts"].append({"handle": "LPP2", "text": "Lpp = 52.001 m", "x": 60000.0, "y": 6500.0})
+    for case in (near_conflict, {**near_conflict, "texts": list(reversed(near_conflict["texts"]))}):
+        near_result = detect_drawing_gaps_and_conflicts([case])
+        assert near_result["status"] == "INSUFFICIENT_EVIDENCE"
+        assert not any(f["finding_id"] == "F_NO_GAPS_OR_CONFLICTS" for f in near_result["findings"])
+        assert any("LPP" in f["finding_id"] and f["verdict"] == "INSUFFICIENT_EVIDENCE" for f in near_result["findings"])
 
 
 def test_mv0_04_non_vessel_and_reference_notes_cannot_resolve_exception_scope() -> None:
@@ -1442,3 +1468,16 @@ def test_named_block_unsupported_carrier_marks_observation_incomplete() -> None:
     assert obs["skipped_entities"]
     assert classify_marine_drawing(obs)["status"] == "INSUFFICIENT_EVIDENCE"
     assert evaluate_regulation_applicability_and_submittal([obs])["status"] == "INSUFFICIENT_EVIDENCE"
+
+    # Ordinary TEXT before the unsupported carrier must not short-circuit the block scan.
+    text_then_carrier = _dxf_with_special_entities(
+        ["0", "INSERT", "8", "0", "2", "CARRIER_BLK", "10", "0.0", "20", "0.0", "30", "0.0"],
+        carrier_block_entities=[
+            "0", "TEXT", "8", "0", "10", "1", "20", "1", "30", "0", "40", "1", "1", "ordinary note",
+            "0", "OLE2FRAME", "8", "0",
+        ],
+    )
+    mixed_obs = observe_dxf_bytes(text_then_carrier, drawing_id="GA_NAMED_TEXT_THEN_OLE")
+    assert mixed_obs["skipped_entities"]
+    assert classify_marine_drawing(mixed_obs)["status"] == "INSUFFICIENT_EVIDENCE"
+    assert evaluate_regulation_applicability_and_submittal([mixed_obs])["status"] == "INSUFFICIENT_EVIDENCE"

@@ -91,7 +91,8 @@ _NEGATED_SCOPE_RE = re.compile(
     r"\b(?:khong\s+ap\s+dung|khong\s+phai|not\s+applicable|ngoai\s+tru|loai\s+tru)\b"
 )
 _INCIDENTAL_REF_RE = re.compile(
-    r"\b(?:tham\s+khao|tham\s+chieu|doi\s+chieu|so\s+sanh|vi\s+du|reference\s+only|for\s+reference|example)\b"
+    r"\b(?:tham\s+khao|tham\s+chieu|doi\s+chieu|so\s+sanh|vi\s+du|reference\s+only|for\s+reference|example)\b|"
+    r"\(\s*ref\.?\s*\)"
 )
 _VESSEL_BOUND_PREFIX_RE = re.compile(
     r"\b(?:cap\s+tau|class(?:ification)?|service\s+area|vung\s+hoat\s+dong|hull\s+(?:material|structure|configuration)|"
@@ -138,6 +139,7 @@ _STRUCTURAL_PLATE_CTX_RE = re.compile(
 
 _EQUIPMENT_ACCESSORY_RE = re.compile(
     r"\b(?:xuong\s+cuu\s+sinh|lifeboat|liferaft|phao\s+cuu\s+sinh|lifebuoy|lifejacket|"
+    r"steering[\s-]+gear(?:\s+catalog(?:ue)?)?|"
     r"locker|cabinet|enclosure|extinguisher|binh\s+chua\s+chay|fire\s+hose|fire\s+station|"
     r"davit|seat|chair|furniture|console|hatch\s+cover|door|window|decal|nameplate|"
     r"tu\s+dung|hop\s+dung|tu\s+chua|hop\s+chua)\b"
@@ -356,6 +358,7 @@ def _block_contains_text_or_insert(
     blk = blocks.get(block_name)
     if blk is None:
         return False, False, False
+    has_text_or_carrier = False
     for block_entity in blk:
         if not _reserve_dxf_entity_visit(
             budget,
@@ -374,9 +377,11 @@ def _block_contains_text_or_insert(
                     "reason": "UNSUPPORTED_TEXT_CARRIER_IN_BLOCK",
                 }
             )
-            return True, True, False
+            has_text_or_carrier = True
+            continue
         if bt in {"TEXT", "MTEXT", "ATTRIB"}:
-            return True, True, False
+            has_text_or_carrier = True
+            continue
         if bt in {"INSERT", "MINSERT"}:
             has_attributes = False
             for attrib in getattr(block_entity, "attribs", ()):
@@ -389,7 +394,7 @@ def _block_contains_text_or_insert(
                 ):
                     return False, True, True
             if has_attributes:
-                return True, True, False
+                has_text_or_carrier = True
             nested = str(getattr(block_entity.dxf, "name", "") or "")
             if nested and nested not in visited:
                 has_sub, _, exhausted = _block_contains_text_or_insert(
@@ -404,8 +409,8 @@ def _block_contains_text_or_insert(
                 if exhausted:
                     return False, True, True
                 if has_sub:
-                    return True, True, False
-    return False, True, False
+                    has_text_or_carrier = True
+    return has_text_or_carrier, True, False
 
 
 def _iter_virtual_entities(
@@ -1064,6 +1069,7 @@ def _extract_particulars(
             if cleaned_nm:
                 _append_unique(non_marine_domain_hits, cleaned_nm)
 
+        equipment_context = False
         for clause in re.split(r"[;\n]+", folded):
             clause_clean = clause.strip()
             if not clause_clean:
@@ -1075,7 +1081,8 @@ def _extract_particulars(
                 _append_unique(incidental_reference_mentions, clause_clean)
                 continue
 
-            is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
+            equipment_context = equipment_context or bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
+            is_equipment_item = equipment_context
             ship_m = None if is_equipment_item else _SHIP_TYPE_RE.search(clause_clean)
             if ship_m:
                 stype = ship_m.group(1).strip().upper()
