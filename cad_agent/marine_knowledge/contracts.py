@@ -1219,10 +1219,11 @@ def verify_source_citation(
             outline_entries = _get_pdf_outline_entries(reader, actual_sha)
             doc_kind = str(source_entry["document_kind"])
             resolver_pdf_pages: Sequence[int] = pdf_pages
-            if doc_kind == "REGULATION" and len(pdf_pages) > 1:
-                # Keep omitted pages in the clause-boundary context so an intervening
-                # heading or continuation cannot disappear from a multi-page citation.
-                # Excerpt matching below remains limited to explicitly cited pages.
+            if len(pdf_pages) > 1:
+                # Keep omitted pages in clause-boundary context for every document
+                # kind, so a non-contiguous citation cannot erase an intervening
+                # section heading or continuation. Excerpt matching below remains
+                # limited to explicitly cited pages.
                 resolver_pdf_pages = range(pdf_pages[0], pdf_pages[-1] + 1)
             extracted_pages_lines: list[str] = []
             reg_pages_by_pdf = dict(zip(pdf_pages, reg_pages))
@@ -1292,13 +1293,18 @@ def verify_source_citation(
                     if _normalize_ws(seg)
                 ]
                 cited_page_spans: list[tuple[int, int]] = []
-                page_cursor = 0
+                normalized_page_cursor = 0
                 for pdf_p, page_text in zip(resolver_pdf_pages, extracted_pages_lines):
                     normalized_page = _normalize_ws(page_text)
-                    page_end = page_cursor + len(normalized_page)
+                    if not normalized_page:
+                        continue
+                    page_start = normalized_source.find(normalized_page, normalized_page_cursor)
+                    if page_start < 0:
+                        _fail("CITATION_PAGE_MISMATCH")
+                    page_end = page_start + len(normalized_page)
                     if pdf_p in pdf_pages:
-                        cited_page_spans.append((page_cursor, page_end))
-                    page_cursor = page_end + 1
+                        cited_page_spans.append((page_start, page_end))
+                    normalized_page_cursor = page_end
 
                 allowed_spans = sorted(
                     (max(clause_start, page_start), min(clause_end, page_end))

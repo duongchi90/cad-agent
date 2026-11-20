@@ -465,6 +465,126 @@ def test_mk574_r20_regulation_excerpt_matching_does_not_duplicate_overlapping_cl
     assert ordered_siblings["verification_level"] == "SOURCE_CONTENT_VERIFIED"
 
 
+def test_mk574_r21_citation_page_offsets_share_normalized_source_coordinates() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "19 SYNTH REG\n2.1 Alpha rule opening paragraph.\n")
+    doc.new_page()  # Empty pages collapse to one normalized whitespace boundary.
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "21 SYNTH REG\nFIRSTCHARMATTERS.\n")
+    p4 = doc.new_page()
+    p4.insert_text((72, 72), "22 SYNTH REG\n2.2 Closing rule.\n")
+    doc.set_toc([[1, "2.1 Alpha rule", 1], [1, "2.2 Closing rule", 4]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_R21_NORMALIZED_PAGE_OFFSETS",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_REG_R21_OFFSETS", "title": "Synthetic blank-page offset PDF",
+                "document_kind": "REGULATION", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 4, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic normalized page-offset regression.",
+            }],
+        }
+    )
+    citation = {
+        "source_id": "SYNTH_REG_R21_OFFSETS", "source_sha256": sha, "source_version": "2025",
+        "clause": "2.1 Alpha rule", "pdf_page": [1, 3, 4], "reg_page": [19, 21, 22],
+        "verbatim_excerpt": "FIRSTCHARMATTERS.",
+    }
+
+    result = verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
+    assert result["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
+def test_mk574_r21_blank_pages_cannot_shift_an_omitted_excerpt_into_a_cited_page() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "19 SYNTH REG\n2.1 Alpha rule opening paragraph.\n")
+    for _ in range(7):
+        doc.new_page()
+    p9 = doc.new_page()
+    p9.insert_text((72, 72), "27 SYNTH REG\n")
+    p10 = doc.new_page()
+    p10.insert_text((72, 72), "DENIED OMITTED PAGE REQUIREMENT.\n")
+    p11 = doc.new_page()
+    p11.insert_text((72, 72), "29 SYNTH REG\n2.2 Closing rule.\n")
+    doc.set_toc([[1, "2.1 Alpha rule", 1], [1, "2.2 Closing rule", 11]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_R21_BLANK_PAGE_CUSTODY",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_REG_R21_BLANK_CUSTODY", "title": "Synthetic blank-page custody PDF",
+                "document_kind": "REGULATION", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 11, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic omitted-page blank-offset regression.",
+            }],
+        }
+    )
+    citation = {
+        "source_id": "SYNTH_REG_R21_BLANK_CUSTODY", "source_sha256": sha, "source_version": "2025",
+        "clause": "2.1 Alpha rule", "pdf_page": [1, 9, 11], "reg_page": [19, 27, 29],
+        "verbatim_excerpt": "DENIED",
+    }
+
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
+
+
+def test_mk574_r21_textbook_clause_context_keeps_omitted_pages() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "BEFORE GAP\n1.4 Applied heading.\nVALID TEXT FOR SECTION 1.4.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "1.5 Intervening section heading.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "AFTER GAP CLAIMED UNDER 1.4.\n")
+    doc.set_toc([[1, "1.4 Applied heading", 1], [1, "1.5 Intervening section heading", 2]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_R21_TEXTBOOK_GAP",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_TEXTBOOK_R21_GAP", "title": "Synthetic textbook gap PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic noncontiguous textbook citation regression.",
+            }],
+        }
+    )
+    base = {
+        "source_id": "SYNTH_TEXTBOOK_R21_GAP", "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied heading", "pdf_page": [1, 3], "verbatim_excerpt": "AFTER GAP CLAIMED UNDER 1.4.",
+    }
+
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(base, manifest, source_bytes=pdf_bytes)
+
+    valid_cited_page_excerpt = verify_source_citation(
+        {**base, "verbatim_excerpt": "VALID TEXT FOR SECTION 1.4."}, manifest, source_bytes=pdf_bytes
+    )
+    assert valid_cited_page_excerpt["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
 def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -> None:
     ga = _base_ga(
         drawing_id="GA_R20_EQUIPMENT_REF_SCOPE",
@@ -482,6 +602,41 @@ def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -
     result = evaluate_regulation_applicability_and_submittal([ga], partial_package=True)
     mk08 = next(f for f in result["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
     assert mk08["verdict"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_mk574_r21_equipment_catalogue_scope_cannot_assert_vessel_hull_structure() -> None:
+    for idx, hull_text in enumerate(("SINGLE SIDE", "DOUBLE SIDE"), start=1):
+        ga = _base_ga(
+            drawing_id=f"GA_R21_EQUIPMENT_HULL_SCOPE_{idx}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
+            bulkheads=3,
+            extra_texts=[
+                {
+                    "handle": "EQ",
+                    "text": f"STEERING GEAR CATALOGUE (REF.); HULL STRUCTURE : {hull_text}",
+                    "x": 60000.0,
+                    "y": 5200.0,
+                },
+            ],
+        )
+        observed = normalize_observation(ga)
+        assert observed["particulars"]["double_hull_or_double_side"] is False
+        assert observed["particulars"]["single_side_or_non_double_hull"] is False
+        result = evaluate_regulation_applicability_and_submittal([ga], partial_package=True)
+        mk08 = next(f for f in result["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+        assert result["status"] == "INSUFFICIENT_EVIDENCE"
+        assert mk08["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
+
+    vessel_fact = normalize_observation({
+        "drawing_id": "GA_R21_VESSEL_HULL_SCOPE",
+        "insunits": 4,
+        "texts": [
+            {"handle": "HULL", "text": "HULL STRUCTURE : SINGLE SIDE"},
+        ],
+        "structural_metrics": {},
+    })
+    assert vessel_fact["particulars"]["single_side_or_non_double_hull"] is True
 
 
 def test_mk574_r20_equipment_prefix_does_not_mask_explicit_vessel_scope() -> None:

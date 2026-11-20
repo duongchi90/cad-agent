@@ -1139,7 +1139,7 @@ def _extract_particulars(
             # lifeboat/equipment note or an unlabeled detail decide hull facts.
             if (
                 _VESSEL_HULL_CONFIGURATION_RE.search(clause_clean)
-                and not _EQUIPMENT_ACCESSORY_RE.search(clause_clean)
+                and not is_equipment_item
             ):
                 if _NON_DOUBLE_SIDE_RE.search(clause_clean):
                     single_side_or_non_double_hull = True
