@@ -590,6 +590,7 @@ def test_mk574_r22_textbook_omitted_outline_boundaries_do_not_verify_later_secti
         ("PUNCTUATED", "1.5. Intervening section heading."),
         ("SECTION_PREFIX", "Section 1.5 Intervening section heading."),
         ("SECTION_COLON", "Section 1.5: Intervening section heading."),
+        ("SECTION_COLON_NO_SPACE", "Section 1.5:Intervening section heading."),
         ("OUTLINE_ONLY", ""),
     ):
         doc = fitz.open()
@@ -691,6 +692,158 @@ def test_mk574_r23_unresolved_same_page_outline_sibling_does_not_verify_next_pag
     # from that page cannot be promoted to content-verified on this evidence.
     assert positive["verification_level"] == "SOURCE_PAGE_VERIFIED"
     assert "CLAUSE_CONTENT_VERIFIED" not in positive["verification_states"]
+
+
+def test_mk574_r24_inline_cross_reference_cannot_start_numbered_clause_span() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "1.3 Background\nSee Section 1.4 for a separate method.\nBACKGROUND ONLY TEXT.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "Section 1.4: Applied method\nACTUAL SECTION TEXT.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "Section 1.5: Closing section.\n")
+    doc.set_toc([[1, "Section 1.4 Applied heading", 2], [1, "Section 1.5 Closing section", 3]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R24_INLINE_CROSS_REFERENCE"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic inline cross-reference PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Inline reference must not anchor a clause citation.",
+            }],
+        }
+    )
+    base = {
+        "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied method", "pdf_page": [1, 2, 3],
+    }
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(
+            {**base, "verbatim_excerpt": "BACKGROUND ONLY TEXT."},
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+    positive = verify_source_citation(
+        {**base, "verbatim_excerpt": "ACTUAL SECTION TEXT."}, manifest, source_bytes=pdf_bytes
+    )
+    assert positive["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
+def test_mk574_r24_repeated_outline_sibling_title_uses_occurrence_after_clause_start() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "Appendix data\n4.3 Main section\nVALID SECTION 4.3 BODY.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "Appendix data\nAPPENDIX ONLY TEXT.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "4.4 Closing section.\n")
+    doc.set_toc([[1, "4.3 Main section", 1], [1, "Appendix data", 1], [1, "4.4 Closing section", 3]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R24_REPEATED_OUTLINE_TITLE"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic repeated outline title PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Earlier title duplicate must not mask later boundary.",
+            }],
+        }
+    )
+    result = verify_source_citation(
+        {
+            "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+            "clause": "4.3 Main section", "pdf_page": [1, 2, 3],
+            "verbatim_excerpt": "APPENDIX ONLY TEXT.",
+        },
+        manifest,
+        source_bytes=pdf_bytes,
+    )
+    assert result["verification_level"] != "SOURCE_CONTENT_VERIFIED"
+    assert "CLAUSE_CONTENT_VERIFIED" not in result["verification_states"]
+
+
+def _build_nested_equipment_dxf_bytes(
+    *, catalogue_as_attribute: bool = False, include_lpp: bool = False
+) -> bytes:
+    lines = [
+        "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
+        "9", "$INSUNITS", "70", "4", "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS",
+        "0", "BLOCK", "8", "0", "2", "VESSEL_ROOT", "70", "0",
+        "10", "0", "20", "0", "30", "0", "3", "VESSEL_ROOT",
+        "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
+        "1", "HULL STRUCTURE : SINGLE SIDE",
+        "0", "INSERT", "8", "0", "2", "STEERING_GEAR", "10", "0", "20", "0", "30", "0",
+        "41", "1", "42", "1", "43", "1",
+    ]
+    if catalogue_as_attribute:
+        lines.extend(["66", "1"])
+        lines.extend([
+            "0", "ATTRIB", "8", "0", "2", "ITEM", "10", "0", "20", "0", "30", "0",
+            "40", "250", "1", "STEERING GEAR CATALOGUE", "0", "SEQEND", "8", "0",
+        ])
+    lines.extend(["0", "ENDBLK", "8", "0", "2", "VESSEL_ROOT"])
+    lines.extend([
+        "0", "BLOCK", "8", "0", "2", "STEERING_GEAR", "70", "0",
+        "10", "0", "20", "0", "30", "0", "3", "STEERING_GEAR",
+    ])
+    if not catalogue_as_attribute:
+        lines.extend([
+            "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
+            "1", "STEERING GEAR CATALOGUE",
+        ])
+    if include_lpp:
+        lines.extend([
+            "0", "TEXT", "8", "0", "10", "0", "20", "500", "30", "0", "40", "250",
+            "1", "Lpp = 52.00 m",
+        ])
+    lines.extend([
+        "0", "ENDBLK", "8", "0", "2", "STEERING_GEAR", "0", "ENDSEC",
+        "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0", "2", "VESSEL_ROOT",
+        "10", "0", "20", "0", "30", "0", "41", "1", "42", "1", "43", "1",
+        "0", "ENDSEC", "0", "EOF", "",
+    ])
+    return "\n".join(lines).encode("latin-1")
+
+
+def test_mk574_r24_nested_equipment_label_does_not_make_sibling_hull_a_vessel_fact() -> None:
+    def observe(catalogue_as_attribute: bool) -> dict[str, Any]:
+        data = _build_nested_equipment_dxf_bytes(catalogue_as_attribute=catalogue_as_attribute)
+        return observe_dxf_bytes(data, drawing_id="GA_R24_NESTED_SCOPE")
+
+    # A nested block TEXT label scopes its containing assembly; an ATTRIB attached
+    # to the nested INSERT stays on that child and cannot mask its parent vessel text.
+    child_text = observe(catalogue_as_attribute=False)
+    child_attrib = observe(catalogue_as_attribute=True)
+    assert all("_entity_type" not in item for item in child_text["texts"])
+    assert all("_entity_type" not in item for item in child_attrib["texts"])
+    assert child_text["particulars"]["single_side_or_non_double_hull"] is False
+    assert child_attrib["particulars"]["single_side_or_non_double_hull"] is True
+
+
+def test_mk574_r24_equipment_lpp_cannot_supply_vessel_span_length() -> None:
+    observed = observe_dxf_bytes(
+        _build_nested_equipment_dxf_bytes(include_lpp=True), drawing_id="GA_R24_EQUIPMENT_LPP"
+    )
+    assert observed["particulars"]["lpp_m_values"] == []
+    result = detect_drawing_gaps_and_conflicts([observed], partial_package=True)
+    assert result["status"] != "PASS"
 
 
 def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -> None:

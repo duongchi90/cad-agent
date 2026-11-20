@@ -1006,7 +1006,7 @@ def _resolve_regulation_clause_slices(
 
 
 _TB_BOUNDARY_RE = re.compile(
-    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)[.):]?(?=\s|$)|"
+    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)(?::|[.)](?=\s|$)|(?=\s|$))|"
     r"(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
 )
 
@@ -1077,8 +1077,9 @@ def _find_textbook_next_boundary(
                 page_start, page_end = page_span
                 if page_end <= start_after:
                     continue
+                local_start_after = max(0, start_after - page_start)
                 local_heading = _find_heading_offset_in_lines(
-                    merged_lines[page_start:page_end], title, min_pos=0
+                    merged_lines[page_start:page_end], title, min_pos=local_start_after
                 )
                 if local_heading is not None:
                     outline_pos = page_start + local_heading
@@ -1120,18 +1121,18 @@ def _resolve_textbook_clause_slices(
 
     if clause_items:
         for base_clause, _sub in clause_items:
-            m = re.search(rf"(?m)(?:^|\n)\s*{re.escape(base_clause)}(?![.\d])", merged_lines)
+            m = re.search(
+                rf"(?im)(?:^|\n)\s*(?:(?:section|sec\.?|§)\s*)?"
+                rf"(?P<number>{re.escape(base_clause)})(?![.\d])",
+                merged_lines,
+            )
             if m is None:
-                m = re.search(rf"(?<!\d\.){re.escape(base_clause)}(?![.\d])", merged_lines)
-                start_pos = m.start() if m is not None else -1
-            else:
-                start_pos = m.start() + (1 if merged_lines[m.start() : m.start() + 1] == "\n" else 0)
-            if start_pos < 0:
                 _fail("CITATION_CLAUSE_PAGE_MISMATCH")
+            start_pos = m.start() + (1 if merged_lines[m.start() : m.start() + 1] == "\n" else 0)
 
             end_pos, found_end = _find_textbook_next_boundary(
                 merged_lines,
-                start_after=start_pos + len(base_clause),
+                start_after=m.end("number"),
                 outline_norm=outline_norm,
                 resolver_pdf_pages=resolver_pdf_pages,
                 extracted_pages_lines=extracted_pages_lines,

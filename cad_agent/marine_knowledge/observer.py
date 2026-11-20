@@ -322,6 +322,7 @@ def _entity_text_payload(
     y = _to_float(getattr(insert, "y", None)) or 0.0
     payload: dict[str, Any] = {
         "handle": str(getattr(entity.dxf, "handle", "") or ""),
+        "_entity_type": dxftype,
         "text": normalize_marine_cad_text(raw_text, font_hint=font_hint),
         "raw_text": raw_text,
         "font_hint": font_hint,
@@ -559,6 +560,7 @@ def _expand_insert_texts(
             break
         vtype = ve.dxftype()
         if vtype in {"INSERT", "MINSERT"}:
+            child_occurrence_id = f"{occurrence_id}/{getattr(ve.dxf, 'name', '')}"
             for attrib in getattr(ve, "attribs", ()):
                 if not _reserve_dxf_entity_visit(
                     budget,
@@ -571,7 +573,7 @@ def _expand_insert_texts(
                 if t_err is not None:
                     unsupported_text.append({"handle": str(getattr(attrib.dxf, "handle", "") or root_handle), "dxftype": "ATTRIB", "reason": t_err})
                     continue
-                attr_item = _entity_text_payload(attrib, style_fonts, occurrence_id=occurrence_id)
+                attr_item = _entity_text_payload(attrib, style_fonts, occurrence_id=child_occurrence_id)
                 if attr_item is not None and len(collected) < _MAX_BLOCK_TEXT_ITEMS:
                     collected.append(attr_item)
             _expand_insert_texts(
@@ -585,7 +587,7 @@ def _expand_insert_texts(
                 skipped=skipped,
                 budget=budget,
                 root_handle=root_handle,
-                occurrence_id=f"{occurrence_id}/{getattr(ve.dxf, 'name', '')}",
+                occurrence_id=child_occurrence_id,
             )
             continue
         if vtype in {"TEXT", "MTEXT", "ATTRIB"}:
@@ -813,6 +815,7 @@ def _normalize_text_entries(raw_texts: object) -> list[dict[str, Any]]:
                 "y": _to_float(item.get("y")),
                 "height": _to_float(item.get("height")),
                 "occurrence_id": str(item.get("occurrence_id") or "MODELSPACE"),
+                "_entity_type": str(item.get("_entity_type") or "TEXT").upper(),
                 **({"view_id": str(item["view_id"]).strip()} if item.get("view_id") else {}),
             }
         )
@@ -930,7 +933,13 @@ def _extract_particulars(
     insunits: int = 0,
 ) -> dict[str, Any]:
     equipment_marker_occurrences = {
-        str(entry.get("occurrence_id") or "MODELSPACE")
+        (
+            str(entry.get("occurrence_id") or "MODELSPACE").rsplit("/", 1)[0]
+            if entry.get("_entity_type") != "ATTRIB"
+            and "/" in str(entry.get("occurrence_id") or "MODELSPACE")
+            and str(entry.get("occurrence_id") or "MODELSPACE").rsplit("/", 1)[0] != "MODELSPACE"
+            else str(entry.get("occurrence_id") or "MODELSPACE")
+        )
         for entry in entries
         if str(entry.get("occurrence_id") or "MODELSPACE") != "MODELSPACE"
         and _EQUIPMENT_ACCESSORY_RE.search(str(entry.get("folded") or ""))
@@ -985,6 +994,10 @@ def _extract_particulars(
     for entry in entries:
         text = entry["text"]
         folded = entry["folded"]
+        occurrence_id = str(entry.get("occurrence_id") or "MODELSPACE")
+        equipment_context = occurrence_id in equipment_occurrences or bool(
+            _EQUIPMENT_ACCESSORY_RE.search(folded)
+        )
 
         for bad_tok in _CORRUPTED_NUMBER_RE.findall(text):
             _append_unique(corrupted_numeric_tokens, str(bad_tok).strip())
@@ -998,7 +1011,10 @@ def _extract_particulars(
                     _append_unique(unverified_unitless_particulars, f"L:{m.group(1)}")
 
         lpp_matched = False
-        if _INCIDENTAL_REF_RE.search(folded) or _REFERENCE_MARKER_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
+        if equipment_context:
+            # Equipment dimensions are not vessel particulars.
+            pass
+        elif _INCIDENTAL_REF_RE.search(folded) or _REFERENCE_MARKER_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
             _append_unique(incidental_reference_mentions, re.sub(r"\s+", " ", text).strip())
         else:
             for m in _LPP_RE.finditer(folded):
@@ -1110,8 +1126,6 @@ def _extract_particulars(
             if cleaned_nm:
                 _append_unique(non_marine_domain_hits, cleaned_nm)
 
-        occurrence_id = str(entry.get("occurrence_id") or "MODELSPACE")
-        equipment_context = occurrence_id in equipment_occurrences
         for clause in re.split(r"[;\n]+", folded):
             clause_clean = clause.strip()
             if not clause_clean:
@@ -1466,6 +1480,10 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         elif fval <= 0.0:
             invalid_structural_metrics.append(f"{mkey}={mval!r}")
 
+    public_text_entries = [
+        {key: value for key, value in entry.items() if key != "_entity_type"}
+        for entry in entries
+    ]
     return {
         "_normalized_marine_obs": True,
         "drawing_id": drawing_id,
@@ -1482,7 +1500,7 @@ def normalize_observation(raw: Mapping[str, Any]) -> dict[str, Any]:
         "unsupported_text_transforms": unsupported_text_transforms,
         "skipped_entities": skipped_entities,
         "invalid_structural_metrics": invalid_structural_metrics,
-        "texts": entries,
+        "texts": public_text_entries,
         "particulars": particulars,
         "structural_metrics": structural_metrics,
         "metric_provenance": metric_provenance,
