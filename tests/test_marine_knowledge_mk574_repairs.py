@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 from typing import Any
 
 import fitz
@@ -516,22 +515,24 @@ def test_mk574_r20_reference_lpp_cannot_supply_skill3_span_length(reference_suff
 
 
 def test_mk574_r20_nested_missing_block_definition_abstains() -> None:
-    import ezdxf
-
-    doc = ezdxf.new("R2010")
-    doc.header["$INSUNITS"] = 4
-    doc.header["$MEASUREMENT"] = 1
-    carrier = doc.blocks.new("CARRIER")
-    carrier.add_text("BẢN VẼ BỐ TRÍ CHUNG", dxfattribs={"insert": (0, 0), "height": 300})
-    carrier.add_blockref("MISSING_INNER", (0, 0))
-    remote = doc.blocks.new("REMOTE_XREF")
-    remote.block.dxf.flags = 4
-    remote.block.dxf.xref_path = "unavailable-reference.dwg"
-    carrier.add_blockref("REMOTE_XREF", (0, 0))
-    doc.modelspace().add_blockref("CARRIER", (0, 0))
-    stream = io.StringIO()
-    doc.write(stream)
-    observed = observe_dxf_bytes(stream.getvalue().encode("utf-8"), drawing_id="GA_R20_NESTED_MISSING")
+    data = "\n".join(
+        [
+            "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
+            "9", "$INSUNITS", "70", "4", "9", "$MEASUREMENT", "70", "1", "0", "ENDSEC",
+            "0", "SECTION", "2", "BLOCKS",
+            "0", "BLOCK", "8", "0", "2", "CARRIER", "70", "0", "10", "0", "20", "0", "30", "0", "3", "CARRIER",
+            "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "300", "1", "GENERAL ARRANGEMENT",
+            "0", "INSERT", "8", "0", "2", "MISSING_INNER", "10", "0", "20", "0", "30", "0",
+            "0", "INSERT", "8", "0", "2", "REMOTE_XREF", "10", "0", "20", "0", "30", "0",
+            "0", "ENDBLK", "8", "0",
+            "0", "BLOCK", "8", "0", "2", "REMOTE_XREF", "70", "4", "10", "0", "20", "0", "30", "0", "3", "REMOTE_XREF", "1", "unavailable-reference.dwg",
+            "0", "ENDBLK", "8", "0", "0", "ENDSEC",
+            "0", "SECTION", "2", "ENTITIES",
+            "0", "INSERT", "8", "0", "2", "CARRIER", "10", "0", "20", "0", "30", "0",
+            "0", "ENDSEC", "0", "EOF", "",
+        ]
+    ).encode("ascii")
+    observed = observe_dxf_bytes(data, drawing_id="GA_R20_NESTED_MISSING")
     assert any(item.get("reason") == "MISSING_BLOCK_DEFINITION" for item in observed["skipped_entities"])
     assert any(item.get("reason") == "EXTERNAL_REFERENCE_BLOCK_UNRESOLVED" for item in observed["skipped_entities"])
     assert classify_marine_drawing(observed)["status"] == "INSUFFICIENT_EVIDENCE"
