@@ -107,7 +107,7 @@ _NON_DOUBLE_SIDE_RE = re.compile(
     r"\b(?:man\s+don|vo\s+don|mot\s+lop\s+vo|single[\s-]side|single[\s-]hull|"
     r"non[\s-]double[\s-]side|non[\s-]double[\s-]hull|"
     r"khong\s+(?:co\s+)?(?:day\s+doi\s+)?man\s+kep|khong\s+phai\s+(?:day\s+doi\s+)?man\s+kep|"
-    r"day\s+don|single[\s-]bottom)\b"
+    r"day\s+don)\b"
 )
 _DOUBLE_HULL_RE = re.compile(
     r"\b(?:day\s+doi\s+man\s+kep|man\s+kep|vo\s+kep|double[\s-]hull|double[\s-]side)\b"
@@ -338,7 +338,18 @@ def _block_contains_text_or_insert(
     budget: dict[str, Any],
     skipped: list[dict[str, Any]],
     root_handle: str,
+    depth: int = 0,
 ) -> tuple[bool, bool, bool]:
+    if depth > _MAX_INSERT_RECURSION_DEPTH:
+        skipped.append(
+            {
+                "handle": root_handle,
+                "dxftype": "INSERT",
+                "block_name": block_name,
+                "reason": "INSERT_NESTING_TOO_DEEP",
+            }
+        )
+        return False, True, True
     blocks = getattr(doc, "blocks", None)
     if blocks is None or not block_name:
         return False, False, False
@@ -378,6 +389,7 @@ def _block_contains_text_or_insert(
                     budget=budget,
                     skipped=skipped,
                     root_handle=root_handle,
+                    depth=depth + 1,
                 )
                 if exhausted:
                     return False, True, True
@@ -1050,6 +1062,19 @@ def _extract_particulars(
                 _append_unique(incidental_reference_mentions, clause_clean)
                 continue
 
+            ship_m = _SHIP_TYPE_RE.search(clause_clean)
+            if ship_m:
+                stype = ship_m.group(1).strip().upper()
+                if stype:
+                    _append_unique(ship_types, stype)
+                    stype_folded = fold_marine_search_text(stype)
+                    if _NON_CONTAINER_RE.search(stype_folded):
+                        non_container_ship = True
+                    elif "CONTAINER" in stype or "CONG TE NO" in stype:
+                        is_container_ship = True
+            elif "tau hang kho" in clause_clean or "dry cargo" in clause_clean:
+                _append_unique(ship_types, "DRY CARGO")
+
             for m in _CLASS_NOTATION_RE.finditer(clause_clean):
                 tag = f"VR-{m.group(1).upper()}"
                 _append_unique(class_notations, tag)
@@ -1063,7 +1088,10 @@ def _extract_particulars(
                 _append_unique(service_areas, "INLAND_WATERWAY")
             # Clause 2.4.6-9 eligibility is vessel-level evidence. Do not let a
             # lifeboat/equipment note or an unlabeled detail decide hull facts.
-            if _VESSEL_HULL_CONFIGURATION_RE.search(clause_clean):
+            if (
+                _VESSEL_HULL_CONFIGURATION_RE.search(clause_clean)
+                and not _EQUIPMENT_ACCESSORY_RE.search(clause_clean)
+            ):
                 if _NON_DOUBLE_SIDE_RE.search(clause_clean):
                     single_side_or_non_double_hull = True
                 elif _DOUBLE_HULL_RE.search(clause_clean):
@@ -1118,19 +1146,6 @@ def _extract_particulars(
                     _append_unique(hull_materials, "STEEL")
                 if _CONCRETE_HULL_RE.search(clause_clean):
                     _append_unique(hull_materials, "CONCRETE")
-
-        ship_m = _SHIP_TYPE_RE.search(folded)
-        if ship_m:
-            stype = ship_m.group(1).strip().upper()
-            if stype:
-                _append_unique(ship_types, stype)
-                stype_folded = fold_marine_search_text(stype)
-                if _NON_CONTAINER_RE.search(stype_folded):
-                    non_container_ship = True
-                elif "CONTAINER" in stype or "CONG TE NO" in stype:
-                    is_container_ship = True
-        elif "tau hang kho" in folded or "dry cargo" in folded:
-            _append_unique(ship_types, "DRY CARGO")
 
         x_coord = entry.get("x")
         if x_coord is not None:

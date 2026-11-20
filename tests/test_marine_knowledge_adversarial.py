@@ -126,6 +126,7 @@ def _valid_mcn(
 def test_group_a_correct_data_and_mixed_unit_normalization() -> None:
     """Group A (DM-02, DM-12): valid multi-sheet inland VR-SB across mm/cm/m normalizes cleanly."""
     ga_mm = _valid_ga(insunits=4, length_line="Chiều dài tàu L = 52.00 m")
+    ga_mm["texts"].append({"handle": "LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6200.0, "height": 250.0})
     mcn_cm = _valid_mcn(
         drawing_id="ADV_MCN_CM",
         insunits=5,

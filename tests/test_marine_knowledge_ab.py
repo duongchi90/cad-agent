@@ -447,6 +447,7 @@ def _build_16_ground_truth_cases() -> list[tuple[str, str, list[dict[str, Any]],
     )
 
     span_1000x = _ga_vrsb(drawing_id="SPAN_1000X", insunits=6)  # meters header vs mm coords 1000..53000
+    span_1000x["texts"].append({"handle": "LPP_SPAN", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6100.0, "height": 250.0})
 
     reversed_bow = _ga_vrsb(drawing_id="BOW_Z_ERR")
     for t in reversed_bow["texts"]:

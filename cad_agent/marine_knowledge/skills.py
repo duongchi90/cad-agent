@@ -95,12 +95,23 @@ def build_marine_core_proposal(
         obs_set = {str(h) for h in observed_handles}
         if any(str(h) not in obs_set for h in target_handles):
             raise MarineKnowledgeError("PROPOSAL_STALE_HANDLE")
-    if (
-        "proposed_value_mm" in evidence
-        and evidence.get("insunits") == 0
-        and evidence.get("calibration_verified") is not True
-    ):
-        raise MarineKnowledgeError("PROPOSAL_UNCALIBRATED_DIM_EDIT")
+    if "proposed_value_mm" in evidence:
+        insunits = evidence.get("insunits")
+        supported_unit = (
+            isinstance(insunits, int)
+            and not isinstance(insunits, bool)
+            and insunits in _INSUNITS_TO_MM
+        )
+        scale = evidence.get("verified_scale_to_mm")
+        calibrated_fallback = (
+            evidence.get("calibration_verified") is True
+            and isinstance(scale, (int, float))
+            and not isinstance(scale, bool)
+            and math.isfinite(float(scale))
+            and float(scale) > 0.0
+        )
+        if not supported_unit and not calibrated_fallback:
+            raise MarineKnowledgeError("PROPOSAL_UNCALIBRATED_DIM_EDIT")
     if evidence.get("conflicting_measurements") is True:
         raise MarineKnowledgeError("PROPOSAL_CONFLICTING_MEASUREMENTS")
     return {
@@ -415,6 +426,24 @@ def classify_marine_drawing(
                 confidence=cls["confidence"],
             )
         )
+
+    if obs.get("skipped_entities"):
+        status = "INSUFFICIENT_EVIDENCE"
+        summary = (
+            f"Classification of {obs['drawing_id']} is incomplete because some CAD entities could not be read."
+        )
+        observed_scope["observation_complete"] = False
+        findings = [
+            _make_finding(
+                rules_by_id,
+                finding_id=f"F_CLASSIFICATION_INCOMPLETE_{obs['drawing_id']}",
+                verdict="INSUFFICIENT_EVIDENCE",
+                rule_id="RULE_MK_06_CROSS_DRAWING_COHERENCE",
+                evidence={"drawing_id": obs["drawing_id"], "skipped_entities": obs["skipped_entities"]},
+                reason="Skipped or unresolved CAD entities may change the drawing classification.",
+            )
+        ]
+        proposals = []
 
     return validate_check_result(
         {
@@ -1103,6 +1132,7 @@ def evaluate_regulation_applicability_and_submittal(
         for obs in obs_list
         for item in obs.get("invalid_structural_metrics", [])
     ]
+    incomplete_obs_ids = [o["drawing_id"] for o in obs_list if o.get("skipped_entities")]
     input_gates_blocked = bool(
         has_ocr_only
         or corrupted_tokens
@@ -1111,6 +1141,7 @@ def evaluate_regulation_applicability_and_submittal(
         or not units_ok
         or untrusted_deps
         or invalid_obs_metrics
+        or incomplete_obs_ids
     )
 
     fatal_scope_conflict = (
@@ -1178,6 +1209,22 @@ def evaluate_regulation_applicability_and_submittal(
         )
 
     if input_gates_blocked:
+        if incomplete_obs_ids:
+            findings.append(
+                _make_finding(
+                    rules_by_id,
+                    finding_id="F_INCOMPLETE_CAD_TRAVERSAL",
+                    verdict="INSUFFICIENT_EVIDENCE",
+                    rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                    evidence={
+                        "drawing_ids": incomplete_obs_ids,
+                        "skipped_entities": {
+                            o["drawing_id"]: o["skipped_entities"] for o in obs_list if o.get("skipped_entities")
+                        },
+                    },
+                    reason="Skipped or unresolved CAD entities can conceal scope or submittal evidence.",
+                )
+            )
         if untrusted_deps:
             findings.append(
                 _make_finding(
@@ -1256,7 +1303,7 @@ def evaluate_regulation_applicability_and_submittal(
                     rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
                     evidence={
                         "unitless_drawing_ids": unitless_ids,
-                        "calibration_verified": bool(calibration_verified),
+                        "calibration_verified": calibration_verified is True,
                         "verified_scale_to_mm": scale_mm,
                     },
                     reason=(
@@ -3113,7 +3160,7 @@ def detect_drawing_gaps_and_conflicts(
                 evidence={
                     "unitless_drawing_ids": unitless_ids,
                     "insunits_expected": [4, 5, 6],
-                    "calibration_verified": bool(calibration_verified),
+                        "calibration_verified": calibration_verified is True,
                     "verified_scale_to_mm": scale_mm,
                 },
                 reason=f"Unitless CAD ($INSUNITS=0) on {', '.join(unitless_ids)} without verified calibration.",
@@ -3426,7 +3473,7 @@ def detect_drawing_gaps_and_conflicts(
                         )
                     )
 
-            decl_lengths = part.get("design_length_l_m_values") or part["lpp_m_values"]
+            decl_lengths = part["lpp_m_values"]
             if not has_ocr_only and unit_factor is not None and decl_lengths and decl_lengths[0] > 0 and paired_spans:
                 ran_span_check = True
                 decl_l = decl_lengths[0]
@@ -3495,7 +3542,18 @@ def detect_drawing_gaps_and_conflicts(
                 if not paired_spans:
                     miss_bits.append("paired A.P / F.P view anchors absent or unresolved")
                 if not (decl_lengths and decl_lengths[0] > 0):
-                    miss_bits.append("declared vessel length (L / Lpp) absent")
+                    miss_bits.append("declared Lpp absent; design length L is not a substitute for A.P-to-F.P span checks")
+                    if paired_spans:
+                        findings.append(
+                            _make_finding(
+                                rules_by_id,
+                                finding_id=f"F_AP_FP_SPAN_UNAVAILABLE_LPP_{did}",
+                                verdict="INSUFFICIENT_EVIDENCE",
+                                rule_id="RULE_MK_03_CAD_UNITS_AND_CALIBRATION_REQUIRED",
+                                evidence={"drawing_id": did, "paired_span_count": len(paired_spans), "lpp_m_values": []},
+                                reason="A.P-to-F.P spans cannot be checked against design length L; verified Lpp is absent.",
+                            )
+                        )
                 span_unavailable_reasons.append(f"{did}: {', '.join(miss_bits)}")
         else:
             if did not in bow_missing_dids:
@@ -3508,9 +3566,9 @@ def detect_drawing_gaps_and_conflicts(
             if unit_factor is None:
                 miss_bits.append("drawing units ($INSUNITS) unverified and no verified calibration")
             miss_bits.append("A.P / F.P markers absent or incomplete")
-            decl_lengths = part.get("design_length_l_m_values") or part["lpp_m_values"]
+            decl_lengths = part["lpp_m_values"]
             if not (decl_lengths and decl_lengths[0] > 0):
-                miss_bits.append("declared vessel length (L / Lpp) absent")
+                miss_bits.append("declared Lpp absent; design length L is not a substitute for A.P-to-F.P span checks")
             span_unavailable_reasons.append(f"{did}: {', '.join(miss_bits)}")
 
         # Text height check only when scale and calibrated units are known and not OCR-only

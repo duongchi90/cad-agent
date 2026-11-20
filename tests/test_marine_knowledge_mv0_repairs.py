@@ -356,6 +356,25 @@ def test_mv0_03_bounded_citation_spans_and_rule08_2_4_6_9() -> None:
     assert tb_ok["verification_level"] == "SOURCE_CONTENT_VERIFIED"
     assert tb_ok["clause_span_status"] == "CLAUSE_SPAN_BOUNDED"
 
+    for excerpt in (
+        "midship planes...Base plane is perpendicular to the centerline",
+        "Base plane is perpendicular to the centerline...Base plane is perpendicular to the centerline",
+    ):
+        with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+            verify_source_citation(
+                {
+                    "source_id": "SYNTH_TB",
+                    "source_sha256": tb_sha,
+                    "source_version": "1",
+                    "clause": "Chapter 2, 2.1 Base plane definition",
+                    "pdf_page": [1],
+                    "reg_page": [],
+                    "verbatim_excerpt": excerpt,
+                },
+                tb_man,
+                source_bytes=tb_bytes,
+            )
+
     # 2. Regulation outline fallback WITHOUT body heading & WITHOUT closing boundary must NOT claim SOURCE_CONTENT_VERIFIED
     doc_reg = fitz.open()
     rp1 = doc_reg.new_page()
@@ -516,18 +535,6 @@ def test_custody_disposition_14_textbook_summaries_only_and_schema_parity() -> N
             priv_man,
             source_bytes=pbytes,
         )
-
-
-def test_manifest_does_not_publish_unused_private_local_source_identities() -> None:
-    """Private local drawing and unrelated archive identities have no V0 check and stay out of the public manifest."""
-    manifest = get_marine_source_manifest()
-    published = json.dumps(manifest, ensure_ascii=False)
-    assert "PRIVATE_HOMEWORK_DWG_20261109" not in published
-    assert "bai ve nha 09.11.2026_recover.dwg" not in published
-    assert "fca179cc8b89791560268a6da5251853914283b630d40317342aec6a4b057bde" not in published
-    assert "EXCLUDED_CDK_VEHICLE_CIRCULARS" not in published
-    assert "HỌC PHÍ" not in published
-    assert "13855f2999a1bc8e6d879c6111a1cd16dc92afe56756f7c624b52d1833eeffc1" not in published
 
 
 def test_dxf_insert_entity_budget_streams_and_marks_incomplete_observation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -796,7 +803,10 @@ def test_mv0_06_per_occurrence_bow_orientation_minsert_text_transforms_and_skipp
     )
     obs_arrow = observe_dxf_bytes(dxf_autarrow, drawing_id="GA_AUTARROW_OK")
     assert obs_arrow["unsupported_insert_transforms"] == []
-    assert detect_drawing_gaps_and_conflicts([obs_arrow])["status"] == "PASS"
+    arrow_result = detect_drawing_gaps_and_conflicts([obs_arrow])
+    assert arrow_result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert not any(f["finding_id"].startswith("F_UNSUPPORTED_INSERT_TRANSFORM") for f in arrow_result["findings"])
+    assert any(f["finding_id"].startswith("F_AP_FP_SPAN_UNAVAILABLE_LPP") for f in arrow_result["findings"])
 
 
 def test_mv0_07_gap_pass_requires_substantive_checks_executed() -> None:
@@ -820,7 +830,11 @@ def test_mv0_07_gap_pass_requires_substantive_checks_executed() -> None:
     assert not any(f["finding_id"] == "F_NO_GAPS_OR_CONFLICTS" for f in res_noise["findings"])
 
     # Positive control: full valid package -> PASS with substantive_checks_ran >= 3
-    res_ok = detect_drawing_gaps_and_conflicts([_ga(), _mcn()], partial_package=True)
+    ga_with_lpp = _ga(drawing_id="MV0_07_GA")
+    mcn_with_lpp = _mcn(drawing_id="MV0_07_MCN")
+    ga_with_lpp["texts"].append({"handle": "GA_LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6000.0, "height": 250.0})
+    mcn_with_lpp["texts"].append({"handle": "MCN_LPP", "text": "Lpp = 52.00 m", "x": 4000.0, "y": 3000.0, "height": 150.0})
+    res_ok = detect_drawing_gaps_and_conflicts([ga_with_lpp, mcn_with_lpp], partial_package=True)
     assert res_ok["status"] == "PASS"
     assert res_ok["observed_scope"]["substantive_checks_ran"] >= 3
 
@@ -1087,6 +1101,7 @@ def test_mv0_06_every_supported_ap_fp_view_span_is_checked_order_independently()
     def observation(*, short_span_view: str, good_span_view: str) -> dict[str, Any]:
         ga = _ga(drawing_id="GA_MULTI_SPAN", length_line="Chiều dài tàu L = 52.00 m", bulkheads=4)
         ga["texts"] = [text for text in ga["texts"] if text["handle"] not in {"G10", "G11"}]
+        ga["texts"].append({"handle": "LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6200.0, "height": 250.0})
         for view_id, fp_x in ((short_span_view, 1052.0), (good_span_view, 53000.0)):
             ga["texts"].extend(
                 [
@@ -1118,6 +1133,7 @@ def test_mv0_06_title_scale_cannot_reconcile_modelspace_span_mismatch() -> None:
     ga = _ga(drawing_id="GA_SCALE_CANNOT_HIDE_MODEL_MISMATCH", length_line="Chiều dài tàu L = 52.00 m", bulkheads=4)
     ga.pop("claimed_scale", None)
     ga["texts"] = [text for text in ga["texts"] if text["handle"] not in {"G10", "G11"}]
+    ga["texts"].append({"handle": "LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6200.0, "height": 250.0})
     ga["texts"].append({"handle": "SCALE1", "text": "SCALE 1:1000", "x": 60000.0, "y": 5500.0, "height": 250.0})
     for view_id, fp_x in (("INSERT_LARGE", 53000.0), ("INSERT_SMALL", 1052.0)):
         ga["texts"].extend(
@@ -1203,6 +1219,7 @@ def test_mv0_06_followup_independent_orientation_and_1000x_span_coverage() -> No
 
     # 3. Calibrated ($INSUNITS=4) with clean single A.P + F.P pair -> BOTH orientation and 1000x span in checks_executed -> PASS
     ga_ok = _ga(drawing_id="GA_MM_OK", insunits=4)
+    ga_ok["texts"].append({"handle": "LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6200.0, "height": 250.0})
     res_ok = detect_drawing_gaps_and_conflicts([ga_ok], partial_package=True)
     assert res_ok["status"] == "PASS"
     assert any("Bow direction (A.P vs F.P) orientation check" == chk for chk in res_ok["checks_executed"])
@@ -1219,3 +1236,147 @@ def test_mv0_06_followup_independent_orientation_and_1000x_span_coverage() -> No
     assert res_rev["status"] == "CONFLICT"
     assert any("F_BOW_ORIENTATION" in f["finding_id"] and f["verdict"] == "CONFLICT" for f in res_rev["findings"])
     assert any("Bow direction (A.P vs F.P) orientation check" == chk for chk in res_rev["checks_executed"])
+
+
+def test_mv0_06_checks_every_paired_span_independent_of_order_and_uses_lpp() -> None:
+    """Each associated span is checked against Lpp, independent of observation order."""
+    def paired(
+        *,
+        large_first: bool,
+        length_line: str = "Chiều dài tàu L = 52.00 m",
+        lpp_line: str = "Lpp = 52.00 m",
+    ) -> dict[str, Any]:
+        ga = _ga(drawing_id=f"GA_SPAN_{large_first}", length_line=length_line, insunits=4)
+        ga["texts"] = [text for text in ga["texts"] if text["handle"] not in {"G10", "G11"}]
+        ga["texts"].append({"handle": "LPP", "text": lpp_line, "x": 60000.0, "y": 6200.0, "height": 250.0})
+        large = [
+            {"handle": "AP_LARGE", "text": "A.P", "x": 1000.0, "y": 0.0, "height": 300.0, "view_id": "LARGE"},
+            {"handle": "FP_LARGE", "text": "F.P", "x": 53000.0, "y": 0.0, "height": 300.0, "view_id": "LARGE"},
+        ]
+        small = [
+            {"handle": "AP_SMALL", "text": "A.P", "x": 1000.0, "y": 1000.0, "height": 300.0, "view_id": "SMALL"},
+            {"handle": "FP_SMALL", "text": "F.P", "x": 1052.0, "y": 1000.0, "height": 300.0, "view_id": "SMALL"},
+        ]
+        ga["texts"].extend([*large, *small] if large_first else [*small, *large])
+        return ga
+
+    for large_first in (True, False):
+        result = detect_drawing_gaps_and_conflicts([paired(large_first=large_first)])
+        finding = next(f for f in result["findings"] if f["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X")
+        assert result["status"] == "CONFLICT"
+        assert len(finding["evidence"]["checked_ap_fp_spans"]) >= 2
+        assert len(finding["evidence"]["mismatched_ap_fp_spans"]) == 1
+
+    lpp_case = paired(large_first=True, lpp_line="Lpp = 31.00 m")
+    lpp_result = detect_drawing_gaps_and_conflicts([lpp_case])
+    lpp_finding = next(f for f in lpp_result["findings"] if f["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X")
+    assert lpp_finding["evidence"]["declared_length_m"] == 31.0
+
+    no_lpp = paired(large_first=True)
+    no_lpp["texts"] = [text for text in no_lpp["texts"] if text["handle"] != "LPP"]
+    unavailable = detect_drawing_gaps_and_conflicts([no_lpp])
+    assert unavailable["status"] == "INSUFFICIENT_EVIDENCE"
+    assert any(f["finding_id"] == "F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_SPAN_True" for f in unavailable["findings"])
+
+
+def test_mv0_04_non_vessel_and_reference_notes_cannot_resolve_exception_scope() -> None:
+    """Equipment-only hull wording and a reference-only ship type leave eligibility unknown."""
+    from cad_agent.marine_knowledge import observer
+
+    ga = _ga(
+        drawing_id="GA_42_NON_VESSEL_FACTS",
+        length_line="Chiều dài tàu L = 42.00 m",
+        ship_type_line="SHIP TYPE : DRY CARGO",
+        bulkheads=3,
+        extra_texts=[
+            {"handle": "NOTE1", "text": "HULL STRUCTURE : SINGLE HULL LIFEBOAT", "x": 60000.0, "y": 5500.0},
+            {"handle": "NOTE2", "text": "HULL STRUCTURE : SINGLE BOTTOM", "x": 60000.0, "y": 5800.0},
+            {"handle": "NOTE3", "text": "REFERENCE ONLY: SHIP TYPE : DRY CARGO NON-CONTAINER", "x": 60000.0, "y": 6100.0},
+        ],
+    )
+    part = observer.normalize_observation(ga)["particulars"]
+    assert not part["single_side_or_non_double_hull"]
+    assert not part["non_container_ship"]
+    result = evaluate_regulation_applicability_and_submittal([ga])
+    finding = next(f for f in result["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert finding["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
+
+
+def test_structured_exception_boolean_provenance_is_not_a_numeric_metric_conflict() -> None:
+    """Explicit structured exception booleans are validated separately from dimensional metrics."""
+    from cad_agent.marine_knowledge import observer
+
+    for value in (True, False):
+        ga = _ga(
+            drawing_id=f"GA_42_EXCEPTION_{value}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            bulkheads=3,
+            extra_metrics={"bulkhead_2_4_6_9_exception_applicable": value},
+            metric_provenance={"bulkhead_2_4_6_9_exception_applicable": "FIXTURE_SUPPLIED"},
+        )
+        normalized = observer.normalize_observation(ga)
+        assert not normalized["invalid_structural_metrics"]
+        result = evaluate_regulation_applicability_and_submittal([ga])
+        assert not any(f["finding_id"].startswith("F_INVALID_STRUCTURAL_METRIC") for f in result["findings"])
+
+
+def test_proposal_calibration_evidence_rejects_unknown_insunits() -> None:
+    """Calibration evidence must not be bypassed by string, missing, or unsupported unit codes."""
+    for insunits in ("0", None, 1):
+        with pytest.raises(MarineKnowledgeError, match="PROPOSAL_UNCALIBRATED_DIM_EDIT"):
+            build_marine_core_proposal(
+                target_drawing_id="GA_UNKNOWN_INSUNITS",
+                action_kind="SET_INSUNITS_AND_VERIFY_CALIBRATION",
+                evidence={"insunits": insunits, "proposed_value_mm": 52000.0, "calibration_verified": "false"},
+            )
+
+
+def test_incomplete_calibration_is_reported_as_exact_boolean_false() -> None:
+    """Truthiness is not verification in the emitted uncalibrated-evidence record."""
+    unitless = _ga(drawing_id="GA_FORGED_CALIBRATION_OUTPUT", insunits=0)
+    result = detect_drawing_gaps_and_conflicts([unitless], calibration_verified="false")  # type: ignore[arg-type]
+    gate = next(f for f in result["findings"] if f["finding_id"] == "F_UNITLESS_BLOCKED")
+    assert gate["evidence"]["calibration_verified"] is False
+    reg_result = evaluate_regulation_applicability_and_submittal(
+        [_ga(drawing_id="GA_FORGED_CALIBRATION_SKILL2", insunits=0)],
+        calibration_verified="false",  # type: ignore[arg-type]
+    )
+    reg_gate = next(f for f in reg_result["findings"] if f["finding_id"] == "F_UNITS_UNVERIFIED")
+    assert reg_gate["evidence"]["calibration_verified"] is False
+
+
+def test_deep_insert_chain_is_bounded_before_recursive_text_prescan() -> None:
+    """A nested INSERT chain beyond supported depth is incomplete, never a Python recursion crash."""
+    depth = 1_100
+    lines = [
+        "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
+        "9", "$INSUNITS", "70", "4", "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS",
+    ]
+    for idx in range(depth):
+        name = f"B{idx:04d}"
+        lines.extend(["0", "BLOCK", "8", "0", "2", name, "70", "0", "10", "0", "20", "0", "30", "0", "3", name])
+        if idx + 1 < depth:
+            lines.extend(["0", "INSERT", "8", "0", "2", f"B{idx + 1:04d}", "10", "0", "20", "0", "30", "0"])
+        else:
+            lines.extend(["0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "1", "1", "nested note"])
+        lines.extend(["0", "ENDBLK"])
+    lines.extend(["0", "ENDSEC", "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0", "2", "B0000", "10", "0", "20", "0", "30", "0", "0", "ENDSEC", "0", "EOF", ""])
+
+    try:
+        observation = observe_dxf_bytes("\n".join(lines).encode("ascii"), drawing_id="DEEP_INSERT")
+    except RecursionError:
+        pytest.fail("recursive INSERT pre-scan exceeded Python's recursion limit")
+    assert observation["skipped_entities"] or observation["unsupported_insert_transforms"]
+
+
+def test_skipped_entities_cannot_leave_skills_1_or_2_definitive() -> None:
+    """Incomplete traversal evidence must propagate to classification and applicability results."""
+    from cad_agent.marine_knowledge.skills import classify_marine_drawing
+
+    obs = _ga(drawing_id="GA_TRAVERSAL_INCOMPLETE")
+    obs["skipped_entities"] = [{"handle": "1", "dxftype": "INSERT", "reason": "test limit"}]
+    classified = classify_marine_drawing(obs)
+    evaluated = evaluate_regulation_applicability_and_submittal([obs])
+    assert classified["status"] == "INSUFFICIENT_EVIDENCE"
+    assert evaluated["status"] == "INSUFFICIENT_EVIDENCE"

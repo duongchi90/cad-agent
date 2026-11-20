@@ -1245,9 +1245,16 @@ def verify_source_citation(
                     for seg in excerpt.split("...")
                     if _normalize_ws(seg)
                 ]
-                if not segments or not bound_slices or not all(
-                    any(seg in sl for sl in bound_slices) for seg in segments
-                ):
+                bounded_text = "\n".join(_normalize_ws(sl) for sl in bound_slices)
+                cursor = 0
+                ordered_match = bool(segments and bound_slices)
+                for segment in segments:
+                    position = bounded_text.find(segment, cursor)
+                    if position < 0:
+                        ordered_match = False
+                        break
+                    cursor = position + len(segment)
+                if not ordered_match:
                     _fail("CITATION_EXCERPT_CONTENT_MISMATCH")
                 if span_bounded:
                     states.append("CLAUSE_CONTENT_VERIFIED")

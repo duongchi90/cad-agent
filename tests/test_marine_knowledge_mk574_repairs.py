@@ -726,8 +726,12 @@ def test_mk574_12_metadata_only_empty_observation_cannot_pass_gap_check() -> Non
     assert not any("Bow direction" in chk for chk in res_empty["checks_executed"])
 
     # Positive control: populated valid package returns PASS and lists genuinely executed checks
+    ga_with_lpp = _base_ga()
+    mcn_with_lpp = _base_mcn()
+    ga_with_lpp["texts"].append({"handle": "GA_LPP", "text": "Lpp = 52.00 m", "x": 60000.0, "y": 6000.0, "height": 250.0})
+    mcn_with_lpp["texts"].append({"handle": "MCN_LPP", "text": "Lpp = 52.00 m", "x": 4000.0, "y": 3000.0, "height": 150.0})
     res_ok = validate_check_result(
-        detect_drawing_gaps_and_conflicts([_base_ga(), _base_mcn()], partial_package=True)
+        detect_drawing_gaps_and_conflicts([ga_with_lpp, mcn_with_lpp], partial_package=True)
     )
     assert res_ok["status"] == "PASS"
     assert any("Bow direction" in chk for chk in res_ok["checks_executed"])
