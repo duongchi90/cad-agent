@@ -1011,7 +1011,7 @@ _TB_BOUNDARY_RE = re.compile(
 )
 _TB_MEASUREMENT_UNIT_TOKEN_RE = re.compile(
     r"^(?:%|m/s|m/sec|km/h|km/hr|ft/s|ft/min|m/min|mm|cm|km|m|ft|inch|inches|"
-    r"kg|g|t|ton|tons|hp|kw|kn|knot|knots|deg|degree|degrees|psi|bar|rpm|c)\.?$",
+    r"kg|g|t|ton|tons|hp|kw|kn|knot|knots|deg|degree|degrees|psi|kpa|bar|rpm|in|c)\.?$",
     re.IGNORECASE,
 )
 
@@ -1030,6 +1030,9 @@ def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
         return not content or (not content[0].isdigit() and not content.startswith("%"))
     if tail[0] in ".)":
         return len(tail) == 1 or tail[1].isspace()
+    if tail[0] in "-–—":
+        content = tail[1:].lstrip(" \t")
+        return not content or (not content[0].isdigit() and not content.startswith("%"))
     if physical_line_suffix[:1] in {" ", "\t"}:
         token = tail.split(maxsplit=1)[0].strip(".,;:()[]{}")
         return bool(token) and not _TB_MEASUREMENT_UNIT_TOKEN_RE.fullmatch(token) and token[0].isalpha()

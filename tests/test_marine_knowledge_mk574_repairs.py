@@ -909,7 +909,8 @@ def test_mk574_r26_measurement_line_does_not_end_a_textbook_clause() -> None:
     [
         ("1.5", "5 percent margin is described here."),
         ("2.3:", "30 degrees was the starting angle."),
-        ("1.5 in service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
+        ("1.5. In service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
+        ("Section 1.5 - Auxiliary steering", "THE AUXILIARY STEERING RULE BELONGS TO SECTION 1.5."),
     ],
 )
 def test_mk574_r27_textbook_citation_stops_at_physical_heading_line(
@@ -951,6 +952,44 @@ def test_mk574_r27_textbook_citation_stops_at_physical_heading_line(
         verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
 
 
+def test_mk574_r28_measurement_suffix_cannot_anchor_a_textbook_clause() -> None:
+    doc = fitz.open()
+    prior_page = doc.new_page()
+    prior_page.insert_text(
+        (72, 72),
+        "1.3 Existing requirements\n"
+        "1.4 kPa design limit governs the earlier requirement.\n",
+    )
+    real_clause_page = doc.new_page()
+    real_clause_page.insert_text((72, 72), "Section 1.4\nREAL SECTION 1.4 REQUIREMENT TEXT.\n")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R28_MEASUREMENT_SUFFIX"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic measurement suffix PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 2, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "A measurement token is not a clause heading.",
+            }],
+        }
+    )
+    citation = {
+        "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4", "pdf_page": [1],
+        "verbatim_excerpt": "kPa design limit governs the earlier requirement.",
+    }
+    with pytest.raises(MarineKnowledgeError, match="CITATION_CLAUSE_PAGE_MISMATCH"):
+        verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
+
+
 def _build_nested_equipment_dxf_bytes(
     *,
     catalogue_as_attribute: bool = False,
@@ -960,12 +999,13 @@ def _build_nested_equipment_dxf_bytes(
     vessel_length_line: str | None = None,
     length_in_nested_block: bool = False,
     nested_catalogue_label: bool = False,
+    root_block_name: str = "VESSEL_ROOT",
 ) -> bytes:
     lines = [
         "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
         "9", "$INSUNITS", "70", "4", "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS",
-        "0", "BLOCK", "8", "0", "2", "VESSEL_ROOT", "70", "0",
-        "10", "0", "20", "0", "30", "0", "3", "VESSEL_ROOT",
+        "0", "BLOCK", "8", "0", "2", root_block_name, "70", "0",
+        "10", "0", "20", "0", "30", "0", "3", root_block_name,
     ]
     if not hull_text_in_nested_block:
         lines.extend([
@@ -992,7 +1032,7 @@ def _build_nested_equipment_dxf_bytes(
             "0", "INSERT", "5", "A2", "8", "0", "2", "STEERING_GEAR", "10", "2000", "20", "0", "30", "0",
             "41", "1", "42", "1", "43", "1",
         ])
-    lines.extend(["0", "ENDBLK", "8", "0", "2", "VESSEL_ROOT"])
+    lines.extend(["0", "ENDBLK", "8", "0", "2", root_block_name])
     lines.extend([
         "0", "BLOCK", "8", "0", "2", "STEERING_GEAR", "70", "0",
         "10", "0", "20", "0", "30", "0", "3", "STEERING_GEAR",
@@ -1040,7 +1080,7 @@ def _build_nested_equipment_dxf_bytes(
         ])
     lines.extend([
         "0", "ENDSEC",
-        "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0", "2", "VESSEL_ROOT",
+        "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0", "2", root_block_name,
         "10", "0", "20", "0", "30", "0", "41", "1", "42", "1", "43", "1",
         "0", "ENDSEC", "0", "EOF", "",
     ])
@@ -1113,6 +1153,20 @@ def test_mk574_r27_nested_catalogue_label_keeps_equipment_assembly_facts_out_of_
     assert particulars["single_side_or_non_double_hull"] is False
 
 
+def test_mk574_r28_nested_catalogue_does_not_promote_mixed_vessel_ancestor_to_equipment() -> None:
+    observed = observe_dxf_bytes(
+        _build_nested_equipment_dxf_bytes(
+            root_block_name="VESSEL_STEERING_GEAR",
+            vessel_length_line="L = 52.00 m",
+            nested_catalogue_label=True,
+        ),
+        drawing_id="GA_R28_MIXED_ASSEMBLY_ANCESTOR_SCOPE",
+    )
+    particulars = observed["particulars"]
+    assert particulars["design_length_l_m_values"] == [52.0]
+    assert particulars["single_side_or_non_double_hull"] is True
+
+
 def _build_lpp_row_pairing_dxf_bytes() -> bytes:
     lines = [
         "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015", "9", "$INSUNITS", "70", "4",
@@ -1133,6 +1187,45 @@ def _build_lpp_row_pairing_dxf_bytes() -> bytes:
     return "\n".join(lines).encode("ascii")
 
 
+def _build_lpp_hold_length_dxf_bytes() -> bytes:
+    lines = [
+        "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015", "9", "$INSUNITS", "70", "4",
+        "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES",
+    ]
+    for handle, text, x, y in (
+        ("A1", "LENGTH (L.P.P)", 60000, 6000),
+        ("A2", "55 m", 62000, 6050),
+        ("A3", "HOLD LENGTH", 63000, 6000),
+        ("A4", "40 m", 65000, 6000),
+        ("A5", "A.P", 1000, 0),
+        ("A6", "F.P", 41000, 0),
+    ):
+        lines.extend([
+            "0", "TEXT", "5", handle, "8", "0", "10", str(x), "20", str(y), "30", "0",
+            "40", "250", "1", text,
+        ])
+    lines.extend(["0", "ENDSEC", "0", "EOF", ""])
+    return "\n".join(lines).encode("ascii")
+
+
+def _build_blank_lpp_breadth_value_dxf_bytes() -> bytes:
+    lines = [
+        "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015", "9", "$INSUNITS", "70", "6",
+        "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES",
+    ]
+    for handle, text, x, y in (
+        ("B1", "LENGTH (L.P.P)", 0, 0),
+        ("B2", "BREADTH", 10, 0),
+        ("B3", "15 m", 13, 0),
+    ):
+        lines.extend([
+            "0", "TEXT", "5", handle, "8", "0", "10", str(x), "20", str(y), "30", "0",
+            "40", "0.3", "1", text,
+        ])
+    lines.extend(["0", "ENDSEC", "0", "EOF", ""])
+    return "\n".join(lines).encode("ascii")
+
+
 def test_mk574_r27_off_row_numeric_text_cannot_hide_a_native_ap_fp_lpp_conflict() -> None:
     observation = observe_dxf_bytes(
         _build_lpp_row_pairing_dxf_bytes(),
@@ -1141,6 +1234,25 @@ def test_mk574_r27_off_row_numeric_text_cannot_hide_a_native_ap_fp_lpp_conflict(
     result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
     assert observation["particulars"]["lpp_m_values"] == [55.0]
     assert any(item["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X" for item in result["findings"])
+
+
+def test_mk574_r28_intervening_field_label_delimits_lpp_value_binding() -> None:
+    observation = observe_dxf_bytes(
+        _build_lpp_hold_length_dxf_bytes(), drawing_id="GA_R28_HOLD_LENGTH_DELIMITER"
+    )
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
+    assert observation["particulars"]["lpp_m_values"] == [55.0]
+    assert observation["metric_provenance"]["lpp_m"] == "NATIVE_CAD_TEXT"
+    assert any(item["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X" for item in result["findings"])
+
+
+def test_mk574_r28_breadth_value_cannot_fill_blank_lpp_field() -> None:
+    observation = observe_dxf_bytes(
+        _build_blank_lpp_breadth_value_dxf_bytes(), drawing_id="GA_R28_BLANK_LPP_BREADTH_VALUE"
+    )
+    assert observation["particulars"]["lpp_m_values"] == []
+    assert observation["particulars"]["breadth_m_values"] == [15.0]
+    assert "lpp_m" not in observation["metric_provenance"]
 
 
 def test_mk574_r24_equipment_lpp_cannot_supply_vessel_span_length() -> None:

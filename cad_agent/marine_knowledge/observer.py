@@ -32,6 +32,10 @@ _KNOWN_BLANK_FIELD_LABELS = (
     "SHIPYARD",
     "HULL NO",
 )
+_NUMERIC_FIELD_LABEL_RE = re.compile(
+    r"\b(?:lpp|l\.?p\.?p|lwl|length|hold\s+length|breadth|beam|width|depth|draught|draft)\b",
+    re.IGNORECASE,
+)
 
 _MAX_OBSERVATION_TEXT_ITEMS = 5000
 _MAX_TEXT_LENGTH = 4096
@@ -880,6 +884,7 @@ def _nearest_right_numeric(
     label_occurrence = str(label_entry.get("occurrence_id") or "MODELSPACE")
     h = label_entry.get("height") or 200.0
     candidates: list[tuple[float, float, float, bool]] = []
+    max_dy_row = max(h * 1.6, 350.0)
     for other in entries:
         if other is label_entry:
             continue
@@ -894,7 +899,23 @@ def _nearest_right_numeric(
         dx = ox - lx
         if dx <= 0.0 or dx > max(h * 70.0, 30000.0):
             continue
-        if abs(oy - ly) > max(h * 1.6, 350.0):
+        if abs(oy - ly) > max_dy_row:
+            continue
+        # A neighboring field label owns values to its right. Do not let a
+        # farther, better-aligned value cross that boundary and become Lpp.
+        crossed_field_label = any(
+            field is not label_entry
+            and field is not other
+            and _NUMERIC_FIELD_LABEL_RE.search(str(field.get("folded") or ""))
+            and str(field.get("occurrence_id") or "MODELSPACE") == label_occurrence
+            and _same_text_occurrence_and_view(label_entry, field)
+            and field.get("x") is not None
+            and lx < field["x"] < ox
+            and field.get("y") is not None
+            and abs(field["y"] - ly) <= max_dy_row
+            for field in entries
+        )
+        if crossed_field_label:
             continue
         m = re.fullmatch(r"\s*([0-9]+(?:[.,][0-9]+)?)\s*(mm|cm|m)?\s*", other["folded"])
         if m:
@@ -976,7 +997,7 @@ def _extract_particulars(
         path_parts = marked_occurrence.split("/")
         for depth, segment in enumerate(path_parts, start=1):
             block_name = _occurrence_block_name(segment).replace("_", " ")
-            if block_name and _EQUIPMENT_ACCESSORY_RE.search(fold_marine_search_text(block_name)):
+            if block_name and _EQUIPMENT_ACCESSORY_RE.fullmatch(fold_marine_search_text(block_name)):
                 equipment_scope_roots.add("/".join(path_parts[:depth]))
 
     equipment_occurrences: set[str] = set()
