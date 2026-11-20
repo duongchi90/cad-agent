@@ -1006,7 +1006,7 @@ def _resolve_regulation_clause_slices(
 
 
 _TB_BOUNDARY_RE = re.compile(
-    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)[.)]?(?=\s|$)|"
+    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)[.):]?(?=\s|$)|"
     r"(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
 )
 
@@ -1046,7 +1046,11 @@ def _find_textbook_next_boundary(
     if start_page is not None and outline_norm:
         active_index: int | None = None
         if clause_num:
-            clause_re = re.compile(rf"^{re.escape(clause_num)}(?=[\s.:)]|$)", re.IGNORECASE)
+            clause_re = re.compile(
+                rf"^(?:(?:section|sec\.?|§)\s*)?{re.escape(clause_num)}"
+                r"(?=\s|:|\)|$|\.(?!\d))",
+                re.IGNORECASE,
+            )
             matches = [
                 index for index, (page_no, _level, title) in enumerate(outline_norm)
                 if page_no <= start_page and clause_re.search(title)

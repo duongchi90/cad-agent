@@ -589,6 +589,7 @@ def test_mk574_r22_textbook_omitted_outline_boundaries_do_not_verify_later_secti
     for case_id, boundary_text in (
         ("PUNCTUATED", "1.5. Intervening section heading."),
         ("SECTION_PREFIX", "Section 1.5 Intervening section heading."),
+        ("SECTION_COLON", "Section 1.5: Intervening section heading."),
         ("OUTLINE_ONLY", ""),
     ):
         doc = fitz.open()
@@ -601,13 +602,10 @@ def test_mk574_r22_textbook_omitted_outline_boundaries_do_not_verify_later_secti
         p3.insert_text((72, 72), "LATER SECTION TEXT MUST NOT VERIFY AS 1.4.\n")
         p4 = doc.new_page()
         p4.insert_text((72, 72), "1.6 Closing section heading.\n")
-        doc.set_toc(
-            [
-                [1, "1.4 Applied heading", 1],
-                [1, "1.5 Intervening section heading", 2],
-                [1, "1.6 Closing section heading", 4],
-            ]
-        )
+        toc = [[1, "1.4 Applied heading", 1], [1, "1.6 Closing section heading", 4]]
+        if case_id == "OUTLINE_ONLY":
+            toc.insert(1, [1, "1.5 Intervening section heading", 2])
+        doc.set_toc(toc)
         pdf_bytes = doc.tobytes()
         doc.close()
         sha = hashlib.sha256(pdf_bytes).hexdigest()
@@ -642,6 +640,57 @@ def test_mk574_r22_textbook_omitted_outline_boundaries_do_not_verify_later_secti
             source_bytes=pdf_bytes,
         )
         assert positive["verification_level"] == "SOURCE_CONTENT_VERIFIED", case_id
+
+
+def test_mk574_r23_unresolved_same_page_outline_sibling_does_not_verify_next_page() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "1.4 Applied heading.\nVALID SECTION 1.4 TEXT.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "UNRESOLVED SAME PAGE OUTLINE SIBLING TEXT.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "1.5 Closing section heading.\n")
+    doc.set_toc(
+        [
+            [1, "Section 1.4 Applied heading", 1],
+            [1, "Intervening same-page topic", 1],
+            [1, "1.5 Closing section heading", 3],
+        ]
+    )
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "SYNTH_TEXTBOOK_R23_SAME_PAGE_OUTLINE",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_TEXTBOOK_R23_SAME_PAGE_OUTLINE", "title": "Synthetic textbook bookmark PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Same-page unresolved outline sibling regression.",
+            }],
+        }
+    )
+    citation = {
+        "source_id": "SYNTH_TEXTBOOK_R23_SAME_PAGE_OUTLINE", "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied heading", "pdf_page": [1, 2, 3],
+        "verbatim_excerpt": "UNRESOLVED SAME PAGE OUTLINE SIBLING TEXT.",
+    }
+    result = verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
+    assert result["verification_level"] == "SOURCE_PAGE_VERIFIED"
+    assert "CLAUSE_CONTENT_VERIFIED" not in result["verification_states"]
+
+    positive = verify_source_citation(
+        {**citation, "verbatim_excerpt": "VALID SECTION 1.4 TEXT."}, manifest, source_bytes=pdf_bytes
+    )
+    # The same-page sibling has no resolved text offset, so even a real excerpt
+    # from that page cannot be promoted to content-verified on this evidence.
+    assert positive["verification_level"] == "SOURCE_PAGE_VERIFIED"
+    assert "CLAUSE_CONTENT_VERIFIED" not in positive["verification_states"]
 
 
 def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -> None:
@@ -748,6 +797,46 @@ def test_mk574_r22_equipment_scope_is_shared_by_text_entities_in_one_insert() ->
         }
     )
     assert standalone["particulars"]["single_side_or_non_double_hull"] is True
+
+
+def test_mk574_r23_equipment_scope_propagates_from_parent_insert_to_child_text() -> None:
+    for idx, (catalogue, hull_text) in enumerate(
+        (
+            ("STEERING GEAR CATALOGUE (REF.)", "HULL STRUCTURE : SINGLE SIDE"),
+            ("STEERING GEAR CATALOGUE (REFERENCE ONLY, NOT APPLICABLE)", "HULL CONFIGURATION=NON-DOUBLE-HULL"),
+            ("STEERING GEAR CATALOGUE", "HULL STRUCTURE : DOUBLE SIDE"),
+        ),
+        start=1,
+    ):
+        ga = _base_ga(
+            drawing_id=f"GA_R23_NESTED_EQUIPMENT_SCOPE_{idx}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
+            bulkheads=3,
+            extra_texts=[
+                {
+                    "handle": "EQCAT",
+                    "text": catalogue,
+                    "occurrence_id": "MODELSPACE/INSERT:ROOT:BOW",
+                    "x": 60000.0,
+                    "y": 5200.0,
+                },
+                {
+                    "handle": "EQHULL",
+                    "text": hull_text,
+                    "occurrence_id": "MODELSPACE/INSERT:ROOT:BOW/CHILD",
+                    "x": 60000.0,
+                    "y": 5400.0,
+                },
+            ],
+        )
+        observed = normalize_observation(ga)
+        assert observed["particulars"]["double_hull_or_double_side"] is False
+        assert observed["particulars"]["single_side_or_non_double_hull"] is False
+        result = evaluate_regulation_applicability_and_submittal([ga], partial_package=True)
+        mk08 = next(f for f in result["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+        assert result["status"] == "INSUFFICIENT_EVIDENCE"
+        assert mk08["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
 
 
 def test_mk574_r20_equipment_prefix_does_not_mask_explicit_vessel_scope() -> None:

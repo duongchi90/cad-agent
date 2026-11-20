@@ -929,12 +929,20 @@ def _extract_particulars(
     *,
     insunits: int = 0,
 ) -> dict[str, Any]:
-    equipment_occurrences = {
+    equipment_marker_occurrences = {
         str(entry.get("occurrence_id") or "MODELSPACE")
         for entry in entries
         if str(entry.get("occurrence_id") or "MODELSPACE") != "MODELSPACE"
         and _EQUIPMENT_ACCESSORY_RE.search(str(entry.get("folded") or ""))
     }
+    equipment_occurrences: set[str] = set()
+    for entry in entries:
+        occurrence_id = str(entry.get("occurrence_id") or "MODELSPACE")
+        if occurrence_id == "MODELSPACE":
+            continue
+        path_parts = occurrence_id.split("/")
+        if any("/".join(path_parts[:depth]) in equipment_marker_occurrences for depth in range(1, len(path_parts) + 1)):
+            equipment_occurrences.add(occurrence_id)
     design_length_l_m_values: list[float] = []
     lpp_values: list[float] = []
     lwl_values: list[float] = []
