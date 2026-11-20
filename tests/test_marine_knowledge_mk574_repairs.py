@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from typing import Any
 
 import fitz
@@ -10,6 +11,7 @@ import pytest
 
 from cad_agent.marine_knowledge import (
     MarineKnowledgeError,
+    classify_marine_drawing,
     detect_drawing_gaps_and_conflicts,
     evaluate_regulation_applicability_and_submittal,
     get_marine_knowledge_pack,
@@ -368,6 +370,210 @@ def test_mk574_01_regulation_citation_rejects_omitted_intervening_page() -> None
                 "source_id": "SYNTH_REG_PAGE_GAP", "source_sha256": sha, "source_version": "2025",
                 "clause": "2.1.1 Alpha rule", "pdf_page": [1, 3], "reg_page": [19, 21],
                 "verbatim_excerpt": "Beta continuation states rudder shaft torque limits.",
+            },
+            manifest,
+            source_bytes=pdf_bytes,
+        )
+
+
+def test_mk574_r20_regulation_excerpt_must_be_on_a_cited_page() -> None:
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "19 SYNTH REG\n2.1 Alpha rule opening paragraph.\n")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "20 SYNTH REG\nUNIQUE QUOTED REQUIREMENT ON OMITTED PAGE.\n")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "21 SYNTH REG\n2.2 Closing rule.\n")
+    doc.set_toc([[1, "2.1 Alpha rule", 1], [1, "2.2 Closing rule", 3]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_R20_PAGE_CUSTODY",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_REG_R20_PAGE_CUSTODY", "title": "Synthetic page custody PDF",
+                "document_kind": "REGULATION", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 3, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic citation page-custody regression.",
+            }],
+        }
+    )
+    base = {
+        "source_id": "SYNTH_REG_R20_PAGE_CUSTODY", "source_sha256": sha, "source_version": "2025",
+        "clause": "2.1 Alpha rule", "verbatim_excerpt": "UNIQUE QUOTED REQUIREMENT ON OMITTED PAGE.",
+    }
+
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation({**base, "pdf_page": [1, 3], "reg_page": [19, 21]}, manifest, source_bytes=pdf_bytes)
+
+    cited_interval = verify_source_citation(
+        {**base, "pdf_page": [1, 2, 3], "reg_page": [19, 20, 21]}, manifest, source_bytes=pdf_bytes
+    )
+    assert cited_interval["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
+def test_mk574_r20_regulation_excerpt_matching_does_not_duplicate_overlapping_clause_slices() -> None:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (72, 72),
+        "19 SYNTH REG\n2.1 Parent clause.\n2.1.1 Alpha rule.\nBRAVO EARLIER PHRASE.\n"
+        "2.1.2 Beta rule.\nCHARLIE LATER PHRASE.\n2.2 Closing rule.\n",
+    )
+    doc.set_toc([[1, "2.1 Parent clause", 1], [2, "2.1.1 Alpha rule", 1], [2, "2.1.2 Beta rule", 1], [1, "2.2 Closing rule", 1]])
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_R20_OVERLAP",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_REG_R20_OVERLAP", "title": "Synthetic overlapping clause PDF",
+                "document_kind": "REGULATION", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 1, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic citation interval-overlap regression.",
+            }],
+        }
+    )
+
+    def citation(clause: str, excerpt: str) -> dict[str, Any]:
+        return {
+            "source_id": "SYNTH_REG_R20_OVERLAP", "source_sha256": sha, "source_version": "2025",
+            "clause": clause, "pdf_page": [1], "reg_page": [19], "verbatim_excerpt": excerpt,
+        }
+
+    for clause, excerpt in (
+        ("2.1; 2.1.1", "CHARLIE LATER PHRASE...BRAVO EARLIER PHRASE."),
+        ("2.1; 2.1.1", "BRAVO EARLIER PHRASE...BRAVO EARLIER PHRASE."),
+    ):
+        with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+            verify_source_citation(citation(clause, excerpt), manifest, source_bytes=pdf_bytes)
+
+    ordered_siblings = verify_source_citation(
+        citation("2.1.1; 2.1.2", "BRAVO EARLIER PHRASE...CHARLIE LATER PHRASE."),
+        manifest,
+        source_bytes=pdf_bytes,
+    )
+    assert ordered_siblings["verification_level"] == "SOURCE_CONTENT_VERIFIED"
+
+
+def test_mk574_r20_equipment_reference_prefix_cannot_assert_vessel_ship_type() -> None:
+    ga = _base_ga(
+        drawing_id="GA_R20_EQUIPMENT_REF_SCOPE",
+        length_line="Chiều dài tàu L = 42.00 m",
+        ship_type_line="",
+        bulkheads=3,
+        extra_texts=[
+            {"handle": "EQREF", "text": "STEERING GEAR CATALOGUE (REF.); SHIP TYPE : DRY CARGO NON-CONTAINER", "x": 60000.0, "y": 5200.0, "height": 200.0},
+            {"handle": "HULL", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5400.0, "height": 200.0},
+        ],
+    )
+    observed = normalize_observation(ga)
+    assert observed["particulars"]["ship_types"] == []
+    assert observed["particulars"]["non_container_ship"] is False
+    result = evaluate_regulation_applicability_and_submittal([ga], partial_package=True)
+    mk08 = next(f for f in result["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
+    assert mk08["verdict"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_mk574_r20_equipment_prefix_does_not_mask_explicit_vessel_scope() -> None:
+    from cad_agent.marine_knowledge.observer import normalize_observation as observe
+
+    observation = observe({
+        "drawing_id": "GA_R20_EXPLICIT_VESSEL_SCOPE", "insunits": 4,
+        "texts": [{"handle": "SCOPE", "text": "LIFEBOAT EQUIPMENT; VESSEL REGULATION : QCVN 21:2025", "x": 0, "y": 0, "height": 100}],
+    })
+    assert "OCEAN_GOING" in observation["particulars"]["service_areas"]
+
+
+@pytest.mark.parametrize("reference_suffix", ["REF.", "[REF.]", "(REFERENCE)"])
+def test_mk574_r20_reference_lpp_cannot_supply_skill3_span_length(reference_suffix: str) -> None:
+    from cad_agent.marine_knowledge import detect_drawing_gaps_and_conflicts
+
+    data = _build_insert_dxf_bytes().replace(
+        b"Lpp = 52.00 m", f"Lpp = 52.00 m {reference_suffix}".encode("ascii")
+    )
+    observation = observe_dxf_bytes(data, drawing_id="GA_R20_REFERENCE_LPP")
+    assert observation["particulars"]["lpp_m_values"] == []
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
+    assert result["status"] != "PASS"
+    assert any(f["finding_id"] == "F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_R20_REFERENCE_LPP" for f in result["findings"])
+
+    unqualified = observe_dxf_bytes(_build_insert_dxf_bytes(), drawing_id="GA_R20_UNQUALIFIED_LPP")
+    assert unqualified["particulars"]["lpp_m_values"] == [52.0]
+    positive = detect_drawing_gaps_and_conflicts([unqualified], partial_package=True)
+    assert positive["status"] == "PASS"
+    assert not any("F_AP_FP_SPAN_UNAVAILABLE_LPP_GA_R20_UNQUALIFIED_LPP" == f["finding_id"] for f in positive["findings"])
+
+
+def test_mk574_r20_nested_missing_block_definition_abstains() -> None:
+    import ezdxf
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    doc.header["$MEASUREMENT"] = 1
+    carrier = doc.blocks.new("CARRIER")
+    carrier.add_text("BẢN VẼ BỐ TRÍ CHUNG", dxfattribs={"insert": (0, 0), "height": 300})
+    carrier.add_blockref("MISSING_INNER", (0, 0))
+    remote = doc.blocks.new("REMOTE_XREF")
+    remote.block.dxf.flags = 4
+    remote.block.dxf.xref_path = "unavailable-reference.dwg"
+    carrier.add_blockref("REMOTE_XREF", (0, 0))
+    doc.modelspace().add_blockref("CARRIER", (0, 0))
+    stream = io.StringIO()
+    doc.write(stream)
+    observed = observe_dxf_bytes(stream.getvalue().encode("utf-8"), drawing_id="GA_R20_NESTED_MISSING")
+    assert any(item.get("reason") == "MISSING_BLOCK_DEFINITION" for item in observed["skipped_entities"])
+    assert any(item.get("reason") == "EXTERNAL_REFERENCE_BLOCK_UNRESOLVED" for item in observed["skipped_entities"])
+    assert classify_marine_drawing(observed)["status"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_mk574_r20_actual_pdf_page_count_is_checked_before_expanding_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cad_agent.marine_knowledge.contracts as contracts
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "19 SYNTH REG\n2.1 Alpha rule.\n2.2 Closing rule.\n")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": "MK574_R20_PAGE_BOUND",
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": "SYNTH_REG_R20_PAGE_BOUND", "title": "Synthetic page-bound PDF",
+                "document_kind": "REGULATION", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": None, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Synthetic actual-PDF-page-count regression.",
+            }],
+        }
+    )
+    builtin_range = range
+
+    def reject_unbounded_range(*args: int) -> range:
+        if max(args) > 1_000_000:
+            raise AssertionError("PDF page interval expanded before validating actual page count")
+        return builtin_range(*args)
+
+    monkeypatch.setattr(contracts, "range", reject_unbounded_range, raising=False)
+    with pytest.raises(MarineKnowledgeError, match="CITATION_PDF_PAGE_OUT_OF_RANGE"):
+        verify_source_citation(
+            {
+                "source_id": "SYNTH_REG_R20_PAGE_BOUND", "source_sha256": sha, "source_version": "2025",
+                "clause": "2.1 Alpha rule", "pdf_page": [1, 10_000_000], "reg_page": [19, 20],
             },
             manifest,
             source_bytes=pdf_bytes,

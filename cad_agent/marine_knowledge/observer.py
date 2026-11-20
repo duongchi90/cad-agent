@@ -94,6 +94,10 @@ _INCIDENTAL_REF_RE = re.compile(
     r"\b(?:tham\s+khao|tham\s+chieu|doi\s+chieu|so\s+sanh|vi\s+du|reference\s+only|for\s+reference|example)\b|"
     r"\(\s*ref\.?\s*\)"
 )
+_REFERENCE_MARKER_RE = re.compile(
+    r"\bref(?:erence)?\b\.?|[\[(]\s*ref(?:erence)?\.?\s*[\])]",
+    re.IGNORECASE,
+)
 _VESSEL_BOUND_PREFIX_RE = re.compile(
     r"\b(?:cap\s+tau|class(?:ification)?|service\s+area|vung\s+hoat\s+dong|hull\s+(?:material|structure|configuration)|"
     r"vat\s+lieu\s+(?:vo|than\s+tau)|ship\s+type|loai\s+tau)\s*[:=]"
@@ -358,6 +362,19 @@ def _block_contains_text_or_insert(
     blk = blocks.get(block_name)
     if blk is None:
         return False, False, False
+    block_def = getattr(blk, "block", None)
+    if block_def is not None and (
+        getattr(block_def, "is_xref", False) or getattr(block_def, "is_xref_overlay", False)
+    ):
+        skipped.append(
+            {
+                "handle": root_handle,
+                "dxftype": "INSERT",
+                "block_name": block_name,
+                "reason": "EXTERNAL_REFERENCE_BLOCK_UNRESOLVED",
+            }
+        )
+        return False, True, True
     has_text_or_carrier = False
     for block_entity in blk:
         if not _reserve_dxf_entity_visit(
@@ -397,7 +414,7 @@ def _block_contains_text_or_insert(
                 has_text_or_carrier = True
             nested = str(getattr(block_entity.dxf, "name", "") or "")
             if nested and nested not in visited:
-                has_sub, _, exhausted = _block_contains_text_or_insert(
+                has_sub, nested_found, exhausted = _block_contains_text_or_insert(
                     doc,
                     nested,
                     visited | {block_name},
@@ -408,6 +425,16 @@ def _block_contains_text_or_insert(
                 )
                 if exhausted:
                     return False, True, True
+                if not nested_found:
+                    skipped.append(
+                        {
+                            "handle": root_handle,
+                            "dxftype": "INSERT",
+                            "block_name": nested,
+                            "reason": "MISSING_BLOCK_DEFINITION",
+                        }
+                    )
+                    has_text_or_carrier = True
                 if has_sub:
                     has_text_or_carrier = True
     return has_text_or_carrier, True, False
@@ -957,7 +984,7 @@ def _extract_particulars(
                     _append_unique(unverified_unitless_particulars, f"L:{m.group(1)}")
 
         lpp_matched = False
-        if _INCIDENTAL_REF_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
+        if _INCIDENTAL_REF_RE.search(folded) or _REFERENCE_MARKER_RE.search(folded) or _NEGATED_SCOPE_RE.search(folded):
             _append_unique(incidental_reference_mentions, re.sub(r"\s+", " ", text).strip())
         else:
             for m in _LPP_RE.finditer(folded):
@@ -1077,12 +1104,13 @@ def _extract_particulars(
             if _NEGATED_SCOPE_RE.search(clause_clean):
                 _append_unique(negated_scope_texts, clause_clean)
                 continue
-            if _INCIDENTAL_REF_RE.search(clause_clean):
+            equipment_context = equipment_context or bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
+            if _INCIDENTAL_REF_RE.search(clause_clean) or _REFERENCE_MARKER_RE.search(clause_clean):
                 _append_unique(incidental_reference_mentions, clause_clean)
                 continue
 
-            equipment_context = equipment_context or bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
-            is_equipment_item = equipment_context
+            explicit_vessel_regulation = bool(re.match(r"^\s*vessel\s+regulation\s*[:=]", clause_clean))
+            is_equipment_item = equipment_context and not explicit_vessel_regulation
             ship_m = None if is_equipment_item else _SHIP_TYPE_RE.search(clause_clean)
             if ship_m:
                 stype = ship_m.group(1).strip().upper()

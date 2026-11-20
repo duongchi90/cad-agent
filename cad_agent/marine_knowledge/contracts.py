@@ -1214,13 +1214,16 @@ def verify_source_citation(
         if raw_bytes.lstrip().startswith(b"%PDF") and pdf_pages:
             reader = PdfReader(BytesIO(raw_bytes))
             total_pdf_pages = len(reader.pages)
+            if any(page > total_pdf_pages for page in pdf_pages):
+                _fail("CITATION_PDF_PAGE_OUT_OF_RANGE")
             outline_entries = _get_pdf_outline_entries(reader, actual_sha)
             doc_kind = str(source_entry["document_kind"])
-            resolver_pdf_pages = pdf_pages
+            resolver_pdf_pages: Sequence[int] = pdf_pages
             if doc_kind == "REGULATION" and len(pdf_pages) > 1:
                 # Keep omitted pages in the clause-boundary context so an intervening
                 # heading or continuation cannot disappear from a multi-page citation.
-                resolver_pdf_pages = list(range(pdf_pages[0], pdf_pages[-1] + 1))
+                # Excerpt matching below remains limited to explicitly cited pages.
+                resolver_pdf_pages = range(pdf_pages[0], pdf_pages[-1] + 1)
             extracted_pages_lines: list[str] = []
             reg_pages_by_pdf = dict(zip(pdf_pages, reg_pages))
             for pdf_p in resolver_pdf_pages:
@@ -1255,17 +1258,27 @@ def verify_source_citation(
                     outline_entries=outline_entries,
                 )
 
+            raw_source = "\n".join(extracted_pages_lines)
+            normalized_source = _normalize_ws(raw_source)
+            clause_source_spans: list[tuple[int, int]] = []
             if doc_kind == "REGULATION":
                 if any(later < earlier for earlier, later in zip(resolved_clause_starts, resolved_clause_starts[1:])):
                     _fail("CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH")
+                for bound_slice, source_start in zip(bound_slices, resolved_clause_starts):
+                    normalized_slice = _normalize_ws(bound_slice)
+                    normalized_start = len(_normalize_ws(raw_source[:source_start]))
+                    source_position = normalized_source.find(normalized_slice, normalized_start)
+                    if not normalized_slice or source_position < 0:
+                        _fail("CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH")
+                    clause_source_spans.append((source_position, source_position + len(normalized_slice)))
             else:
-                normalized_source = _normalize_ws("\n".join(extracted_pages_lines))
                 source_cursor = 0
                 for bound_slice in bound_slices:
                     normalized_slice = _normalize_ws(bound_slice)
                     source_position = normalized_source.find(normalized_slice, source_cursor)
                     if not normalized_slice or source_position < 0:
                         _fail("CITATION_CLAUSE_DOCUMENT_ORDER_MISMATCH")
+                    clause_source_spans.append((source_position, source_position + len(normalized_slice)))
                     source_cursor = source_position + len(normalized_slice)
 
             clause_span_status = "CLAUSE_SPAN_BOUNDED" if span_bounded else "CLAUSE_BOUNDARY_UNBOUNDED"
@@ -1278,11 +1291,41 @@ def verify_source_citation(
                     for seg in excerpt.split("...")
                     if _normalize_ws(seg)
                 ]
-                bounded_text = "\n".join(_normalize_ws(sl) for sl in bound_slices)
+                cited_page_spans: list[tuple[int, int]] = []
+                page_cursor = 0
+                for pdf_p, page_text in zip(resolver_pdf_pages, extracted_pages_lines):
+                    normalized_page = _normalize_ws(page_text)
+                    page_end = page_cursor + len(normalized_page)
+                    if pdf_p in pdf_pages:
+                        cited_page_spans.append((page_cursor, page_end))
+                    page_cursor = page_end + 1
+
+                allowed_spans = sorted(
+                    (max(clause_start, page_start), min(clause_end, page_end))
+                    for clause_start, clause_end in clause_source_spans
+                    for page_start, page_end in cited_page_spans
+                    if max(clause_start, page_start) < min(clause_end, page_end)
+                )
+                merged_allowed_spans: list[tuple[int, int]] = []
+                for start, end in allowed_spans:
+                    if merged_allowed_spans and start <= merged_allowed_spans[-1][1] + 1:
+                        merged_allowed_spans[-1] = (
+                            merged_allowed_spans[-1][0], max(merged_allowed_spans[-1][1], end)
+                        )
+                    else:
+                        merged_allowed_spans.append((start, end))
                 cursor = 0
-                ordered_match = bool(segments and bound_slices)
+                ordered_match = bool(segments and merged_allowed_spans)
                 for segment in segments:
-                    position = bounded_text.find(segment, cursor)
+                    position = -1
+                    for span_start, span_end in merged_allowed_spans:
+                        search_start = max(span_start, cursor)
+                        if search_start >= span_end:
+                            continue
+                        candidate = normalized_source.find(segment, search_start, span_end)
+                        if candidate >= 0 and candidate + len(segment) <= span_end:
+                            position = candidate
+                            break
                     if position < 0:
                         ordered_match = False
                         break
