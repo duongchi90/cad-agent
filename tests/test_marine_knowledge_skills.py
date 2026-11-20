@@ -124,11 +124,20 @@ def test_skill2_submittal_and_regulation_pass_conflict_missing_and_out_of_scope(
 
     # 2. Violation: 40m < L=52m <= 60m requires >= 4 transverse bulkheads, given 3 with verified non-2.4.6-9 hull -> CONFLICT
     ga_bad_bh = _inland_vrsb_ga_obs(bulkheads=3)
+    ga_bad_bh["texts"] = [
+        {**text, "text": "SHIP TYPE : DRY CARGO NON-CONTAINER"} if text["handle"] == "T11" else text
+        for text in ga_bad_bh["texts"]
+    ]
     ga_bad_bh["texts"].append(
-        {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "layer": "0", "x": 60000.0, "y": 5500.0, "height": 250.0}
+        {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE", "layer": "0", "x": 60000.0, "y": 5500.0, "height": 250.0}
     )
+    bad_mcn = _inland_midship_obs(double_bottom_height_mm=550.0)
+    bad_mcn["texts"] = [
+        {**text, "text": "SHIP TYPE : DRY CARGO NON-CONTAINER"} if text["handle"] == "M7B" else text
+        for text in bad_mcn["texts"]
+    ]
     res_bad_bh = evaluate_regulation_applicability_and_submittal(
-        [ga_bad_bh, _inland_midship_obs(double_bottom_height_mm=550.0)],
+        [ga_bad_bh, bad_mcn],
         partial_package=True,
     )
     assert res_bad_bh["status"] == "CONFLICT"

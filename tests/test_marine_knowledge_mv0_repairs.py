@@ -552,7 +552,7 @@ def test_mv0_04_bulkhead_20m_boundary_steel_gate_and_2_4_6_9_exception() -> None
     ga_dh = _ga(
         drawing_id="GA_DOUBLE_HULL",
         bulkheads=3,
-        extra_texts=[{"handle": "DH1", "text": "KẾT CẤU ĐÁY ĐÔI MẠN KÉP", "x": 100.0, "y": 950.0}],
+        extra_texts=[{"handle": "DH1", "text": "HULL STRUCTURE : DOUBLE HULL", "x": 100.0, "y": 950.0}],
     )
     res_dh = evaluate_regulation_applicability_and_submittal([ga_dh, _mcn()])
     mk08_dh = next(f for f in res_dh["findings"] if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT")
@@ -573,7 +573,8 @@ def test_mv0_04_bulkhead_20m_boundary_steel_gate_and_2_4_6_9_exception() -> None
         drawing_id="GA_20_5_BAD",
         length_line="Chiều dài tàu L = 20.50 m",
         bulkheads=2,
-        extra_texts=[{"handle": "NS0", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0, "height": 250.0}],
+        ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
+        extra_texts=[{"handle": "NS0", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5400.0, "height": 250.0}],
     )
     assert evaluate_regulation_applicability_and_submittal([ga_20_5_bad, mcn_20_5])["status"] == "CONFLICT"
 
@@ -936,8 +937,9 @@ def test_mv0_04_followup_unknown_exception_eligibility_and_tristate_controls() -
         drawing_id="GA_42_INAPP",
         length_line="Chiều dài tàu L = 42.00 m",
         bulkheads=3,
+        ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
         extra_texts=[
-            {"handle": "NS2", "text": "KHÔNG CÓ MẠN KÉP - KHÔNG CHỞ CONTAINER", "x": 60000.0, "y": 5400.0},
+            {"handle": "NS2", "text": "HULL STRUCTURE : KHÔNG CÓ MẠN KÉP", "x": 60000.0, "y": 5400.0},
         ],
     )
     res_inapp = evaluate_regulation_applicability_and_submittal([ga_42_inapp])
@@ -953,8 +955,8 @@ def test_mv0_04_followup_unknown_exception_eligibility_and_tristate_controls() -
         length_line="Chiều dài tàu L = 42.00 m",
         bulkheads=3,
         extra_texts=[
-            {"handle": "C1", "text": "ĐÁY ĐÔI MẠN KÉP", "x": 60000.0, "y": 5400.0},
-            {"handle": "C2", "text": "SINGLE SIDE HULL", "x": 60000.0, "y": 5600.0},
+            {"handle": "C1", "text": "HULL STRUCTURE : ĐÁY ĐÔI MẠN KÉP", "x": 60000.0, "y": 5400.0},
+            {"handle": "C2", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5600.0},
         ],
     )
     res_contra = evaluate_regulation_applicability_and_submittal([ga_42_contra])
@@ -983,6 +985,78 @@ def test_mv0_04_followup_unknown_exception_eligibility_and_tristate_controls() -
     res_cont = evaluate_regulation_applicability_and_submittal([ga_42_cont])
     assert res_cont["status"] == "INSUFFICIENT_EVIDENCE"
     assert any(f["finding_id"] == "F_WATERTIGHT_BULKHEAD_2_4_6_9_EXCEPTION_QUALIFIED" for f in res_cont["findings"])
+
+
+def test_mv0_04_exception_facts_require_vessel_scope_and_typed_boolean_metrics() -> None:
+    """Optional equipment text cannot decide hull eligibility; typed boolean inputs stay out of dimensional validation."""
+    equipment_note = _ga(
+        drawing_id="GA_42_EQUIPMENT_NOTE",
+        length_line="Chiều dài tàu L = 42.00 m",
+        bulkheads=3,
+        extra_texts=[
+            {"handle": "EQ1", "text": "LIFEBOAT EQUIPMENT: SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0},
+        ],
+    )
+    note_result = evaluate_regulation_applicability_and_submittal([equipment_note])
+    note_finding = next(
+        f for f in note_result["findings"]
+        if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT"
+    )
+    assert note_result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert note_finding["finding_id"] == "F_WATERTIGHT_BULKHEAD_2_4_6_9_ELIGIBILITY_UNKNOWN"
+    assert note_finding["evidence"]["exception_2_4_6_9_eligibility"] == "UNKNOWN"
+
+    # Explicit typed facts are accepted as scope facts, not treated as numeric dimensions.
+    for applicable, expected_eligibility, expected_verdict in (
+        (True, "APPLICABLE", "INSUFFICIENT_EVIDENCE"),
+        (False, "INAPPLICABLE", "CONFLICT"),
+    ):
+        typed = _ga(
+            drawing_id=f"GA_42_TYPED_{applicable}",
+            length_line="Chiều dài tàu L = 42.00 m",
+            bulkheads=3,
+            extra_metrics={"bulkhead_2_4_6_9_exception_applicable": applicable},
+        )
+        typed_result = evaluate_regulation_applicability_and_submittal([typed])
+        assert not any(f["finding_id"] == "F_SCOPE_CONFLICT" for f in typed_result["findings"])
+        typed_finding = next(
+            f for f in typed_result["findings"]
+            if f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT"
+        )
+        assert typed_result["status"] == expected_verdict
+        assert typed_finding["verdict"] == expected_verdict
+        assert typed_finding["evidence"]["exception_2_4_6_9_eligibility"] == expected_eligibility
+
+
+def test_mv0_06_every_supported_ap_fp_view_span_is_checked_order_independently() -> None:
+    """A bad supported view span cannot be hidden by whichever AP/FP pair is visited first."""
+    def observation(*, short_span_view: str, good_span_view: str) -> dict[str, Any]:
+        ga = _ga(drawing_id="GA_MULTI_SPAN", length_line="Chiều dài tàu L = 52.00 m", bulkheads=4)
+        ga["texts"] = [text for text in ga["texts"] if text["handle"] not in {"G10", "G11"}]
+        for view_id, fp_x in ((short_span_view, 1052.0), (good_span_view, 53000.0)):
+            ga["texts"].extend(
+                [
+                    {"handle": f"{view_id}_AP", "text": "A.P", "x": 1000.0, "y": 0.0, "height": 300.0, "view_id": view_id},
+                    {"handle": f"{view_id}_FP", "text": "F.P", "x": fp_x, "y": 0.0, "height": 300.0, "view_id": view_id},
+                ]
+            )
+        return ga
+
+    short_first = detect_drawing_gaps_and_conflicts(
+        [observation(short_span_view="A", good_span_view="B")], partial_package=True,
+    )
+    good_first = detect_drawing_gaps_and_conflicts(
+        [observation(short_span_view="B", good_span_view="A")], partial_package=True,
+    )
+    for result in (short_first, good_first):
+        mismatch = next(
+            (f for f in result["findings"] if f["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X"),
+            None,
+        )
+        assert mismatch is not None
+        assert mismatch["verdict"] == "CONFLICT"
+        assert mismatch["evidence"]["cad_ap_fp_dx"] == 52.0
+        assert result["status"] == "CONFLICT"
 
 
 def test_mv0_06_followup_independent_orientation_and_1000x_span_coverage() -> None:

@@ -289,14 +289,17 @@ def test_mk574_03_incidental_equipment_does_not_suppress_inland_defects() -> Non
     """MK574-03: FRP locker / SOLAS extinguisher must NOT trigger vessel NOT_APPLICABLE and hide bulkhead defect."""
     ga_frp_locker = _base_ga(
         drawing_id="GA_FRP_LOCKER",
+        ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
         bulkheads=3,  # Violates 2.4.6-8 (40 < L=52 <= 60 requires >= 4)
         extra_texts=[
             {"handle": "EQ1", "text": "FRP LIFERAFT LOCKER ON POOP DECK", "x": 15000.0, "y": 5000.0, "height": 200.0},
             {"handle": "EQ2", "text": "DECK CABINET MATERIAL : FRP", "x": 16000.0, "y": 5200.0, "height": 200.0},
-            {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0, "height": 200.0},
+            {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5400.0, "height": 200.0},
         ],
     )
-    res_frp_eq = evaluate_regulation_applicability_and_submittal([ga_frp_locker, _base_mcn()], partial_package=True)
+    res_frp_eq = evaluate_regulation_applicability_and_submittal(
+        [ga_frp_locker, _base_mcn(ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER")], partial_package=True,
+    )
     assert res_frp_eq["status"] == "CONFLICT"
     assert any(
         f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT" and f["verdict"] == "CONFLICT"
@@ -305,14 +308,17 @@ def test_mk574_03_incidental_equipment_does_not_suppress_inland_defects() -> Non
 
     ga_solas_ext = _base_ga(
         drawing_id="GA_SOLAS_EXT",
+        ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER",
         bulkheads=3,
         extra_texts=[
             {"handle": "EQ3", "text": "FIRE EXTINGUISHER SOLAS APPROVED", "x": 17000.0, "y": 5200.0, "height": 200.0},
             {"handle": "EQ4", "text": "LIFEBUOY IMO / SOLAS TYPE", "x": 18000.0, "y": 5200.0, "height": 200.0},
-            {"handle": "NS2", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 60000.0, "y": 5400.0, "height": 200.0},
+            {"handle": "NS2", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 60000.0, "y": 5400.0, "height": 200.0},
         ],
     )
-    res_solas_eq = evaluate_regulation_applicability_and_submittal([ga_solas_ext, _base_mcn()], partial_package=True)
+    res_solas_eq = evaluate_regulation_applicability_and_submittal(
+        [ga_solas_ext, _base_mcn(ship_type_line="SHIP TYPE : DRY CARGO NON-CONTAINER")], partial_package=True,
+    )
     assert res_solas_eq["status"] == "CONFLICT"
     assert any(
         f["rule_id"] == "RULE_MK_08_WATERTIGHT_BULKHEAD_MIN_COUNT" and f["verdict"] == "CONFLICT"

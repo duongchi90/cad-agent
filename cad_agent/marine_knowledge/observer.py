@@ -94,7 +94,11 @@ _INCIDENTAL_REF_RE = re.compile(
     r"\b(?:tham\s+khao|tham\s+chieu|doi\s+chieu|so\s+sanh|vi\s+du|reference\s+only|for\s+reference|example)\b"
 )
 _VESSEL_BOUND_PREFIX_RE = re.compile(
-    r"\b(?:cap\s+tau|class(?:ification)?|service\s+area|vung\s+hoat\s+dong|hull\s+material|vat\s+lieu\s+(?:vo|than\s+tau)|ship\s+type|loai\s+tau)\s*[:=]"
+    r"\b(?:cap\s+tau|class(?:ification)?|service\s+area|vung\s+hoat\s+dong|hull\s+(?:material|structure|configuration)|"
+    r"vat\s+lieu\s+(?:vo|than\s+tau)|ship\s+type|loai\s+tau)\s*[:=]"
+)
+_VESSEL_HULL_CONFIGURATION_RE = re.compile(
+    r"\b(?:hull\s+(?:structure|configuration)|ket\s+cau\s+(?:vo|than\s+tau))\s*[:=]"
 )
 _PASSENGER_COUNT_RE = re.compile(
     r"\b(?:passengers?|so\s+khach|hanh\s+khach|suc\s+cho\s+nguoi)\s*[:=]?\s*(\d+)\b"
@@ -940,14 +944,13 @@ def _extract_particulars(
 
             if any(tok in clause_clean for tok in ("thuy noi dia", "qcvn 72")):
                 _append_unique(service_areas, "INLAND_WATERWAY")
-            if _NON_DOUBLE_SIDE_RE.search(clause_clean):
-                single_side_or_non_double_hull = True
-            elif _DOUBLE_HULL_RE.search(clause_clean):
-                double_hull_or_double_side = True
-            if _NON_CONTAINER_RE.search(clause_clean):
-                non_container_ship = True
-            elif _CONTAINER_SHIP_RE.search(clause_clean):
-                is_container_ship = True
+            # Clause 2.4.6-9 eligibility is vessel-level evidence. Do not let a
+            # lifeboat/equipment note or an unlabeled detail decide hull facts.
+            if _VESSEL_HULL_CONFIGURATION_RE.search(clause_clean):
+                if _NON_DOUBLE_SIDE_RE.search(clause_clean):
+                    single_side_or_non_double_hull = True
+                elif _DOUBLE_HULL_RE.search(clause_clean):
+                    double_hull_or_double_side = True
             is_equipment_item = bool(_EQUIPMENT_ACCESSORY_RE.search(clause_clean))
             if is_equipment_item:
                 if re.search(r"\b(?:frp|solas|imo|iacs|qcvn\s*(?:21|25|50|51|54|55|56|84|127))\b", clause_clean):

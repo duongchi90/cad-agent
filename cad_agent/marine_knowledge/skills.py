@@ -39,7 +39,15 @@ _SOURCES_BY_ID = {src["source_id"]: src for src in _MANIFEST["sources"]}
 
 
 _VERIFIED_PROVENANCES = frozenset({"NATIVE_CAD_TEXT", "FIXTURE_SUPPLIED"})
-_NON_DIM_METRIC_KEYS = frozenset({"floor_spacing_region", "floor_spacing_measurements"})
+_BOOL_EXCEPTION_METRIC_KEYS = frozenset(
+    {
+        "double_hull_or_double_side",
+        "is_container_ship",
+        "single_side_or_non_double_hull",
+        "bulkhead_2_4_6_9_exception_applicable",
+    }
+)
+_NON_DIM_METRIC_KEYS = frozenset({"floor_spacing_region", "floor_spacing_measurements"}) | _BOOL_EXCEPTION_METRIC_KEYS
 _UNDER_HATCH_REGIONS = frozenset({"UNDER_CARGO_HATCH", "UNDER_HATCH", "CARGO_HATCH", "CARGO_HOLD", "DUOI_MIENG_KHOANG_HANG"})
 _OUTSIDE_HATCH_REGIONS = frozenset({"OUTSIDE_CARGO_HATCH", "OUTSIDE_HATCH", "NGOAI_MIENG_KHOANG_HANG", "NGOAI_KHOANG_HANG"})
 
@@ -3348,7 +3356,7 @@ def detect_drawing_gaps_and_conflicts(
             all_groups = sorted(set(grouped_aps) | set(grouped_fps))
             reversed_occ: list[dict[str, Any]] = []
             unresolved_occ: list[dict[str, Any]] = []
-            paired_spans: list[float] = []
+            paired_spans: list[tuple[str, float]] = []
             for gk in all_groups:
                 g_aps = grouped_aps.get(gk, [])
                 g_fps = grouped_fps.get(gk, [])
@@ -3361,7 +3369,7 @@ def detect_drawing_gaps_and_conflicts(
                     if fp_x < ap_x - 1.0:
                         reversed_occ.append({"group": gk, "ap_x": ap_x, "fp_x": fp_x})
                     else:
-                        paired_spans.append(fp_x - ap_x)
+                        paired_spans.append((gk, fp_x - ap_x))
                 else:
                     ap_xs = [float(a["x"]) for a in g_aps]
                     fp_xs = [float(f["x"]) for f in g_fps]
@@ -3422,17 +3430,30 @@ def detect_drawing_gaps_and_conflicts(
             if not has_ocr_only and unit_factor is not None and decl_lengths and decl_lengths[0] > 0 and paired_spans:
                 ran_span_check = True
                 decl_l = decl_lengths[0]
-                dx = paired_spans[0]
-                model_m = dx * unit_factor / 1000.0
-                paper_m = (
-                    model_m * scale_denom
-                    if isinstance(scale_denom, (int, float)) and scale_denom > 0
-                    else None
-                )
-                rel_model = abs(model_m - decl_l) / decl_l
-                rel_paper = abs(paper_m - decl_l) / decl_l if paper_m is not None else rel_model
-                best_rel = min(rel_model, rel_paper)
-                if best_rel > 0.25:
+                span_measurements: list[dict[str, Any]] = []
+                mismatched_spans: list[dict[str, Any]] = []
+                for group, dx in paired_spans:
+                    model_m = dx * unit_factor / 1000.0
+                    paper_m = (
+                        model_m * scale_denom
+                        if isinstance(scale_denom, (int, float)) and scale_denom > 0
+                        else None
+                    )
+                    rel_model = abs(model_m - decl_l) / decl_l
+                    rel_paper = abs(paper_m - decl_l) / decl_l if paper_m is not None else rel_model
+                    best_rel = min(rel_model, rel_paper)
+                    measurement = {
+                        "group": group,
+                        "cad_ap_fp_dx": round(dx, 4),
+                        "model_span_m": round(model_m, 4),
+                        "paper_scaled_span_m": round(paper_m, 4) if paper_m is not None else None,
+                        "relative_error": round(best_rel, 6),
+                    }
+                    span_measurements.append(measurement)
+                    if best_rel > 0.25:
+                        mismatched_spans.append(measurement)
+                if mismatched_spans:
+                    first_mismatch = mismatched_spans[0]
                     findings.append(
                         _make_finding(
                             rules_by_id,
@@ -3442,15 +3463,17 @@ def detect_drawing_gaps_and_conflicts(
                             evidence={
                                 "drawing_id": did,
                                 "declared_length_m": decl_l,
-                                "cad_ap_fp_dx": round(dx, 4),
+                                "cad_ap_fp_dx": first_mismatch["cad_ap_fp_dx"],
                                 "insunits": obs["insunits"],
                                 "unit_factor_mm": unit_factor,
-                                "model_span_m": round(model_m, 4),
-                                "paper_scaled_span_m": round(paper_m, 4) if paper_m is not None else None,
+                                "model_span_m": first_mismatch["model_span_m"],
+                                "paper_scaled_span_m": first_mismatch["paper_scaled_span_m"],
+                                "checked_ap_fp_spans": span_measurements,
+                                "mismatched_ap_fp_spans": mismatched_spans,
                             },
                             reason=(
-                                f"CAD A.P-to-F.P span on {did} ({model_m:.4f}m model) disagrees with declared "
-                                f"length {decl_l:.2f}m (likely 1000x unit or drawing scale mismatch)."
+                                f"{len(mismatched_spans)} of {len(span_measurements)} supported CAD A.P-to-F.P views on {did} "
+                                f"disagree with declared length {decl_l:.2f}m (likely 1000x unit or drawing scale mismatch)."
                             ),
                         )
                     )
@@ -3458,7 +3481,10 @@ def detect_drawing_gaps_and_conflicts(
                         build_marine_core_proposal(
                             target_drawing_id=did,
                             action_kind="SET_INSUNITS_AND_VERIFY_CALIBRATION",
-                            evidence={"declared_length_m": decl_l, "model_span_m": round(model_m, 4)},
+                            evidence={
+                                "declared_length_m": decl_l,
+                                "mismatched_ap_fp_spans": mismatched_spans,
+                            },
                         )
                     )
             else:

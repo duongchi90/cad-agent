@@ -133,7 +133,10 @@ def test_marine_pack_ab_benchmark_beats_baseline_and_stays_isolated() -> None:
                     {
                         **_ga_vrsb(bulkheads=3),
                         "texts": _ga_vrsb(bulkheads=3)["texts"]
-                        + [{"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE, NON-CONTAINER", "x": 50000.0, "y": 4250.0, "height": 250.0}],
+                        + [
+                            {"handle": "NS1", "text": "HULL STRUCTURE : SINGLE SIDE", "x": 50000.0, "y": 4250.0, "height": 250.0},
+                            {"handle": "NS2", "text": "SHIP TYPE : DRY CARGO NON-CONTAINER", "x": 50000.0, "y": 4500.0, "height": 250.0},
+                        ],
                     },
                     _mcn_vrsb(db_mm=550.0),
                 ],
