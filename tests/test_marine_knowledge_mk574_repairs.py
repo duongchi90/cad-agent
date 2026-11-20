@@ -824,7 +824,7 @@ def test_mk574_r25_decimal_line_cannot_anchor_clause_and_punctuated_heading_is_v
 
 @pytest.mark.parametrize(
     "numeric_line",
-    ["1.4 m freeboard", "1.4 % freeboard margin", "1.4:1 geometric scale"],
+    ["1.4 m freeboard", "1.4 % freeboard margin", "1.4:1 geometric scale", "1.4 m/s at design speed"],
 )
 def test_mk574_r26_measurement_lines_cannot_anchor_a_textbook_clause(numeric_line: str) -> None:
     doc = fitz.open()
@@ -904,6 +904,53 @@ def test_mk574_r26_measurement_line_does_not_end_a_textbook_clause() -> None:
     assert result["verification_level"] == "SOURCE_CONTENT_VERIFIED"
 
 
+@pytest.mark.parametrize(
+    "next_heading,wrong_section_text",
+    [
+        ("1.5", "5 percent margin is described here."),
+        ("2.3:", "30 degrees was the starting angle."),
+        ("1.5 in service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
+    ],
+)
+def test_mk574_r27_textbook_citation_stops_at_physical_heading_line(
+    next_heading: str,
+    wrong_section_text: str,
+) -> None:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (72, 72),
+        "1.4. Applied method\nACTUAL SECTION 1.4 TEXT.\n"
+        f"{next_heading}\n{wrong_section_text}\n1.6. Closing section.\n",
+    )
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    source_id = "SYNTH_TEXTBOOK_R27_PHYSICAL_HEADING"
+    manifest = seal_source_manifest(
+        {
+            "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+            "manifest_id": source_id,
+            "revision": "0.1.0",
+            "status": "CANDIDATE_UNAPPROVED",
+            "sources": [{
+                "source_id": source_id, "title": "Synthetic line-bounded PDF",
+                "document_kind": "TEXTBOOK", "version": "2025", "origin": "synthetic-in-memory",
+                "sha256": sha, "page_count": 1, "applicable_scope": ["test"],
+                "usage_rights": "OPEN_ACADEMIC_RESEARCH", "commit_prohibited": True,
+                "usage_status": "ACTIVE_INDEXED", "notes": "Headings and measurement text are line-bounded.",
+            }],
+        }
+    )
+    citation = {
+        "source_id": source_id, "source_sha256": sha, "source_version": "2025",
+        "clause": "1.4 Applied method", "pdf_page": [1],
+        "verbatim_excerpt": wrong_section_text,
+    }
+    with pytest.raises(MarineKnowledgeError, match="CITATION_EXCERPT_CONTENT_MISMATCH"):
+        verify_source_citation(citation, manifest, source_bytes=pdf_bytes)
+
+
 def _build_nested_equipment_dxf_bytes(
     *,
     catalogue_as_attribute: bool = False,
@@ -911,6 +958,8 @@ def _build_nested_equipment_dxf_bytes(
     repeat_nested_insert: bool = False,
     hull_text_in_nested_block: bool = False,
     vessel_length_line: str | None = None,
+    length_in_nested_block: bool = False,
+    nested_catalogue_label: bool = False,
 ) -> bytes:
     lines = [
         "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015",
@@ -923,7 +972,7 @@ def _build_nested_equipment_dxf_bytes(
             "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
             "1", "HULL STRUCTURE : SINGLE SIDE",
         ])
-    if vessel_length_line:
+    if vessel_length_line and not length_in_nested_block:
         lines.extend([
             "0", "TEXT", "8", "0", "10", "0", "20", "500", "30", "0", "40", "250",
             "1", vessel_length_line,
@@ -932,7 +981,7 @@ def _build_nested_equipment_dxf_bytes(
         "0", "INSERT", "5", "A1", "8", "0", "2", "STEERING_GEAR", "10", "0", "20", "0", "30", "0",
         "41", "1", "42", "1", "43", "1",
     ])
-    if catalogue_as_attribute:
+    if catalogue_as_attribute and not nested_catalogue_label:
         lines.extend(["66", "1"])
         lines.extend([
             "0", "ATTRIB", "8", "0", "2", "ITEM", "10", "0", "20", "0", "30", "0",
@@ -948,10 +997,22 @@ def _build_nested_equipment_dxf_bytes(
         "0", "BLOCK", "8", "0", "2", "STEERING_GEAR", "70", "0",
         "10", "0", "20", "0", "30", "0", "3", "STEERING_GEAR",
     ])
-    if not catalogue_as_attribute:
+    if nested_catalogue_label:
+        lines.extend([
+            "0", "INSERT", "5", "A3", "8", "0", "2", "GEAR_LABEL", "10", "0", "20", "0", "30", "0",
+            "41", "1", "42", "1", "43", "1",
+        ])
+        if catalogue_as_attribute:
+            lines.extend(["66", "1", "0", "ATTRIB", "8", "0", "2", "ITEM", "10", "0", "20", "0", "30", "0", "40", "250", "1", "STEERING GEAR CATALOGUE", "0", "SEQEND", "8", "0"])
+    elif not catalogue_as_attribute:
         lines.extend([
             "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
             "1", "STEERING GEAR CATALOGUE",
+        ])
+    if vessel_length_line and length_in_nested_block:
+        lines.extend([
+            "0", "TEXT", "8", "0", "10", "0", "20", "500", "30", "0", "40", "250",
+            "1", vessel_length_line,
         ])
     if hull_text_in_nested_block:
         lines.extend([
@@ -963,8 +1024,22 @@ def _build_nested_equipment_dxf_bytes(
             "0", "TEXT", "8", "0", "10", "0", "20", "500", "30", "0", "40", "250",
             "1", "Lpp = 52.00 m",
         ])
+    lines.extend(["0", "ENDBLK", "8", "0", "2", "STEERING_GEAR"])
+    if nested_catalogue_label and not catalogue_as_attribute:
+        lines.extend([
+            "0", "BLOCK", "8", "0", "2", "GEAR_LABEL", "70", "0",
+            "10", "0", "20", "0", "30", "0", "3", "GEAR_LABEL",
+            "0", "TEXT", "8", "0", "10", "0", "20", "0", "30", "0", "40", "250",
+            "1", "STEERING GEAR CATALOGUE", "0", "ENDBLK", "8", "0", "2", "GEAR_LABEL",
+        ])
+    elif nested_catalogue_label and catalogue_as_attribute:
+        lines.extend([
+            "0", "BLOCK", "8", "0", "2", "GEAR_LABEL", "70", "0",
+            "10", "0", "20", "0", "30", "0", "3", "GEAR_LABEL",
+            "0", "ENDBLK", "8", "0", "2", "GEAR_LABEL",
+        ])
     lines.extend([
-        "0", "ENDBLK", "8", "0", "2", "STEERING_GEAR", "0", "ENDSEC",
+        "0", "ENDSEC",
         "0", "SECTION", "2", "ENTITIES", "0", "INSERT", "8", "0", "2", "VESSEL_ROOT",
         "10", "0", "20", "0", "30", "0", "41", "1", "42", "1", "43", "1",
         "0", "ENDSEC", "0", "EOF", "",
@@ -1017,6 +1092,55 @@ def test_mk574_r26_nested_equipment_text_does_not_mask_parent_vessel_facts() -> 
     for observed in (child_text, child_attrib):
         assert observed["particulars"]["design_length_l_m_values"] == [52.0]
         assert observed["particulars"]["single_side_or_non_double_hull"] is True
+
+
+@pytest.mark.parametrize("catalogue_as_attribute", [False, True])
+def test_mk574_r27_nested_catalogue_label_keeps_equipment_assembly_facts_out_of_vessel_scope(
+    catalogue_as_attribute: bool,
+) -> None:
+    observed = observe_dxf_bytes(
+        _build_nested_equipment_dxf_bytes(
+            catalogue_as_attribute=catalogue_as_attribute,
+            hull_text_in_nested_block=True,
+            vessel_length_line="L = 52.00 m",
+            length_in_nested_block=True,
+            nested_catalogue_label=True,
+        ),
+        drawing_id=f"GA_R27_EQUIPMENT_ASSEMBLY_{'ATTRIB' if catalogue_as_attribute else 'TEXT'}",
+    )
+    particulars = observed["particulars"]
+    assert particulars["design_length_l_m_values"] == []
+    assert particulars["single_side_or_non_double_hull"] is False
+
+
+def _build_lpp_row_pairing_dxf_bytes() -> bytes:
+    lines = [
+        "0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1015", "9", "$INSUNITS", "70", "4",
+        "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES",
+    ]
+    for handle, text, x, y in (
+        ("A1", "LENGTH (L.P.P)", 60000, 6000),
+        ("A2", "40 m", 60200, 6250),  # closer in X, but belongs to an adjacent detail row
+        ("A3", "55 m", 62000, 6000),  # actual same-row Lpp value
+        ("A4", "A.P", 1000, 0),
+        ("A5", "F.P", 41000, 0),
+    ):
+        lines.extend([
+            "0", "TEXT", "5", handle, "8", "0", "10", str(x), "20", str(y), "30", "0",
+            "40", "250", "1", text,
+        ])
+    lines.extend(["0", "ENDSEC", "0", "EOF", ""])
+    return "\n".join(lines).encode("ascii")
+
+
+def test_mk574_r27_off_row_numeric_text_cannot_hide_a_native_ap_fp_lpp_conflict() -> None:
+    observation = observe_dxf_bytes(
+        _build_lpp_row_pairing_dxf_bytes(),
+        drawing_id="GA_R27_OFF_ROW_LPP",
+    )
+    result = detect_drawing_gaps_and_conflicts([observation], partial_package=True)
+    assert observation["particulars"]["lpp_m_values"] == [55.0]
+    assert any(item["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X" for item in result["findings"])
 
 
 def test_mk574_r24_equipment_lpp_cannot_supply_vessel_span_length() -> None:

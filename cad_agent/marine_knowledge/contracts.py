@@ -1006,19 +1006,23 @@ def _resolve_regulation_clause_slices(
 
 
 _TB_BOUNDARY_RE = re.compile(
-    r"(?im)(?:^|\n)\s*(?:(?:(?:section|sec\.?|§)\s*)?(?P<number>\d+\.\d+(?:\.\d+)?)|"
+    r"(?im)(?:^|\n)[ \t]*(?:(?:(?:section|sec\.?|§)[ \t]*)?(?P<number>\d+\.\d+(?:\.\d+)?)|"
     r"(?:chương|phần|mục)\s+[0-9ivxlcdm]+\b)"
 )
 _TB_MEASUREMENT_UNIT_TOKEN_RE = re.compile(
-    r"^(?:%|m|mm|cm|km|ft|in|inch|inches|kg|g|t|ton|tons|hp|kw|kn|knot|knots|"
-    r"deg|degree|degrees|psi|bar|rpm|c)\.?$",
+    r"^(?:%|m/s|m/sec|km/h|km/hr|ft/s|ft/min|m/min|mm|cm|km|m|ft|inch|inches|"
+    r"kg|g|t|ton|tons|hp|kw|kn|knot|knots|deg|degree|degrees|psi|bar|rpm|c)\.?$",
     re.IGNORECASE,
 )
 
 
 def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
     """Distinguish a numbered heading from a measurement beginning with the same digits."""
-    tail = suffix.lstrip()
+    # Heading grammar is local to one extracted physical line. Whitespace
+    # normalization across a newline can otherwise treat the next paragraph as
+    # the heading's suffix and lose a valid standalone section boundary.
+    physical_line_suffix = re.split(r"\r?\n", suffix, maxsplit=1)[0]
+    tail = physical_line_suffix.lstrip(" \t")
     if not tail:
         return True
     if tail.startswith(":"):
@@ -1026,7 +1030,7 @@ def _is_textbook_clause_heading_suffix(suffix: str) -> bool:
         return not content or (not content[0].isdigit() and not content.startswith("%"))
     if tail[0] in ".)":
         return len(tail) == 1 or tail[1].isspace()
-    if suffix[:1].isspace():
+    if physical_line_suffix[:1] in {" ", "\t"}:
         token = tail.split(maxsplit=1)[0].strip(".,;:()[]{}")
         return bool(token) and not _TB_MEASUREMENT_UNIT_TOKEN_RE.fullmatch(token) and token[0].isalpha()
     return False
@@ -1149,7 +1153,7 @@ def _resolve_textbook_clause_slices(
     if clause_items:
         for base_clause, _sub in clause_items:
             pattern = re.compile(
-                rf"(?im)(?:^|\n)\s*(?:(?:section|sec\.?|§)\s*)?"
+                rf"(?im)(?:^|\n)[ \t]*(?:(?:section|sec\.?|§)[ \t]*)?"
                 rf"(?P<number>{re.escape(base_clause)})"
             )
             m = next(

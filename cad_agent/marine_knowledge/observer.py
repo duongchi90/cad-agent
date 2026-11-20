@@ -900,9 +900,11 @@ def _nearest_right_numeric(
         if m:
             val, verified = _unit_value_to_meters(m.group(1), m.group(2), insunits=insunits)
             if val is not None:
-                candidates.append((dx, abs(oy - ly), val, verified))
+                candidates.append((abs(oy - ly), dx, val, verified))
     if not candidates:
         return None, False
+    # Text on the same row is stronger value-binding evidence than a closer
+    # number in an adjacent note/detail row. Prefer row alignment, then X gap.
     candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
     nearest_distance = candidates[0][:2]
     nearest = [candidate for candidate in candidates if candidate[:2] == nearest_distance]
@@ -941,6 +943,14 @@ def _detect_blank_fields(entries: list[dict[str, Any]], explicit: object) -> lis
     return blanks
 
 
+def _occurrence_block_name(path_segment: str) -> str:
+    """Return the referenced block name embedded in one occurrence path segment."""
+    if path_segment.startswith("INSERT:"):
+        parts = path_segment.split(":", 2)
+        return parts[2] if len(parts) == 3 else ""
+    return path_segment.rsplit(":", 1)[0]
+
+
 def _append_unique(items: list[Any], value: Any) -> None:
     if value not in items:
         items.append(value)
@@ -958,13 +968,24 @@ def _extract_particulars(
         if str(entry.get("occurrence_id") or "MODELSPACE") != "MODELSPACE"
         and _EQUIPMENT_ACCESSORY_RE.search(str(entry.get("folded") or ""))
     }
+    equipment_scope_roots = set(equipment_marker_occurrences)
+    # A nested catalogue label may identify its enclosing named equipment
+    # assembly. Only infer that ancestor scope along a path containing the
+    # marker; a repeated, otherwise unmarked block occurrence stays independent.
+    for marked_occurrence in equipment_marker_occurrences:
+        path_parts = marked_occurrence.split("/")
+        for depth, segment in enumerate(path_parts, start=1):
+            block_name = _occurrence_block_name(segment).replace("_", " ")
+            if block_name and _EQUIPMENT_ACCESSORY_RE.search(fold_marine_search_text(block_name)):
+                equipment_scope_roots.add("/".join(path_parts[:depth]))
+
     equipment_occurrences: set[str] = set()
     for entry in entries:
         occurrence_id = str(entry.get("occurrence_id") or "MODELSPACE")
         if occurrence_id == "MODELSPACE":
             continue
         path_parts = occurrence_id.split("/")
-        if any("/".join(path_parts[:depth]) in equipment_marker_occurrences for depth in range(1, len(path_parts) + 1)):
+        if any("/".join(path_parts[:depth]) in equipment_scope_roots for depth in range(1, len(path_parts) + 1)):
             equipment_occurrences.add(occurrence_id)
     design_length_l_m_values: list[float] = []
     lpp_values: list[float] = []
