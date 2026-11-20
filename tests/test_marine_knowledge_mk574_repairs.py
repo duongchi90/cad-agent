@@ -909,8 +909,10 @@ def test_mk574_r26_measurement_line_does_not_end_a_textbook_clause() -> None:
     [
         ("1.5", "5 percent margin is described here."),
         ("2.3:", "30 degrees was the starting angle."),
+        ("1.5 In service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
         ("1.5. In service", "THE IN-SERVICE RULE BELONGS TO SECTION 1.5."),
         ("Section 1.5 In service", "THE PREFIXED IN-SERVICE RULE BELONGS TO SECTION 1.5."),
+        ("Section 1.5 - In service", "THE DASHED PREFIXED IN-SERVICE RULE BELONGS TO SECTION 1.5."),
         ("Section 1.5 - Auxiliary steering", "THE AUXILIARY STEERING RULE BELONGS TO SECTION 1.5."),
     ],
 )
@@ -961,6 +963,9 @@ def test_mk574_r27_textbook_citation_stops_at_physical_heading_line(
         ("1.4-MPa proof pressure is required.", "MPa proof pressure is required."),
         ("1.4 kN/m allowable load applies.", "kN/m allowable load applies."),
         ("1.4-kN/m allowable load applies.", "kN/m allowable load applies."),
+        ("1.4 t/m3 cargo density applies.", "t/m3 cargo density applies."),
+        ("1.4 N/mm^2 proof stress applies.", "N/mm^2 proof stress applies."),
+        ("1.4 kN-m shaft torque applies.", "kN-m shaft torque applies."),
     ],
 )
 def test_mk574_r28_measurement_suffix_cannot_anchor_a_textbook_clause(
@@ -1181,7 +1186,13 @@ def test_mk574_r28_nested_catalogue_does_not_promote_mixed_vessel_ancestor_to_eq
     assert particulars["single_side_or_non_double_hull"] is True
 
 
-@pytest.mark.parametrize("equipment_block_name", ["STEERING_GEAR_ASSY", "STEERING_GEAR_01", "AFT_STEERING_GEAR"])
+@pytest.mark.parametrize(
+    "equipment_block_name",
+    [
+        "STEERING_GEAR_ASSY", "STEERING_GEAR_01", "AFT_STEERING_GEAR",
+        "PORT_STEERING_GEAR", "STBD_STEERING_GEAR",
+    ],
+)
 def test_mk574_r28_qualified_equipment_assembly_keeps_nested_catalogue_facts_out_of_vessel_scope(
     equipment_block_name: str,
 ) -> None:
@@ -1268,7 +1279,10 @@ def test_mk574_r27_off_row_numeric_text_cannot_hide_a_native_ap_fp_lpp_conflict(
     assert any(item["finding_id"] == "F_UNIT_OR_SCALE_MISMATCH_1000X" for item in result["findings"])
 
 
-@pytest.mark.parametrize("adjacent_length_label", ["HOLD LENGTH", "CHIEU DAI HAM HANG", "LOA"])
+@pytest.mark.parametrize(
+    "adjacent_length_label",
+    ["HOLD LENGTH", "CHIEU DAI HAM HANG", "LOA", "T:", "CHIEU DAI DUONG NUOC", "LTK"],
+)
 def test_mk574_r28_intervening_field_label_delimits_lpp_value_binding(adjacent_length_label: str) -> None:
     observation = observe_dxf_bytes(
         _build_lpp_hold_length_dxf_bytes(adjacent_length_label=adjacent_length_label), drawing_id="GA_R28_HOLD_LENGTH_DELIMITER"

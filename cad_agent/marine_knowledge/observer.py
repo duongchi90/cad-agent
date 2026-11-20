@@ -33,10 +33,11 @@ _KNOWN_BLANK_FIELD_LABELS = (
     "HULL NO",
 )
 _NUMERIC_FIELD_LABEL_RE = re.compile(
-    r"\b(?:lpp|l\.?p\.?p|lwl|loa|l\.?o\.?a\.?|length|hold\s+length|"
+    r"\b(?:lpp|l\.?p\.?p|lwl|ltk|loa|l\.?o\.?a\.?|length|hold\s+length|"
     r"chieu\s+dai\s+ham\s+hang|chieu\s+dai\s+giua\s+2\s+tru|"
-    r"chieu\s+dai\s+tau|breadth|beam|width|chieu\s+rong(?:\s*\(?b\)?)?|depth|draught|draft)\b|"
-    r"(?<!\w)(?:l|b|d)\s*[:=]?(?!\w)",
+    r"chieu\s+dai\s+tau|chieu\s+dai\s+duong\s+nuoc(?:\s+thiet\s+ke)?|"
+    r"breadth|beam|width|chieu\s+rong(?:\s*\(?b\)?)?|depth|draught|draft)\b|"
+    r"(?<!\w)(?:l|b|d|t)\s*[:=]?(?!\w)",
     re.IGNORECASE,
 )
 
@@ -979,7 +980,7 @@ def _is_named_equipment_assembly(block_name: str) -> bool:
     """Recognize accessory blocks with bounded instance/location qualifiers."""
     normalized = fold_marine_search_text(block_name.replace("_", " ").replace("-", " "))
     normalized = re.sub(r"(?:\s+(?:assy|assembly|unit|equipment|\d+))+$", "", normalized)
-    normalized = re.sub(r"^(?:aft|after|fore|forward)\s+", "", normalized)
+    normalized = re.sub(r"^(?:aft|after|fore|forward|port|stbd|starboard)\s+", "", normalized)
     return bool(_EQUIPMENT_ACCESSORY_RE.fullmatch(normalized))
 
 
