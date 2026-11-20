@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-agent.local/contracts/marine-check-result-1.0",
+  "title": "Marine Domain Skill Check Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "skill_id",
+    "pack_id",
+    "pack_sha256",
+    "pack_status",
+    "cad_mutation",
+    "regulatory_compliance_proven",
+    "status",
+    "summary",
+    "observed_scope",
+    "applicable_regulation_scope",
+    "partial_package",
+    "findings",
+    "checks_executed",
+    "checks_not_executed",
+    "limitations",
+    "proposal_only_actions"
+  ],
+  "properties": {
+    "schema_version": { "const": "marine-check-result-1.0" },
+    "skill_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+    "pack_id": { "type": "string", "minLength": 1 },
+    "pack_sha256": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "pack_status": { "enum": ["CANDIDATE_UNAPPROVED", "DRAFT_REVIEW_ONLY", "DISABLED"] },
+    "cad_mutation": { "const": false },
+    "regulatory_compliance_proven": { "const": false },
+    "status": {
+      "enum": ["PASS", "CONFLICT", "INSUFFICIENT_EVIDENCE", "NOT_APPLICABLE", "DISABLED"]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "observed_scope": { "type": "object" },
+    "applicable_regulation_scope": { "type": "object" },
+    "partial_package": { "type": "boolean" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "verdict",
+          "rule_id",
+          "source_id",
+          "source_sha256",
+          "source_version",
+          "clause",
+          "pdf_page",
+          "reg_page",
+          "pagination_basis",
+          "conditions_applied",
+          "exceptions_checked",
+          "evidence",
+          "reason",
+          "confidence",
+          "limitation"
+        ],
+        "properties": {
+          "finding_id": { "type": "string", "minLength": 1 },
+          "verdict": { "enum": ["PASS", "CONFLICT", "INSUFFICIENT_EVIDENCE", "NOT_APPLICABLE"] },
+          "rule_id": { "type": "string", "minLength": 1 },
+          "source_id": { "type": "string", "minLength": 1 },
+          "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "source_version": { "type": "string", "minLength": 1 },
+          "clause": { "type": "string", "minLength": 1 },
+          "pdf_page": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+          "reg_page": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+          "pagination_basis": { "type": "string", "minLength": 1 },
+          "conditions_applied": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "exceptions_checked": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "evidence": { "type": "object" },
+          "reason": { "type": "string", "minLength": 1 },
+          "confidence": { "enum": ["HIGH", "MEDIUM", "LOW"] },
+          "limitation": { "type": "string", "minLength": 1 }
+        },
+        "anyOf": [
+          { "properties": { "pdf_page": { "minItems": 1 } } },
+          { "properties": { "reg_page": { "minItems": 1 } } }
+        ]
+      }
+    },
+    "checks_executed": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "checks_not_executed": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "proposal_only_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proposal_id",
+          "target_drawing_id",
+          "action_kind",
+          "cad_mutation",
+          "proposal_only",
+          "requires_cad_core_admission",
+          "required_core_gates",
+          "evidence",
+          "reason"
+        ],
+        "properties": {
+          "proposal_id": { "type": "string", "minLength": 1 },
+          "target_drawing_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+          "action_kind": {
+            "enum": [
+              "FIX_TITLE_BLOCK_TYPE_MISMATCH",
+              "RECONCILE_SERVICE_AREA_SCOPE",
+              "CONFIRM_REGULATORY_SERVICE_AREA",
+              "SET_INSUNITS_AND_VERIFY_CALIBRATION",
+              "SET_INSUNITS_AND_COMPLETE_TITLE_BLOCK",
+              "REVIEW_WATERTIGHT_BULKHEAD_SUBDIVISION",
+              "REVIEW_DOUBLE_BOTTOM_SCANTLINGS",
+              "VERIFY_SMALL_HULL_SCANTLINGS",
+              "REQUEST_NATIVE_CAD_AND_CALIBRATION",
+              "COMPLETE_TITLE_BLOCK_FIELDS",
+              "VERIFY_LONGLINE_BOW_TO_RIGHT",
+              "STANDARDIZE_TEXT_HEIGHTS_AT_SCALE",
+              "CHECK_NON_UNIFORM_VERTICAL_SCALE",
+              "RECONCILE_MAIN_ENGINE_SPECIFICATION",
+              "RECONCILE_L_PARTICULAR",
+              "RECONCILE_LPP_PARTICULAR",
+              "RECONCILE_B_PARTICULAR",
+              "RECONCILE_D_PARTICULAR",
+              "RECONCILE_DRAFT_PARTICULAR",
+              "RECONCILE_SHIP_TYPE_AND_HULL_ID",
+              "RECONCILE_METRIC_CONFLICT",
+              "VERIFY_CORRUPTED_NUMERIC_TEXT",
+              "VERIFY_CAD_GEOMETRY_ENTITIES"
+            ]
+          },
+          "cad_mutation": { "const": false },
+          "proposal_only": { "const": true },
+          "requires_cad_core_admission": { "const": true },
+          "required_core_gates": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "string", "minLength": 1 },
+            "allOf": [
+              { "contains": { "const": "CAD_CORE_SOURCE_SUPPORT" } },
+              { "contains": { "const": "CAD_CORE_REVIEW" } }
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "cad_mutation": { "not": { "const": true } },
+              "proposal_only": { "not": { "const": false } }
+            }
+          },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "if": { "properties": { "status": { "not": { "const": "DISABLED" } } } },
+  "then": { "properties": { "pack_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } }
+}
