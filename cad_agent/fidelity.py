@@ -2383,6 +2383,23 @@ class _NativePdfThinStrokeCheck:
             return None
 
 
+
+class _GlyphPairWorkBudget:
+    """Bound cumulative Cartesian glyph comparisons and fail closed on exhaustion."""
+
+    def __init__(self, limit: int) -> None:
+        if limit < 0:
+            raise ValueError("Glyph pair work limit must be nonnegative.")
+        self.limit = limit
+        self.work = 0
+
+    def reserve(self, left: Collection[Any], right: Collection[Any]) -> bool:
+        work = len(left) * len(right)
+        if self.work + work > self.limit:
+            return False
+        self.work += work
+        return True
+
 def _native_pdf_text_span_records(
     source_page: fitz.Page,
     page_number: int,
@@ -2661,8 +2678,8 @@ def _native_pdf_text_span_records(
                 continue
             grect = fitz.Rect(char[3])
             if grect.is_empty or not grect.is_valid:
-                if not skip_spaces and chr(char[0]).isspace():
-                    continue
+                # A whitespace codepoint may be a visible glyph remapped by /ToUnicode.
+                # Without nonempty bounds it cannot prove an intersecting fill is harmless.
                 return None
             entries.append((char[0], (float(char[2][0]), float(char[2][1])), grect))
         return entries
@@ -2816,6 +2833,8 @@ def _native_pdf_text_span_records(
             tr["_occluder_v_expanded"] = False
             tr["_effective_v_size"] = tr_sz_f
 
+    glyph_pair_work_limit = 100_000
+
     def has_valid_glyph_progression(
         ordered_traces: list[dict[str, Any]],
         line_dir: Any,
@@ -2844,7 +2863,7 @@ def _native_pdf_text_span_records(
                 return False
             for cp, org, gr in entries:
                 ordered_glyphs.append((cp, org, gr, float(mt_size)))
-        if len(ordered_glyphs) * max(0, len(ordered_glyphs) - 1) // 2 > 100_000:
+        if len(ordered_glyphs) * max(0, len(ordered_glyphs) - 1) // 2 > glyph_pair_work_limit:
             return False
         for idx_a in range(len(ordered_glyphs)):
             cp_a, (ox_a, oy_a), gr_a, sz_a = ordered_glyphs[idx_a]
@@ -3561,9 +3580,12 @@ def _native_pdf_text_span_records(
             target_glyphs = raw_target_glyphs
 
         member_id_set = set(member_trace_order_ids)
+        glyph_pair_work = _GlyphPairWorkBudget(glyph_pair_work_limit)
 
         def trace_glyphs_hit_target(lt: dict[str, Any], lt_glyphs: list[tuple[int, tuple[float, float], fitz.Rect]]) -> bool:
             assert target_glyphs is not None
+            if not glyph_pair_work.reserve(target_glyphs, lt_glyphs):
+                return True
             lt_dir = lt.get("dir")
             lt_size = lt.get("size")
             same_oblique_dir = (
@@ -3619,6 +3641,8 @@ def _native_pdf_text_span_records(
                     return True
                 intra_glyphs = glyph_entries_from_chars(later_intra_chars, skip_spaces=False)
                 if intra_glyphs is None:
+                    return True
+                if not glyph_pair_work.reserve(target_glyphs, intra_glyphs):
                     return True
                 if abs(v_scale - 1.0) > 1e-3:
                     intra_glyphs = [
@@ -3791,6 +3815,8 @@ def _native_pdf_text_span_records(
                     verified_fill = get_verified_fill_seq(index, paint_rect)
                     if verified_fill is not None:
                         flat_subs, all_dark_opaque_fills = verified_fill
+                        if not glyph_pair_work.reserve(target_glyphs, flat_subs):
+                            return True
                         metric_hit = any(
                             not (glyph_rect & subpath).is_empty
                             for subpath in flat_subs
@@ -3804,6 +3830,8 @@ def _native_pdf_text_span_records(
                                 if not deferred_fills:
                                     deferred_fills.append(True)
                                 direction = (ux, uy) if dir_ok else (1.0, 0.0)
+                                if not glyph_pair_work.reserve(target_glyphs, flat_subs):
+                                    return True
                                 if any(
                                     not (protected_stroke_glyph_rect(cp, origin, rect, direction) & subpath).is_empty
                                     for subpath in flat_subs

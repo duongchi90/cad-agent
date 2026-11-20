@@ -1082,6 +1082,7 @@ def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_late
     finally:
         baseline_pdf.close()
     assert any(record["content"].strip() == "100" for record in baseline_records)
+    before_fill = page.get_pixmap(clip=masked_rect, alpha=False)
     pdf_y = page.rect.height - masked_rect.y1
     fill = f"\nq 1 1 1 rg {masked_rect.x0:.4f} {pdf_y:.4f} {masked_rect.width:.4f} {masked_rect.height:.4f} re f Q\n".encode("ascii")
     document.update_stream(content_xref, document.xref_stream(content_xref) + fill)
@@ -1089,14 +1090,136 @@ def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_late
     reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
     document.close()
     try:
+        after_fill = reopened[0].get_pixmap(clip=masked_rect, alpha=False)
+        assert any(sample < 240 for sample in before_fill.samples)
+        assert all(sample > 250 for sample in after_fill.samples)
+
+        import copy
+
+        class EmptyMetricSpaceGlyphPage:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(reopened[0], name)
+
+            def get_texttrace(self, *args: Any, **kwargs: Any) -> Any:
+                traces = copy.deepcopy(reopened[0].get_texttrace(*args, **kwargs))
+                for trace in traces:
+                    chars = list(trace.get("chars", ()))
+                    for index, char in enumerate(chars):
+                        if char[0] == 0x20:
+                            empty_bbox = (char[3][0], char[3][1], char[3][0], char[3][1])
+                            chars[index] = (*char[:3], empty_bbox, *char[4:])
+                    trace["chars"] = tuple(chars)
+                return traces
+
         records = fidelity_module._native_pdf_text_span_records(
-            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+            EmptyMetricSpaceGlyphPage(), 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
         )
     finally:
         reopened.close()
 
     assert not any(record["content"].strip() == "100" for record in records)
     assert "CONTROL" in {record["content"] for record in records}
+
+
+def test_native_pdf_observation_handles_generated_tounicode_space_overprint_stress() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((10, 250), "CONTROL", fontsize=12)
+    page.insert_text((100, 120), "A" * 320, fontsize=12)
+    page.clean_contents()
+    cmap_stream = (
+        b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        b"/CMapName /CustomSpaceMap def\n/CMapType 2 def\n"
+        b"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+        b"1 beginbfchar\n<49> <0020>\nendbfchar\nendcmap\n"
+        b"CMapName currentdict /CMap defineresource pop\nend\nend\n"
+    )
+    cmap_xref = document.get_new_xref()
+    document.update_object(cmap_xref, "<< >>")
+    document.update_stream(cmap_xref, cmap_stream)
+    font_xref = document.get_new_xref()
+    document.update_object(
+        font_xref,
+        f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode {cmap_xref} 0 R >>",
+    )
+    pg_obj = document.xref_object(page.xref)
+    if "/Font <<" in pg_obj:
+        document.update_object(page.xref, pg_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+    else:
+        _, res_val = document.xref_get_key(page.xref, "Resources")
+        res_xref = int(res_val.split()[0])
+        res_obj = document.xref_object(res_xref)
+        if "/Font <<" in res_obj:
+            document.update_object(res_xref, res_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+        else:
+            _, font_val = document.xref_get_key(res_xref, "Font")
+            existing_font_xref = int(font_val.split()[0])
+            document.update_object(
+                existing_font_xref,
+                document.xref_object(existing_font_xref).replace("<<", f"<< /F99 {font_xref} 0 R ", 1),
+            )
+
+    content_xref = page.get_contents()[0]
+    document.update_stream(
+        content_xref,
+        document.xref_stream(content_xref)
+        + b"\nq BT 1 1 1 rg /F99 12 Tf 1 0 0 1 101.65 160 Tm (" + b"I" * 320 + b") Tj ET Q\n",
+    )
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        import copy
+
+        class BroadPaintBoundsStressPage:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(reopened[0], name)
+
+            def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
+                paint_log = list(reopened[0].get_bboxlog())
+                # The coarse paint bounds overlap while the measured glyph boxes do not.
+                paint_log[2] = (paint_log[2][0], paint_log[1][1])
+                return paint_log
+
+            def get_texttrace(self, *args: Any, **kwargs: Any) -> Any:
+                return copy.deepcopy(reopened[0].get_texttrace(*args, **kwargs))
+
+        records = fidelity_module._native_pdf_text_span_records(
+            BroadPaintBoundsStressPage(), 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+    assert "CONTROL" in {record["content"] for record in records}
+    assert not any(len(record["content"]) >= 300 for record in records)
+
+
+def test_native_pdf_observation_accepts_genuine_blank_space_when_unoccluded() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((60, 120), " 100", fontsize=18)
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+    assert any(record["content"].strip() == "100" for record in records)
+
+
+def test_glyph_pair_work_budget_caps_cumulative_cartesian_comparisons() -> None:
+    from cad_agent.fidelity import _GlyphPairWorkBudget
+
+    budget = _GlyphPairWorkBudget(100_000)
+    assert budget.reserve([None] * 320, [None] * 300)
+    assert budget.work == 96_000
+    assert not budget.reserve([None] * 320, [None] * 20)
+    assert budget.work == 96_000
+    assert budget.reserve([None] * 2, [None] * 2)
+    assert budget.work == 96_004
 
 
 def test_native_pdf_observation_fails_closed_for_excessive_glyph_pair_work() -> None:
