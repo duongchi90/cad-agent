@@ -1121,78 +1121,96 @@ def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_late
     assert "CONTROL" in {record["content"] for record in records}
 
 
-def test_native_pdf_observation_handles_generated_tounicode_space_overprint_stress() -> None:
+def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
     from cad_agent import fidelity as fidelity_module
+
+    original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
+    reservation_attempts: list[tuple[int, bool]] = []
+    reservation_contexts: list[dict[str, Any]] = []
+
+    def observe_reservation(self, left, right) -> bool:
+        before = self.work
+        reserved = original_reserve(self, left, right)
+        reservation_attempts.append((len(left) * len(right), reserved))
+        caller = sys._getframe(1)
+        source_span = None
+        source_trace = None
+        frame = caller
+        for _ in range(6):
+            if frame is None:
+                break
+            source_span = source_span or frame.f_locals.get("span")
+            source_trace = source_trace or frame.f_locals.get("trace")
+            frame = frame.f_back
+        local = caller.f_locals
+        flat_subs = local.get("flat_subs")
+        target_glyphs = local.get("target_glyphs")
+        reservation_contexts.append({
+            "budget_id": id(self),
+            "budget_before": before,
+            "budget_after": self.work,
+            "paint_type": local.get("paint_type"),
+            "flat_subpaths": len(flat_subs) if isinstance(flat_subs, list) else None,
+            "target_glyphs": len(target_glyphs) if isinstance(target_glyphs, list) else None,
+            "metric_hit": local.get("metric_hit"),
+            "source_span_chars": len(source_span.get("text", "")) if isinstance(source_span, dict) else None,
+            "source_trace_seqno": source_trace.get("seqno") if isinstance(source_trace, dict) else None,
+            "source_trace_chars": len(source_trace.get("chars", ())) if isinstance(source_trace, dict) else None,
+        })
+        return reserved
+
+    monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
 
     document = fitz.open()
     page = document.new_page(width=4000, height=300)
     page.insert_text((10, 250), "CONTROL", fontsize=12)
-    page.insert_text((100, 120), "A" * 320, fontsize=12)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
     page.clean_contents()
-    cmap_stream = (
-        b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
-        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
-        b"/CMapName /CustomSpaceMap def\n/CMapType 2 def\n"
-        b"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
-        b"1 beginbfchar\n<49> <0020>\nendbfchar\nendcmap\n"
-        b"CMapName currentdict /CMap defineresource pop\nend\nend\n"
-    )
-    cmap_xref = document.get_new_xref()
-    document.update_object(cmap_xref, "<< >>")
-    document.update_stream(cmap_xref, cmap_stream)
-    font_xref = document.get_new_xref()
-    document.update_object(
-        font_xref,
-        f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode {cmap_xref} 0 R >>",
-    )
-    pg_obj = document.xref_object(page.xref)
-    if "/Font <<" in pg_obj:
-        document.update_object(page.xref, pg_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
-    else:
-        _, res_val = document.xref_get_key(page.xref, "Resources")
-        res_xref = int(res_val.split()[0])
-        res_obj = document.xref_object(res_xref)
-        if "/Font <<" in res_obj:
-            document.update_object(res_xref, res_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
-        else:
-            _, font_val = document.xref_get_key(res_xref, "Font")
-            existing_font_xref = int(font_val.split()[0])
-            document.update_object(
-                existing_font_xref,
-                document.xref_object(existing_font_xref).replace("<<", f"<< /F99 {font_xref} 0 R ", 1),
-            )
 
-    content_xref = page.get_contents()[0]
-    document.update_stream(
-        content_xref,
-        document.xref_stream(content_xref)
-        + b"\nq BT 1 1 1 rg /F99 12 Tf 1 0 0 1 101.65 160 Tm (" + b"I" * 320 + b") Tj ET Q\n",
-    )
+    # A single compound fill has 250 verified subpaths. The first two cover
+    # the source glyph metrics; one 250x250 reservation fits, while the second
+    # reservation against that same source trace would exceed the 100,000 cap.
+    fill = page.new_shape()
+    for _ in range(250):
+        fill.draw_rect(fitz.Rect(101, 110, 105, 115))
+    fill.finish(color=None, fill=(0, 0, 0), closePath=True)
+    fill.commit()
+
     reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
     document.close()
     try:
-        import copy
-
-        class BroadPaintBoundsStressPage:
-            def __getattr__(self, name: str) -> Any:
-                return getattr(reopened[0], name)
-
-            def get_bboxlog(self) -> list[tuple[str, tuple[float, float, float, float]]]:
-                paint_log = list(reopened[0].get_bboxlog())
-                # The coarse paint bounds overlap while the measured glyph boxes do not.
-                paint_log[2] = (paint_log[2][0], paint_log[1][1])
-                return paint_log
-
-            def get_texttrace(self, *args: Any, **kwargs: Any) -> Any:
-                return copy.deepcopy(reopened[0].get_texttrace(*args, **kwargs))
-
         records = fidelity_module._native_pdf_text_span_records(
-            BroadPaintBoundsStressPage(), 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
         )
     finally:
         reopened.close()
+
     assert "CONTROL" in {record["content"] for record in records}
-    assert not any(len(record["content"]) >= 300 for record in records)
+    grouped_attempts: dict[int, list[tuple[int, bool]]] = {}
+    grouped_contexts: dict[int, list[dict[str, Any]]] = {}
+    for attempt, context in zip(reservation_attempts, reservation_contexts, strict=True):
+        grouped_attempts.setdefault(context["budget_id"], []).append(attempt)
+        grouped_contexts.setdefault(context["budget_id"], []).append(context)
+    exhausted = [
+        budget_id for budget_id, attempts in grouped_attempts.items()
+        if attempts == [(62_500, True), (62_500, False)]
+    ]
+    assert len(exhausted) == 1, repr({key: (grouped_attempts[key], grouped_contexts[key]) for key in grouped_attempts})
+    source_bound = grouped_contexts[exhausted[0]]
+    assert all(
+        context["source_span_chars"] == 250
+        and context["source_trace_chars"] == 250
+        and context["source_trace_seqno"] == 1
+        and context["paint_type"] == "fill-path"
+        and context["flat_subpaths"] == 250
+        and context["target_glyphs"] == 250
+        for context in source_bound
+    ), repr(source_bound)
+    assert source_bound[0]["budget_before"] == 0 and source_bound[0]["budget_after"] == 62_500
+    assert source_bound[1]["budget_before"] == 62_500 and source_bound[1]["budget_after"] == 62_500
+    assert not any(len(record["content"]) >= 250 for record in records)
 
 
 def test_native_pdf_observation_accepts_genuine_blank_space_when_unoccluded() -> None:
