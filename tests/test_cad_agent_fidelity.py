@@ -1420,6 +1420,37 @@ def test_native_pdf_observation_bounds_below_baseline_glyph_lookup_work() -> Non
     )
 
 
+def test_native_pdf_below_baseline_contact_proof_uses_unique_source_glyph() -> None:
+    source_glyph = (ord("g"), 72, (100.0, 120.0), fitz.Rect(100.0, 101.0, 113.0, 127.0))
+    lookup = {fidelity_module._native_pdf_glyph_source_key(source_glyph): [source_glyph]}
+    protected_results = {}
+    proof_key_prefix = (1, 2, (0, 1))
+    clip = fitz.Rect(99.75, 120.0, 113.25, 127.25)
+    proof_calls = []
+
+    def run_proof(decision: bool) -> bool:
+        def proof(glyph):
+            proof_calls.append(glyph)
+            return decision
+
+        return fidelity_module._native_pdf_below_baseline_candidate_overlaps(
+            lookup,
+            ord("g"),
+            100.0,
+            120.0,
+            proof_key_prefix,
+            protected_results,
+            span_font_size=12.0,
+            clip=clip,
+            deferred_fills=[True],
+            proof=proof,
+        )
+
+    assert run_proof(True) is True
+    assert run_proof(False) is False
+    assert proof_calls == [source_glyph, source_glyph]
+
+
 def test_native_pdf_observation_accepts_genuine_blank_space_when_unoccluded() -> None:
     from cad_agent import fidelity as fidelity_module
 

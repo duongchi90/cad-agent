@@ -2405,6 +2405,38 @@ class _GlyphPairWorkBudget:
         self.work += work
         return True
 
+def _native_pdf_glyph_source_key(glyph: tuple[Any, ...]) -> tuple[Any, tuple[Any, ...]]:
+    return glyph[0], tuple(glyph[2])
+
+
+def _native_pdf_below_baseline_candidate_overlaps(
+    glyph_lookup: dict[tuple[Any, tuple[Any, ...]], list[Any]],
+    codepoint: int,
+    origin_x: float,
+    origin_y: float,
+    proof_key_prefix: tuple[Any, ...],
+    protected_results: dict[tuple[Any, ...], bool],
+    *,
+    span_font_size: Any,
+    clip: fitz.Rect,
+    deferred_fills: list[bool] | None,
+    proof: Any,
+) -> bool:
+    matches = glyph_lookup.get((codepoint, (origin_x, origin_y)), [])
+    if len(matches) != 1:
+        return deferred_fills is None
+    glyph = matches[0]
+    proof_key = proof_key_prefix + (
+        glyph[0], glyph[1], tuple(glyph[2]), span_font_size, tuple(clip),
+    )
+    if deferred_fills is None:
+        return protected_results.get(proof_key) is not False
+    decision = proof(glyph)
+    if decision is not None:
+        protected_results[proof_key] = decision
+    return bool(decision)
+
+
 def _native_pdf_text_span_records(
     source_page: fitz.Page,
     page_number: int,
@@ -3993,7 +4025,7 @@ def _native_pdf_text_span_records(
                                     return True
                                 glyph_lookup_by_source_position = {}
                                 for glyph in source_chars:
-                                    key = (glyph[0], tuple(glyph[2]))
+                                    key = _native_pdf_glyph_source_key(glyph)
                                     glyph_lookup_by_source_position.setdefault(key, []).append(glyph)
                             checked_glyphs = set()
                             for cp, ox, oy, glyph_rect in below_baseline_candidates:
@@ -4001,27 +4033,22 @@ def _native_pdf_text_span_records(
                                 if key in checked_glyphs:
                                     continue
                                 checked_glyphs.add(key)
-                                matches = glyph_lookup_by_source_position.get(key, [])
-                                if len(matches) != 1:
-                                    if deferred_fills is None:
-                                        return True
-                                    continue
                                 clip = fitz.Rect(glyph_rect.x0 - 0.25, oy, glyph_rect.x1 + 0.25, glyph_rect.y1 + 0.25)
-                                glyph = matches[0]
-                                proof_key = (index, trace_order_id, trace.get("_source_character_range"),
-                                             glyph[0], glyph[1], tuple(glyph[2]), span_font_size, tuple(clip))
-                                if deferred_fills is None:
-                                    # Optional fill work can use only a completed protected stroke proof.
-                                    if protected_stroke_results.get(proof_key) is not False:
-                                        return True
-                                else:
-                                    decision = thin_stroke_check.overlaps_below_baseline(
-                                        index, seq_drawings[0], trace, glyph, span_font_size, clip,
-                                    )
-                                    if decision is not None:
-                                        protected_stroke_results[proof_key] = decision
-                                    if decision:
-                                        return True
+                                if _native_pdf_below_baseline_candidate_overlaps(
+                                    glyph_lookup_by_source_position,
+                                    cp,
+                                    ox,
+                                    oy,
+                                    (index, trace_order_id, trace.get("_source_character_range")),
+                                    protected_stroke_results,
+                                    span_font_size=span_font_size,
+                                    clip=clip,
+                                    deferred_fills=deferred_fills,
+                                    proof=lambda matched_glyph: thin_stroke_check.overlaps_below_baseline(
+                                        index, seq_drawings[0], trace, matched_glyph, span_font_size, clip,
+                                    ),
+                                ):
+                                    return True
                         continue
 
                 if overlap_ratio(trace_rect, paint_rect) > 0:
