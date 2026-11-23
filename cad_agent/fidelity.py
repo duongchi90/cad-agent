@@ -1778,6 +1778,9 @@ class _NativePdfThinStrokeCheck:
         self.glyphs: dict[tuple[str, int], list[tuple[Any, tuple[float, ...]]]] = {}
         self.definitions: dict[str, Any] = {}
         self.fonts: dict[str, Any] = {}
+        self.base14_fonts: dict[str, fitz.Font | None] = {}
+        self.base14_trace_bounds: dict[int, dict[tuple[int, tuple[Any, ...]], fitz.Rect] | None] = {}
+        self.base14_stroke_geometry: dict[int, tuple[dict[str, Any], tuple[fitz.Rect, ...], fitz.Rect] | None] = {}
         self.font_resources: dict[str, list[tuple[Any, ...]]] | None = None
         self.font_programs: dict[int, bytes | None] = {}
         self.font_bytes = 0
@@ -1877,6 +1880,202 @@ class _NativePdfThinStrokeCheck:
         self.glyphs = indexed
         self.definitions = definitions
         self.paths = {index: node for (index, _), node in zip(path_sequences, path_nodes)}
+
+    def _base14_font(self, trace: dict[str, Any]) -> fitz.Font | None:
+        font_name = trace.get("font")
+        base14_names = {
+            "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
+            "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
+            "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic", "Symbol", "ZapfDingbats",
+        }
+        if not isinstance(font_name, str) or font_name not in base14_names:
+            return None
+        if font_name not in self.base14_fonts:
+            self.base14_fonts[font_name] = None
+            document = self.page.parent
+            if document is None:
+                return None
+            resources = [resource for resource in self.page.get_fonts(full=True)
+                         if len(resource) >= 6 and resource[3] == font_name]
+            if len(resources) != 1:
+                return None
+            resource = resources[0]
+            if (resource[1] != "n/a" or resource[2] != "Type1"
+                    or resource[5] not in ("WinAnsiEncoding", "StandardEncoding", "MacRomanEncoding")):
+                return None
+            extracted = document.extract_font(resource[0])
+            if len(extracted) != 4 or extracted[1:3] != ("n/a", "Type1") or extracted[3]:
+                return None
+            try:
+                font = fitz.Font(font_name)
+            except (RuntimeError, ValueError, TypeError):
+                return None
+            if font.name == font_name:
+                self.base14_fonts[font_name] = font
+        return self.base14_fonts.get(font_name)
+
+    def _base14_trace_glyph_rects(
+        self, trace: dict[str, Any],
+    ) -> dict[tuple[int, tuple[Any, ...]], fitz.Rect] | None:
+        trace_order_idx = trace.get("_trace_order_idx")
+        if type(trace_order_idx) is not int or trace_order_idx < 0:
+            return None
+        if trace_order_idx in self.base14_trace_bounds:
+            return self.base14_trace_bounds[trace_order_idx]
+        self.base14_trace_bounds[trace_order_idx] = None
+        if (
+            trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer")
+            or trace.get("wmode") != 0 or trace.get("dir") != (1.0, 0.0)
+            or not isinstance(trace.get("size"), (int, float))
+            or trace.get("_effective_v_size", trace.get("size")) != trace.get("size")
+        ):
+            return None
+        font = self._base14_font(trace)
+        if font is None:
+            return None
+        chars = trace.get("chars")
+        if not isinstance(chars, (tuple, list)) or len(chars) < 2:
+            return None
+        scale = float(trace["size"])
+        for left, right in zip(chars, chars[1:]):
+            if (
+                not isinstance(left, (tuple, list)) or len(left) < 4
+                or not isinstance(right, (tuple, list)) or len(right) < 3
+                or type(left[0]) is not int
+                or type(left[1]) is not int
+                or not isinstance(left[2], (tuple, list)) or len(left[2]) != 2
+                or not isinstance(right[2], (tuple, list)) or len(right[2]) != 2
+                or font.has_glyph(left[0]) != left[1]
+                or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in (*left[2], *right[2]))
+            ):
+                return None
+            expected_advance = font.glyph_advance(left[0]) * scale
+            actual_advance = float(right[2][0]) - float(left[2][0])
+            if not math.isfinite(expected_advance) or expected_advance <= 0 or abs(actual_advance - expected_advance) > 0.01:
+                return None
+        bounds = {}
+        for glyph in chars:
+            if (
+                not isinstance(glyph, (tuple, list)) or len(glyph) < 4
+                or type(glyph[0]) is not int or type(glyph[1]) is not int
+                or not isinstance(glyph[2], (tuple, list)) or len(glyph[2]) != 2
+                or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in glyph[2])
+                or font.has_glyph(glyph[0]) != glyph[1]
+            ):
+                return None
+            local_box = font.glyph_bbox(glyph[0])
+            if not local_box.is_valid or local_box.is_empty:
+                continue
+            key = (glyph[0], tuple(glyph[2]))
+            if key in bounds:
+                return None
+            ox, oy = float(glyph[2][0]), float(glyph[2][1])
+            bounds[key] = fitz.Rect(
+                ox + float(local_box.x0) * scale,
+                oy - float(local_box.y1) * scale,
+                ox + float(local_box.x1) * scale,
+                oy - float(local_box.y0) * scale,
+            )
+        self.base14_trace_bounds[trace_order_idx] = bounds or None
+        return self.base14_trace_bounds[trace_order_idx]
+
+    def _base14_glyph_rect(
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: Any,
+    ) -> fitz.Rect | None:
+        if (
+            not isinstance(span_size, (int, float)) or not math.isfinite(float(span_size))
+            or not isinstance(trace.get("size"), (int, float))
+            or abs(float(trace["size"]) - float(span_size)) > 0.001
+            or not isinstance(glyph, (tuple, list)) or len(glyph) < 3
+            or type(glyph[0]) is not int
+            or not isinstance(glyph[2], (tuple, list)) or len(glyph[2]) != 2
+        ):
+            return None
+        rects = self._base14_trace_glyph_rects(trace)
+        return rects.get((glyph[0], tuple(glyph[2]))) if rects is not None else None
+
+    def _base14_stroke_is_disjoint(
+        self, drawing: dict[str, Any], trace: dict[str, Any],
+        glyph: tuple[Any, ...], span_size: Any,
+    ) -> bool:
+        """Prove vertical separation for a simple horizontal stroke and Base-14 glyph."""
+        if (
+            trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer")
+            or trace.get("wmode") != 0 or trace.get("dir") != (1.0, 0.0)
+            or not isinstance(span_size, (int, float)) or not math.isfinite(float(span_size))
+            or not isinstance(trace.get("size"), (int, float))
+            or abs(float(trace["size"]) - float(span_size)) > 0.001
+            or trace.get("_effective_v_size", trace.get("size")) != trace.get("size")
+            or not isinstance(glyph, (tuple, list)) or len(glyph) < 4
+            or type(glyph[0]) is not int or type(glyph[1]) is not int
+            or not isinstance(glyph[2], (tuple, list)) or len(glyph[2]) != 2
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in glyph[2])
+        ):
+            return False
+        glyph_box = self._base14_glyph_rect(trace, glyph, span_size)
+        if glyph_box is None or not glyph_box.is_valid or glyph_box.is_empty:
+            return False
+
+        items = drawing.get("items")
+        width = drawing.get("width")
+        if (
+            drawing.get("type") != "s" or drawing.get("dashes") != "[] 0"
+            or not isinstance(items, (tuple, list)) or not items
+            or not isinstance(width, (int, float)) or not math.isfinite(float(width)) or float(width) <= 0
+        ):
+            return False
+        stroke_pad = float(width) / 2.0 + 0.05
+        cache_key = id(drawing)
+        cached_geometry = self.base14_stroke_geometry.get(cache_key)
+        if cached_geometry is not None and cached_geometry[0] is drawing:
+            stroke_rects, stroke_bounds = cached_geometry[1], cached_geometry[2]
+        else:
+            rects: list[fitz.Rect] = []
+            for item in items:
+                if not isinstance(item, (tuple, list)) or not item:
+                    return False
+                if item[0] == "l" and len(item) == 3 and all(isinstance(point, fitz.Point) for point in item[1:]):
+                    left, right = item[1:]
+                    rects.append(fitz.Rect(
+                        min(left.x, right.x) - stroke_pad,
+                        min(left.y, right.y) - stroke_pad,
+                        max(left.x, right.x) + stroke_pad,
+                        max(left.y, right.y) + stroke_pad,
+                    ))
+                elif item[0] == "re" and len(item) >= 2 and isinstance(item[1], fitz.Rect):
+                    rect = item[1]
+                    rects.extend((
+                        fitz.Rect(rect.x0 - stroke_pad, rect.y0 - stroke_pad,
+                                  rect.x1 + stroke_pad, rect.y0 + stroke_pad),
+                        fitz.Rect(rect.x0 - stroke_pad, rect.y1 - stroke_pad,
+                                  rect.x1 + stroke_pad, rect.y1 + stroke_pad),
+                        fitz.Rect(rect.x0 - stroke_pad, rect.y0 - stroke_pad,
+                                  rect.x0 + stroke_pad, rect.y1 + stroke_pad),
+                        fitz.Rect(rect.x1 - stroke_pad, rect.y0 - stroke_pad,
+                                  rect.x1 + stroke_pad, rect.y1 + stroke_pad),
+                    ))
+                else:
+                    return False
+            if not rects:
+                return False
+            stroke_bounds = fitz.Rect(
+                min(rect.x0 for rect in rects), min(rect.y0 for rect in rects),
+                max(rect.x1 for rect in rects), max(rect.y1 for rect in rects),
+            )
+            stroke_rects = tuple(rects)
+            self.base14_stroke_geometry[cache_key] = (drawing, stroke_rects, stroke_bounds)
+        if (
+            stroke_bounds.x1 < glyph_box.x0 - 0.05 or stroke_bounds.x0 > glyph_box.x1 + 0.05
+            or stroke_bounds.y1 < glyph_box.y0 - 0.05 or stroke_bounds.y0 > glyph_box.y1 + 0.05
+        ):
+            return True
+        return not any(
+            not (
+                rect.x1 < glyph_box.x0 - 0.05 or rect.x0 > glyph_box.x1 + 0.05
+                or rect.y1 < glyph_box.y0 - 0.05 or rect.y0 > glyph_box.y1 + 0.05
+            )
+            for rect in stroke_rects
+        )
 
     def _bound_stroke(self, sequence: int, drawing: dict[str, Any]) -> str | None:
         from fontTools.pens.recordingPen import RecordingPen
@@ -2338,6 +2537,8 @@ class _NativePdfThinStrokeCheck:
         self, sequence: int, drawing: dict[str, Any], trace: dict[str, Any],
         glyph: tuple[Any, ...], span_size: Any, clip: fitz.Rect,
     ) -> bool | None:
+        if self._base14_stroke_is_disjoint(drawing, trace, glyph, span_size):
+            return False
         if (
             self.preparation_exhausted
             or self.pairs >= self._PAIR_LIMIT
@@ -2694,6 +2895,8 @@ def _native_pdf_text_span_records(
             b = (1.0 - y) * (1.0 - k)
         return (0.2126 * r + 0.7152 * g + 0.0722 * b) <= 0.35
 
+    glyph_entries_cache: dict[tuple[int, bool], tuple[Any, list[tuple[int, tuple[float, float], fitz.Rect]]]] = {}
+
     def glyph_entries_from_chars(
         chars: Any,
         *,
@@ -2701,6 +2904,10 @@ def _native_pdf_text_span_records(
     ) -> list[tuple[int, tuple[float, float], fitz.Rect]] | None:
         if not isinstance(chars, (tuple, list)) or not chars:
             return None
+        cache_key = (id(chars), skip_spaces)
+        cached = glyph_entries_cache.get(cache_key)
+        if cached is not None and cached[0] is chars:
+            return cached[1]
         entries: list[tuple[int, tuple[float, float], fitz.Rect]] = []
         for char in chars:
             if (
@@ -2720,6 +2927,7 @@ def _native_pdf_text_span_records(
                 # Without nonempty bounds it cannot prove an intersecting fill is harmless.
                 return None
             entries.append((char[0], (float(char[2][0]), float(char[2][1])), grect))
+        glyph_entries_cache[cache_key] = (chars, entries)
         return entries
 
     def nonspace_glyph_entries_from_chars(
@@ -3623,6 +3831,21 @@ def _native_pdf_text_span_records(
 
         def trace_glyphs_hit_target(lt: dict[str, Any], lt_glyphs: list[tuple[int, tuple[float, float], fitz.Rect]]) -> bool:
             assert target_glyphs is not None
+            base14_rects = thin_stroke_check._base14_trace_glyph_rects(lt)
+            if base14_rects is not None:
+                lt_glyphs = [
+                    (
+                        codepoint,
+                        origin,
+                        fitz.Rect(
+                            min(nominal_rect.x0, base14_rects.get((codepoint, tuple(origin)), nominal_rect).x0),
+                            min(nominal_rect.y0, base14_rects.get((codepoint, tuple(origin)), nominal_rect).y0),
+                            max(nominal_rect.x1, base14_rects.get((codepoint, tuple(origin)), nominal_rect).x1),
+                            max(nominal_rect.y1, base14_rects.get((codepoint, tuple(origin)), nominal_rect).y1),
+                        ),
+                    )
+                    for codepoint, origin, nominal_rect in lt_glyphs
+                ]
             if not glyph_pair_work.reserve(target_glyphs, lt_glyphs):
                 if deferred_fills is not None:
                     deferred_fills.clear()
@@ -3819,7 +4042,6 @@ def _native_pdf_text_span_records(
                         float(paint_rect.x1) - float(union_lt.x1),
                         float(paint_rect.y1) - float(union_lt.y1),
                     )
-                    nominal_trace_contact = any(not (trace_rect & lt_r).is_empty for lt_r in lt_rects)
                     p_area = paint_rect.get_area()
                     lt_covered = (
                         ((paint_rect & union_lt).get_area() / p_area >= 0.85)
@@ -3831,15 +4053,37 @@ def _native_pdf_text_span_records(
                         for lt, lt_r in zip(later_traces, lt_rects):
                             if lt.get("_trace_order_idx") in member_id_set:
                                 continue
-                            if (trace_rect & lt_r).is_empty:
-                                if (
-                                    not nominal_trace_contact
-                                    and lt_protrusion > 1.5
-                                ):
-                                    # A nominal trace is disjoint, but the aggregate paint
-                                    # extends into this source beyond rounding noise. This
-                                    # remains unattributed even when another trace shares
-                                    # the same compound text-paint sequence.
+                            trace_paint_protrusion = max(
+                                abs(float(paint_rect.x0) - float(lt_r.x0)),
+                                abs(float(paint_rect.y0) - float(lt_r.y0)),
+                                abs(float(paint_rect.x1) - float(lt_r.x1)),
+                                abs(float(paint_rect.y1) - float(lt_r.y1)),
+                            )
+                            if (
+                                (trace_rect & lt_r).is_empty
+                                and len(later_traces) == 1
+                                and max(lt_protrusion, trace_paint_protrusion) <= 1.5
+                            ):
+                                # Preserve the cheap non-overlap path unless the compound
+                                # paint extends materially beyond its trace union.
+                                continue
+                            lt_glyphs = lt.get("_occluder_glyphs")
+                            if lt_glyphs is None:
+                                glyph_hit = True
+                                break
+                            if expand_single_lt_y:
+                                lt_glyphs = [
+                                    (lcp, lorg, fitz.Rect(
+                                        lgr.x0, min(lgr.y0, paint_rect.y0),
+                                        lgr.x1, max(lgr.y1, paint_rect.y1),
+                                    ))
+                                    for lcp, lorg, lgr in lt_glyphs
+                                ]
+                            glyph_contact = trace_glyphs_hit_target(lt, lt_glyphs)
+                            if not glyph_contact:
+                                if lt_protrusion > 1.5:
+                                    # A disjoint run cannot be attributed as harmless
+                                    # when the paint extent has significant overhang.
                                     glyph_hit = True
                                     break
                                 continue
@@ -3849,18 +4093,8 @@ def _native_pdf_text_span_records(
                                 and is_safe_adjacent_text_overlap(trace, lt)
                             ):
                                 continue
-                            lt_glyphs = lt.get("_occluder_glyphs")
-                            if lt_glyphs is None:
-                                glyph_hit = True
-                                break
-                            if expand_single_lt_y:
-                                lt_glyphs = [
-                                    (lcp, lorg, fitz.Rect(lgr.x0, min(lgr.y0, paint_rect.y0), lgr.x1, max(lgr.y1, paint_rect.y1)))
-                                    for lcp, lorg, lgr in lt_glyphs
-                                ]
-                            if trace_glyphs_hit_target(lt, lt_glyphs):
-                                glyph_hit = True
-                                break
+                            glyph_hit = True
+                            break
                         if not glyph_hit:
                             continue
                         return True

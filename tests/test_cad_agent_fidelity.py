@@ -1039,14 +1039,20 @@ def test_native_pdf_observation_fails_closed_for_compound_italic_paint_overhang(
     overlay_sequence = len(page.get_bboxlog()) - 1
     overlay_stream = document.xref_stream(overlay_xref)
     assert overlay_stream.count(b"ET") == 1
-    # A second font run in the same text-paint sequence makes the paint
-    # rectangle compound while leaving the italic overprint unchanged.
+    # Two distant Helvetica siblings in the same text-paint sequence make the
+    # aggregate trace bbox straddle H while both glyph boxes remain disjoint.
+    # They must not mask the italic overprint's source-bound paint overhang.
     document.update_stream(
         overlay_xref,
-        overlay_stream.replace(b"ET", b"500 0 Td /helv 48 Tf (X) Tj\nET"),
+        overlay_stream.replace(
+            b"ET",
+            b"1 0 0 1 15 103 Tm /helv 48 Tf (X) Tj "
+            b"1 0 0 1 600 103 Tm (X) Tj\nET",
+        ),
     )
 
     later_traces = [trace for trace in page.get_texttrace() if trace["seqno"] == overlay_sequence]
+    h_bbox = fitz.Rect(h_trace["bbox"])
     later_paint_bbox = fitz.Rect(page.get_bboxlog()[-1][1])
     after = np.frombuffer(
         page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
@@ -1057,7 +1063,13 @@ def test_native_pdf_observation_fails_closed_for_compound_italic_paint_overhang(
     )
 
     assert len(later_traces) == 2
-    assert all((fitz.Rect(trace["bbox"]) & h_bbox).is_empty for trace in later_traces)
+    assert all(
+        (fitz.Rect(char[3]) & h_bbox).is_empty
+        for trace in later_traces
+        for char in trace["chars"]
+    )
+    assert any((fitz.Rect(trace["bbox"]) & h_bbox).is_empty for trace in later_traces)
+    assert any(not (fitz.Rect(trace["bbox"]) & h_bbox).is_empty for trace in later_traces)
     assert not (later_paint_bbox & h_bbox).is_empty
     assert np.count_nonzero((before < 64) & (after > 192)) > 0
     assert {record["content"] for record in records} == {"CONTROL", "fAAAAAgAA", "X"}
