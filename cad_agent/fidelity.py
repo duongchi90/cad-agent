@@ -2505,7 +2505,17 @@ class _NativePdfThinStrokeCheck:
                 return False
             if trace_key not in self.ink_bounds:
                 self.ink_bounds[trace_key] = None
-                boxes = [self._glyph_control_bounds(trace, glyph, span_size) for glyph in trace["chars"]]
+                base14_bounds = self._base14_trace_glyph_rects(trace)
+                if base14_bounds is not None:
+                    boxes = [
+                        tuple(base14_bounds[(glyph[0], tuple(glyph[2]))])
+                        for glyph in trace["chars"]
+                        if (glyph[0], tuple(glyph[2])) in base14_bounds
+                    ]
+                    if len(boxes) != len(trace["chars"]):
+                        return False
+                else:
+                    boxes = [self._glyph_control_bounds(trace, glyph, span_size) for glyph in trace["chars"]]
                 self.ink_bounds[trace_key] = [box for box in boxes if box]
             ink = self.ink_bounds[trace_key]
             comparison_budget = work_budget or _GlyphPairWorkBudget(_GlyphPairWorkBudget.DEFAULT_LIMIT)
@@ -4137,6 +4147,19 @@ def _native_pdf_text_span_records(
                                     work_budget=glyph_pair_work,
                                 ):
                                     return True
+                        else:
+                            fill_probe_pad = max(1.0, 0.15 * effective_v_size)
+                            fill_probe_rect = fitz.Rect(
+                                trace_rect.x0 - fill_probe_pad, trace_rect.y0 - fill_probe_pad,
+                                trace_rect.x1 + fill_probe_pad, trace_rect.y1 + fill_probe_pad,
+                            )
+                            if any(not (fill_probe_rect & subpath).is_empty for subpath in flat_subs):
+                                fill_drawings = drawings_by_sequence.get(index, [])
+                                if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
+                                    index, fill_drawings[0], flat_subs, trace, span_font_size,
+                                    work_budget=glyph_pair_work,
+                                ):
+                                    return True
                         continue
 
                 if (
@@ -4177,6 +4200,17 @@ def _native_pdf_text_span_records(
                             for cp, (ox, oy), gr in target_glyphs:
                                 if (gr & d_bounds).is_empty:
                                     continue
+                                if not thin_cad_stroke:
+                                    if any(
+                                        sx1 + half >= gr.x0 - ink_probe_pad
+                                        and sx0 - half <= gr.x1 + ink_probe_pad
+                                        and sy1 + half >= gr.y0 - ink_probe_pad
+                                        and sy0 - half <= gr.y1 + ink_probe_pad
+                                        for sx0, sy0, sx1, sy1, _sp1, _sp2, seg_pad in cand_segs
+                                        for half in (0.5 * width + seg_pad,)
+                                    ):
+                                        stroke_hit = True
+                                        break
                                 gx0, gy0, gx1, gy1 = gr.x0, gr.y0, gr.x1, gr.y1
                                 corners = ((gx0, gy0), (gx1, gy0), (gx1, gy1), (gx0, gy1))
                                 us = [(cx - ox) * ux + (cy - oy) * uy for cx, cy in corners]

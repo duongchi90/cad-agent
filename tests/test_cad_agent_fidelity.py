@@ -1123,6 +1123,49 @@ def test_native_pdf_observation_vetoes_compound_stroke_on_italic_ink_overhang(
     document.close()
 
 
+@pytest.mark.parametrize("stroke_x, expect_contact", [(150.0, True), (155.0, False)])
+def test_native_pdf_observation_vetoes_light_compound_stroke_on_italic_ink_overhang(
+    stroke_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    stroke = page.new_shape()
+    stroke.draw_line((stroke_x, 80), (stroke_x, 125))
+    stroke.draw_line((60, 80), (60, 125))
+    stroke.finish(color=(0.7, 0.7, 0.7), fill=None, width=1.0)
+    stroke.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 150)
+        & (after[:, :, 1] > 150)
+        & (after[:, :, 2] > 150)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
 @pytest.mark.parametrize("stroke_x, expect_contact", [(105.0, True), (110.0, False)])
 def test_native_pdf_observation_vetoes_rotated_italic_f_below_baseline_contact(
     stroke_x: float, expect_contact: bool,
@@ -1162,6 +1205,52 @@ def test_native_pdf_observation_vetoes_rotated_italic_f_below_baseline_contact(
     assert "CONTROL" in contents
     if not expect_contact:
         assert "f35" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("right_fill_x, expect_contact", [(149.6, True), (155.0, False)])
+def test_native_pdf_observation_vetoes_compound_fill_on_italic_ink_overhang(
+    right_fill_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    # Two disjoint rectangles in one fill-path exercise a compound paint whose
+    # distant first component overlaps the trace while the second reaches only
+    # the italic ink overhang outside the nominal glyph metric bounds.
+    fill = page.new_shape()
+    fill.draw_rect(fitz.Rect(59.6, 80, 60.4, 125))
+    fill.draw_rect(fitz.Rect(right_fill_x, 80, right_fill_x + 0.8, 125))
+    fill.finish(color=None, fill=(1, 1, 1))
+    fill.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 192)
+        & (after[:, :, 1] > 192)
+        & (after[:, :, 2] > 192)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
     document.close()
 
 
