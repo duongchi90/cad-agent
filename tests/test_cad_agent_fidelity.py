@@ -974,6 +974,50 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+
+def test_native_pdf_observation_fails_closed_for_italic_paint_overhang() -> None:
+    document = fitz.open()
+    page = document.new_page(width=800, height=250)
+    page.insert_text((60, 115), "H", fontsize=48, fontname="helv", color=(0, 0, 0))
+    page.insert_text((60, 200), "CONTROL", fontsize=18, fontname="helv", color=(0, 0, 0))
+    h_trace = page.get_texttrace()[0]
+    h_bbox = fitz.Rect(h_trace["bbox"])
+    clip = fitz.Rect(50, 60, h_bbox.x1 + 0.01, 130)
+    source_sha = "a" * 64
+    render_sha = "b" * 64
+
+    before_records = fidelity_module._native_pdf_text_span_records(
+        page, 1, source_sha, render_sha, 800, 250, "displayed-page-box-v1",
+    )
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    page.insert_text(
+        (h_bbox.x1 + 0.75, 103), "fAAAAAgAA", fontsize=48, fontname="tiit", color=(1, 1, 1),
+    )
+    later_trace = page.get_texttrace()[-1]
+    later_bbox = fitz.Rect(later_trace["bbox"])
+    later_paint_bbox = fitz.Rect(page.get_bboxlog()[-1][1])
+    after_records = fidelity_module._native_pdf_text_span_records(
+        page, 1, source_sha, render_sha, 800, 250, "displayed-page-box-v1",
+    )
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    assert [record["content"] for record in before_records] == ["H", "CONTROL"]
+    assert later_bbox.x0 > h_bbox.x1
+    assert not (later_paint_bbox & h_bbox).is_empty
+    assert np.count_nonzero((before < 64) & (after > 192)) > 0
+    assert "CONTROL" in [record["content"] for record in after_records]
+    assert "fAAAAAgAA" in [record["content"] for record in after_records]
+    assert "H" not in [record["content"] for record in after_records]
+
+    document.close()
+
 def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)

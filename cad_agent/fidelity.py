@@ -3818,6 +3818,7 @@ def _native_pdf_text_span_records(
                         float(paint_rect.x1) - float(union_lt.x1),
                         float(paint_rect.y1) - float(union_lt.y1),
                     )
+                    nominal_trace_contact = any(not (trace_rect & lt_r).is_empty for lt_r in lt_rects)
                     p_area = paint_rect.get_area()
                     lt_covered = (
                         ((paint_rect & union_lt).get_area() / p_area >= 0.85)
@@ -3830,6 +3831,16 @@ def _native_pdf_text_span_records(
                             if lt.get("_trace_order_idx") in member_id_set:
                                 continue
                             if (trace_rect & lt_r).is_empty:
+                                if (
+                                    not nominal_trace_contact
+                                    and len(later_traces) == 1
+                                    and lt_protrusion > 1.5
+                                ):
+                                    # A single nominal trace is disjoint, but the aggregate
+                                    # paint extends into this source beyond rounding noise.
+                                    # Preserve that unattributed paint conservatively.
+                                    glyph_hit = True
+                                    break
                                 continue
                             if (
                                 not expand_single_lt_y
