@@ -2434,7 +2434,8 @@ def _native_pdf_below_baseline_candidate_overlaps(
     decision = proof(glyph)
     if decision is not None:
         protected_results[proof_key] = decision
-    return bool(decision)
+    # An unavailable pixel proof cannot clear a metric-box contact veto.
+    return decision is not False
 
 
 def _native_pdf_text_span_records(
@@ -3833,12 +3834,12 @@ def _native_pdf_text_span_records(
                             if (trace_rect & lt_r).is_empty:
                                 if (
                                     not nominal_trace_contact
-                                    and len(later_traces) == 1
                                     and lt_protrusion > 1.5
                                 ):
-                                    # A single nominal trace is disjoint, but the aggregate
-                                    # paint extends into this source beyond rounding noise.
-                                    # Preserve that unattributed paint conservatively.
+                                    # A nominal trace is disjoint, but the aggregate paint
+                                    # extends into this source beyond rounding noise. This
+                                    # remains unattributed even when another trace shares
+                                    # the same compound text-paint sequence.
                                     glyph_hit = True
                                     break
                                 continue

@@ -1018,6 +1018,52 @@ def test_native_pdf_observation_fails_closed_for_italic_paint_overhang() -> None
 
     document.close()
 
+
+def test_native_pdf_observation_fails_closed_for_compound_italic_paint_overhang() -> None:
+    document = fitz.open()
+    page = document.new_page(width=800, height=250)
+    page.insert_text((60, 115), "H", fontsize=48, fontname="helv", color=(0, 0, 0))
+    page.insert_text((60, 200), "CONTROL", fontsize=18, fontname="helv", color=(0, 0, 0))
+    h_trace = page.get_texttrace()[0]
+    h_bbox = fitz.Rect(h_trace["bbox"])
+    clip = fitz.Rect(50, 60, h_bbox.x1 + 0.01, 130)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    page.insert_text(
+        (h_bbox.x1 + 0.75, 103), "fAAAAAgAA", fontsize=48, fontname="tiit", color=(1, 1, 1),
+    )
+    overlay_xref = page.get_contents()[-1]
+    overlay_sequence = len(page.get_bboxlog()) - 1
+    overlay_stream = document.xref_stream(overlay_xref)
+    assert overlay_stream.count(b"ET") == 1
+    # A second font run in the same text-paint sequence makes the paint
+    # rectangle compound while leaving the italic overprint unchanged.
+    document.update_stream(
+        overlay_xref,
+        overlay_stream.replace(b"ET", b"500 0 Td /helv 48 Tf (X) Tj\nET"),
+    )
+
+    later_traces = [trace for trace in page.get_texttrace() if trace["seqno"] == overlay_sequence]
+    later_paint_bbox = fitz.Rect(page.get_bboxlog()[-1][1])
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 800, 250, "displayed-page-box-v1",
+    )
+
+    assert len(later_traces) == 2
+    assert all((fitz.Rect(trace["bbox"]) & h_bbox).is_empty for trace in later_traces)
+    assert not (later_paint_bbox & h_bbox).is_empty
+    assert np.count_nonzero((before < 64) & (after > 192)) > 0
+    assert {record["content"] for record in records} == {"CONTROL", "fAAAAAgAA", "X"}
+
+    document.close()
+
 def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)
@@ -1490,9 +1536,28 @@ def test_native_pdf_below_baseline_contact_proof_uses_unique_source_glyph() -> N
             proof=proof,
         )
 
+    def run_unavailable_proof() -> bool:
+        def proof(glyph):
+            proof_calls.append(glyph)
+            return None
+
+        return fidelity_module._native_pdf_below_baseline_candidate_overlaps(
+            lookup,
+            ord("g"),
+            100.0,
+            120.0,
+            proof_key_prefix,
+            protected_results,
+            span_font_size=12.0,
+            clip=clip,
+            deferred_fills=[True],
+            proof=proof,
+        )
+
     assert run_proof(True) is True
     assert run_proof(False) is False
-    assert proof_calls == [source_glyph, source_glyph]
+    assert run_unavailable_proof() is True
+    assert proof_calls == [source_glyph, source_glyph, source_glyph]
 
 
 def test_native_pdf_observation_accepts_genuine_blank_space_when_unoccluded() -> None:
@@ -5933,7 +5998,7 @@ def test_native_pdf_preparation_stops_font_work_at_page_budget(
     ("swap_svg_strokes", "expected_target_retained"),
     [
         pytest.param(False, False, id="source-bound-contact"),
-        pytest.param(True, True, id="same-kind-substitution-falls-back"),
+        pytest.param(True, False, id="unavailable-stroke-proof-fails-closed"),
     ],
 )
 def test_native_pdf_observation_jxs_below_baseline_stroke_binding(
