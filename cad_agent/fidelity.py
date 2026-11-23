@@ -3586,10 +3586,13 @@ def _native_pdf_text_span_records(
 
         member_id_set = set(member_trace_order_ids)
         glyph_pair_work = _GlyphPairWorkBudget(glyph_pair_work_limit)
+        glyph_lookup_by_source_position: dict[tuple[int, tuple[Any, ...]], list[Any]] | None = None
 
         def trace_glyphs_hit_target(lt: dict[str, Any], lt_glyphs: list[tuple[int, tuple[float, float], fitz.Rect]]) -> bool:
             assert target_glyphs is not None
             if not glyph_pair_work.reserve(target_glyphs, lt_glyphs):
+                if deferred_fills is not None:
+                    deferred_fills.clear()
                 return True
             lt_dir = lt.get("dir")
             lt_size = lt.get("size")
@@ -3648,6 +3651,8 @@ def _native_pdf_text_span_records(
                 if intra_glyphs is None:
                     return True
                 if not glyph_pair_work.reserve(target_glyphs, intra_glyphs):
+                    if deferred_fills is not None:
+                        deferred_fills.clear()
                     return True
                 if abs(v_scale - 1.0) > 1e-3:
                     intra_glyphs = [
@@ -3821,6 +3826,8 @@ def _native_pdf_text_span_records(
                     if verified_fill is not None:
                         flat_subs, all_dark_opaque_fills = verified_fill
                         if not glyph_pair_work.reserve(target_glyphs, flat_subs):
+                            if deferred_fills is not None:
+                                deferred_fills.clear()
                             return True
                         metric_hit = any(
                             not (glyph_rect & subpath).is_empty
@@ -3877,6 +3884,8 @@ def _native_pdf_text_span_records(
                             if not cand_segs:
                                 continue
                             if not glyph_pair_work.reserve(target_glyphs, cand_segs):
+                                if deferred_fills is not None:
+                                    deferred_fills.clear()
                                 return True
                             thin_cad_stroke = (
                                 sop_opaque
@@ -3974,15 +3983,25 @@ def _native_pdf_text_span_records(
                         if deferred_fills is None and below_baseline_candidates and len(seq_drawings) != 1:
                             return True
                         if below_baseline_candidates and len(seq_drawings) == 1:
+                            if glyph_lookup_by_source_position is None:
+                                source_chars = trace.get("chars")
+                                if not isinstance(source_chars, (tuple, list)):
+                                    return True
+                                if not glyph_pair_work.reserve(source_chars, (None,)):
+                                    if deferred_fills is not None:
+                                        deferred_fills.clear()
+                                    return True
+                                glyph_lookup_by_source_position = {}
+                                for glyph in source_chars:
+                                    key = (glyph[0], tuple(glyph[2]))
+                                    glyph_lookup_by_source_position.setdefault(key, []).append(glyph)
                             checked_glyphs = set()
                             for cp, ox, oy, glyph_rect in below_baseline_candidates:
                                 key = (cp, ox, oy)
                                 if key in checked_glyphs:
                                     continue
                                 checked_glyphs.add(key)
-                                matches = [
-                                    glyph for glyph in trace["chars"] if glyph[0] == cp and tuple(glyph[2]) == (ox, oy)
-                                ]
+                                matches = glyph_lookup_by_source_position.get(key, [])
                                 if len(matches) != 1:
                                     if deferred_fills is None:
                                         return True

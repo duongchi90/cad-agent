@@ -1227,6 +1227,87 @@ def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch
     )
 
 
+def test_native_pdf_observation_does_not_replay_after_later_budget_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from cad_agent import fidelity as fidelity_module
+
+    original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
+    reservations: list[tuple[int, int, int, bool, bool]] = []
+
+    def observe_reservation(self, left, right) -> bool:
+        before = self.work
+        reserved = original_reserve(self, left, right)
+        caller = sys._getframe(1).f_locals
+        target_glyphs = caller.get("target_glyphs")
+        flat_subs = caller.get("flat_subs")
+        if isinstance(target_glyphs, list) and isinstance(flat_subs, list):
+            deferred = caller.get("deferred_fills")
+            reservations.append((
+                id(self), before, len(target_glyphs) * len(flat_subs), reserved,
+                bool(deferred),
+            ))
+        return reserved
+
+    monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
+
+    optional_proofs: list[int] = []
+
+    def report_verified_separation(self, sequence, *_args, **_kwargs):
+        optional_proofs.append(sequence)
+        return True
+
+    monkeypatch.setattr(
+        fidelity_module._NativePdfThinStrokeCheck,
+        "separates_dark_fill",
+        report_verified_separation,
+    )
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((10, 250), "CONTROL", fontsize=12)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+
+    # The first fill intersects glyph metrics only below the baseline. It sets
+    # deferred optional work and consumes two 37,500-pair reservations. A later
+    # fill's first 37,500-pair reservation is then denied at 75,000 pairs.
+    for _ in range(2):
+        fill = page.new_shape()
+        for _ in range(150):
+            fill.draw_rect(fitz.Rect(101, 120.1, 105, 121.5))
+        fill.finish(color=None, fill=(0, 0, 0), closePath=True)
+        fill.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert "CONTROL" in {record["content"] for record in records}
+    matching_budgets = {}
+    for budget_id, before, work, reserved, deferred in reservations:
+        if work == 37_500:
+            matching_budgets.setdefault(budget_id, []).append((before, reserved, deferred))
+    assert any(
+        attempts[:3] == [
+            (0, True, False),
+            (37_500, True, True),
+            (75_000, False, True),
+        ]
+        for attempts in matching_budgets.values()
+    ), repr(matching_budgets)
+    assert not optional_proofs, (
+        "a later reservation failure after earlier fill deferral must not enter fresh-budget replay"
+    )
+
+
 def test_native_pdf_observation_bounds_glyph_by_stroke_segment_comparisons(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1277,6 +1358,66 @@ def test_native_pdf_observation_bounds_glyph_by_stroke_segment_comparisons(
         for glyph_count, segment_count, work, reserved in stroke_reservations
     ), repr(stroke_reservations)
     assert not any(len(record["content"]) >= 250 for record in records)
+
+
+def test_native_pdf_observation_bounds_below_baseline_glyph_lookup_work() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    class CountingChars(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.visited = 0
+
+        def __iter__(self):
+            for value in super().__iter__():
+                self.visited += 1
+                yield value
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+    stroke = page.new_shape()
+    stroke.draw_line((100, 121), (2101, 121))
+    stroke.finish(color=(0, 0, 0), width=0.1)
+    stroke.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    class CountingCharPage:
+        def __init__(self, inner):
+            self.inner = inner
+            self.counted_chars = []
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def get_texttrace(self):
+            traces = []
+            for trace in self.inner.get_texttrace():
+                copied = dict(trace)
+                counted = CountingChars(copied.get("chars", ()))
+                self.counted_chars.append(counted)
+                copied["chars"] = counted
+                traces.append(copied)
+            return traces
+
+    counted_page = CountingCharPage(reopened[0])
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            counted_page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert any(len(record["content"]) == 250 for record in records)
+    raw_char_count = max(len(chars) for chars in counted_page.counted_chars)
+    visited_chars = sum(chars.visited for chars in counted_page.counted_chars)
+    assert raw_char_count == 250
+    assert visited_chars <= raw_char_count * 10, (
+        f"below-baseline glyph lookup rescanned raw characters {visited_chars} times "
+        f"for a {raw_char_count}-character trace"
+    )
 
 
 def test_native_pdf_observation_accepts_genuine_blank_space_when_unoccluded() -> None:
