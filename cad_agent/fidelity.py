@@ -2876,7 +2876,6 @@ def _native_pdf_text_span_records(
     below_baseline_ink_glyphs = frozenset("gjpqyQJ$,;()[]{}_|@#&§µçşğı")
     deep_descender_glyphs = frozenset("gjpqyQ$,;")
     baseline_punct_glyphs = frozenset(".:/\\=")
-    minus_like_glyphs = frozenset("-−–—+")
     narrow_advance_glyphs = frozenset(".,:;!'\"|ilI1()[]{}-/\\` ")
 
     def stroke_color_is_dark_visible(color: Any) -> bool:
@@ -4170,7 +4169,7 @@ def _native_pdf_text_span_records(
                                 and dark_vis
                                 and width <= 0.30 * effective_v_size
                             )
-                            for glyph_idx, (cp, (ox, oy), gr) in enumerate(target_glyphs):
+                            for cp, (ox, oy), gr in target_glyphs:
                                 if (gr & d_bounds).is_empty:
                                     continue
                                 gx0, gy0, gx1, gy1 = gr.x0, gr.y0, gr.x1, gr.y1
@@ -4180,15 +4179,6 @@ def _native_pdf_text_span_records(
                                 u0, u1 = min(us), max(us)
                                 v0, v1 = min(vs), max(vs)
                                 ch = chr(cp)
-                                has_prev_glyph = (
-                                    glyph_idx > 0
-                                    or bool(member_trace_order_ids and trace_order_id != member_trace_order_ids[0])
-                                )
-                                has_next_glyph = (
-                                    glyph_idx < len(target_glyphs) - 1
-                                    or bool(member_trace_order_ids and trace_order_id != member_trace_order_ids[-1])
-                                )
-                                u_span = max(0.0, u1 - u0)
                                 if thin_cad_stroke:
                                     v_top = v1
                                     if ch in deep_descender_glyphs:
@@ -4199,9 +4189,10 @@ def _native_pdf_text_span_records(
                                         v_bot = max(v0, 0.01 * effective_v_size)
                                     else:
                                         v_bot = max(v0, 0.0)
-                                    left_pad = 0.0 if (has_prev_glyph or ch in minus_like_glyphs) else 0.10 * u_span
-                                    right_pad = 0.0 if (has_next_glyph or ch in minus_like_glyphs) else 0.10 * u_span
-                                    box_u0, box_u1 = u0 + left_pad, u1 - right_pad
+                                    # Metric-side trimming is not source-bound proof that a
+                                    # font's outer glyph region contains no ink. Keep the
+                                    # full horizontal glyph box in the stroke-overlap veto.
+                                    box_u0, box_u1 = u0, u1
                                     box_v0, box_v1 = min(v_bot, v_top), max(v_bot, v_top)
                                 else:
                                     box_u0, box_u1, box_v0, box_v1 = u0, u1, v0, v1

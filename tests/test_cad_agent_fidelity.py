@@ -5409,7 +5409,14 @@ def test_native_pdf_observation_admits_spans_inside_compound_cad_paint_operators
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     contents = {span["content"] for span in observation["native_pdf_spans"]}
 
-    assert {"63", "2 x M3 - 6H", "35", "R13.50", "+/-1"}.issubset(contents)
+    assert {"63", "2 x M3 - 6H", "35", "R13.50"}.issubset(contents)
+    if compound_mode in {
+        "fm_d_baseline_underline_oblique_leader_and_table_divider",
+        "combined_all_four_compound_modes",
+    }:
+        # The tall divider grazes the final glyph's metric side bearing; without
+        # source-bound proof that the side bearing is ink-free, fail closed.
+        assert "+/-1" not in contents
     if compound_mode == "fm_e_per_glyph_multi_trace_and_condensed_tz_spans":
         assert {"M12", "AB", "CD"}.issubset(contents)
     assert all(span["visibility"] == "unverified" for span in observation["native_pdf_spans"])
@@ -5917,6 +5924,40 @@ def test_native_pdf_observation_thin_stroke_at_glyph_bounds(
     with fitz.open(stream=pdf_bytes, filetype="pdf") as reopened:
         records = fidelity_module._native_pdf_text_span_records(
             reopened[0], 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+        )
+
+    assert {record["content"] for record in records} == expected
+
+
+@pytest.mark.parametrize(
+    ("line_start", "line_end", "expected"),
+    [
+        pytest.param(
+            (165.25953247070314, 84.0), (165.25953247070314, 119.0),
+            {"CONTROL"}, id="stroke-contacts-final-glyph-ink",
+        ),
+        pytest.param(
+            (165.25953247070314, 78.0), (165.25953247070314, 81.0),
+            {"10C", "CONTROL"}, id="stroke-in-clear-top-margin",
+        ),
+    ],
+)
+def test_native_pdf_observation_keeps_ink_contact_veto_at_final_glyph_edge(
+    line_start: tuple[float, float], line_end: tuple[float, float], expected: set[str],
+) -> None:
+    with fitz.open() as document:
+        page = document.new_page(width=400, height=300)
+        page.insert_text((80, 120), "10C", fontsize=48, fontname="helv")
+        page.insert_text((250, 250), "CONTROL", fontsize=12, fontname="helv")
+        shape = page.new_shape()
+        shape.draw_line(line_start, line_end)
+        shape.finish(color=(0, 0, 0), width=1.0)
+        shape.commit()
+        pdf_bytes = document.tobytes()
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as reopened:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
         )
 
     assert {record["content"] for record in records} == expected
