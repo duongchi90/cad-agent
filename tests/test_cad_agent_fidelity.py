@@ -1129,6 +1129,7 @@ def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch
     original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
     reservation_attempts: list[tuple[int, bool]] = []
     reservation_contexts: list[dict[str, Any]] = []
+    separation_calls: list[int] = []
 
     def observe_reservation(self, left, right) -> bool:
         before = self.work
@@ -1163,6 +1164,16 @@ def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch
 
     monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
 
+    def report_verified_separation(self, sequence, *_args, **_kwargs):
+        separation_calls.append(sequence)
+        return True
+
+    monkeypatch.setattr(
+        fidelity_module._NativePdfThinStrokeCheck,
+        "separates_dark_fill",
+        report_verified_separation,
+    )
+
     document = fitz.open()
     page = document.new_page(width=4000, height=300)
     page.insert_text((10, 250), "CONTROL", fontsize=12)
@@ -1171,7 +1182,7 @@ def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch
 
     # A single compound fill has 250 verified subpaths. The first two cover
     # the source glyph metrics; one 250x250 reservation fits, while the second
-    # reservation against that same source trace would exceed the 100,000 cap.
+    # reservation against that same source trace exceeds the 100,000 cap.
     fill = page.new_shape()
     for _ in range(250):
         fill.draw_rect(fitz.Rect(101, 110, 105, 115))
@@ -1210,6 +1221,61 @@ def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch
     ), repr(source_bound)
     assert source_bound[0]["budget_before"] == 0 and source_bound[0]["budget_after"] == 62_500
     assert source_bound[1]["budget_before"] == 62_500 and source_bound[1]["budget_after"] == 62_500
+    assert not separation_calls, "an exhausted fill must not enter replay with a fresh allowance"
+    assert not any(len(record["content"]) >= 250 for record in records), (
+        "a later successful optional proof must not clear an exhausted earlier budget"
+    )
+
+
+def test_native_pdf_observation_bounds_glyph_by_stroke_segment_comparisons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from cad_agent import fidelity as fidelity_module
+
+    original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
+    stroke_reservations: list[tuple[int, int, int, bool]] = []
+
+    def observe_reservation(self, left, right) -> bool:
+        reserved = original_reserve(self, left, right)
+        caller = sys._getframe(1).f_locals
+        target_glyphs = caller.get("target_glyphs")
+        cand_segs = caller.get("cand_segs")
+        if isinstance(target_glyphs, list) and isinstance(cand_segs, list):
+            stroke_reservations.append((len(target_glyphs), len(cand_segs), len(left) * len(right), reserved))
+        return reserved
+
+    monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((10, 250), "CONTROL", fontsize=12)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+    trace = next(trace for trace in page.get_texttrace() if len(trace.get("chars", ())) == 250)
+    x0, y0, x1, y1 = trace["bbox"]
+    stroke = page.new_shape()
+    for index in range(500):
+        y = y0 + (y1 - y0) * index / 499
+        stroke.draw_line((x0 + 0.1, y), (x1 - 0.1, y))
+    stroke.finish(color=(0, 0, 0), width=0.1)
+    stroke.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert "CONTROL" in {record["content"] for record in records}
+    assert any(
+        glyph_count == 250 and segment_count >= 500 and work > 100_000 and not reserved
+        for glyph_count, segment_count, work, reserved in stroke_reservations
+    ), repr(stroke_reservations)
     assert not any(len(record["content"]) >= 250 for record in records)
 
 
@@ -5825,6 +5891,28 @@ def test_native_pdf_dark_fill_reuses_unavailable_binding_and_keeps_stroke_budget
     assert check.pairs == check._PAIR_LIMIT
     assert check.fill_attempts == 2
     assert check.pixels == 0
+
+
+def test_native_pdf_dark_fill_bounds_glyph_by_component_comparisons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    check.fill_bounds[5] = [(0.0, 0.0, 1.0, 1.0)] * 1_000
+    trace = {"_trace_order_idx": 0}
+    check.ink_bounds[(0, 18.0, None)] = [(2.0, 2.0, 3.0, 3.0)] * 101
+    comparison_count = 0
+
+    def count_comparison(_ink, _fill):
+        nonlocal comparison_count
+        comparison_count += 1
+        return True
+
+    monkeypatch.setattr(check, "_strict_fill_separation", count_comparison)
+
+    separated = check.separates_dark_fill(5, {}, [], trace, 18.0)
+    assert comparison_count <= 100_000
+    assert not separated
 
 
 @pytest.mark.parametrize("compare_whole", [False, True])

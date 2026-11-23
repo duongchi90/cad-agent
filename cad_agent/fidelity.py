@@ -2260,7 +2260,7 @@ class _NativePdfThinStrokeCheck:
 
     def separates_dark_fill(
         self, sequence: int, drawing: dict[str, Any], components: list[fitz.Rect],
-        trace: dict[str, Any], span_size: Any,
+        trace: dict[str, Any], span_size: Any, *, work_budget: Any = None,
     ) -> bool:
         if not isinstance(span_size, (int, float)) or not math.isfinite(span_size) or span_size <= 0:
             return False
@@ -2309,6 +2309,9 @@ class _NativePdfThinStrokeCheck:
                 boxes = [self._glyph_control_bounds(trace, glyph, span_size) for glyph in trace["chars"]]
                 self.ink_bounds[trace_key] = [box for box in boxes if box]
             ink = self.ink_bounds[trace_key]
+            comparison_budget = work_budget or _GlyphPairWorkBudget(_GlyphPairWorkBudget.DEFAULT_LIMIT)
+            if not comparison_budget.reserve(ink, fills):
+                return False
             separated = bool(ink) and all(self._strict_fill_separation(glyph_box, fill_box)
                                           for glyph_box in ink for fill_box in fills)
             self.fill_separations[pair_key] = separated
@@ -2386,6 +2389,8 @@ class _NativePdfThinStrokeCheck:
 
 class _GlyphPairWorkBudget:
     """Bound cumulative Cartesian glyph comparisons and fail closed on exhaustion."""
+
+    DEFAULT_LIMIT = 100_000
 
     def __init__(self, limit: int) -> None:
         if limit < 0:
@@ -2833,7 +2838,7 @@ def _native_pdf_text_span_records(
             tr["_occluder_v_expanded"] = False
             tr["_effective_v_size"] = tr_sz_f
 
-    glyph_pair_work_limit = 100_000
+    glyph_pair_work_limit = _GlyphPairWorkBudget.DEFAULT_LIMIT
 
     def has_valid_glyph_progression(
         ordered_traces: list[dict[str, Any]],
@@ -3831,6 +3836,9 @@ def _native_pdf_text_span_records(
                                     deferred_fills.append(True)
                                 direction = (ux, uy) if dir_ok else (1.0, 0.0)
                                 if not glyph_pair_work.reserve(target_glyphs, flat_subs):
+                                    # Exhaustion is a terminal veto, not optional
+                                    # work for the fresh-budget replay pass.
+                                    deferred_fills.clear()
                                     return True
                                 if any(
                                     not (protected_stroke_glyph_rect(cp, origin, rect, direction) & subpath).is_empty
@@ -3843,6 +3851,7 @@ def _native_pdf_text_span_records(
                                 fill_drawings = drawings_by_sequence.get(index, [])
                                 if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
                                     index, fill_drawings[0], flat_subs, trace, span_font_size,
+                                    work_budget=glyph_pair_work,
                                 ):
                                     return True
                         continue
@@ -3867,6 +3876,8 @@ def _native_pdf_text_span_records(
                             ]
                             if not cand_segs:
                                 continue
+                            if not glyph_pair_work.reserve(target_glyphs, cand_segs):
+                                return True
                             thin_cad_stroke = (
                                 sop_opaque
                                 and dark_vis
