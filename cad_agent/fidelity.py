@@ -3768,6 +3768,74 @@ def _native_pdf_text_span_records(
 
     thin_stroke_check = _NativePdfThinStrokeCheck(source_page, paint_log)
     protected_stroke_results: dict[tuple[Any, ...], bool] = {}
+    translated_fill_separations: dict[tuple[Any, ...], bool] = {}
+
+    def separates_verified_fill(
+        index: int, drawing: dict[str, Any], components: list[fitz.Rect],
+        trace: dict[str, Any], span_font_size: Any, work_budget: Any,
+    ) -> bool:
+        """Reuse a completed separation proof for identical translated geometry."""
+        chars = trace.get("chars")
+        font_name = trace.get("font")
+        trace_size = trace.get("size")
+        if (
+            not isinstance(chars, (tuple, list)) or not chars
+            or not isinstance(font_name, str)
+            or not isinstance(trace_size, (int, float)) or not math.isfinite(float(trace_size))
+        ):
+            return thin_stroke_check.separates_dark_fill(
+                index, drawing, components, trace, span_font_size, work_budget=work_budget,
+            )
+        first = chars[0]
+        if (
+            not isinstance(first, (tuple, list)) or len(first) < 3
+            or not isinstance(first[2], (tuple, list)) or len(first[2]) != 2
+            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in first[2])
+        ):
+            return thin_stroke_check.separates_dark_fill(
+                index, drawing, components, trace, span_font_size, work_budget=work_budget,
+            )
+        origin_x, origin_y = (float(value) for value in first[2])
+        normalized_chars = []
+        for glyph in chars:
+            if (
+                not isinstance(glyph, (tuple, list)) or len(glyph) < 4
+                or not isinstance(glyph[2], (tuple, list)) or len(glyph[2]) != 2
+                or not isinstance(glyph[3], (tuple, list)) or len(glyph[3]) != 4
+                or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in (*glyph[2], *glyph[3]))
+            ):
+                return thin_stroke_check.separates_dark_fill(
+                    index, drawing, components, trace, span_font_size, work_budget=work_budget,
+                )
+            normalized_chars.append((
+                glyph[0], glyph[1],
+                tuple(round(float(value) - offset, 5) for value, offset in zip(glyph[2], (origin_x, origin_y))),
+                tuple(round(float(value) - offset, 5) for value, offset in zip(
+                    glyph[3], (origin_x, origin_y, origin_x, origin_y),
+                )),
+            ))
+        normalized_components = tuple(sorted(
+            tuple(round(value, 5) for value in (
+                component.x0 - origin_x, component.y0 - origin_y,
+                component.x1 - origin_x, component.y1 - origin_y,
+            ))
+            for component in components
+        ))
+        normalized_span_size = (
+            round(float(span_font_size), 5)
+            if isinstance(span_font_size, (int, float)) and math.isfinite(float(span_font_size)) else None
+        )
+        key = (
+            font_name, round(float(trace_size), 5), normalized_span_size,
+            tuple(normalized_chars), normalized_components,
+        )
+        if key in translated_fill_separations:
+            return translated_fill_separations[key]
+        result = thin_stroke_check.separates_dark_fill(
+            index, drawing, components, trace, span_font_size, work_budget=work_budget,
+        )
+        translated_fill_separations[key] = result
+        return result
 
     def has_later_paint_overlap(
         trace: dict[str, Any],
@@ -3787,6 +3855,31 @@ def _native_pdf_text_span_records(
         ):
             return True
         trace_rect = fitz.Rect(trace_bbox)
+        # PyMuPDF's text trace box can omit italic paint overhang. Use the
+        # matching source paint bound only to keep later operations in the
+        # candidate set; the glyph/paint proofs below still decide visibility.
+        source_candidate_rect = trace_rect
+        if 0 <= sequence_number < len(paint_log):
+            source_paint_item = paint_log[sequence_number]
+            if (
+                isinstance(source_paint_item, (tuple, list))
+                and len(source_paint_item) == 2
+                and source_paint_item[0] in ("fill-text", "stroke-text")
+                and isinstance(source_paint_item[1], (tuple, list))
+                and len(source_paint_item[1]) == 4
+                and all(
+                    isinstance(value, (int, float)) and math.isfinite(float(value))
+                    for value in source_paint_item[1]
+                )
+            ):
+                source_paint_rect = fitz.Rect(source_paint_item[1])
+                if not source_paint_rect.is_empty:
+                    source_candidate_rect = fitz.Rect(
+                        min(trace_rect.x0, source_paint_rect.x0),
+                        min(trace_rect.y0, source_paint_rect.y0),
+                        max(trace_rect.x1, source_paint_rect.x1),
+                        max(trace_rect.y1, source_paint_rect.y1),
+                    )
         # Keep paint geometry for glyphs that a ToUnicode map reports as whitespace.
         # Such a codepoint can still be visible ink and a later fill must mask the whole span.
         raw_target_glyphs = glyph_entries_from_chars(trace.get("chars"), skip_spaces=False)
@@ -3832,7 +3925,6 @@ def _native_pdf_text_span_records(
             )
         else:
             target_glyphs = raw_target_glyphs
-
         member_id_set = set(member_trace_order_ids)
         glyph_pair_work = _GlyphPairWorkBudget(glyph_pair_work_limit)
         glyph_lookup_by_source_position: dict[tuple[int, tuple[Any, ...]], list[Any]] | None = None
@@ -3995,15 +4087,15 @@ def _native_pdf_text_span_records(
                     and len(paint_bbox) == 4
                     and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in paint_bbox)
                     and (
-                        float(paint_bbox[2]) <= trace_rect.x0
-                        or float(paint_bbox[0]) >= trace_rect.x1
-                        or float(paint_bbox[3]) <= trace_rect.y0
-                        or float(paint_bbox[1]) >= trace_rect.y1
+                        float(paint_bbox[2]) <= source_candidate_rect.x0
+                        or float(paint_bbox[0]) >= source_candidate_rect.x1
+                        or float(paint_bbox[3]) <= source_candidate_rect.y0
+                        or float(paint_bbox[1]) >= source_candidate_rect.y1
                     )
                 ):
                     continue
                 paint_rect = fitz.Rect(paint_bbox)
-                if overlap_ratio(trace_rect, paint_rect) <= 0:
+                if overlap_ratio(source_candidate_rect, paint_rect) <= 0:
                     continue
                 later_traces = traces_by_sequence.get(index, [])
                 if (
@@ -4142,7 +4234,7 @@ def _native_pdf_text_span_records(
                                     return True
                             else:
                                 fill_drawings = drawings_by_sequence.get(index, [])
-                                if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
+                                if len(fill_drawings) != 1 or not separates_verified_fill(
                                     index, fill_drawings[0], flat_subs, trace, span_font_size,
                                     work_budget=glyph_pair_work,
                                 ):
@@ -4155,7 +4247,7 @@ def _native_pdf_text_span_records(
                             )
                             if any(not (fill_probe_rect & subpath).is_empty for subpath in flat_subs):
                                 fill_drawings = drawings_by_sequence.get(index, [])
-                                if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
+                                if len(fill_drawings) != 1 or not separates_verified_fill(
                                     index, fill_drawings[0], flat_subs, trace, span_font_size,
                                     work_budget=glyph_pair_work,
                                 ):
@@ -4174,7 +4266,7 @@ def _native_pdf_text_span_records(
                         ink_contact_candidates = []
                         trace_probe_pad = max(1.0, 0.15 * effective_v_size)
                         for segs, d_bounds, width, sop_opaque, dark_vis in verified_strokes:
-                            if (trace_rect & d_bounds).is_empty:
+                            if (source_candidate_rect & d_bounds).is_empty:
                                 continue
                             # Trace metrics can underbound italic ink, but the
                             # expanded trace filter keeps unrelated strokes out.
@@ -4187,6 +4279,18 @@ def _native_pdf_text_span_records(
                             ]
                             if not cand_segs:
                                 continue
+                            if any(
+                                (fitz.Rect(segment[0], segment[1], segment[2], segment[3]) & trace_rect).is_empty
+                                and not (
+                                    fitz.Rect(segment[0], segment[1], segment[2], segment[3])
+                                    & source_candidate_rect
+                                ).is_empty
+                                for segment in cand_segs
+                            ):
+                                # A verified stroke in source paint overhang is a
+                                # possible strike even when nominal glyph metrics
+                                # miss it; keep that span out of review admission.
+                                return True
                             if not glyph_pair_work.reserve(target_glyphs, cand_segs):
                                 if deferred_fills is not None:
                                     deferred_fills.clear()

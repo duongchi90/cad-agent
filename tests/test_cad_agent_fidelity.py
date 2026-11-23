@@ -1254,6 +1254,99 @@ def test_native_pdf_observation_vetoes_compound_fill_on_italic_ink_overhang(
     document.close()
 
 
+@pytest.mark.parametrize("paint_kind, paint_x, expect_contact", [
+    ("fill", 149.6, True), ("fill", 155.0, False),
+    ("stroke", 150.0, True), ("stroke", 155.0, False),
+])
+def test_native_pdf_observation_checks_standalone_paint_against_italic_ink(
+    paint_kind: str, paint_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    shape = page.new_shape()
+    if paint_kind == "fill":
+        shape.draw_rect(fitz.Rect(paint_x, 80, paint_x + 0.8, 125))
+        shape.finish(color=None, fill=(1, 1, 1))
+    else:
+        shape.draw_line((paint_x, 80), (paint_x, 125))
+        shape.finish(color=(1, 0, 0), fill=None, width=0.7)
+    shape.commit()
+
+    # Keep the source and overlay in the same verified serialized PDF that
+    # the native observer reads; the clear control differs only in position.
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    source_ink = (before[:, :, 0] < 64) & (before[:, :, 1] < 64) & (before[:, :, 2] < 64)
+    if paint_kind == "fill":
+        overwritten = np.count_nonzero(
+            source_ink & (after[:, :, 0] > 192) & (after[:, :, 1] > 192) & (after[:, :, 2] > 192)
+        )
+    else:
+        overwritten = np.count_nonzero(
+            source_ink & (after[:, :, 0] > 160) & (after[:, :, 1] < 64) & (after[:, :, 2] < 64)
+        )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=400)
+    baselines = (60.0, 150.0, 240.0, 330.0)
+    for baseline in baselines:
+        page.insert_text((80, baseline), "10f", fontsize=48, fontname="heit")
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    for baseline in baselines:
+        fill = page.new_shape()
+        fill.draw_rect(fitz.Rect(60.0, baseline - 40, 60.8, baseline + 5))
+        fill.draw_rect(fitz.Rect(153.5, baseline - 40, 154.3, baseline + 5))
+        fill.finish(color=None, fill=(1, 1, 1))
+        fill.commit()
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 3200, "displayed-page-box-v1",
+    )
+
+    # These compounds are deliberately near the metric edge but do not paint
+    # over any source pixels. They must not consume page-wide proof capacity
+    # and suppress later, otherwise observable rows.
+    assert np.array_equal(after, before)
+    assert [record["content"] for record in records].count("10f") == len(baselines)
+    document.close()
+
+
 def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)
