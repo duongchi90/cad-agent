@@ -1311,6 +1311,49 @@ def test_native_pdf_observation_checks_standalone_paint_against_italic_ink(
     document.close()
 
 
+@pytest.mark.parametrize("image_x, expect_contact", [(149.6, True), (155.0, False)])
+def test_native_pdf_observation_checks_later_image_against_italic_ink_overhang(
+    image_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    image = np.full((450, 8, 3), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    page.insert_image(fitz.Rect(image_x, 80, image_x + 0.8, 125), stream=encoded.tobytes())
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    source_ink = (before[:, :, 0] < 64) & (before[:, :, 1] < 64) & (before[:, :, 2] < 64)
+    overwritten = np.count_nonzero(
+        source_ink & (after[:, :, 0] > 192) & (after[:, :, 1] > 192) & (after[:, :, 2] > 192)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
 def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows() -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=400)

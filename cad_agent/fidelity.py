@@ -4438,7 +4438,10 @@ def _native_pdf_text_span_records(
                                     return True
                         continue
 
-                if overlap_ratio(trace_rect, paint_rect) > 0:
+                fallback_candidate_rect = (
+                    source_candidate_rect if paint_type == "fill-image" else trace_rect
+                )
+                if overlap_ratio(fallback_candidate_rect, paint_rect) > 0:
                     return True
         except (TypeError, ValueError, RuntimeError):
             return True
