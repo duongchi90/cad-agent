@@ -1076,6 +1076,95 @@ def test_native_pdf_observation_fails_closed_for_compound_italic_paint_overhang(
 
     document.close()
 
+
+@pytest.mark.parametrize("stroke_x, expect_contact", [(150.0, True), (155.0, False)])
+def test_native_pdf_observation_vetoes_compound_stroke_on_italic_ink_overhang(
+    stroke_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    # Keep the distant segment in the same compound stroke so its aggregate
+    # paint bounds intersect the trace while the contact segment reaches only
+    # the italic final-glyph ink overhang.
+    stroke = page.new_shape()
+    stroke.draw_line((stroke_x, 80), (stroke_x, 125))
+    stroke.draw_line((60, 80), (60, 125))
+    stroke.finish(color=(1, 0, 0), fill=None, width=0.4)
+    stroke.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 160)
+        & (after[:, :, 1] < 64)
+        & (after[:, :, 2] < 64)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("stroke_x, expect_contact", [(105.0, True), (110.0, False)])
+def test_native_pdf_observation_vetoes_rotated_italic_f_below_baseline_contact(
+    stroke_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=300, height=200)
+    page.insert_text((100, 120), "f35", fontsize=36, fontname="tibi", rotate=90)
+    page.insert_text((220, 170), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(1600, 2400, 3).copy()
+
+    stroke = page.new_shape()
+    stroke.draw_line((stroke_x, 80), (stroke_x, 130))
+    stroke.finish(color=(0.6, 0, 0), fill=None, width=1.0)
+    stroke.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(1600, 2400, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 100)
+        & (after[:, :, 0] > after[:, :, 1] * 1.5)
+        & (after[:, :, 0] > after[:, :, 2] * 1.5)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 2400, 1600, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("f35" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "f35" in contents
+    document.close()
+
+
 def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)

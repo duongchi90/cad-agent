@@ -2578,10 +2578,9 @@ class _NativePdfThinStrokeCheck:
             glyph_mask = self.masks[key]
             if glyph_mask is None or not np.any(glyph_mask):
                 return None
-            # Exclude boundary samples whose centers could straddle the baseline.
-            baseline = glyph[2][1]
-            rows = (bounds.y0 + np.arange(bounds.height) + 0.5) / self._SCALE
-            return bool(np.any(glyph_mask & self._dark_mask(stroke, bounds) & (rows[:, None] > baseline + 0.5 / self._SCALE)))
+            # The expanded clip covers ink outside nominal metrics; only actual
+            # source glyph pixels can trigger a veto for this candidate.
+            return bool(np.any(glyph_mask & self._dark_mask(stroke, bounds)))
         except Exception:
             # Absence of a completed proof is distinct from verified separation.
             return None
@@ -2873,7 +2872,7 @@ def _native_pdf_text_span_records(
                 if drawing.get("type") == "fs":
                     drawings_by_sequence.setdefault(d_seq + 1, []).append(drawing)
 
-    below_baseline_ink_glyphs = frozenset("gjpqyQJ$,;()[]{}_|@#&§µçşğı")
+    below_baseline_ink_glyphs = frozenset("fgjpqyQJ$,;()[]{}_|@#&§µçşğı")
     deep_descender_glyphs = frozenset("gjpqyQ$,;")
     baseline_punct_glyphs = frozenset(".:/\\=")
     narrow_advance_glyphs = frozenset(".,:;!'\"|ilI1()[]{}-/\\` ")
@@ -4149,14 +4148,19 @@ def _native_pdf_text_span_records(
                     verified_strokes = get_verified_stroke_seq(index, paint_rect)
                     if verified_strokes is not None:
                         stroke_hit = False
-                        below_baseline_candidates = []
-                        tx0, ty0, tx1, ty1 = trace_rect.x0, trace_rect.y0, trace_rect.x1, trace_rect.y1
+                        ink_contact_candidates = []
+                        trace_probe_pad = max(1.0, 0.15 * effective_v_size)
                         for segs, d_bounds, width, sop_opaque, dark_vis in verified_strokes:
                             if (trace_rect & d_bounds).is_empty:
                                 continue
+                            # Trace metrics can underbound italic ink, but the
+                            # expanded trace filter keeps unrelated strokes out.
                             cand_segs = [
-                                s for s in segs
-                                if s[2] >= tx0 and s[0] <= tx1 and s[3] >= ty0 and s[1] <= ty1
+                                segment for segment in segs
+                                if segment[2] >= trace_rect.x0 - trace_probe_pad
+                                and segment[0] <= trace_rect.x1 + trace_probe_pad
+                                and segment[3] >= trace_rect.y0 - trace_probe_pad
+                                and segment[1] <= trace_rect.y1 + trace_probe_pad
                             ]
                             if not cand_segs:
                                 continue
@@ -4169,6 +4173,7 @@ def _native_pdf_text_span_records(
                                 and dark_vis
                                 and width <= 0.30 * effective_v_size
                             )
+                            ink_probe_pad = max(1.0, 0.15 * effective_v_size)
                             for cp, (ox, oy), gr in target_glyphs:
                                 if (gr & d_bounds).is_empty:
                                     continue
@@ -4197,7 +4202,10 @@ def _native_pdf_text_span_records(
                                 else:
                                     box_u0, box_u1, box_v0, box_v1 = u0, u1, v0, v1
                                 for sx0, sy0, sx1, sy1, sp1, sp2, seg_pad in cand_segs:
-                                    if sx1 < gx0 or sx0 > gx1 or sy1 < gy0 or sy0 > gy1:
+                                    if (
+                                        sx1 < gx0 - ink_probe_pad or sx0 > gx1 + ink_probe_pad
+                                        or sy1 < gy0 - ink_probe_pad or sy0 > gy1 + ink_probe_pad
+                                    ):
                                         continue
                                     su1 = (sp1[0] - ox) * ux + (sp1[1] - oy) * uy
                                     sv1 = (sp1[0] - ox) * vx + (sp1[1] - oy) * vy
@@ -4237,11 +4245,12 @@ def _native_pdf_text_span_records(
                                         stroke_hit = True
                                         break
                                     if (
-                                        thin_cad_stroke and ux == 1.0 and uy == 0.0
-                                        and max(sy0, oy) < min(sy1, gy1)
-                                        and max(sx0, gx0) < min(sx1, gx1)
+                                        thin_cad_stroke
+                                        and min(abs(ux), abs(uy)) <= 1e-3
+                                        and max(sy0, gy0 - ink_probe_pad) < min(sy1, gy1 + ink_probe_pad)
+                                        and max(sx0, gx0 - ink_probe_pad) < min(sx1, gx1 + ink_probe_pad)
                                     ):
-                                        below_baseline_candidates.append((cp, ox, oy, gr))
+                                        ink_contact_candidates.append((cp, ox, oy, gr))
                                 if stroke_hit:
                                     break
                             if stroke_hit:
@@ -4249,9 +4258,9 @@ def _native_pdf_text_span_records(
                         if stroke_hit:
                             return True
                         seq_drawings = drawings_by_sequence.get(index, [])
-                        if deferred_fills is None and below_baseline_candidates and len(seq_drawings) != 1:
+                        if deferred_fills is None and ink_contact_candidates and len(seq_drawings) != 1:
                             return True
-                        if below_baseline_candidates and len(seq_drawings) == 1:
+                        if ink_contact_candidates and len(seq_drawings) == 1:
                             if glyph_lookup_by_source_position is None:
                                 source_chars = trace.get("chars")
                                 if not isinstance(source_chars, (tuple, list)):
@@ -4265,12 +4274,15 @@ def _native_pdf_text_span_records(
                                     key = _native_pdf_glyph_source_key(glyph)
                                     glyph_lookup_by_source_position.setdefault(key, []).append(glyph)
                             checked_glyphs = set()
-                            for cp, ox, oy, glyph_rect in below_baseline_candidates:
+                            for cp, ox, oy, glyph_rect in ink_contact_candidates:
                                 key = (cp, ox, oy)
                                 if key in checked_glyphs:
                                     continue
                                 checked_glyphs.add(key)
-                                clip = fitz.Rect(glyph_rect.x0 - 0.25, oy, glyph_rect.x1 + 0.25, glyph_rect.y1 + 0.25)
+                                clip = fitz.Rect(
+                                    glyph_rect.x0 - ink_probe_pad, glyph_rect.y0 - ink_probe_pad,
+                                    glyph_rect.x1 + ink_probe_pad, glyph_rect.y1 + ink_probe_pad,
+                                )
                                 if _native_pdf_below_baseline_candidate_overlaps(
                                     glyph_lookup_by_source_position,
                                     cp,
