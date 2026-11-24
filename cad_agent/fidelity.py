@@ -4438,9 +4438,19 @@ def _native_pdf_text_span_records(
                                     return True
                         continue
 
-                fallback_candidate_rect = (
-                    source_candidate_rect if paint_type == "fill-image" else trace_rect
-                )
+                fallback_candidate_rect = trace_rect
+                if paint_type in ("fill-image", "fill-shade"):
+                    # The source paint bbox is only a broad-phase candidate
+                    # bound: aggregate text operations can cover several
+                    # disjoint selected spans. Use a bounded per-selection
+                    # neighborhood for image/shading fallbacks so italic ink
+                    # overhang stays conservative without letting a clear
+                    # paint in a sibling span or blank gap suppress this one.
+                    fallback_pad = max(1.0, 0.15 * effective_v_size)
+                    fallback_candidate_rect = fitz.Rect(
+                        trace_rect.x0 - fallback_pad, trace_rect.y0 - fallback_pad,
+                        trace_rect.x1 + fallback_pad, trace_rect.y1 + fallback_pad,
+                    )
                 if overlap_ratio(fallback_candidate_rect, paint_rect) > 0:
                     return True
         except (TypeError, ValueError, RuntimeError):

@@ -1443,6 +1443,56 @@ def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace()
     assert records[0]["bbox_px"][2] > records[0]["bbox_px"][0]
 
 
+@pytest.mark.parametrize(
+    "image_x, expected_contents",
+    [
+        (160.0, {"414 MM", "ANNOTATION", "CONTROL"}),
+        (200.0, {"414 MM", "CONTROL"}),
+    ],
+)
+def test_native_pdf_observation_scopes_later_image_to_selected_aggregate_text_span(
+    image_x: float, expected_contents: set[str],
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    writer = fitz.TextWriter(page.rect)
+    writer.append((40, 80), "414 MM", fontsize=18)
+    writer.append((190, 80), "ANNOTATION", fontsize=18)
+    writer.write_text(page)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    image = np.full((18 * 8, 8, 3), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    page.insert_image(fitz.Rect(image_x, 66, image_x + 0.8, 84), stream=encoded.tobytes())
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+
+    contents = {record["content"] for record in records}
+    assert contents == expected_contents
+    if image_x == 160.0:
+        # The image is in the blank gap and must not erase either text span.
+        assert np.array_equal(after, before)
+    else:
+        # Contact with ANNOTATION must not suppress its clear sibling span.
+        assert np.any((before < 64) & (after > 192))
+    document.close()
+
+
 def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_later_filled() -> None:
     from cad_agent import fidelity as fidelity_module
 
