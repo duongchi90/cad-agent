@@ -1493,6 +1493,61 @@ def test_native_pdf_observation_scopes_later_image_to_selected_aggregate_text_sp
     document.close()
 
 
+def test_native_pdf_observation_rejects_later_axial_shading_over_italic_ink() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    resource_type, resource_ref = document.xref_get_key(page.xref, "Resources")
+    assert resource_type == "xref"
+    resource_xref = int(resource_ref.split()[0])
+    shading_xref = document.get_new_xref()
+    document.update_object(
+        shading_xref,
+        (
+            "<< /ShadingType 2 /ColorSpace /DeviceRGB "
+            "/Coords [149.6 175 150.4 220] "
+            "/Function << /FunctionType 2 /Domain [0 1] "
+            "/C0 [1 1 1] /C1 [1 1 1] /N 1 >> /Extend [true true] >>"
+        ),
+    )
+    document.xref_set_key(resource_xref, "Shading", f"<< /Sh1 {shading_xref} 0 R >>")
+    shade_stream_xref = document.get_new_xref()
+    document.update_object(shade_stream_xref, "<<>>")
+    document.update_stream(shade_stream_xref, b"q 149.6 175 0.8 45 re W n /Sh1 sh Q")
+    existing_contents = page.get_contents()
+    assert len(existing_contents) == 2
+    contents = " ".join(
+        f"{xref} 0 R" for xref in [existing_contents[0], shade_stream_xref, existing_contents[1]]
+    )
+    document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    assert any(kind == "fill-shade" for kind, _bbox in page.get_bboxlog())
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    source_ink = before < 64
+    overwritten = np.count_nonzero(source_ink & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert overwritten > 0
+    assert "10f" not in contents
+    assert "CONTROL" in contents
+    document.close()
+
 def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_later_filled() -> None:
     from cad_agent import fidelity as fidelity_module
 
