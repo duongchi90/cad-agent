@@ -4282,15 +4282,16 @@ def _native_pdf_text_span_records(
                             metric_hit = any(
                                 not (fill_probe_rect & subpath).is_empty for subpath in flat_subs
                             )
-                            source_overhang_hit = any(
-                                intersects_attributed_source_overhang(subpath, fill_probe_rect)
-                                for subpath in flat_subs
-                            )
-                            if source_overhang_hit and not all_dark_opaque_fills:
-                                # A non-dark fill outside the nominal neighborhood
-                                # can erase source ink that the text trace underbounds.
-                                return True
-                            if metric_hit or source_overhang_hit:
+                            if not all_dark_opaque_fills:
+                                source_overhang_hit = any(
+                                    intersects_attributed_source_overhang(subpath, fill_probe_rect)
+                                    for subpath in flat_subs
+                                )
+                                if source_overhang_hit:
+                                    # A non-dark fill outside the nominal neighborhood
+                                    # can erase source ink that the text trace underbounds.
+                                    return True
+                            if metric_hit:
                                 fill_drawings = drawings_by_sequence.get(index, [])
                                 if len(fill_drawings) != 1 or not separates_verified_fill(
                                     index, fill_drawings[0], flat_subs, trace, span_font_size,
