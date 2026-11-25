@@ -2853,6 +2853,7 @@ def _native_pdf_text_span_records(
         narrowed["chars"] = list(chars[start:end])
         narrowed["bbox"] = tuple(float(value) for value in selected_bbox)
         narrowed["_source_character_range"] = (start, end)
+        narrowed["_source_span_bbox"] = tuple(float(value) for value in span_rect)
         narrowed["_aggregate_trace_char_count"] = len(chars)
         narrowed["_aggregate_trace_bbox"] = tuple(float(value) for value in trace_bbox)
         narrowed["_later_intra_trace_chars"] = list(chars[end:])
@@ -3855,6 +3856,16 @@ def _native_pdf_text_span_records(
         ):
             return True
         trace_rect = fitz.Rect(trace_bbox)
+        source_span_rect: fitz.Rect | None = None
+        raw_source_span_bbox = trace.get("_source_span_bbox")
+        if (
+            isinstance(raw_source_span_bbox, (tuple, list))
+            and len(raw_source_span_bbox) == 4
+            and all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in raw_source_span_bbox)
+        ):
+            candidate_span_rect = fitz.Rect(raw_source_span_bbox)
+            if candidate_span_rect.is_valid and not candidate_span_rect.is_empty:
+                source_span_rect = candidate_span_rect
         # PyMuPDF's text trace box can omit italic paint overhang. The source
         # operation bbox is only a conservative candidate bound: when one paint
         # operation contains several traces, it cannot prove which span owns an
@@ -3923,6 +3934,23 @@ def _native_pdf_text_span_records(
                         max(trace_rect.x1, source_paint_rect.x1),
                         max(trace_rect.y1, source_paint_rect.y1),
                     )
+                    if (
+                        source_span_rect is not None
+                        and isinstance(trace.get("_source_character_range"), (tuple, list))
+                    ):
+                        # A narrowed span is selected from a shared paint trace.
+                        # The source text span bbox preserves its transformed
+                        # glyph extent while avoiding the aggregate operation's
+                        # unrelated siblings.
+                        source_paint_candidate_rect = source_span_rect
+                        source_paint_envelope = source_span_rect
+                        source_interaction_rect = fitz.Rect(
+                            min(trace_rect.x0, source_span_rect.x0),
+                            min(trace_rect.y0, source_span_rect.y0),
+                            max(trace_rect.x1, source_span_rect.x1),
+                            max(trace_rect.y1, source_span_rect.y1),
+                        )
+                        source_candidate_rect = source_interaction_rect
         # Keep paint geometry for glyphs that a ToUnicode map reports as whitespace.
         # Such a codepoint can still be visible ink and a later fill must mask the whole span.
         raw_target_glyphs = glyph_entries_from_chars(trace.get("chars"), skip_spaces=False)

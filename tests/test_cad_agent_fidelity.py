@@ -1703,6 +1703,67 @@ def test_native_pdf_observation_fails_closed_for_aggregate_sheared_text_overpain
     assert bool(overwritten > 0) is expect_contact
     source_present = any(content.startswith("10f") for content in contents)
     assert source_present is (not expect_contact)
+    assert "OTHER" in contents
+    assert "CONTROL" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("paint_x, expect_contact", [(155.0, True), (550.0, False)])
+def test_native_pdf_observation_rejects_only_occluded_aggregate_image_span(
+    paint_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=650, height=300)
+    origin = fitz.Point(80, 120)
+    page.insert_text(
+        origin,
+        "10f",
+        fontsize=48,
+        fontname="helv",
+        morph=(origin, fitz.Matrix(1, 0, 0.4, 1, 0, 0)),
+    )
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    source_xref = page.get_contents()[0]
+    source_stream = document.xref_stream(source_xref)
+    assert source_stream.count(b"ET") == 1
+    document.update_stream(
+        source_xref,
+        source_stream.replace(
+            b"ET",
+            b"1 0 0 1 300 180 Tm (OTHER) Tj ET",
+            1,
+        ),
+    )
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    image = np.full((450, 8, 3), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    page.insert_image(
+        fitz.Rect(paint_x, 80, paint_x + 0.8, 135), stream=encoded.tobytes(),
+    )
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    assert page.get_images()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    overwritten = np.count_nonzero((before < 64) & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "OTHER" in contents
     assert "CONTROL" in contents
     document.close()
 
