@@ -3855,18 +3855,23 @@ def _native_pdf_text_span_records(
         ):
             return True
         trace_rect = fitz.Rect(trace_bbox)
-        # PyMuPDF's text trace box can omit italic paint overhang. Use the
-        # matching source paint bound only to keep later operations in the
-        # candidate set; the glyph/paint proofs below still decide visibility.
+        # PyMuPDF's text trace box can omit italic paint overhang. The source
+        # operation bbox is only a conservative candidate bound: when one paint
+        # operation contains several traces, it cannot prove which span owns an
+        # overhang, so any intersecting later paint must fail closed.
         source_candidate_rect = trace_rect
+        source_interaction_rect = trace_rect
+        source_paint_candidate_rect: fitz.Rect | None = None
         source_paint_envelope: fitz.Rect | None = None
 
-        def intersects_attributed_source_overhang(
-            paint_rect: fitz.Rect, metric_rect: fitz.Rect,
+        def intersects_source_paint_overhang(
+            source_rect: fitz.Rect | None,
+            paint_rect: fitz.Rect,
+            metric_rect: fitz.Rect,
         ) -> bool:
-            if source_paint_envelope is None:
+            if source_rect is None:
                 return False
-            overlap = source_paint_envelope & paint_rect
+            overlap = source_rect & paint_rect
             if overlap.is_empty:
                 return False
             metric_overlap = overlap & metric_rect
@@ -3896,18 +3901,22 @@ def _native_pdf_text_span_records(
             ):
                 source_paint_rect = fitz.Rect(source_paint_item[1])
                 if not source_paint_rect.is_empty:
-                    sequence_traces = traces_by_sequence.get(sequence_number, [])
+                    source_paint_candidate_rect = source_paint_rect
+                    # A paint bbox shared by multiple traces cannot attribute
+                    # overhang to this span. It remains useful for conservative
+                    # fill-path checks, but image/shade fallback needs a
+                    # span-specific envelope to avoid suppressing clear siblings.
                     if (
-                        len(sequence_traces) == 1
-                        and sequence_traces[0].get("_trace_order_idx") == trace_order_id
-                        and "_source_character_range" not in trace
-                        and "_aggregate_trace_bbox" not in trace
+                        len(traces_by_sequence.get(sequence_number, [])) == 1
+                        and not isinstance(trace.get("_source_character_range"), (tuple, list))
                     ):
-                        # The paint-log envelope is useful as a per-span ink
-                        # bound only when this trace owns the whole text paint
-                        # operation. An aggregate operation cannot be narrowed
-                        # to one selected span without separate source evidence.
                         source_paint_envelope = source_paint_rect
+                        source_interaction_rect = fitz.Rect(
+                            min(trace_rect.x0, source_paint_rect.x0),
+                            min(trace_rect.y0, source_paint_rect.y0),
+                            max(trace_rect.x1, source_paint_rect.x1),
+                            max(trace_rect.y1, source_paint_rect.y1),
+                        )
                     source_candidate_rect = fitz.Rect(
                         min(trace_rect.x0, source_paint_rect.x0),
                         min(trace_rect.y0, source_paint_rect.y0),
@@ -4116,20 +4125,23 @@ def _native_pdf_text_span_records(
                 paint_type, paint_bbox = paint_item
                 if index <= sequence_number or paint_type == "ignore-text":
                     continue
+                interaction_rect = (
+                    source_candidate_rect if paint_type == "fill-path" else source_interaction_rect
+                )
                 if (
                     isinstance(paint_bbox, (tuple, list))
                     and len(paint_bbox) == 4
                     and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in paint_bbox)
                     and (
-                        float(paint_bbox[2]) <= source_candidate_rect.x0
-                        or float(paint_bbox[0]) >= source_candidate_rect.x1
-                        or float(paint_bbox[3]) <= source_candidate_rect.y0
-                        or float(paint_bbox[1]) >= source_candidate_rect.y1
+                        float(paint_bbox[2]) <= interaction_rect.x0
+                        or float(paint_bbox[0]) >= interaction_rect.x1
+                        or float(paint_bbox[3]) <= interaction_rect.y0
+                        or float(paint_bbox[1]) >= interaction_rect.y1
                     )
                 ):
                     continue
                 paint_rect = fitz.Rect(paint_bbox)
-                if overlap_ratio(source_candidate_rect, paint_rect) <= 0:
+                if overlap_ratio(interaction_rect, paint_rect) <= 0:
                     continue
                 later_traces = traces_by_sequence.get(index, [])
                 if (
@@ -4282,14 +4294,21 @@ def _native_pdf_text_span_records(
                             metric_hit = any(
                                 not (fill_probe_rect & subpath).is_empty for subpath in flat_subs
                             )
-                            if not all_dark_opaque_fills:
-                                source_overhang_hit = any(
-                                    intersects_attributed_source_overhang(subpath, fill_probe_rect)
+                            if source_paint_candidate_rect is not None:
+                                source_bounds = source_paint_candidate_rect
+                                if any(
+                                    subpath.x0 < source_bounds.x1
+                                    and subpath.x1 > source_bounds.x0
+                                    and subpath.y0 < source_bounds.y1
+                                    and subpath.y1 > source_bounds.y0
+                                    and intersects_source_paint_overhang(
+                                        source_paint_candidate_rect, subpath, fill_probe_rect,
+                                    )
                                     for subpath in flat_subs
-                                )
-                                if source_overhang_hit:
-                                    # A non-dark fill outside the nominal neighborhood
-                                    # can erase source ink that the text trace underbounds.
+                                ):
+                                    # Any fill that reaches beyond the metric
+                                    # neighborhood into source paint can alter ink,
+                                    # regardless of whether that fill itself is dark.
                                     return True
                             if metric_hit:
                                 fill_drawings = drawings_by_sequence.get(index, [])
@@ -4495,7 +4514,9 @@ def _native_pdf_text_span_records(
                         trace_rect.x0 - fallback_pad, trace_rect.y0 - fallback_pad,
                         trace_rect.x1 + fallback_pad, trace_rect.y1 + fallback_pad,
                     )
-                    if intersects_attributed_source_overhang(paint_rect, fallback_candidate_rect):
+                    if intersects_source_paint_overhang(
+                        source_paint_envelope, paint_rect, fallback_candidate_rect,
+                    ):
                         return True
                 if overlap_ratio(fallback_candidate_rect, paint_rect) > 0:
                     return True
