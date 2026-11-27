@@ -2257,10 +2257,10 @@ class _NativePdfThinStrokeCheck:
             program = data
         return TTFont(BytesIO(program), lazy=True) if program is not None else None
 
-    def _bound_glyph(
+    def _bound_svg_glyph(
         self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float, *,
         allow_quarter_turn: bool = False,
-    ) -> tuple[Any, str, tuple[float, ...], str, Any, float] | None:
+    ) -> tuple[tuple[float, ...], str, Any] | None:
         code, gid, (ox, oy), _ = glyph
         if trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer") or trace.get("wmode") != 0:
             return None
@@ -2290,6 +2290,17 @@ class _NativePdfThinStrokeCheck:
         definition = self.definitions[node.attrib[self._HREF][1:]]
         if definition.tag != self._SVG_NS + "path" or set(definition.attrib) != {"id", "d"}:
             return None
+        return (a, b, c, d, e, f), fill, definition
+
+    def _bound_glyph(
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float, *,
+        allow_quarter_turn: bool = False,
+    ) -> tuple[Any, str, tuple[float, ...], str, Any, float] | None:
+        bound = self._bound_svg_glyph(trace, glyph, span_size, allow_quarter_turn=allow_quarter_turn)
+        if bound is None:
+            return None
+        matrix, fill, definition = bound
+        gid = glyph[1]
         font_name = trace["font"]
         if font_name not in self.fonts:
             self.fonts[font_name] = None
@@ -2301,7 +2312,7 @@ class _NativePdfThinStrokeCheck:
         order = font.getGlyphOrder()
         if gid >= len(order) or units <= 0:
             return None
-        return font.getGlyphSet(), order[gid], (a, b, c, d, e, f), fill, definition, 1.0 / units
+        return font.getGlyphSet(), order[gid], matrix, fill, definition, 1.0 / units
 
     def _glyph_paths(
         self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
@@ -2490,9 +2501,19 @@ class _NativePdfThinStrokeCheck:
         pair_key = (sequence, *trace_key)
         if pair_key in self.fill_separations:
             return self.fill_separations[pair_key]
-        if self.preparation_exhausted or self.fill_attempts >= self._FILL_PAIR_LIMIT:
+        if self.preparation_exhausted:
             return False
-        self.fill_attempts += 1
+        glyphs_already_bound = self.fill_attempts >= self._FILL_PAIR_LIMIT
+        if glyphs_already_bound:
+            # Reuse a completed ink binding. A new paint binding still pays the
+            # cumulative comparison and SVG path-operation budgets.
+            ink = self.ink_bounds.get(trace_key)
+            if not ink or not self.export_ready or work_budget is None:
+                return False
+            if sequence not in self.fill_bounds and not work_budget.reserve(ink, components):
+                return False
+        else:
+            self.fill_attempts += 1
         self.fill_separations[pair_key] = False
         try:
             if not self.export_ready:
@@ -3265,23 +3286,27 @@ def _native_pdf_text_span_records(
             uin_x, uin_y = (q1[0] - q0[0]) / l_in, (q1[1] - q0[1]) / l_in
             uout_x, uout_y = (r1[0] - r0[0]) / l_out, (r1[1] - r0[1]) / l_out
             dot = max(-1.0, min(1.0, uin_x * uout_x + uin_y * uout_y))
-            if dot < -0.2:
-                sin_half = math.sqrt(max(0.0, 0.5 * (1.0 + dot)))
-                if sin_half > 1e-4 and (1.0 / sin_half) <= 10.05:
-                    bx, by = uin_x - uout_x, uin_y - uout_y
-                    bn = math.hypot(bx, by)
-                    if bn > 1e-6:
-                        miter_len = half / sin_half
-                        tip = (q1[0] + (bx / bn) * miter_len, q1[1] + (by / bn) * miter_len)
-                        segs.append((
-                            min(q1[0], tip[0]) - half,
-                            min(q1[1], tip[1]) - half,
-                            max(q1[0], tip[0]) + half,
-                            max(q1[1], tip[1]) + half,
-                            q1,
-                            tip,
-                            0.0,
-                        ))
+            sin_half = math.sqrt(max(0.0, 0.5 * (1.0 + dot)))
+            if sin_half <= 1e-4 or (1.0 / sin_half) > 10.05:
+                return
+            bx, by = uin_x - uout_x, uin_y - uout_y
+            bn = math.hypot(bx, by)
+            if bn == 0.0:
+                return
+            miter_len = half / sin_half
+            dx_tip, dy_tip = (bx / bn) * miter_len, (by / bn) * miter_len
+            if max(abs(dx_tip), abs(dy_tip)) <= half:
+                return
+            tip = (q1[0] + dx_tip, q1[1] + dy_tip)
+            segs.append((
+                min(q1[0], tip[0]) - half,
+                min(q1[1], tip[1]) - half,
+                max(q1[0], tip[0]) + half,
+                max(q1[1], tip[1]) + half,
+                q1,
+                tip,
+                0.0,
+            ))
 
         def add_seg(p1: tuple[float, float], p2: tuple[float, float], pad: float = 0.0, track_join: bool = False) -> bool:
             nonlocal has_diagonal, prev_seg_pts, subpath_first_seg, subpath_just_closed
@@ -3838,6 +3863,81 @@ def _native_pdf_text_span_records(
         translated_fill_separations[key] = result
         return result
 
+    source_outline_cache: dict[
+        tuple[int, float, tuple[int, int] | None], list[tuple[float, ...]] | None
+    ] = {}
+
+    def source_outline_boxes(
+        trace: dict[str, Any], span_size: float, envelope: fitz.Rect,
+    ) -> list[tuple[float, ...]] | None:
+        # Native boxes can underbound italic ink. Include the control bounds of
+        # each independently attributed SVG glyph before using them for clearance.
+        if not (
+            trace.get("type") == 0 and trace.get("opacity") == 1
+            and not trace.get("layer") and trace.get("wmode") == 0
+            and trace.get("dir") == (1.0, 0.0) and source_page.rect.contains(envelope)
+        ):
+            return None
+        chars = trace.get("chars")
+        if not isinstance(chars, (tuple, list)) or not 0 < len(chars) <= 16:
+            return None
+        key = (trace["_trace_order_idx"], span_size, trace.get("_source_character_range"))
+        if key in source_outline_cache:
+            return source_outline_cache[key]
+        if len(source_outline_cache) >= thin_stroke_check._PAIR_LIMIT:
+            return None
+        source_outline_cache[key] = None
+        if not thin_stroke_check.export_ready:
+            thin_stroke_check._prepare_export()
+        from fontTools.pens.boundsPen import ControlBoundsPen
+        from fontTools.pens.transformPen import TransformPen
+        from fontTools.svgLib.path import parse_path
+
+        svg_boxes = []
+        for char in chars:
+            bound = thin_stroke_check._bound_svg_glyph(trace, char, span_size)
+            if bound is None:
+                return None
+            matrix, _, ref = bound
+            data = thin_stroke_check._path_data(ref)
+            if "A" in data or "a" in data:
+                return None
+            pen = ControlBoundsPen(None)
+            parse_path(data, thin_stroke_check._metered_pen(TransformPen(pen, matrix)))
+            if pen.bounds is None or not all(math.isfinite(v) for v in pen.bounds):
+                return None
+            svg_boxes.append(pen.bounds)
+        # Get the full outlines for the local glyphs without changing global PyMuPDF settings.
+        bounds = source_page.get_text(
+            "rawdict", clip=envelope + (-1, -1, 1, 1),
+            flags=(fitz.TEXTFLAGS_RAWDICT | fitz.TEXT_ACCURATE_BBOXES) & ~fitz.TEXT_PRESERVE_IMAGES,
+        )
+        observed = {}
+        for block in bounds["blocks"]:
+            for line in block.get("lines", []):
+                if tuple(line["dir"]) != trace["dir"] or line["wmode"] != 0:
+                    continue
+                for span in line["spans"]:
+                    if span["font"] != trace.get("font") or span.get("alpha") != 255:
+                        continue
+                    for item in span["chars"]:
+                        if item.get("synthetic"):
+                            continue
+                        name = (ord(item["c"]), tuple(item["origin"]))
+                        observed.setdefault(name, []).append(tuple(item["bbox"]))
+        boxes = []
+        for char in chars:
+            matches = observed.get((char[0], tuple(char[2])), ())
+            if len(matches) != 1:
+                return None
+            x0, y0, x1, y1 = matches[0]
+            if not all(math.isfinite(v) for v in (x0, y0, x1, y1)) or x1 <= x0 or y1 <= y0:
+                return None
+            boxes.append((x0, y0, x1, y1))
+        boxes.extend(svg_boxes)
+        source_outline_cache[key] = boxes
+        return boxes
+
     def has_later_paint_overlap(
         trace: dict[str, Any],
         member_trace_order_ids: tuple[int, ...],
@@ -4334,10 +4434,18 @@ def _native_pdf_text_span_records(
                                     )
                                     for subpath in flat_subs
                                 ):
-                                    # Any fill that reaches beyond the metric
-                                    # neighborhood into source paint can alter ink,
-                                    # regardless of whether that fill itself is dark.
-                                    return True
+                                    fill_drawings = drawings_by_sequence.get(index, [])
+                                    if not all_dark_opaque_fills or len(fill_drawings) != 1:
+                                        return True
+                                    if deferred_fills is not None:
+                                        if not deferred_fills:
+                                            deferred_fills.append(True)
+                                    elif not thin_stroke_check.separates_dark_fill(
+                                        index, fill_drawings[0], flat_subs, trace, span_font_size,
+                                        work_budget=glyph_pair_work,
+                                    ):
+                                        return True
+                                    continue
                             if metric_hit:
                                 fill_drawings = drawings_by_sequence.get(index, [])
                                 if len(fill_drawings) != 1 or not separates_verified_fill(
@@ -4363,6 +4471,44 @@ def _native_pdf_text_span_records(
                                 continue
                             # Trace metrics can underbound italic ink, but the
                             # expanded trace filter keeps unrelated strokes out.
+                            separation = None
+
+                            def proven_stroke_separation() -> bool:
+                                nonlocal separation
+                                if separation is not None:
+                                    return separation
+                                separation = False
+                                if not sop_opaque or not dark_vis or width <= 0:
+                                    return False
+                                if trace.get("dir") in ((0.0, 1.0), (0.0, -1.0)):
+                                    if not thin_stroke_check.export_ready:
+                                        thin_stroke_check._prepare_export()
+                                    key = (trace_order_id, span_font_size, trace.get("_source_character_range"))
+                                    if key not in thin_stroke_check.ink_bounds:
+                                        thin_stroke_check.ink_bounds[key] = None
+                                        boxes = [thin_stroke_check._glyph_control_bounds(
+                                            trace, glyph, span_font_size,
+                                        ) for glyph in trace["chars"]]
+                                        thin_stroke_check.ink_bounds[key] = [box for box in boxes if box]
+                                    source_boxes = thin_stroke_check.ink_bounds[key]
+                                else:
+                                    try:
+                                        source_boxes = (
+                                            source_outline_boxes(trace, span_font_size, source_candidate_rect)
+                                            if source_paint_envelope is not None else None
+                                        )
+                                    except (TypeError, ValueError, RuntimeError):
+                                        # An unavailable optional outline leaves the existing stroke checks in charge.
+                                        return False
+                                if not source_boxes or not glyph_pair_work.reserve(source_boxes, segs):
+                                    return False
+                                separation = all(
+                                    a1 < x0 or x1 < a0 or b1 < y0 or y1 < b0
+                                    for x0, y0, x1, y1 in source_boxes
+                                    for a0, b0, a1, b1, *_ in segs
+                                )
+                                return separation
+
                             cand_segs = [
                                 segment for segment in segs
                                 if segment[2] >= trace_rect.x0 - trace_probe_pad
@@ -4380,10 +4526,9 @@ def _native_pdf_text_span_records(
                                 ).is_empty
                                 for segment in cand_segs
                             ):
-                                # A verified stroke in source paint overhang is a
-                                # possible strike even when nominal glyph metrics
-                                # miss it; keep that span out of review admission.
-                                return True
+                                if not proven_stroke_separation():
+                                    return True
+                                continue
                             if not glyph_pair_work.reserve(target_glyphs, cand_segs):
                                 if deferred_fills is not None:
                                     deferred_fills.clear()
@@ -4472,7 +4617,7 @@ def _native_pdf_text_span_records(
                                                     clipped = False
                                                     break
                                                 t1 = min(t1, t_val)
-                                    if clipped and t0 <= t1:
+                                    if clipped and t0 <= t1 and not proven_stroke_separation():
                                         stroke_hit = True
                                         break
                                     if (
@@ -4491,6 +4636,11 @@ def _native_pdf_text_span_records(
                         seq_drawings = drawings_by_sequence.get(index, [])
                         if deferred_fills is None and ink_contact_candidates and len(seq_drawings) != 1:
                             return True
+                        if (
+                            ink_contact_candidates and len(verified_strokes) == 1
+                            and proven_stroke_separation()
+                        ):
+                            continue
                         if ink_contact_candidates and len(seq_drawings) == 1:
                             if glyph_lookup_by_source_position is None:
                                 source_chars = trace.get("chars")

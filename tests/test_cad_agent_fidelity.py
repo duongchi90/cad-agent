@@ -6907,6 +6907,41 @@ def test_native_pdf_dark_fill_reuses_unavailable_binding_and_keeps_stroke_budget
     assert check.pixels == 0
 
 
+@pytest.mark.parametrize(
+    ("cached_ink", "paint_box", "work_limit", "expected_pass", "expected_bindings"),
+    [
+        pytest.param(True, (0.0, 2.0, 1.0, 3.0), 4, True, [5], id="warm-ink-proves-clearance"),
+        pytest.param(True, (0.0, 1.0, 1.0, 2.0), 4, False, [5], id="touching"),
+        pytest.param(False, (0.0, 2.0, 1.0, 3.0), 4, False, [], id="missing-ink"),
+        pytest.param(True, None, 4, False, [5], id="missing-paint-binding"),
+        pytest.param(True, (0.0, 2.0, 1.0, 3.0), 0, False, [], id="budget-before-binding"),
+        pytest.param(True, (0.0, 2.0, 1.0, 3.0), 1, False, [5], id="budget-before-comparison"),
+    ],
+)
+def test_native_pdf_dark_fill_reuses_warm_ink_without_spending_preparation_attempts(
+    cached_ink, paint_box, work_limit, expected_pass, expected_bindings, monkeypatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    check.fill_attempts = check._FILL_PAIR_LIMIT
+    if cached_ink:
+        check.ink_bounds[(0, 18.0, None)] = [(0.0, 0.0, 1.0, 1.0)]
+    bindings = []
+
+    def bind(sequence, _drawing, _components):
+        bindings.append(sequence)
+        return [paint_box] if paint_box is not None else None
+
+    monkeypatch.setattr(check, "_bound_fill_components", bind)
+    budget = fidelity_module._GlyphPairWorkBudget(work_limit)
+    assert check.separates_dark_fill(
+        5, {}, [fitz.Rect(0.0, 2.0, 1.0, 3.0)], {"_trace_order_idx": 0}, 18.0, work_budget=budget,
+    ) is expected_pass
+    assert bindings == expected_bindings
+    assert check.fill_attempts == check._FILL_PAIR_LIMIT
+    assert budget.work <= work_limit
+
+
 def test_native_pdf_dark_fill_bounds_glyph_by_component_comparisons(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6964,6 +6999,36 @@ def test_native_pdf_dark_fill_keeps_binding_receipts_per_character_scope(
     assert check.fill_attempts == 2
     assert check.pairs == 0
     assert lookups == [5]
+
+
+def test_native_pdf_observation_distinguishes_right_angle_miter_ink_contact() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    clip = fitz.Rect(60, 105, 69, 122)
+    scale = fitz.Matrix(10, 10)
+    with fitz.open() as document:
+        page = document.new_page(width=140, height=140)
+        page.insert_text((70, 50), "CONTROL", fontsize=12)
+        page.insert_text((60, 120), "1", fontsize=12)
+        reference = page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples
+        unpainted = document.tobytes()
+
+    for join in (0, 1, 2):
+        with fitz.open(stream=unpainted, filetype="pdf") as document:
+            page = document[0]
+            shape = page.new_shape()
+            shape.draw_polyline([(38.75, 99), (53.75, 114), (38.75, 129)])
+            shape.finish(width=12, color=(1, 1, 1), lineJoin=join, closePath=False)
+            shape.commit()
+            paint = page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples
+            records = fidelity_module._native_pdf_text_span_records(
+                page, 1, "a" * 64, "b" * 64, 280, 280, "displayed-page-box-v1",
+            )
+
+        contents = {record["content"] for record in records}
+        assert (paint != reference) is (join == 0)
+        assert "CONTROL" in contents
+        assert ("1" in contents) is (join != 0), f"Incorrect native text admission for line join {join}"
 
 
 @pytest.mark.parametrize(
