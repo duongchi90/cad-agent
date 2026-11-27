@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from io import BytesIO, TextIOWrapper
+import math
 
 from ezdxf.document import Drawing
 from ezdxf.filemanagement import dxf_stream_info
@@ -45,6 +46,25 @@ def _observe_repeated_style_records(
                 else:
                     repeated_style_records.add(("handle", handle))
         yield from group
+
+
+def validate_planar_lwpolyline(entity) -> None:
+    """Require an LWPOLYLINE in the supported zero-elevation, +Z plane.
+
+    Opt in before consuming the raw vertices or bulges. General snapshot
+    loading also supports valid DXF entities in other planes.
+    """
+    if entity.dxftype() != "LWPOLYLINE":
+        raise ValueError("expected LWPOLYLINE")
+    extrusion = tuple(entity.dxf.extrusion)
+    if not all(map(math.isfinite, extrusion)) or any(
+        abs(actual - expected) > 1e-6
+        for actual, expected in zip(extrusion, (0.0, 0.0, 1.0), strict=True)
+    ):
+        raise ValueError(f"unsupported OCS extrusion {extrusion}")
+    elevation = entity.dxf.elevation
+    if not math.isfinite(elevation) or abs(elevation) > 1e-6:
+        raise ValueError(f"nonplanar LWPOLYLINE elevation {elevation}")
 
 
 def read_dxf_snapshot(
