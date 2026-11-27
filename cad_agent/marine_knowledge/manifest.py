@@ -1,0 +1,209 @@
+"""Verified SHA-256 source manifest for Marine Knowledge Pack V0.
+
+Contains metadata provenance only — copyrighted regulations, textbooks, client
+DWGs, and private ZIP archives remain external and are explicitly marked
+``commit_prohibited=True``.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+from .contracts import SOURCE_MANIFEST_SCHEMA_VERSION, seal_source_manifest
+
+_RAW_SOURCES: tuple[dict[str, Any], ...] = (
+    {
+        "source_id": "QCVN_72_2025_BGTVT",
+        "title": "QCVN 72:2025/BGTVT - Quy chuẩn kỹ thuật quốc gia về phân cấp và đóng phương tiện thủy nội địa",
+        "document_kind": "REGULATION",
+        "version": "2025 (867-page consolidated PDF)",
+        "origin": "External local custody: QCVN 72-2025.BGTVT.pdf",
+        "sha256": "4ffed2dad51f16d72bff5661a17be4d4793fe547133f999c41ded1ea72696b20",
+        "page_count": 867,
+        "applicable_scope": [
+            "inland_waterway_ships",
+            "VR-SB",
+            "VR-SI",
+            "VR-SII",
+            "VR-SIII",
+            "design_length_L_le_140m",
+        ],
+        "usage_rights": "PUBLIC_REGULATION_NO_REDISTRIBUTION",
+        "commit_prohibited": True,
+        "usage_status": "ACTIVE_INDEXED",
+        "notes": "Governs inland waterway ships only. Historical pinned citations in QCVN 72:2025/BGTVT (QCVN 21:2015/BGTVT for sea-going steel ships and QCVN 54:2013/BGTVT for high-speed craft) are superseded effective 2025-09-01 by QCVN 21:2025/BGTVT (Circular 09/2025/TT-BGTVT) and QCVN 127:2025/BGTVT (Circular 06/2025/TT-BGTVT). Separate Sua doi 1:2026 QCVN 72:2025/BGTVT (Circular 78/2026/TT-BXD) takes effect 2027-05-01.",
+    },
+    {
+        "source_id": "VIMARU_VETAU_CH1",
+        "title": "Bài giảng Vẽ tàu - Chương 1: Các yêu cầu cơ bản trong bản vẽ đóng tàu",
+        "document_kind": "TEXTBOOK",
+        "version": "2024-07-13 (VMU Khoa Đóng tàu)",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> Bai giang Ve tau/Chuong 1",
+        "sha256": "76e9951f73a2c72d842556a325c5a06ec37aafda682317d21eee3ce9a594d558",
+        "page_count": 33,
+        "applicable_scope": [
+            "shipbuilding_drafting_standards",
+            "paper_formats_scales_text_heights",
+            "bow_right_convention",
+        ],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "ACTIVE_INDEXED",
+        "notes": "Defines sheet scales, <=4 text height rule, min >=2.5mm text height, bow-to-right rule.",
+    },
+    {
+        "source_id": "VIMARU_VETAU_CH2",
+        "title": "Bài giảng Vẽ tàu - Chương 2: Bản vẽ Tuyến hình tàu",
+        "document_kind": "TEXTBOOK",
+        "version": "2024-07-13 (VMU Khoa Đóng tàu)",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> Bai giang Ve tau/Chuong 2",
+        "sha256": "4b34b11c7accd522981b08f89696fb2b3fc3a8a6bd746c4ffb399925310de540",
+        "page_count": 63,
+        "applicable_scope": [
+            "lines_plan_THLT",
+            "coordinate_planes_CL_MP_BP",
+            "waterline_station_buttock_grid",
+            "body_plan_aft_port_convention",
+        ],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "ACTIVE_INDEXED",
+        "notes": "Defines Sheer, Half-Breadth, Body Plan views, offsets table, and CL/BP/WL/Sn/CD notation.",
+    },
+    {
+        "source_id": "VIMARU_VETAU_CH3",
+        "title": "Bài giảng Vẽ tàu - Chương 3: Bản vẽ Bố trí chung toàn tàu",
+        "document_kind": "TEXTBOOK",
+        "version": "2024-07-15 (VMU Khoa Đóng tàu)",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> Bai giang Ve tau/Chuong 3",
+        "sha256": "d27a98eb708ae12fd78fbffa7f6b0998a862476ecb9c92f19af030122e1cbf73",
+        "page_count": 60,
+        "applicable_scope": [
+            "general_arrangement_GA",
+            "compartmentation_cargo_machinery_tanks",
+            "actual_frame_numbering",
+        ],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "ACTIVE_INDEXED",
+        "notes": "Defines GA views (profile, decks, SƯỜN GIỮA, equipment symbols, actual frame numbering).",
+    },
+    {
+        "source_id": "VIMARU_VETAU_CH4",
+        "title": "Bài giảng Vẽ tàu - Chương 4: Bản vẽ Kết cấu tàu",
+        "document_kind": "TEXTBOOK",
+        "version": "2024-07-15 (VMU Khoa Đóng tàu)",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> Bai giang Ve tau/Chuong 4",
+        "sha256": "3c4a3737e8276f3f613a4e9a993601c99c62d9cce1f900242ee8dcba4a573760",
+        "page_count": 47,
+        "applicable_scope": [
+            "structural_drawings_KCCB_MCN",
+            "framing_systems",
+            "plate_bar_section_callouts",
+        ],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "ACTIVE_INDEXED",
+        "notes": "Defines Basic Construction (KCCB), Midship Section (MCN), plate s=t, bar bxh, profile L/T/I conventions.",
+    },
+    {
+        "source_id": "VETAU_NXB_DHQG_2009",
+        "title": "Giáo trình Vẽ Tàu - NXB Đại Học Quốc Gia 2009",
+        "document_kind": "TEXTBOOK",
+        "version": "2009",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> Vẽ Tàu NXB Đại Học Quốc Gia 2009.pdf",
+        "sha256": "9bee493bba40290576d646cc26d54060580e8599c038227527def5a871873680",
+        "page_count": 94,
+        "applicable_scope": ["shipbuilding_drafting_reference", "lines_plan_GA_structural"],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "REFERENCE_METADATA_ONLY",
+        "notes": "Supplementary Vietnamese naval-architecture drafting textbook indexed by SHA-256.",
+    },
+    {
+        "source_id": "KCT_THAN_TAU_THUY",
+        "title": "Kết cấu thân tàu thủy (KCT-KẾT CẤU THÂN TÀU THỦY.pdf)",
+        "document_kind": "TEXTBOOK",
+        "version": "246-page textbook",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> KCT-KẾT CẤU THÂN TÀU THỦY.pdf",
+        "sha256": "36fa4617747964e715560221af5e8393112303f0d74bf5d3c12cbb2c59ec0a9b",
+        "page_count": 246,
+        "applicable_scope": ["hull_structural_elements", "double_bottom_bulkhead_framing"],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "REFERENCE_METADATA_ONLY",
+        "notes": "Structural engineering reference for hull plates, girders, floors, and bulkheads.",
+    },
+    {
+        "source_id": "KET_CAU_TAU_SONG_DOCX",
+        "title": "Tài liệu Kết cấu tàu sông (ket cau tau sông.docx)",
+        "document_kind": "TEXTBOOK",
+        "version": "local-docx",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> ket cau tau sông.docx",
+        "sha256": "65f5f98892111e3f416ff4cb0a6008b6e3630cbb0338b396d448f0b7e351b258",
+        "page_count": None,
+        "applicable_scope": ["inland_river_ship_structures"],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "REFERENCE_METADATA_ONLY",
+        "notes": "Inland river vessel construction notes; metadata indexed without storing copyrighted content.",
+    },
+    {
+        "source_id": "SUC_BEN_TAU_THUY_VR2024",
+        "title": "Sức bền tàu thủy PPT (VR 2024)",
+        "document_kind": "TEXTBOOK",
+        "version": "VR 2024",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> Sức bền tàu thủy PPT (VR 2024).pdf",
+        "sha256": "3f0d93555df19353413e8004c50a007cbcb572f5a8f15c14b8c6d2e7f6e0f58e",
+        "page_count": 202,
+        "applicable_scope": ["ship_structural_strength_overview"],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "REFERENCE_METADATA_ONLY",
+        "notes": "VR 2024 strength lectures; image-heavy PPT slide deck referenced for provenance.",
+    },
+    {
+        "source_id": "THIET_BI_HANG_HOA_LAI",
+        "title": "Giáo trình Thiết bị hàng hóa & Thiết bị lái (combined manifest note: thiết bị hàng hóa.pdf + thiết bị lái.pdf)",
+        "document_kind": "TEXTBOOK",
+        "version": "63p + 141p",
+        "origin": "External archive: tài liệu bản vẽ tàu.zip -> thiết bị hàng hóa.pdf / thiết bị lái.pdf",
+        "sha256": "cd771138206b6658365ce808595498c0281ce5f423c4524efad54b207b5082fe",
+        "page_count": 63,
+        "applicable_scope": ["cargo_gear_and_rudder_arrangements"],
+        "usage_rights": "PRIVATE_LOCAL_NO_COMMIT",
+        "commit_prohibited": True,
+        "usage_status": "REFERENCE_METADATA_ONLY",
+        "notes": "Companion steering equipment file SHA-256: 2beb98f8b290556ec946ee3d145d517eec62cca20013039c1a923f900cf71eff.",
+    },
+    {
+        "source_id": "RV_GUNNERUS_GA_PDF",
+        "title": "RV Gunnerus LNVZ General Arrangement (Polarkonsult / NTNU Open CC BY-NC 4.0)",
+        "document_kind": "DRAWING_SAMPLE",
+        "version": "Rev1 (1:100, LOA=36.25m)",
+        "origin": "Open research dataset: gunnerus_vessel/polarkonsult/GA Gunnerus Rev1.pdf",
+        "sha256": "68083b5b117c387b452ef2565e29ace3c46b020fd67075b9b6f5cbb2ced0c019",
+        "page_count": 1,
+        "applicable_scope": ["general_arrangement_GA", "open_research_vessel_benchmark"],
+        "usage_rights": "OPEN_ACADEMIC_RESEARCH",
+        "commit_prohibited": True,
+        "usage_status": "SAMPLE_ONLY_READ_ONLY",
+        "notes": "DNV +1A1 Ice C E0 R2 research vessel; kept external to avoid binary PDF bloat in Git.",
+    },
+)
+
+_SEALED_MANIFEST = seal_source_manifest(
+    {
+        "schema_version": SOURCE_MANIFEST_SCHEMA_VERSION,
+        "manifest_id": "MARINE_V0_SOURCE_MANIFEST",
+        "revision": "0.1.0",
+        "status": "CANDIDATE_UNAPPROVED",
+        "sources": [deepcopy(item) for item in _RAW_SOURCES],
+    }
+)
+
+
+def get_marine_source_manifest() -> dict[str, Any]:
+    """Return a defensive copy of the SHA-sealed Marine V0 Source Manifest."""
+    return deepcopy(_SEALED_MANIFEST)
