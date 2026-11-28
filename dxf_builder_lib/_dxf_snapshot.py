@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
+from fractions import Fraction
 from io import BytesIO, TextIOWrapper
-from itertools import chain
+from itertools import chain, count
 import math
 
 from ezdxf.document import Drawing
@@ -93,6 +95,105 @@ def validate_planar_lwpolyline(entity) -> None:
     elevation = entity.dxf.elevation
     if not math.isfinite(elevation) or abs(elevation) > 1e-6:
         raise ValueError(f"nonplanar LWPOLYLINE elevation {elevation}")
+
+
+def measure_planar_lwpolyline_signed_area(entity) -> float:
+    """Measure oriented algebraic area in squared drawing units.
+
+    Preserve circular bulges. Callers establish simple-loop topology, units
+    and any hole relationships before using this value as material area.
+    """
+    validate_planar_lwpolyline(entity)
+    if not entity.closed:
+        raise ValueError("area measurement requires a closed LWPOLYLINE")
+    points = entity.get_points("xyseb")
+    if entity.dxf.get("const_width", 0.0) != 0.0 or any(
+        start_width != 0.0 or end_width != 0.0 for _, _, start_width, end_width, _ in points
+    ):
+        raise ValueError("area measurement requires zero polyline width")
+    return measure_signed_bulged_loop_area((x, y, bulge) for x, y, _, _, bulge in points)
+
+
+def measure_signed_bulged_loop_area(vertices: Iterable[tuple[float, float, float]]) -> float:
+    """Measure oriented area of an implicitly closed loop of (x, y, bulge) triples."""
+    points = [(float(x), float(y), float(bulge)) for x, y, bulge in vertices]
+    if len(points) < 2:
+        raise ValueError("area measurement requires at least two vertices")
+    if not all(math.isfinite(value) for point in points for value in point):
+        raise ValueError("area measurement requires finite vertices and bulges")
+
+    def decimal_fraction(value: Fraction) -> Decimal:
+        return Decimal(value.numerator) / Decimal(value.denominator)
+
+    def atan_unit(value: Decimal) -> Decimal:
+        # Halve the angle three times before summing its alternating series.
+        for _ in range(3):
+            value /= 1 + (1 + value * value).sqrt()
+        total = power = value
+        multiplier = -value * value
+        for denominator in count(3, 2):
+            power *= multiplier
+            updated = total + power / denominator
+            if updated == total:
+                return 8 * total
+            total = updated
+
+    def arc_factor(bulge: Decimal, half_pi: Decimal) -> Decimal:
+        squared = bulge * bulge
+        if bulge <= Decimal("0.25"):
+            # Expand the full coefficient near zero so the linear terms of
+            # atan(b) and b do not cancel before scaling by b squared.
+            total = 2 * bulge / 3
+            power = bulge
+            for index in count(2):
+                power *= squared if index == 2 else -squared
+                denominator = (2 * index + 1) * (2 * index - 1) * (2 * index - 3)
+                updated = total + 2 * power / denominator
+                if updated == total:
+                    return total
+                total = updated
+        angle = atan_unit(bulge) if bulge <= 1 else half_pi - atan_unit(1 / bulge)
+        # Substitute sin(4 atan(b)) to avoid a separate transcendental term.
+        return ((1 + squared) ** 2 * angle - bulge * (1 - squared)) / (4 * squared)
+
+    # Keep determinants exact for the original binary64 coordinates.
+    exact_points = [(Fraction(x), Fraction(y), bulge) for x, y, bulge in points]
+    origin_x, origin_y, _ = exact_points[0]
+    polygon_twice_area = Fraction()
+    arc_chords: dict[float, Fraction] = {}
+    for (x, y, bulge), (end_x, end_y, _) in zip(exact_points, exact_points[1:] + exact_points[:1], strict=True):
+        dx, dy = end_x - x, end_y - y
+        if dx == dy == 0:
+            raise ValueError("area measurement cannot use coincident consecutive vertices")
+        polygon_twice_area += (x - origin_x) * dy - (y - origin_y) * dx
+        if bulge != 0.0:
+            magnitude = abs(bulge)
+            chord_squared = dx * dx + dy * dy
+            signed_chord_squared = chord_squared if bulge > 0.0 else -chord_squared
+            # Equal and opposite circular coefficients can cancel exactly.
+            arc_chords[magnitude] = arc_chords.get(magnitude, Fraction()) + signed_chord_squared
+
+    remaining_arcs = [(bulge, chord) for bulge, chord in arc_chords.items() if chord]
+    try:
+        if not remaining_arcs:
+            return float(polygon_twice_area / 2)
+        context = Context(prec=80, rounding=ROUND_HALF_EVEN, Emin=-10000, Emax=10000)
+        with localcontext(context):
+            half_pi = 2 * atan_unit(Decimal(1))
+            twice_area = decimal_fraction(polygon_twice_area)
+            magnitude = abs(twice_area)
+            for bulge, chord in remaining_arcs:
+                contribution = decimal_fraction(chord) * arc_factor(Decimal.from_float(bulge), half_pi)
+                twice_area += contribution
+                magnitude += abs(contribution)
+            if abs(twice_area) <= magnitude.scaleb(-68):
+                raise ValueError("signed area is below supported numerical resolution")
+            area = float(twice_area / 2)
+    except OverflowError as exc:
+        raise ValueError("area measurement exceeds finite arithmetic range") from exc
+    if not math.isfinite(area):
+        raise ValueError("area measurement exceeds finite arithmetic range")
+    return area
 
 
 def read_dxf_snapshot(
