@@ -1669,6 +1669,48 @@ def test_native_pdf_observation_checks_italic_paint_envelope_beyond_metric_pad(
     document.close()
 
 
+@pytest.mark.parametrize("split_trace", [False, True], ids=["narrowed-trace", "shared-sequence"])
+@pytest.mark.parametrize("contact", [True, False], ids=["paint-contact", "paint-clearance"])
+def test_native_pdf_observation_checks_italic_ink_in_shared_paint(
+    split_trace: bool, contact: bool,
+) -> None:
+    with fitz.open() as source:
+        page = source.new_page(width=600, height=300)
+        page.insert_text((80, 120), "10\u00cd", fontsize=48, fontname="heit")
+        trace_right = page.get_texttrace()[0]["bbox"][2]
+        page.insert_font(fontname="helv")
+        page.insert_text((250, 250), "CONTROL", fontsize=12)
+        xref = page.get_contents()[0]
+        stream = source.xref_stream(xref)
+        assert stream.count(b"ET") == 1
+        font = b"/helv 36 Tf " if split_trace else b""
+        source.update_stream(
+            xref, stream.replace(b"ET", b"1 0 0 1 300 180 Tm " + font + b"(OTHER) Tj ET"),
+        )
+        traces = [trace for trace in page.get_texttrace() if trace["seqno"] == 0]
+        assert [len(trace["chars"]) for trace in traces] == ([3, 5] if split_trace else [8])
+        center = trace_right + 7.2 + (0.5 if contact else 4.5) + 0.4
+        clip = fitz.Rect(center - 1, 69, center + 1, 126)
+        zoom = fitz.Matrix(16, 16)
+        before = np.frombuffer(
+            page.get_pixmap(matrix=zoom, clip=clip, colorspace=fitz.csGRAY).samples, np.uint8,
+        )
+        page.draw_line((center, 70), (center, 125), color=(1, 1, 1), width=0.8)
+        with fitz.open(stream=source.tobytes(), filetype="pdf") as reopened:
+            page = reopened[0]
+            after = np.frombuffer(
+                page.get_pixmap(matrix=zoom, clip=clip, colorspace=fitz.csGRAY).samples, np.uint8,
+            )
+            rows = fidelity_module._native_pdf_text_span_records(
+                page, 1, "a" * 64, "b" * 64, 1200, 600, "displayed-page-box-v1",
+            )
+
+    assert bool(np.any((before < 64) & (after > 192))) is contact
+    contents = {row["content"] for row in rows}
+    assert {"OTHER", "CONTROL"} <= contents
+    assert ("10\u00cd" not in contents) is contact
+
+
 @pytest.mark.parametrize("paint_x, expect_contact", [(155.0, True), (550.0, False)])
 def test_native_pdf_observation_fails_closed_for_aggregate_sheared_text_overpaint(
     paint_x: float, expect_contact: bool,

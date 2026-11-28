@@ -3877,6 +3877,68 @@ def _native_pdf_text_span_records(
         source_outline_cache[key] = boxes
         return boxes
 
+    shared_glyph_boxes: dict[str, tuple[float, ...] | None] = {}
+    explicit_line_strokes: dict[int, bool] = {}
+    glyph_path_operands = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+    glyph_path_arity = {"M": 2, "L": 2, "C": 6, "Q": 4, "H": 1, "V": 1, "Z": 0}
+
+    def glyph_path_control_box(path: str) -> tuple[float, ...] | None:
+        # The renderer emits absolute outline commands. Every point of a
+        # Bezier curve is inside its control hull. No path is materialized.
+        parts = re.split(r"([MLCQHVZ])", path)
+        if parts[0].strip() or len(parts) < 3 or parts[1] != "M":
+            return None
+        min_x = min_y = math.inf
+        max_x = max_y = -math.inf
+        for command, operands in zip(parts[1::2], parts[2::2]):
+            if glyph_path_operands.sub("", operands).strip(" ,\t\r\n"):
+                return None
+            coords = [float(match.group()) for match in glyph_path_operands.finditer(operands)]
+            count = glyph_path_arity[command]
+            if count == 0:
+                if coords:
+                    return None
+                continue
+            if not coords or len(coords) % count or not all(map(math.isfinite, coords)):
+                return None
+            if command != "V":
+                x = coords if command == "H" else coords[::2]
+                min_x, max_x = min(min_x, min(x)), max(max_x, max(x))
+            if command != "H":
+                y = coords if command == "V" else coords[1::2]
+                min_y, max_y = min(min_y, min(y)), max(max_y, max(y))
+        return (min_x, min_y, max_x, max_y)
+
+    def shared_source_glyph_boxes(trace: dict[str, Any], span_size: float) -> list[fitz.Rect] | None:
+        # Bind each glyph use before reusing its definition's local control box.
+        # Transformed outlines supplement metric boxes for a shared paint operation.
+        if not thin_stroke_check.export_ready:
+            thin_stroke_check._prepare_export()
+        boxes = []
+        for glyph in trace["chars"]:
+            bound = thin_stroke_check._bound_svg_glyph(trace, glyph, span_size, allow_quarter_turn=True)
+            if bound is None:
+                return None
+            matrix, _, definition = bound
+            if not definition.get("d"):
+                if thin_stroke_check._glyph_control_bounds(trace, glyph, span_size):
+                    return None
+                continue
+            definition_id = definition.attrib["id"]
+            if definition_id not in shared_glyph_boxes:
+                shared_glyph_boxes[definition_id] = glyph_path_control_box(
+                    thin_stroke_check._path_data(definition),
+                )
+            local_box = shared_glyph_boxes[definition_id]
+            if local_box is None:
+                return None
+            box = fitz.Rect(local_box) * fitz.Matrix(*matrix)
+            if not box.is_valid or box.is_empty:
+                return None
+            padding = thin_stroke_check._FILL_PADDING_PT
+            boxes.append(box + (-padding, -padding, padding, padding))
+        return boxes or None
+
     def has_later_paint_overlap(
         trace: dict[str, Any],
         member_trace_order_ids: tuple[int, ...],
@@ -3906,13 +3968,14 @@ def _native_pdf_text_span_records(
             if candidate_span_rect.is_valid and not candidate_span_rect.is_empty:
                 source_span_rect = candidate_span_rect
         # PyMuPDF's text trace box can omit italic paint overhang. The source
-        # operation bbox is only a conservative candidate bound: when one paint
-        # operation contains several traces, it cannot prove which span owns an
-        # overhang, so any intersecting later paint must fail closed.
+        # operation bbox is a conservative candidate bound. A shared operation
+        # needs an independent ink binding before it can be narrowed for strokes.
         source_candidate_rect = trace_rect
         source_interaction_rect = trace_rect
         source_paint_candidate_rect: fitz.Rect | None = None
         source_paint_envelope: fitz.Rect | None = None
+        shared_paint_rect: fitz.Rect | None = None
+        shared_ink_boxes: list[fitz.Rect] | None = None
 
         def intersects_source_paint_overhang(
             source_rect: fitz.Rect | None,
@@ -3967,6 +4030,8 @@ def _native_pdf_text_span_records(
                             max(trace_rect.x1, source_paint_rect.x1),
                             max(trace_rect.y1, source_paint_rect.y1),
                         )
+                    else:
+                        shared_paint_rect = source_paint_rect
                     source_candidate_rect = fitz.Rect(
                         min(trace_rect.x0, source_paint_rect.x0),
                         min(trace_rect.y0, source_paint_rect.y0),
@@ -4204,6 +4269,9 @@ def _native_pdf_text_span_records(
                 interaction_rect = (
                     source_candidate_rect if paint_type == "fill-path" else source_interaction_rect
                 )
+                shared_stroke = paint_type == "stroke-path" and shared_paint_rect is not None
+                if shared_stroke:
+                    interaction_rect = interaction_rect | shared_paint_rect
                 if (
                     isinstance(paint_bbox, (tuple, list))
                     and len(paint_bbox) == 4
@@ -4219,6 +4287,44 @@ def _native_pdf_text_span_records(
                 paint_rect = fitz.Rect(paint_bbox)
                 if overlap_ratio(interaction_rect, paint_rect) <= 0:
                     continue
+                if shared_stroke:
+                    if shared_ink_boxes is None:
+                        try:
+                            if glyph_pair_work.reserve(trace["chars"], (None,)):
+                                shared_ink_boxes = shared_source_glyph_boxes(trace, span_font_size)
+                        except (TypeError, ValueError, RuntimeError):
+                            shared_ink_boxes = None
+                        # Keep the original operation's envelope when ink cannot be attributed.
+                        shared_ink_boxes = [
+                            box for box in (shared_ink_boxes or [shared_paint_rect])
+                            if not source_interaction_rect.contains(box)
+                        ]
+                    overhang = [
+                        box for box in shared_ink_boxes
+                        if not (box & paint_rect).is_empty
+                        and not source_interaction_rect.contains(box & paint_rect)
+                    ]
+                    if overhang:
+                        verified = get_verified_stroke_seq(index, paint_rect)
+                        if index not in explicit_line_strokes:
+                            explicit_line_strokes[index] = all(
+                                drawing["type"] == "s" and not drawing.get("closePath")
+                                and (drawing.get("width") or 0) > 0
+                                and all(item[0] == "l" for item in drawing["items"])
+                                for drawing in drawings_by_sequence.get(index, ())
+                            )
+                        if not verified or not explicit_line_strokes[index]:
+                            return True
+                        for segments, *_ in verified:
+                            if not glyph_pair_work.reserve(overhang, segments):
+                                return True
+                            for x0, y0, x1, y1, *_ in segments:
+                                for ink in overhang:
+                                    contact = ink & fitz.Rect(x0, y0, x1, y1)
+                                    if not contact.is_empty and not source_interaction_rect.contains(contact):
+                                        return True
+                    if overlap_ratio(source_interaction_rect, paint_rect) <= 0:
+                        continue
                 later_traces = traces_by_sequence.get(index, [])
                 if (
                     paint_type == "fill-text"
