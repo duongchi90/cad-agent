@@ -14,7 +14,7 @@ import os
 import re
 import tempfile
 from collections import Counter
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -2471,6 +2471,7 @@ class _NativePdfThinStrokeCheck:
     def separates_dark_fill(
         self, sequence: int, drawing: dict[str, Any], components: list[fitz.Rect],
         trace: dict[str, Any], span_size: Any, *, work_budget: Any = None,
+        bind_warm_ink: Callable[[], list[tuple[float, ...]] | None] | None = None,
     ) -> bool:
         if not isinstance(span_size, (int, float)) or not math.isfinite(span_size) or span_size <= 0:
             return False
@@ -2503,19 +2504,22 @@ class _NativePdfThinStrokeCheck:
             return self.fill_separations[pair_key]
         if self.preparation_exhausted:
             return False
-        glyphs_already_bound = self.fill_attempts >= self._FILL_PAIR_LIMIT
-        if glyphs_already_bound:
-            # Reuse a completed ink binding. A new paint binding still pays the
-            # cumulative comparison and SVG path-operation budgets.
-            ink = self.ink_bounds.get(trace_key)
-            if not ink or not self.export_ready or work_budget is None:
-                return False
-            if sequence not in self.fill_bounds and not work_budget.reserve(ink, components):
-                return False
-        else:
-            self.fill_attempts += 1
-        self.fill_separations[pair_key] = False
         try:
+            if self.fill_attempts >= self._FILL_PAIR_LIMIT:
+                if not self.export_ready or work_budget is None:
+                    return False
+                ink = self.ink_bounds.get(trace_key)
+                if trace_key not in self.ink_bounds and bind_warm_ink is not None:
+                    # Bind this trace through the bounded source-outline reader.
+                    # A failed optional lookup cannot preempt another proof.
+                    ink = bind_warm_ink()
+                    if ink:
+                        self.ink_bounds[trace_key] = ink
+                if not ink or (sequence not in self.fill_bounds and not work_budget.reserve(ink, components)):
+                    return False
+            else:
+                self.fill_attempts += 1
+            self.fill_separations[pair_key] = False
             if not self.export_ready:
                 self._prepare_export()
             if sequence not in self.fill_bounds:
@@ -3634,9 +3638,13 @@ def _native_pdf_text_span_records(
                 det_m = abs(a * d - b * c)
                 disc_m = math.sqrt(max(0.0, tr_m * tr_m - 4.0 * det_m * det_m))
                 smax = math.sqrt(max(0.0, 0.5 * (tr_m + disc_m)))
-                smin = math.sqrt(max(0.0, 0.5 * (tr_m - disc_m)))
-                if smin <= 1e-9 or smax / smin > 1.02:
-                    is_aniso = True
+                # The drawing API reports one width. It cannot bound the
+                # displayed stroke under a non-similarity transform.
+                is_aniso = (
+                    det_m <= 1e-18
+                    or a * a + b * b != c * c + d * d
+                    or a * c + b * d != 0.0
+                )
             m_mit = re.search(r'stroke-miterlimit="([^"]+)"', tag)
             mit_val = float(m_mit.group(1)) if m_mit else 10.0
             if not math.isfinite(mit_val):
@@ -3794,75 +3802,6 @@ def _native_pdf_text_span_records(
 
     thin_stroke_check = _NativePdfThinStrokeCheck(source_page, paint_log)
     protected_stroke_results: dict[tuple[Any, ...], bool] = {}
-    translated_fill_separations: dict[tuple[Any, ...], bool] = {}
-
-    def separates_verified_fill(
-        index: int, drawing: dict[str, Any], components: list[fitz.Rect],
-        trace: dict[str, Any], span_font_size: Any, work_budget: Any,
-    ) -> bool:
-        """Reuse a completed separation proof for identical translated geometry."""
-        chars = trace.get("chars")
-        font_name = trace.get("font")
-        trace_size = trace.get("size")
-        if (
-            not isinstance(chars, (tuple, list)) or not chars
-            or not isinstance(font_name, str)
-            or not isinstance(trace_size, (int, float)) or not math.isfinite(float(trace_size))
-        ):
-            return thin_stroke_check.separates_dark_fill(
-                index, drawing, components, trace, span_font_size, work_budget=work_budget,
-            )
-        first = chars[0]
-        if (
-            not isinstance(first, (tuple, list)) or len(first) < 3
-            or not isinstance(first[2], (tuple, list)) or len(first[2]) != 2
-            or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in first[2])
-        ):
-            return thin_stroke_check.separates_dark_fill(
-                index, drawing, components, trace, span_font_size, work_budget=work_budget,
-            )
-        origin_x, origin_y = (float(value) for value in first[2])
-        normalized_chars = []
-        for glyph in chars:
-            if (
-                not isinstance(glyph, (tuple, list)) or len(glyph) < 4
-                or not isinstance(glyph[2], (tuple, list)) or len(glyph[2]) != 2
-                or not isinstance(glyph[3], (tuple, list)) or len(glyph[3]) != 4
-                or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in (*glyph[2], *glyph[3]))
-            ):
-                return thin_stroke_check.separates_dark_fill(
-                    index, drawing, components, trace, span_font_size, work_budget=work_budget,
-                )
-            normalized_chars.append((
-                glyph[0], glyph[1],
-                tuple(round(float(value) - offset, 5) for value, offset in zip(glyph[2], (origin_x, origin_y))),
-                tuple(round(float(value) - offset, 5) for value, offset in zip(
-                    glyph[3], (origin_x, origin_y, origin_x, origin_y),
-                )),
-            ))
-        normalized_components = tuple(sorted(
-            tuple(round(value, 5) for value in (
-                component.x0 - origin_x, component.y0 - origin_y,
-                component.x1 - origin_x, component.y1 - origin_y,
-            ))
-            for component in components
-        ))
-        normalized_span_size = (
-            round(float(span_font_size), 5)
-            if isinstance(span_font_size, (int, float)) and math.isfinite(float(span_font_size)) else None
-        )
-        key = (
-            font_name, round(float(trace_size), 5), normalized_span_size,
-            tuple(normalized_chars), normalized_components,
-        )
-        if key in translated_fill_separations:
-            return translated_fill_separations[key]
-        result = thin_stroke_check.separates_dark_fill(
-            index, drawing, components, trace, span_font_size, work_budget=work_budget,
-        )
-        translated_fill_separations[key] = result
-        return result
-
     source_outline_cache: dict[
         tuple[int, float, tuple[int, int] | None], list[tuple[float, ...]] | None
     ] = {}
@@ -4051,6 +3990,15 @@ def _native_pdf_text_span_records(
                             max(trace_rect.y1, source_span_rect.y1),
                         )
                         source_candidate_rect = source_interaction_rect
+
+        def bind_warm_fill_ink() -> list[tuple[float, ...]] | None:
+            if (
+                source_paint_envelope is None
+                or thin_stroke_check.base14_fonts.get(trace.get("font")) is None
+            ):
+                return None
+            return source_outline_boxes(trace, span_font_size, source_candidate_rect)
+
         # Keep paint geometry for glyphs that a ToUnicode map reports as whitespace.
         # Such a codepoint can still be visible ink and a later fill must mask the whole span.
         raw_target_glyphs = glyph_entries_from_chars(trace.get("chars"), skip_spaces=False)
@@ -4408,9 +4356,9 @@ def _native_pdf_text_span_records(
                                     return True
                             else:
                                 fill_drawings = drawings_by_sequence.get(index, [])
-                                if len(fill_drawings) != 1 or not separates_verified_fill(
+                                if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
                                     index, fill_drawings[0], flat_subs, trace, span_font_size,
-                                    work_budget=glyph_pair_work,
+                                    work_budget=glyph_pair_work, bind_warm_ink=bind_warm_fill_ink,
                                 ):
                                     return True
                         else:
@@ -4442,15 +4390,15 @@ def _native_pdf_text_span_records(
                                             deferred_fills.append(True)
                                     elif not thin_stroke_check.separates_dark_fill(
                                         index, fill_drawings[0], flat_subs, trace, span_font_size,
-                                        work_budget=glyph_pair_work,
+                                        work_budget=glyph_pair_work, bind_warm_ink=bind_warm_fill_ink,
                                     ):
                                         return True
                                     continue
                             if metric_hit:
                                 fill_drawings = drawings_by_sequence.get(index, [])
-                                if len(fill_drawings) != 1 or not separates_verified_fill(
+                                if len(fill_drawings) != 1 or not thin_stroke_check.separates_dark_fill(
                                     index, fill_drawings[0], flat_subs, trace, span_font_size,
-                                    work_budget=glyph_pair_work,
+                                    work_budget=glyph_pair_work, bind_warm_ink=bind_warm_fill_ink,
                                 ):
                                     return True
                         continue
@@ -4466,11 +4414,15 @@ def _native_pdf_text_span_records(
                         stroke_hit = False
                         ink_contact_candidates = []
                         trace_probe_pad = max(1.0, 0.15 * effective_v_size)
+                        stroke_probe_rect = fitz.Rect(
+                            trace_rect.x0 - trace_probe_pad, trace_rect.y0 - trace_probe_pad,
+                            trace_rect.x1 + trace_probe_pad, trace_rect.y1 + trace_probe_pad,
+                        )
+                        if source_paint_envelope is not None:
+                            stroke_probe_rect |= source_paint_envelope
                         for segs, d_bounds, width, sop_opaque, dark_vis in verified_strokes:
                             if (source_candidate_rect & d_bounds).is_empty:
                                 continue
-                            # Trace metrics can underbound italic ink, but the
-                            # expanded trace filter keeps unrelated strokes out.
                             separation = None
 
                             def proven_stroke_separation() -> bool:
@@ -4511,10 +4463,10 @@ def _native_pdf_text_span_records(
 
                             cand_segs = [
                                 segment for segment in segs
-                                if segment[2] >= trace_rect.x0 - trace_probe_pad
-                                and segment[0] <= trace_rect.x1 + trace_probe_pad
-                                and segment[3] >= trace_rect.y0 - trace_probe_pad
-                                and segment[1] <= trace_rect.y1 + trace_probe_pad
+                                if segment[2] >= stroke_probe_rect.x0
+                                and segment[0] <= stroke_probe_rect.x1
+                                and segment[3] >= stroke_probe_rect.y0
+                                and segment[1] <= stroke_probe_rect.y1
                             ]
                             if not cand_segs:
                                 continue
@@ -4682,7 +4634,7 @@ def _native_pdf_text_span_records(
                         continue
 
                 fallback_candidate_rect = trace_rect
-                if paint_type in ("fill-image", "fill-shade"):
+                if paint_type in ("fill-image", "fill-shade", "stroke-path"):
                     # Aggregate source operations can cover disjoint spans.
                     # Keep their shared bbox out of span narrowing. For a whole
                     # trace, separately consider only paint extending beyond the

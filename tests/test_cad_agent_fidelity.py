@@ -1354,7 +1354,9 @@ def test_native_pdf_observation_checks_later_image_against_italic_ink_overhang(
     document.close()
 
 
-def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows() -> None:
+def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=400)
     baselines = (60.0, 150.0, 240.0, 330.0)
@@ -1378,6 +1380,18 @@ def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows() -
         page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
         dtype=np.uint8,
     )
+    paint_sequences = {sequence for sequence, item in enumerate(page.get_bboxlog()) if item[0] == "fill-path"}
+    assert len(paint_sequences) == len(baselines)
+    bound_sequences = set()
+    original_bind = fidelity_module._NativePdfThinStrokeCheck._bound_fill_components
+
+    def track_binding(check, sequence, drawing, components):
+        bound = original_bind(check, sequence, drawing, components)
+        if bound is not None:
+            bound_sequences.add(sequence)
+        return bound
+
+    monkeypatch.setattr(fidelity_module._NativePdfThinStrokeCheck, "_bound_fill_components", track_binding)
     records = fidelity_module._native_pdf_text_span_records(
         page, 1, "a" * 64, "b" * 64, 3200, 3200, "displayed-page-box-v1",
     )
@@ -1387,6 +1401,7 @@ def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows() -
     # and suppress later, otherwise observable rows.
     assert np.array_equal(after, before)
     assert [record["content"] for record in records].count("10f") == len(baselines)
+    assert bound_sequences == paint_sequences
     document.close()
 
 
@@ -1608,9 +1623,10 @@ def test_native_pdf_observation_uses_attributable_sheared_ink_envelope(
     document.close()
 
 
+@pytest.mark.parametrize("later_paint", ["image", "stroke"])
 @pytest.mark.parametrize("delta, expect_contact", [(0.5, True), (4.5, False)])
 def test_native_pdf_observation_checks_italic_paint_envelope_beyond_metric_pad(
-    delta: float, expect_contact: bool,
+    delta: float, expect_contact: bool, later_paint: str,
 ) -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)
@@ -1621,13 +1637,17 @@ def test_native_pdf_observation_checks_italic_paint_envelope_beyond_metric_pad(
         dtype=np.uint8,
     ).copy()
     trace_right = float(page.get_texttrace()[0]["bbox"][2])
-    image_left = trace_right + 7.2 + delta
-    image = np.full((450, 8, 3), 255, dtype=np.uint8)
-    ok, encoded = cv2.imencode(".png", image)
-    assert ok
-    page.insert_image(
-        fitz.Rect(image_left, 70, image_left + 0.8, 125), stream=encoded.tobytes(),
-    )
+    paint_left = trace_right + 7.2 + delta
+    if later_paint == "stroke":
+        center = paint_left + 0.4
+        page.draw_line((center, 70), (center, 125), color=(1, 1, 1), width=0.8)
+    else:
+        image = np.full((450, 8, 3), 255, dtype=np.uint8)
+        ok, encoded = cv2.imencode(".png", image)
+        assert ok
+        page.insert_image(
+            fitz.Rect(paint_left, 70, paint_left + 0.8, 125), stream=encoded.tobytes(),
+        )
 
     serialized = document.tobytes()
     document.close()
@@ -6999,6 +7019,43 @@ def test_native_pdf_dark_fill_keeps_binding_receipts_per_character_scope(
     assert check.fill_attempts == 2
     assert check.pairs == 0
     assert lookups == [5]
+
+
+@pytest.mark.parametrize(("vertical_scale", "contact"), [(1.0, False), (1.019, True)])
+def test_native_pdf_observation_uses_displayed_stroke_width(
+    vertical_scale: float, contact: bool,
+) -> None:
+    with fitz.open() as document:
+        page = document.new_page(width=160, height=140)
+        page.insert_text((55, 90), "1", fontsize=48)
+        raw = page.get_text("rawdict", flags=fitz.TEXTFLAGS_RAWDICT | fitz.TEXT_ACCURATE_BBOXES)
+        glyph = raw["blocks"][0]["lines"][0]["spans"][0]["chars"][0]
+        assert glyph["c"] == "1"
+        ink = fitz.Rect(glyph["bbox"])
+        page.insert_text((20, 20), "CONTROL", fontsize=10)
+        clip = fitz.Rect(ink.x0 - 0.25, ink.y0 - 0.03, ink.x1 + 0.25, ink.y0 + 0.1)
+        scale = fitz.Matrix(256, 256)
+        before = np.frombuffer(
+            page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples, np.uint8,
+        )
+        # A 1 pt line at this distance clears the top at unit scale.
+        # Transverse expansion about its center increases only the painted width.
+        center = ink.y0 - 0.507
+        page.draw_line(
+            (ink.x0 - 2, center), (ink.x1 + 2, center), width=1,
+            color=(0.25, 0.25, 0.25), morph=(fitz.Point(ink.x0, center), fitz.Matrix(1, vertical_scale)),
+        )
+        after = np.frombuffer(
+            page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples, np.uint8,
+        )
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, "a" * 64, "b" * 64, 320, 280, "displayed-page-box-v1",
+        )
+
+    assert bool(np.any((before < 16) & (after > before + 8))) is contact
+    contents = {record["content"] for record in records}
+    assert "CONTROL" in contents
+    assert ("1" not in contents) is contact
 
 
 def test_native_pdf_observation_distinguishes_right_angle_miter_ink_contact() -> None:
