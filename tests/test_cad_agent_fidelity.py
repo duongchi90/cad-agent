@@ -974,6 +974,437 @@ def test_native_pdf_text_observation_is_separate_hash_bound_and_review_only(tmp_
     assert not (output / "text_reconstruction" / "page_01").exists()
 
 
+
+def test_native_pdf_observation_fails_closed_for_italic_paint_overhang() -> None:
+    document = fitz.open()
+    page = document.new_page(width=800, height=250)
+    page.insert_text((60, 115), "H", fontsize=48, fontname="helv", color=(0, 0, 0))
+    page.insert_text((60, 200), "CONTROL", fontsize=18, fontname="helv", color=(0, 0, 0))
+    h_trace = page.get_texttrace()[0]
+    h_bbox = fitz.Rect(h_trace["bbox"])
+    clip = fitz.Rect(50, 60, h_bbox.x1 + 0.01, 130)
+    source_sha = "a" * 64
+    render_sha = "b" * 64
+
+    before_records = fidelity_module._native_pdf_text_span_records(
+        page, 1, source_sha, render_sha, 800, 250, "displayed-page-box-v1",
+    )
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    page.insert_text(
+        (h_bbox.x1 + 0.75, 103), "fAAAAAgAA", fontsize=48, fontname="tiit", color=(1, 1, 1),
+    )
+    later_trace = page.get_texttrace()[-1]
+    later_bbox = fitz.Rect(later_trace["bbox"])
+    later_paint_bbox = fitz.Rect(page.get_bboxlog()[-1][1])
+    after_records = fidelity_module._native_pdf_text_span_records(
+        page, 1, source_sha, render_sha, 800, 250, "displayed-page-box-v1",
+    )
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    assert [record["content"] for record in before_records] == ["H", "CONTROL"]
+    assert later_bbox.x0 > h_bbox.x1
+    assert not (later_paint_bbox & h_bbox).is_empty
+    assert np.count_nonzero((before < 64) & (after > 192)) > 0
+    assert "CONTROL" in [record["content"] for record in after_records]
+    assert "fAAAAAgAA" in [record["content"] for record in after_records]
+    assert "H" not in [record["content"] for record in after_records]
+
+    document.close()
+
+
+def test_native_pdf_observation_fails_closed_for_compound_italic_paint_overhang() -> None:
+    document = fitz.open()
+    page = document.new_page(width=800, height=250)
+    page.insert_text((60, 115), "H", fontsize=48, fontname="helv", color=(0, 0, 0))
+    page.insert_text((60, 200), "CONTROL", fontsize=18, fontname="helv", color=(0, 0, 0))
+    h_trace = page.get_texttrace()[0]
+    h_bbox = fitz.Rect(h_trace["bbox"])
+    clip = fitz.Rect(50, 60, h_bbox.x1 + 0.01, 130)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    page.insert_text(
+        (h_bbox.x1 + 0.75, 103), "fAAAAAgAA", fontsize=48, fontname="tiit", color=(1, 1, 1),
+    )
+    overlay_xref = page.get_contents()[-1]
+    overlay_sequence = len(page.get_bboxlog()) - 1
+    overlay_stream = document.xref_stream(overlay_xref)
+    assert overlay_stream.count(b"ET") == 1
+    # Two distant Helvetica siblings in the same text-paint sequence make the
+    # aggregate trace bbox straddle H while both glyph boxes remain disjoint.
+    # They must not mask the italic overprint's source-bound paint overhang.
+    document.update_stream(
+        overlay_xref,
+        overlay_stream.replace(
+            b"ET",
+            b"1 0 0 1 15 103 Tm /helv 48 Tf (X) Tj "
+            b"1 0 0 1 600 103 Tm (X) Tj\nET",
+        ),
+    )
+
+    later_traces = [trace for trace in page.get_texttrace() if trace["seqno"] == overlay_sequence]
+    h_bbox = fitz.Rect(h_trace["bbox"])
+    later_paint_bbox = fitz.Rect(page.get_bboxlog()[-1][1])
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY, clip=clip).samples,
+        dtype=np.uint8,
+    ).copy()
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 800, 250, "displayed-page-box-v1",
+    )
+
+    assert len(later_traces) == 2
+    assert all(
+        (fitz.Rect(char[3]) & h_bbox).is_empty
+        for trace in later_traces
+        for char in trace["chars"]
+    )
+    assert any((fitz.Rect(trace["bbox"]) & h_bbox).is_empty for trace in later_traces)
+    assert any(not (fitz.Rect(trace["bbox"]) & h_bbox).is_empty for trace in later_traces)
+    assert not (later_paint_bbox & h_bbox).is_empty
+    assert np.count_nonzero((before < 64) & (after > 192)) > 0
+    assert {record["content"] for record in records} == {"CONTROL", "fAAAAAgAA", "X"}
+
+    document.close()
+
+
+@pytest.mark.parametrize("stroke_x, expect_contact", [(150.0, True), (155.0, False)])
+def test_native_pdf_observation_vetoes_compound_stroke_on_italic_ink_overhang(
+    stroke_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    # Keep the distant segment in the same compound stroke so its aggregate
+    # paint bounds intersect the trace while the contact segment reaches only
+    # the italic final-glyph ink overhang.
+    stroke = page.new_shape()
+    stroke.draw_line((stroke_x, 80), (stroke_x, 125))
+    stroke.draw_line((60, 80), (60, 125))
+    stroke.finish(color=(1, 0, 0), fill=None, width=0.4)
+    stroke.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 160)
+        & (after[:, :, 1] < 64)
+        & (after[:, :, 2] < 64)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("stroke_x, expect_contact", [(150.0, True), (155.0, False)])
+def test_native_pdf_observation_vetoes_light_compound_stroke_on_italic_ink_overhang(
+    stroke_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    stroke = page.new_shape()
+    stroke.draw_line((stroke_x, 80), (stroke_x, 125))
+    stroke.draw_line((60, 80), (60, 125))
+    stroke.finish(color=(0.7, 0.7, 0.7), fill=None, width=1.0)
+    stroke.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 150)
+        & (after[:, :, 1] > 150)
+        & (after[:, :, 2] > 150)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("stroke_x, expect_contact", [(105.0, True), (110.0, False)])
+def test_native_pdf_observation_vetoes_rotated_italic_f_below_baseline_contact(
+    stroke_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=300, height=200)
+    page.insert_text((100, 120), "f35", fontsize=36, fontname="tibi", rotate=90)
+    page.insert_text((220, 170), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(1600, 2400, 3).copy()
+
+    stroke = page.new_shape()
+    stroke.draw_line((stroke_x, 80), (stroke_x, 130))
+    stroke.finish(color=(0.6, 0, 0), fill=None, width=1.0)
+    stroke.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(1600, 2400, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 100)
+        & (after[:, :, 0] > after[:, :, 1] * 1.5)
+        & (after[:, :, 0] > after[:, :, 2] * 1.5)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 2400, 1600, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("f35" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "f35" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("right_fill_x, expect_contact", [(149.6, True), (155.0, False)])
+def test_native_pdf_observation_vetoes_compound_fill_on_italic_ink_overhang(
+    right_fill_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    # Two disjoint rectangles in one fill-path exercise a compound paint whose
+    # distant first component overlaps the trace while the second reaches only
+    # the italic ink overhang outside the nominal glyph metric bounds.
+    fill = page.new_shape()
+    fill.draw_rect(fitz.Rect(59.6, 80, 60.4, 125))
+    fill.draw_rect(fitz.Rect(right_fill_x, 80, right_fill_x + 0.8, 125))
+    fill.finish(color=None, fill=(1, 1, 1))
+    fill.commit()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    overwritten_source_ink = np.count_nonzero(
+        (before[:, :, 0] < 64)
+        & (before[:, :, 1] < 64)
+        & (before[:, :, 2] < 64)
+        & (after[:, :, 0] > 192)
+        & (after[:, :, 1] > 192)
+        & (after[:, :, 2] > 192)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert (overwritten_source_ink > 0) == expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("paint_kind, paint_x, expect_contact", [
+    ("fill", 149.6, True), ("fill", 155.0, False),
+    ("stroke", 150.0, True), ("stroke", 155.0, False),
+])
+def test_native_pdf_observation_checks_standalone_paint_against_italic_ink(
+    paint_kind: str, paint_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    shape = page.new_shape()
+    if paint_kind == "fill":
+        shape.draw_rect(fitz.Rect(paint_x, 80, paint_x + 0.8, 125))
+        shape.finish(color=None, fill=(1, 1, 1))
+    else:
+        shape.draw_line((paint_x, 80), (paint_x, 125))
+        shape.finish(color=(1, 0, 0), fill=None, width=0.7)
+    shape.commit()
+
+    # Keep the source and overlay in the same verified serialized PDF that
+    # the native observer reads; the clear control differs only in position.
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    source_ink = (before[:, :, 0] < 64) & (before[:, :, 1] < 64) & (before[:, :, 2] < 64)
+    if paint_kind == "fill":
+        overwritten = np.count_nonzero(
+            source_ink & (after[:, :, 0] > 192) & (after[:, :, 1] > 192) & (after[:, :, 2] > 192)
+        )
+    else:
+        overwritten = np.count_nonzero(
+            source_ink & (after[:, :, 0] > 160) & (after[:, :, 1] < 64) & (after[:, :, 2] < 64)
+        )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("image_x, expect_contact", [(149.6, True), (155.0, False)])
+def test_native_pdf_observation_checks_later_image_against_italic_ink_overhang(
+    image_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3).copy()
+
+    image = np.full((450, 8, 3), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    page.insert_image(fitz.Rect(image_x, 80, image_x + 0.8, 125), stream=encoded.tobytes())
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csRGB).samples,
+        dtype=np.uint8,
+    ).reshape(2400, 3200, 3)
+    source_ink = (before[:, :, 0] < 64) & (before[:, :, 1] < 64) & (before[:, :, 2] < 64)
+    overwritten = np.count_nonzero(
+        source_ink & (after[:, :, 0] > 192) & (after[:, :, 1] > 192) & (after[:, :, 2] > 192)
+    )
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    if not expect_contact:
+        assert "10f" in contents
+    document.close()
+
+
+def test_native_pdf_observation_preserves_four_near_clear_compound_fill_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=400)
+    baselines = (60.0, 150.0, 240.0, 330.0)
+    for baseline in baselines:
+        page.insert_text((80, baseline), "10f", fontsize=48, fontname="heit")
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    for baseline in baselines:
+        fill = page.new_shape()
+        fill.draw_rect(fitz.Rect(60.0, baseline - 40, 60.8, baseline + 5))
+        fill.draw_rect(fitz.Rect(153.5, baseline - 40, 154.3, baseline + 5))
+        fill.finish(color=None, fill=(1, 1, 1))
+        fill.commit()
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    )
+    paint_sequences = {sequence for sequence, item in enumerate(page.get_bboxlog()) if item[0] == "fill-path"}
+    assert len(paint_sequences) == len(baselines)
+    bound_sequences = set()
+    original_bind = fidelity_module._NativePdfThinStrokeCheck._bound_fill_components
+
+    def track_binding(check, sequence, drawing, components):
+        bound = original_bind(check, sequence, drawing, components)
+        if bound is not None:
+            bound_sequences.add(sequence)
+        return bound
+
+    monkeypatch.setattr(fidelity_module._NativePdfThinStrokeCheck, "_bound_fill_components", track_binding)
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 3200, "displayed-page-box-v1",
+    )
+
+    # These compounds are deliberately near the metric edge but do not paint
+    # over any source pixels. They must not consume page-wide proof capacity
+    # and suppress later, otherwise observable rows.
+    assert np.array_equal(after, before)
+    assert [record["content"] for record in records].count("10f") == len(baselines)
+    assert bound_sequences == paint_sequences
+    document.close()
+
+
 def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace() -> None:
     document = fitz.open()
     page = document.new_page(width=400, height=300)
@@ -1025,6 +1456,968 @@ def test_native_pdf_observation_maps_exact_spans_inside_aggregated_paint_trace()
     )
     assert records[0]["bbox_px"][0] == pytest.approx(80, abs=1.0)
     assert records[0]["bbox_px"][2] > records[0]["bbox_px"][0]
+
+
+@pytest.mark.parametrize(
+    "image_x, expected_contents",
+    [
+        (160.0, {"414 MM", "ANNOTATION", "CONTROL"}),
+        (200.0, {"414 MM", "CONTROL"}),
+    ],
+)
+def test_native_pdf_observation_scopes_later_image_to_selected_aggregate_text_span(
+    image_x: float, expected_contents: set[str],
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    writer = fitz.TextWriter(page.rect)
+    writer.append((40, 80), "414 MM", fontsize=18)
+    writer.append((190, 80), "ANNOTATION", fontsize=18)
+    writer.write_text(page)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    image = np.full((18 * 8, 8, 3), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    page.insert_image(fitz.Rect(image_x, 66, image_x + 0.8, 84), stream=encoded.tobytes())
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+
+    contents = {record["content"] for record in records}
+    assert contents == expected_contents
+    if image_x == 160.0:
+        # The image is in the blank gap and must not erase either text span.
+        assert np.array_equal(after, before)
+    else:
+        # Contact with ANNOTATION must not suppress its clear sibling span.
+        assert np.any((before < 64) & (after > 192))
+    document.close()
+
+
+def test_native_pdf_observation_rejects_later_axial_shading_over_italic_ink() -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10f", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    resource_type, resource_ref = document.xref_get_key(page.xref, "Resources")
+    assert resource_type == "xref"
+    resource_xref = int(resource_ref.split()[0])
+    shading_xref = document.get_new_xref()
+    document.update_object(
+        shading_xref,
+        (
+            "<< /ShadingType 2 /ColorSpace /DeviceRGB "
+            "/Coords [149.6 175 150.4 220] "
+            "/Function << /FunctionType 2 /Domain [0 1] "
+            "/C0 [1 1 1] /C1 [1 1 1] /N 1 >> /Extend [true true] >>"
+        ),
+    )
+    document.xref_set_key(resource_xref, "Shading", f"<< /Sh1 {shading_xref} 0 R >>")
+    shade_stream_xref = document.get_new_xref()
+    document.update_object(shade_stream_xref, "<<>>")
+    document.update_stream(shade_stream_xref, b"q 149.6 175 0.8 45 re W n /Sh1 sh Q")
+    existing_contents = page.get_contents()
+    assert len(existing_contents) == 2
+    contents = " ".join(
+        f"{xref} 0 R" for xref in [existing_contents[0], shade_stream_xref, existing_contents[1]]
+    )
+    document.xref_set_key(page.xref, "Contents", f"[{contents}]")
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    assert any(kind == "fill-shade" for kind, _bbox in page.get_bboxlog())
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    source_ink = before < 64
+    overwritten = np.count_nonzero(source_ink & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert overwritten > 0
+    assert "10f" not in contents
+    assert "CONTROL" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("paint_kind", ["compound-fill", "image"])
+@pytest.mark.parametrize("paint_y0, paint_y1, expect_contact", [(80, 135, True), (124, 129, False)])
+def test_native_pdf_observation_uses_attributable_sheared_ink_envelope(
+    paint_kind: str, paint_y0: int, paint_y1: int, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    origin = fitz.Point(80, 120)
+    page.insert_text(
+        origin,
+        "10f",
+        fontsize=48,
+        fontname="helv",
+        morph=(origin, fitz.Matrix(1, 0, 0.4, 1, 0, 0)),
+    )
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    if paint_kind == "compound-fill":
+        fill = page.new_shape()
+        fill.draw_rect(fitz.Rect(59.6, paint_y0, 60.4, paint_y1))
+        fill.draw_rect(fitz.Rect(155.0, paint_y0, 155.8, paint_y1))
+        fill.finish(color=None, fill=(1, 1, 1))
+        fill.commit()
+    else:
+        image = np.full((450, 8, 3), 255, dtype=np.uint8)
+        ok, encoded = cv2.imencode(".png", image)
+        assert ok
+        page.insert_image(
+            fitz.Rect(155.0, paint_y0, 155.8, paint_y1), stream=encoded.tobytes(),
+        )
+
+    # Keep the occluder and source text in the serialized source consumed by
+    # the observer. The clear rows share the same X interval but miss actual
+    # ink vertically, while the contact rows erase sheared source overhang.
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    source_ink = before < 64
+    overwritten = np.count_nonzero(source_ink & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("later_paint", ["image", "stroke"])
+@pytest.mark.parametrize("delta, expect_contact", [(0.5, True), (4.5, False)])
+def test_native_pdf_observation_checks_italic_paint_envelope_beyond_metric_pad(
+    delta: float, expect_contact: bool, later_paint: str,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10\u00cd", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    trace_right = float(page.get_texttrace()[0]["bbox"][2])
+    paint_left = trace_right + 7.2 + delta
+    if later_paint == "stroke":
+        center = paint_left + 0.4
+        page.draw_line((center, 70), (center, 125), color=(1, 1, 1), width=0.8)
+    else:
+        image = np.full((450, 8, 3), 255, dtype=np.uint8)
+        ok, encoded = cv2.imencode(".png", image)
+        assert ok
+        page.insert_image(
+            fitz.Rect(paint_left, 70, paint_left + 0.8, 125), stream=encoded.tobytes(),
+        )
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    overwritten = np.any((before < 64) & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten) is expect_contact
+    assert ("10\u00cd" not in contents) is expect_contact
+    assert "CONTROL" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("split_trace", [False, True], ids=["narrowed-trace", "shared-sequence"])
+@pytest.mark.parametrize("contact", [True, False], ids=["paint-contact", "paint-clearance"])
+def test_native_pdf_observation_checks_italic_ink_in_shared_paint(
+    split_trace: bool, contact: bool,
+) -> None:
+    with fitz.open() as source:
+        page = source.new_page(width=600, height=300)
+        page.insert_text((80, 120), "10\u00cd", fontsize=48, fontname="heit")
+        trace_right = page.get_texttrace()[0]["bbox"][2]
+        page.insert_font(fontname="helv")
+        page.insert_text((250, 250), "CONTROL", fontsize=12)
+        xref = page.get_contents()[0]
+        stream = source.xref_stream(xref)
+        assert stream.count(b"ET") == 1
+        font = b"/helv 36 Tf " if split_trace else b""
+        source.update_stream(
+            xref, stream.replace(b"ET", b"1 0 0 1 300 180 Tm " + font + b"(OTHER) Tj ET"),
+        )
+        traces = [trace for trace in page.get_texttrace() if trace["seqno"] == 0]
+        assert [len(trace["chars"]) for trace in traces] == ([3, 5] if split_trace else [8])
+        center = trace_right + 7.2 + (0.5 if contact else 4.5) + 0.4
+        clip = fitz.Rect(center - 1, 69, center + 1, 126)
+        zoom = fitz.Matrix(16, 16)
+        before = np.frombuffer(
+            page.get_pixmap(matrix=zoom, clip=clip, colorspace=fitz.csGRAY).samples, np.uint8,
+        )
+        page.draw_line((center, 70), (center, 125), color=(1, 1, 1), width=0.8)
+        with fitz.open(stream=source.tobytes(), filetype="pdf") as reopened:
+            page = reopened[0]
+            after = np.frombuffer(
+                page.get_pixmap(matrix=zoom, clip=clip, colorspace=fitz.csGRAY).samples, np.uint8,
+            )
+            rows = fidelity_module._native_pdf_text_span_records(
+                page, 1, "a" * 64, "b" * 64, 1200, 600, "displayed-page-box-v1",
+            )
+
+    assert bool(np.any((before < 64) & (after > 192))) is contact
+    contents = {row["content"] for row in rows}
+    assert {"OTHER", "CONTROL"} <= contents
+    assert ("10\u00cd" not in contents) is contact
+
+
+@pytest.mark.parametrize("paint_x, expect_contact", [(155.0, True), (550.0, False)])
+def test_native_pdf_observation_fails_closed_for_aggregate_sheared_text_overpaint(
+    paint_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=650, height=300)
+    origin = fitz.Point(80, 120)
+    page.insert_text(
+        origin,
+        "10f",
+        fontsize=48,
+        fontname="helv",
+        morph=(origin, fitz.Matrix(1, 0, 0.4, 1, 0, 0)),
+    )
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    source_xref = page.get_contents()[0]
+    source_stream = document.xref_stream(source_xref)
+    assert source_stream.count(b"ET") == 1
+    document.update_stream(
+        source_xref,
+        source_stream.replace(
+            b"ET",
+            b"1 0 0 1 300 180 Tm (OTHER) Tj ET",
+            1,
+        ),
+    )
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    fill = page.new_shape()
+    fill.draw_rect(fitz.Rect(59.6, 80, 60.4, 135))
+    fill.draw_rect(fitz.Rect(paint_x, 80, paint_x + 0.8, 135))
+    fill.finish(color=None, fill=(1, 1, 1))
+    fill.commit()
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    overwritten = np.count_nonzero((before < 64) & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    source_present = any(content.startswith("10f") for content in contents)
+    assert source_present is (not expect_contact)
+    assert "OTHER" in contents
+    assert "CONTROL" in contents
+    document.close()
+
+
+@pytest.mark.parametrize(
+    "area, verified_ink, limit, veto_expected, charged",
+    [
+        pytest.param((11, 2, 12, 4), (9, 1, 12, 5), 1, True, 1, id="positive-contact"),
+        pytest.param((12, 2, 13, 4), (9, 1, 12, 5), 1, True, 1, id="edge-contact"),
+        pytest.param((13, 2, 14, 4), (9, 1, 12, 5), 1, False, 1, id="clear-sibling"),
+        pytest.param((13, 2, 14, 4), None, 1, True, 1, id="unknown-uses-shared-envelope"),
+        pytest.param((21, 2, 22, 4), None, 1, False, 1, id="clear-even-without-binding"),
+        pytest.param((13, 2, 14, 4), (9, 1, 12, 5), 0, True, 0, id="budget-exhausted"),
+        pytest.param((8, 2, 9, 4), (9, 1, 12, 5), 1, False, 1, id="metric-contact-handled-by-owner"),
+    ],
+)
+def test_native_pdf_shared_area_paint_geometry(
+    area: tuple[float, ...], verified_ink: tuple[float, ...] | None,
+    limit: int, veto_expected: bool, charged: int,
+) -> None:
+    work = fidelity_module._GlyphPairWorkBudget(limit)
+    veto = fidelity_module._native_pdf_shared_area_hits_overhang(
+        fitz.Rect(area), fitz.Rect(0, 0, 10, 10), fitz.Rect(0, 0, 20, 10),
+        None if verified_ink is None else (fitz.Rect(verified_ink),), work,
+    )
+    assert veto is veto_expected
+    assert work.work == charged
+
+
+@pytest.mark.parametrize("paint_x, expect_contact", [(155.0, True), (550.0, False)])
+def test_native_pdf_observation_rejects_only_occluded_aggregate_image_span(
+    paint_x: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=650, height=300)
+    origin = fitz.Point(80, 120)
+    page.insert_text(
+        origin,
+        "10f",
+        fontsize=48,
+        fontname="helv",
+        morph=(origin, fitz.Matrix(1, 0, 0.4, 1, 0, 0)),
+    )
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    source_xref = page.get_contents()[0]
+    source_stream = document.xref_stream(source_xref)
+    assert source_stream.count(b"ET") == 1
+    document.update_stream(
+        source_xref,
+        source_stream.replace(
+            b"ET",
+            b"1 0 0 1 300 180 Tm (OTHER) Tj ET",
+            1,
+        ),
+    )
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+
+    image = np.full((450, 8, 3), 255, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    page.insert_image(
+        fitz.Rect(paint_x, 80, paint_x + 0.8, 135), stream=encoded.tobytes(),
+    )
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    assert page.get_images()
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    overwritten = np.count_nonzero((before < 64) & (after > 192))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(overwritten > 0) is expect_contact
+    assert ("10f" not in contents) is expect_contact
+    assert "OTHER" in contents
+    assert "CONTROL" in contents
+    document.close()
+
+
+@pytest.mark.parametrize("fill_color", [(0.3, 0.3, 0.3), (0.8, 0.0, 0.0)])
+@pytest.mark.parametrize("delta, expect_contact", [(0.5, True), (4.5, False)])
+def test_native_pdf_observation_checks_dark_compound_fill_against_italic_paint_envelope(
+    fill_color: tuple[float, float, float], delta: float, expect_contact: bool,
+) -> None:
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((80, 120), "10\u00cd", fontsize=48, fontname="heit")
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    before = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    trace_right = float(page.get_texttrace()[0]["bbox"][2])
+    fill_left = trace_right + 7.2 + delta
+    fill = page.new_shape()
+    fill.draw_rect(fitz.Rect(59.6, 70, 60.4, 125))
+    fill.draw_rect(fitz.Rect(fill_left, 70, fill_left + 0.8, 125))
+    fill.finish(color=None, fill=fill_color)
+    fill.commit()
+
+    serialized = document.tobytes()
+    document.close()
+    document = fitz.open(stream=serialized, filetype="pdf")
+    page = document[0]
+    after = np.frombuffer(
+        page.get_pixmap(matrix=fitz.Matrix(8, 8), colorspace=fitz.csGRAY).samples,
+        dtype=np.uint8,
+    ).copy()
+    changed_source_pixels = np.count_nonzero((before < 64) & (after > before + 16))
+    records = fidelity_module._native_pdf_text_span_records(
+        page, 1, "a" * 64, "b" * 64, 3200, 2400, "displayed-page-box-v1",
+    )
+    contents = {record["content"] for record in records}
+
+    assert bool(changed_source_pixels > 0) is expect_contact
+    source_present = any(content.startswith("10") for content in contents)
+    assert source_present is (not expect_contact)
+    assert "CONTROL" in contents
+    document.close()
+
+def test_native_pdf_observation_rejects_source_glyph_remapped_to_space_when_later_filled() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    page.clean_contents()
+    cmap_stream = (
+        b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+        b"/CMapName /CustomSpaceMap def\n/CMapType 2 def\n"
+        b"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+        b"1 beginbfchar\n<4D> <0020>\nendbfchar\nendcmap\n"
+        b"CMapName currentdict /CMap defineresource pop\nend\nend\n"
+    )
+    cmap_xref = document.get_new_xref()
+    document.update_object(cmap_xref, "<< >>")
+    document.update_stream(cmap_xref, cmap_stream)
+    font_xref = document.get_new_xref()
+    document.update_object(
+        font_xref,
+        f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode {cmap_xref} 0 R >>",
+    )
+    pg_obj = document.xref_object(page.xref)
+    if "/Font <<" in pg_obj:
+        document.update_object(page.xref, pg_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+    else:
+        _, res_val = document.xref_get_key(page.xref, "Resources")
+        res_xref = int(res_val.split()[0])
+        res_obj = document.xref_object(res_xref)
+        if "/Font <<" in res_obj:
+            document.update_object(res_xref, res_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+        else:
+            _, font_val = document.xref_get_key(res_xref, "Font")
+            existing_font_xref = int(font_val.split()[0])
+            document.update_object(
+                existing_font_xref,
+                document.xref_object(existing_font_xref).replace("<<", f"<< /F99 {font_xref} 0 R ", 1),
+            )
+    content_xref = page.get_contents()[0]
+    document.update_stream(
+        content_xref,
+        document.xref_stream(content_xref) + b"\nq BT 0 0 0 rg /F99 18 Tf 1 0 0 1 58 178 Tm (M100) Tj ET Q\n",
+    )
+    assert "100" in page.get_text("text")
+    source_trace = next(trace for trace in page.get_texttrace() if any(char[0] == 0x20 for char in trace["chars"]))
+    masked_rect = next(fitz.Rect(char[3]) for char in source_trace["chars"] if char[0] == 0x20)
+    baseline_pdf = fitz.open(stream=document.tobytes(), filetype="pdf")
+    try:
+        baseline_records = fidelity_module._native_pdf_text_span_records(
+            baseline_pdf[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        baseline_pdf.close()
+    assert any(record["content"].strip() == "100" for record in baseline_records)
+    before_fill = page.get_pixmap(clip=masked_rect, alpha=False)
+    pdf_y = page.rect.height - masked_rect.y1
+    fill = f"\nq 1 1 1 rg {masked_rect.x0:.4f} {pdf_y:.4f} {masked_rect.width:.4f} {masked_rect.height:.4f} re f Q\n".encode("ascii")
+    document.update_stream(content_xref, document.xref_stream(content_xref) + fill)
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        after_fill = reopened[0].get_pixmap(clip=masked_rect, alpha=False)
+        assert any(sample < 240 for sample in before_fill.samples)
+        assert all(sample > 250 for sample in after_fill.samples)
+
+        import copy
+
+        class EmptyMetricSpaceGlyphPage:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(reopened[0], name)
+
+            def get_texttrace(self, *args: Any, **kwargs: Any) -> Any:
+                traces = copy.deepcopy(reopened[0].get_texttrace(*args, **kwargs))
+                for trace in traces:
+                    chars = list(trace.get("chars", ()))
+                    for index, char in enumerate(chars):
+                        if char[0] == 0x20:
+                            empty_bbox = (char[3][0], char[3][1], char[3][0], char[3][1])
+                            chars[index] = (*char[:3], empty_bbox, *char[4:])
+                    trace["chars"] = tuple(chars)
+                return traces
+
+        records = fidelity_module._native_pdf_text_span_records(
+            EmptyMetricSpaceGlyphPage(), 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert not any(record["content"].strip() == "100" for record in records)
+    assert "CONTROL" in {record["content"] for record in records}
+
+
+def test_native_pdf_observation_bounds_cumulative_compound_fill_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from cad_agent import fidelity as fidelity_module
+
+    original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
+    reservation_attempts: list[tuple[int, bool]] = []
+    reservation_contexts: list[dict[str, Any]] = []
+    separation_calls: list[int] = []
+
+    def observe_reservation(self, left, right) -> bool:
+        before = self.work
+        reserved = original_reserve(self, left, right)
+        reservation_attempts.append((len(left) * len(right), reserved))
+        caller = sys._getframe(1)
+        source_span = None
+        source_trace = None
+        frame = caller
+        for _ in range(6):
+            if frame is None:
+                break
+            source_span = source_span or frame.f_locals.get("span")
+            source_trace = source_trace or frame.f_locals.get("trace")
+            frame = frame.f_back
+        local = caller.f_locals
+        flat_subs = local.get("flat_subs")
+        target_glyphs = local.get("target_glyphs")
+        reservation_contexts.append({
+            "budget_id": id(self),
+            "budget_before": before,
+            "budget_after": self.work,
+            "paint_type": local.get("paint_type"),
+            "flat_subpaths": len(flat_subs) if isinstance(flat_subs, list) else None,
+            "target_glyphs": len(target_glyphs) if isinstance(target_glyphs, list) else None,
+            "metric_hit": local.get("metric_hit"),
+            "source_span_chars": len(source_span.get("text", "")) if isinstance(source_span, dict) else None,
+            "source_trace_seqno": source_trace.get("seqno") if isinstance(source_trace, dict) else None,
+            "source_trace_chars": len(source_trace.get("chars", ())) if isinstance(source_trace, dict) else None,
+        })
+        return reserved
+
+    monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
+
+    def report_verified_separation(self, sequence, *_args, **_kwargs):
+        separation_calls.append(sequence)
+        return True
+
+    monkeypatch.setattr(
+        fidelity_module._NativePdfThinStrokeCheck,
+        "separates_dark_fill",
+        report_verified_separation,
+    )
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((10, 250), "CONTROL", fontsize=12)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+
+    # A single compound fill has 250 verified subpaths. The first two cover
+    # the source glyph metrics; one 250x250 reservation fits, while the second
+    # reservation against that same source trace exceeds the 100,000 cap.
+    fill = page.new_shape()
+    for _ in range(250):
+        fill.draw_rect(fitz.Rect(101, 110, 105, 115))
+    fill.finish(color=None, fill=(0, 0, 0), closePath=True)
+    fill.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert "CONTROL" in {record["content"] for record in records}
+    grouped_attempts: dict[int, list[tuple[int, bool]]] = {}
+    grouped_contexts: dict[int, list[dict[str, Any]]] = {}
+    for attempt, context in zip(reservation_attempts, reservation_contexts, strict=True):
+        grouped_attempts.setdefault(context["budget_id"], []).append(attempt)
+        grouped_contexts.setdefault(context["budget_id"], []).append(context)
+    exhausted = [
+        budget_id for budget_id, attempts in grouped_attempts.items()
+        if attempts == [(62_500, True), (62_500, False)]
+    ]
+    assert len(exhausted) == 1, repr({key: (grouped_attempts[key], grouped_contexts[key]) for key in grouped_attempts})
+    source_bound = grouped_contexts[exhausted[0]]
+    assert all(
+        context["source_span_chars"] == 250
+        and context["source_trace_chars"] == 250
+        and context["source_trace_seqno"] == 1
+        and context["paint_type"] == "fill-path"
+        and context["flat_subpaths"] == 250
+        and context["target_glyphs"] == 250
+        for context in source_bound
+    ), repr(source_bound)
+    assert source_bound[0]["budget_before"] == 0 and source_bound[0]["budget_after"] == 62_500
+    assert source_bound[1]["budget_before"] == 62_500 and source_bound[1]["budget_after"] == 62_500
+    assert not separation_calls, "an exhausted fill must not enter replay with a fresh allowance"
+    assert not any(len(record["content"]) >= 250 for record in records), (
+        "a later successful optional proof must not clear an exhausted earlier budget"
+    )
+
+
+def test_native_pdf_observation_does_not_replay_after_later_budget_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from cad_agent import fidelity as fidelity_module
+
+    original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
+    reservations: list[tuple[int, int, int, bool, bool]] = []
+
+    def observe_reservation(self, left, right) -> bool:
+        before = self.work
+        reserved = original_reserve(self, left, right)
+        caller = sys._getframe(1).f_locals
+        target_glyphs = caller.get("target_glyphs")
+        flat_subs = caller.get("flat_subs")
+        if isinstance(target_glyphs, list) and isinstance(flat_subs, list):
+            deferred = caller.get("deferred_fills")
+            reservations.append((
+                id(self), before, len(target_glyphs) * len(flat_subs), reserved,
+                bool(deferred),
+            ))
+        return reserved
+
+    monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
+
+    optional_proofs: list[int] = []
+
+    def report_verified_separation(self, sequence, *_args, **_kwargs):
+        optional_proofs.append(sequence)
+        return True
+
+    monkeypatch.setattr(
+        fidelity_module._NativePdfThinStrokeCheck,
+        "separates_dark_fill",
+        report_verified_separation,
+    )
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((10, 250), "CONTROL", fontsize=12)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+
+    # The first fill intersects glyph metrics only below the baseline. It sets
+    # deferred optional work and consumes two 37,500-pair reservations. A later
+    # fill's first 37,500-pair reservation is then denied at 75,000 pairs.
+    for _ in range(2):
+        fill = page.new_shape()
+        for _ in range(150):
+            fill.draw_rect(fitz.Rect(101, 120.1, 105, 121.5))
+        fill.finish(color=None, fill=(0, 0, 0), closePath=True)
+        fill.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert "CONTROL" in {record["content"] for record in records}
+    matching_budgets = {}
+    for budget_id, before, work, reserved, deferred in reservations:
+        if work == 37_500:
+            matching_budgets.setdefault(budget_id, []).append((before, reserved, deferred))
+    assert any(
+        attempts[:3] == [
+            (0, True, False),
+            (37_500, True, True),
+            (75_000, False, True),
+        ]
+        for attempts in matching_budgets.values()
+    ), repr(matching_budgets)
+    assert not optional_proofs, (
+        "a later reservation failure after earlier fill deferral must not enter fresh-budget replay"
+    )
+
+
+def test_native_pdf_observation_bounds_glyph_by_stroke_segment_comparisons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from cad_agent import fidelity as fidelity_module
+
+    original_reserve = fidelity_module._GlyphPairWorkBudget.reserve
+    stroke_reservations: list[tuple[int, int, int, bool]] = []
+
+    def observe_reservation(self, left, right) -> bool:
+        reserved = original_reserve(self, left, right)
+        caller = sys._getframe(1).f_locals
+        target_glyphs = caller.get("target_glyphs")
+        cand_segs = caller.get("cand_segs")
+        if isinstance(target_glyphs, list) and isinstance(cand_segs, list):
+            stroke_reservations.append((len(target_glyphs), len(cand_segs), len(left) * len(right), reserved))
+        return reserved
+
+    monkeypatch.setattr(fidelity_module._GlyphPairWorkBudget, "reserve", observe_reservation)
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((10, 250), "CONTROL", fontsize=12)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+    trace = next(trace for trace in page.get_texttrace() if len(trace.get("chars", ())) == 250)
+    x0, y0, x1, y1 = trace["bbox"]
+    stroke = page.new_shape()
+    for index in range(500):
+        y = y0 + (y1 - y0) * index / 499
+        stroke.draw_line((x0 + 0.1, y), (x1 - 0.1, y))
+    stroke.finish(color=(0, 0, 0), width=0.1)
+    stroke.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert "CONTROL" in {record["content"] for record in records}
+    assert any(
+        glyph_count == 250 and segment_count >= 500 and work > 100_000 and not reserved
+        for glyph_count, segment_count, work, reserved in stroke_reservations
+    ), repr(stroke_reservations)
+    assert not any(len(record["content"]) >= 250 for record in records)
+
+
+def test_native_pdf_observation_bounds_below_baseline_glyph_lookup_work() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    class CountingChars(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.visited = 0
+
+        def __iter__(self):
+            for value in super().__iter__():
+                self.visited += 1
+                yield value
+
+    document = fitz.open()
+    page = document.new_page(width=4000, height=300)
+    page.insert_text((100, 120), "A" * 250, fontsize=12)
+    page.clean_contents()
+    stroke = page.new_shape()
+    stroke.draw_line((100, 121), (2101, 121))
+    stroke.finish(color=(0, 0, 0), width=0.1)
+    stroke.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    class CountingCharPage:
+        def __init__(self, inner):
+            self.inner = inner
+            self.counted_chars = []
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def get_texttrace(self):
+            traces = []
+            for trace in self.inner.get_texttrace():
+                copied = dict(trace)
+                counted = CountingChars(copied.get("chars", ()))
+                self.counted_chars.append(counted)
+                copied["chars"] = counted
+                traces.append(copied)
+            return traces
+
+    counted_page = CountingCharPage(reopened[0])
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            counted_page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    assert any(len(record["content"]) == 250 for record in records)
+    raw_char_count = max(len(chars) for chars in counted_page.counted_chars)
+    visited_chars = sum(chars.visited for chars in counted_page.counted_chars)
+    assert raw_char_count == 250
+    assert visited_chars <= raw_char_count * 10, (
+        f"below-baseline glyph lookup rescanned raw characters {visited_chars} times "
+        f"for a {raw_char_count}-character trace"
+    )
+
+
+def test_native_pdf_below_baseline_contact_proof_uses_unique_source_glyph() -> None:
+    source_glyph = (ord("g"), 72, (100.0, 120.0), fitz.Rect(100.0, 101.0, 113.0, 127.0))
+    lookup = {fidelity_module._native_pdf_glyph_source_key(source_glyph): [source_glyph]}
+    protected_results = {}
+    proof_key_prefix = (1, 2, (0, 1))
+    clip = fitz.Rect(99.75, 120.0, 113.25, 127.25)
+    proof_calls = []
+
+    def run_proof(decision: bool) -> bool:
+        def proof(glyph):
+            proof_calls.append(glyph)
+            return decision
+
+        return fidelity_module._native_pdf_below_baseline_candidate_overlaps(
+            lookup,
+            ord("g"),
+            100.0,
+            120.0,
+            proof_key_prefix,
+            protected_results,
+            span_font_size=12.0,
+            clip=clip,
+            deferred_fills=[True],
+            proof=proof,
+        )
+
+    def run_unavailable_proof() -> bool:
+        def proof(glyph):
+            proof_calls.append(glyph)
+            return None
+
+        return fidelity_module._native_pdf_below_baseline_candidate_overlaps(
+            lookup,
+            ord("g"),
+            100.0,
+            120.0,
+            proof_key_prefix,
+            protected_results,
+            span_font_size=12.0,
+            clip=clip,
+            deferred_fills=[True],
+            proof=proof,
+        )
+
+    assert run_proof(True) is True
+    assert run_proof(False) is False
+    assert run_unavailable_proof() is True
+    assert proof_calls == [source_glyph, source_glyph, source_glyph]
+
+
+def test_native_pdf_observation_accepts_genuine_blank_space_when_unoccluded() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((60, 120), " 100", fontsize=18)
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+    assert any(record["content"].strip() == "100" for record in records)
+
+
+def test_glyph_pair_work_budget_caps_cumulative_cartesian_comparisons() -> None:
+    from cad_agent.fidelity import _GlyphPairWorkBudget
+
+    budget = _GlyphPairWorkBudget(100_000)
+    assert budget.reserve([None] * 320, [None] * 300)
+    assert budget.work == 96_000
+    assert not budget.reserve([None] * 320, [None] * 20)
+    assert budget.work == 96_000
+    assert budget.reserve([None] * 2, [None] * 2)
+    assert budget.work == 96_004
+
+
+def test_native_pdf_observation_fails_closed_for_excessive_glyph_pair_work() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=5000, height=300)
+    page.insert_text((30, 80), "M" * 460, fontsize=4)
+    page.insert_text((30, 140), "CONTROL", fontsize=18)
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+    assert "CONTROL" in {record["content"] for record in records}
+    assert not any(len(record["content"]) >= 400 for record in records)
+
+
+@pytest.mark.parametrize("bad_coordinate", [float("inf"), "not-a-number"])
+def test_native_pdf_observation_skips_malformed_span_bbox_without_aborting_siblings(bad_coordinate: Any) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), "BROKEN", fontsize=18)
+    page.insert_text((190, 80), "CONTROL", fontsize=18)
+
+    class MalformedSpanPage:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(page, name)
+
+        def get_text(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            result = page.get_text(*args, **kwargs)
+            if args and args[0] == "dict":
+                for block in result.get("blocks", []):
+                    for line in block.get("lines", []):
+                        spans = line.get("spans", [])
+                        if spans:
+                            bbox = list(spans[0]["bbox"])
+                            bbox[2] = bad_coordinate
+                            spans[0]["bbox"] = tuple(bbox)
+                            return result
+            return result
+
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            MalformedSpanPage(), 1, "a" * 64, "b" * 64, 800, 600,
+            "displayed-page-box-v1",
+        )
+    finally:
+        document.close()
+
+    assert [record["content"] for record in records] == ["CONTROL"]
 
 
 @pytest.mark.parametrize(
@@ -4471,27 +5864,33 @@ def test_native_pdf_observation_maps_exact_b041_aigdt_gid80_to_unverified_diamet
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     native = observation["native_pdf_spans"]
 
-    assert len(native) == 1  # Only B041 trace 321 has no later paint overlap under current policy.
-    span = native[0]
-    assert span["content"] == "\u2300"
-    assert span["source_text_raw"] == "n"
-    assert span["source_font_resource"] == {
-        "xref": 24,
-        "resource_name": "F5",
-        "base_font": "ADSINV+AIGDT",
-    }
-    assert span["source_font_file_sha256"] == (
-        "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b"
-    )
-    assert span["source_glyph_id"] == 80
-    assert span["source_glyph_name"] == "uniF06E"
-    assert span["source_cmap_codepoint"] == 0xF06E
-    assert span["source_paint_evidence"]["sequence_number"] == 321
-    assert span["visibility"] == "unverified"
-    assert span["source_sha256"] == manifest["source"]["sha256"]
+    diameter_spans = [
+        span for span in native
+        if span.get("source_glyph_id") == 80 or span["content"] == "\u2300"
+    ]
+    # Source raster readback confirms these three distinct embedded diameter marks.
+    assert sorted(span["source_paint_evidence"]["sequence_number"] for span in diameter_spans) == [
+        266, 321, 336,
+    ]
     audit_path = output / observation["source_layout_audit"]["artifact"]
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    assert span["render_sha256"] == audit["source_page"]["render_sha256"]
+    for span in diameter_spans:
+        assert span["content"] == "\u2300"
+        assert span["source_text_raw"] == "n"
+        assert span["source_font_resource"] == {
+            "xref": 24,
+            "resource_name": "F5",
+            "base_font": "ADSINV+AIGDT",
+        }
+        assert span["source_font_file_sha256"] == (
+            "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b"
+        )
+        assert span["source_glyph_id"] == 80
+        assert span["source_glyph_name"] == "uniF06E"
+        assert span["source_cmap_codepoint"] == 0xF06E
+        assert span["visibility"] == "unverified"
+        assert span["source_sha256"] == manifest["source"]["sha256"]
+        assert span["render_sha256"] == audit["source_page"]["render_sha256"]
     assert observation["candidates"]  # OCR remains a separate typed collection.
     assert all(candidate.get("source") != "native_pdf" for candidate in observation["candidates"])
     assert not any(key in observation for key in ("TEXT", "MTEXT", "DIMENSION"))
@@ -4551,8 +5950,13 @@ def test_native_pdf_text_approval_rejects_overlapping_b041_ocr_and_native_spans(
         source, output, manifest, workspace_root=Path.cwd(),
     )[0]
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "\u2300")
-    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "12,00")
+    # Among B041's identical diameter glyphs, trace 321 belongs to this callout.
+    native, = [
+        span for span in observation["native_pdf_spans"]
+        if span["content"] == "\u2300"
+        and span["source_paint_evidence"]["sequence_number"] == 321
+    ]
+    ocr, = [candidate for candidate in observation["candidates"] if candidate["content"] == "12,00"]
     native_bbox = native["bbox_px"]
     ocr_bbox = ocr["bbox_px"]
     overlap_width = min(native_bbox[2], ocr_bbox[2]) - max(native_bbox[0], ocr_bbox[0])
@@ -4677,3 +6081,1263 @@ def test_native_pdf_observation_aggregates_complete_nakuja_same_span_glyph_trace
     assert "".join(trace["text"] for trace in member_traces) == "10,00"
     assert [trace["sequence_number"] for trace in member_traces] == [190, 191, 192, 193, 194]
     assert all(trace["bbox_pt"] and trace["glyph_ids"] for trace in member_traces)
+
+
+@pytest.mark.parametrize(
+    "compound_mode",
+    [
+        "fm_a_multi_trace_bt_et_border_zones",
+        "fm_b_hollow_frame_and_disjoint_strokes",
+        "fm_c_multi_subpath_fill_arrowheads",
+        "fm_d_baseline_underline_oblique_leader_and_table_divider",
+        "fm_e_per_glyph_multi_trace_and_condensed_tz_spans",
+        "combined_all_four_compound_modes",
+    ],
+)
+def test_native_pdf_observation_admits_spans_inside_compound_cad_paint_operators(
+    tmp_path: Path, compound_mode: str,
+) -> None:
+    import math
+
+    source = tmp_path / f"{compound_mode}.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+
+    # Interior CAD spans painted BEFORE later sheet-wide compound operators.
+    page.insert_text((100, 120), "63", fontsize=12)
+    page.insert_text((205, 120), "2 x M3 - 6H", fontsize=12)
+    page.insert_text((155, 210), "35", fontsize=12, rotate=90)
+    oblique_pivot = fitz.Point(235, 205)
+    page.insert_text(
+        oblique_pivot, "R13.50", fontsize=12, morph=(oblique_pivot, fitz.Matrix(-35.7)),
+    )
+    page.insert_text((310, 75), "+/-1", fontsize=8)
+    page.insert_text((18, 45), "A", fontsize=10)
+
+    if compound_mode in {"fm_a_multi_trace_bt_et_border_zones", "combined_all_four_compound_modes"}:
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        multi_trace_bt_et = (
+            b"\nq BT 0 0 0 rg /F0 10 Tf 1 0 0 1 18 255 Tm (Z) Tj 362 -215 Td (Z) Tj "
+            b"/F0 10.5 Tf -362 0 Td (Y) Tj 362 215 Td (W) Tj ET Q\n"
+        )
+        document.update_stream(xref, stream + multi_trace_bt_et)
+
+    if compound_mode in {"fm_b_hollow_frame_and_disjoint_strokes", "combined_all_four_compound_modes"}:
+        sh_stroke = page.new_shape()
+        sh_stroke.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh_stroke.draw_line((30, 80), (260, 80))
+        sh_stroke.draw_line((30, 250), (360, 250))
+        sh_stroke.finish(color=(0, 0, 0), fill=None, width=0.5)
+        sh_stroke.commit()
+
+    if compound_mode in {"fm_c_multi_subpath_fill_arrowheads", "combined_all_four_compound_modes"}:
+        sh_fill = page.new_shape()
+        sh_fill.draw_polyline([(25, 35), (31, 33.5), (31, 36.5)])
+        sh_fill.draw_polyline([(370, 275), (364, 273.5), (364, 276.5)])
+        sh_fill.finish(color=None, fill=(0, 0, 0), closePath=True)
+        sh_fill.commit()
+
+    if compound_mode in {
+        "fm_d_baseline_underline_oblique_leader_and_table_divider",
+        "combined_all_four_compound_modes",
+    }:
+        sh_cad = page.new_shape()
+        # Horizontal dimension line 2.0 pt below baseline y=120 of "63" (inside char[3] descent).
+        sh_cad.draw_line((90, 122.0), (135, 122.0))
+        # Leader shelf 1.9 pt below baseline y=120 of "2 x M3 - 6H".
+        sh_cad.draw_line((200, 121.9), (285, 121.9))
+        # Oblique radial leader 2.2 pt below rotated baseline of "R13.50" (-35.7 deg in fitz -> dir=(0.812, 0.584)).
+        ang = math.radians(35.7)
+        ux, uy = math.cos(ang), math.sin(ang)
+        nx_down, ny_down = -uy, ux
+        lp0 = fitz.Point(oblique_pivot.x + 2.2 * nx_down, oblique_pivot.y + 2.2 * ny_down)
+        lp1 = fitz.Point(lp0.x + 48.0 * ux, lp0.y + 48.0 * uy)
+        sh_cad.draw_line(lp0, lp1)
+        # Tall perpendicular table column divider grazing right side-bearing of "+/-1".
+        sh_cad.draw_line((323.85, 50.0), (323.85, 100.0))
+        sh_cad.finish(color=(0, 0, 0), fill=None, width=0.5)
+        sh_cad.commit()
+
+    if compound_mode == "fm_e_per_glyph_multi_trace_and_condensed_tz_spans":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        # Inventor-style separate BT..ET per glyph ("M", "1", "2") + 75% Tz condensed aggregate run ("AB   CD").
+        per_glyph_and_tz = (
+            b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 220 Tm (M) Tj ET Q"
+            b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 70 220 Tm (1) Tj ET Q"
+            b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 76.7 220 Tm (2) Tj ET Q"
+            b"\nq BT 0 0 0 rg 75 Tz /F0 10 Tf 1 0 0 1 60 245 Tm (AB) Tj 40 0 Td (CD) Tj ET Q\n"
+        )
+        document.update_stream(xref, stream + per_glyph_and_tz)
+        sh_box = page.new_shape()
+        sh_box.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh_box.finish(color=(0, 0, 0), fill=None, width=0.5)
+        sh_box.commit()
+
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    contents = {span["content"] for span in observation["native_pdf_spans"]}
+
+    assert {"63", "2 x M3 - 6H", "35", "R13.50"}.issubset(contents)
+    if compound_mode in {
+        "fm_d_baseline_underline_oblique_leader_and_table_divider",
+        "combined_all_four_compound_modes",
+    }:
+        # The tall divider grazes the final glyph's metric side bearing; without
+        # source-bound proof that the side bearing is ink-free, fail closed.
+        assert "+/-1" not in contents
+    if compound_mode == "fm_e_per_glyph_multi_trace_and_condensed_tz_spans":
+        assert {"M12", "AB", "CD"}.issubset(contents)
+    assert all(span["visibility"] == "unverified" for span in observation["native_pdf_spans"])
+    assert all(span["semantic_role"] is None for span in observation["native_pdf_spans"])
+
+
+@pytest.mark.parametrize(
+    "attack_kind",
+    [
+        "compound_fill_subpath_whiteout",
+        "horizontal_mid_body_strikethrough",
+        "diagonal_x_crossout_stroke",
+        "short_vertical_slash_through_digit",
+        "thick_dark_redaction_stroke",
+        "thin_rgb_white_erase_stroke",
+        "thin_gray_white_erase_stroke",
+        "thin_cmyk_white_erase_stroke",
+        "later_overlapping_multi_trace_text",
+    ],
+)
+def test_native_pdf_observation_compound_paint_still_excludes_real_masking_and_strikethroughs(
+    tmp_path: Path, attack_kind: str,
+) -> None:
+    source = tmp_path / f"{attack_kind}.pdf"
+    output = tmp_path / "private-staging"
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+
+    page.insert_text((60, 120), "100", fontsize=14)
+    page.insert_text((240, 220), "SAFE NOTE", fontsize=12)
+
+    if attack_kind == "compound_fill_subpath_whiteout":
+        sh = page.new_shape()
+        sh.draw_polyline([(20, 30), (25, 28.5), (25, 31.5)])
+        sh.draw_rect(fitz.Rect(63, 110, 82, 121))
+        sh.finish(color=None, fill=(1, 1, 1), closePath=True)
+        sh.commit()
+    elif attack_kind == "horizontal_mid_body_strikethrough":
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_line((56, 115.0), (92, 115.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.6)
+        sh.commit()
+    elif attack_kind == "diagonal_x_crossout_stroke":
+        sh = page.new_shape()
+        sh.draw_line((58, 121.0), (88, 109.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.6)
+        sh.commit()
+    elif attack_kind == "short_vertical_slash_through_digit":
+        sh = page.new_shape()
+        sh.draw_line((72.0, 109.0), (72.0, 121.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.6)
+        sh.commit()
+    elif attack_kind == "thick_dark_redaction_stroke":
+        sh = page.new_shape()
+        sh.draw_line((72.0, 40.0), (72.0, 260.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=8.0)
+        sh.commit()
+    elif attack_kind == "thin_rgb_white_erase_stroke":
+        sh = page.new_shape()
+        sh.draw_line((55.0, 121.5), (92.0, 121.5))
+        sh.finish(color=(1, 1, 1), fill=None, width=0.5)
+        sh.commit()
+    elif attack_kind == "thin_gray_white_erase_stroke":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        # PDF bottom-up y: page height 300 - 121.5 = 178.5
+        document.update_stream(xref, stream + b"\nq 1 G 0.5 w 55 178.5 m 92 178.5 l S Q\n")
+    elif attack_kind == "thin_cmyk_white_erase_stroke":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        document.update_stream(xref, stream + b"\nq 0 0 0 0 K 0.5 w 55 178.5 m 92 178.5 l S Q\n")
+    elif attack_kind == "later_overlapping_multi_trace_text":
+        xref = page.get_contents()[0]
+        stream = document.xref_stream(xref)
+        # PDF bottom-up y: 300 - 120 = 180 -> overlaps "100" at (60, 120) inside multi-run BT..ET!
+        overlap_bt = (
+            b"\nq BT 0 0 0 rg /F0 14 Tf 1 0 0 1 18 260 Tm (A) Tj "
+            b"/F0 14.5 Tf 44 -80 Td (999) Tj ET Q\n"
+        )
+        document.update_stream(xref, stream + overlap_bt)
+
+    document.save(source)
+    document.close()
+
+    manifest = new_fidelity_manifest(source, output, 144, "approved-test", workspace_root=Path.cwd())
+    run_fidelity_pdf(source, output, output / "fidelity-run-manifest.json", manifest)
+    observation_path = run_fidelity_text_observations(
+        source, output, manifest, workspace_root=Path.cwd(),
+    )[0]
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    contents = {span["content"] for span in observation["native_pdf_spans"]}
+
+    assert "100" not in contents
+    assert "SAFE NOTE" in contents
+
+
+@pytest.mark.parametrize(
+    "vector_id",
+    [
+        "vertical_stroke_turns_minus_into_plus",
+        "tall_vertical_stroke_through_middle_digit",
+        "horizontal_stroke_across_rotated_90_seam",
+        "horizontal_stroke_across_upper_cap_bar_066em",
+        "horizontal_stroke_across_decimal_point_004em",
+        "below_baseline_white_fill_over_q_tail",
+        "inverted_font_descriptor_oblique_overwrite",
+    ],
+)
+def test_native_pdf_observation_excludes_perpendicular_cap_dot_and_descender_masks(
+    vector_id: str,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=300, height=200)
+    page.insert_text((200, 160), "CONTROL", fontsize=12)
+
+    if vector_id == "vertical_stroke_turns_minus_into_plus":
+        target = "-100"
+        page.insert_text((80, 100), target, fontsize=12)
+        minus_rect = fitz.Rect(page.get_texttrace()[-1]["chars"][0][3])
+        mx = 0.5 * (minus_rect.x0 + minus_rect.x1)
+        sh = page.new_shape()
+        sh.draw_line((mx, 75.0), (mx, 125.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "tall_vertical_stroke_through_middle_digit":
+        target = "100"
+        page.insert_text((80, 100), target, fontsize=12)
+        zero_rect = fitz.Rect(page.get_texttrace()[-1]["chars"][1][3])
+        zx = 0.5 * (zero_rect.x0 + zero_rect.x1)
+        sh = page.new_shape()
+        sh.draw_line((zx, 70.0), (zx, 130.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "horizontal_stroke_across_rotated_90_seam":
+        target = "35"
+        page.insert_text((140, 120), target, fontsize=12, rotate=90)
+        t_rect = fitz.Rect(page.get_texttrace()[-1]["bbox"])
+        mid_y = 0.5 * (t_rect.y0 + t_rect.y1)
+        sh = page.new_shape()
+        sh.draw_line((110.0, mid_y), (170.0, mid_y))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "horizontal_stroke_across_upper_cap_bar_066em":
+        target = "77"
+        page.insert_text((80, 100), target, fontsize=12)
+        y_upper = 100.0 - 0.66 * 12.0
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 290, 190))
+        sh.draw_line((75.0, y_upper), (105.0, y_upper))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "horizontal_stroke_across_decimal_point_004em":
+        target = "10.5"
+        page.insert_text((80, 100), target, fontsize=12)
+        y_dot = 100.0 - 0.04 * 12.0
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 290, 190))
+        sh.draw_line((75.0, y_dot), (115.0, y_dot))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif vector_id == "below_baseline_white_fill_over_q_tail":
+        target = "Q10"
+        page.insert_text((80, 100), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_polyline([(20, 20), (25, 19), (25, 21)])
+        sh.draw_rect(fitz.Rect(78.0, 100.05, 95.0, 104.0))
+        sh.finish(color=None, fill=(1, 1, 1), closePath=True)
+        sh.commit()
+    else:
+        target = "OBL1"
+        piv = fitz.Point(80, 120)
+        page.insert_text(piv, target, fontsize=12, morph=(piv, fitz.Matrix(-35.0)))
+        page.insert_text(piv, "OBL2", fontsize=12, morph=(piv, fitz.Matrix(-35.0)))
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        pg = reopened[0]
+        if vector_id == "inverted_font_descriptor_oblique_overwrite":
+            class InvertedMetricsPage:
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(pg, name)
+
+                def get_texttrace(self) -> list[dict[str, Any]]:
+                    return [dict(t, ascender=-0.5, descender=0.9) for t in pg.get_texttrace()]
+
+            records = fidelity_module._native_pdf_text_span_records(
+                InvertedMetricsPage(), 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+            )
+        else:
+            records = fidelity_module._native_pdf_text_span_records(
+                pg, 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+            )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
+
+
+
+@pytest.mark.parametrize(
+    "r3_case",
+    [
+        "multitrace_overprint_M6_to_M68",
+        "intra_trace_backspace_overprint_1_to_18",
+        "shared_member_seqno_sibling_overwrite",
+        "same_seqno_later_trace_whiteout",
+        "wide_white_stroke_text_1Tr_erases_100",
+        "anisotropic_ctm_whiteout_stroke",
+        "acute_miter_spike_whiteout",
+        "condensed_50Tz_upper_cap_white_fill",
+        "condensed_75Tz_066em_cap_bar_strikethrough",
+        "vertical_stroke_right_20pct_of_1C",
+        "light_gray_079_comma_tail_erase",
+        "descender_g10_dark_strikethrough_015em",
+    ],
+)
+def test_native_pdf_observation_r3_blocks_overprint_anisotropic_miter_condensed_and_gray_escapes(
+    r3_case: str,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+
+    if r3_case == "multitrace_overprint_M6_to_M68":
+        target = "M68"
+        page.insert_text((60, 120), "M6", fontsize=12)
+        page.insert_text((70, 120), "8", fontsize=12)
+    elif r3_case == "intra_trace_backspace_overprint_1_to_18":
+        target = "18"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref) + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 180 Tm (1) Tj 0 0 Td (8) Tj ET Q\n",
+        )
+    elif r3_case == "shared_member_seqno_sibling_overwrite":
+        target = "100"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 180 Tm (1) Tj ET Q"
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 66.67 180 Tm (0) Tj ET Q"
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 73.34 180 Tm (0) Tj /F0 16 Tf -22.0 -1.2 Td (===) Tj ET Q\n",
+        )
+    elif r3_case == "same_seqno_later_trace_whiteout":
+        target = "100"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 180 Tm (100) Tj 1 1 1 rg /F0 16 Tf 1 0 0 1 48 179 Tm (MM) Tj ET Q\n",
+        )
+    elif r3_case == "wide_white_stroke_text_1Tr_erases_100":
+        target = "100"
+        page.insert_text((80, 86), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 1 1 1 RG 20 w 1 j 1 Tr /F0 12 Tf 1 0 0 1 20 280 Tm (A) Tj /F0 12.5 Tf 60 -82 Td (XXX) Tj ET Q\n",
+        )
+    elif r3_case == "anisotropic_ctm_whiteout_stroke":
+        target = "100"
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 0.05 0 0 25 0 0 cm 1 1 1 RG 1.2 w 400 4.0 3600 6.0 re 1000 7.06 m 1900 7.06 l S Q\n",
+        )
+    elif r3_case == "acute_miter_spike_whiteout":
+        target = "100"
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 2.5 w 0 j 30 M 20 120 140 150 re 68.5 140.0 m 70.0 175.0 l 71.5 140.0 l S Q\n",
+        )
+    elif r3_case == "condensed_50Tz_upper_cap_white_fill":
+        target = "77"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 50 Tz /F0 20 Tf 1 0 0 1 60 180 Tm (77) Tj ET Q"
+            + b"\nq 1 1 1 rg 20 20 5 5 re 55 188.2 30 8.0 re f Q\n",
+        )
+    elif r3_case == "condensed_75Tz_066em_cap_bar_strikethrough":
+        target = "77"
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 75 Tz /F0 12 Tf 1 0 0 1 60 180 Tm (77) Tj ET Q"
+            + b"\nq 0 0 0 RG 0.8 w 10 10 380 280 re 55 187.92 m 85 187.92 l S Q\n",
+        )
+    elif r3_case == "vertical_stroke_right_20pct_of_1C":
+        target = "1C"
+        page.insert_text((80, 100), target, fontsize=12)
+        grect = fitz.Rect(page.get_texttrace()[-1]["chars"][1][3])
+        rx = grect.x1 - 0.20 * grect.width
+        sh = page.new_shape()
+        sh.draw_line((rx, 70.0), (rx, 130.0))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+    elif r3_case == "light_gray_079_comma_tail_erase":
+        target = "10,5"
+        page.insert_text((60, 120), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_line((55.0, 122.15), (95.0, 122.15))
+        sh.finish(color=(0.79, 0.79, 0.79), fill=None, width=2.0)
+        sh.commit()
+    else:
+        target = "g10"
+        page.insert_text((80, 100), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_line((76.0, 101.8), (105.0, 101.8))
+        sh.finish(color=(0, 0, 0), fill=None, width=0.8)
+        sh.commit()
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
+
+
+
+def test_native_pdf_observation_r3_dense_hatch_caching_stays_fast() -> None:
+    import time
+    from cad_agent import fidelity as fidelity_module
+
+    doc = fitz.open()
+    pg = doc.new_page(width=800, height=600)
+    for row in range(15):
+        for col in range(10):
+            pg.insert_text((40 + col * 70, 40 + row * 35), f"{row * 10 + col:03d}", fontsize=10)
+    sh = pg.new_shape()
+    sh.draw_rect(fitz.Rect(5, 5, 795, 595))
+    for k in range(2500):
+        y_h = 10.0 + (k % 25) * 0.2
+        sh.draw_line((10.0, y_h), (790.0, y_h))
+    sh.finish(color=(0, 0, 0), fill=None, width=0.3)
+    sh.commit()
+    hatch_bytes = doc.tobytes()
+    doc.close()
+
+    reopened = fitz.open(stream=hatch_bytes, filetype="pdf")
+    try:
+        t0 = time.perf_counter()
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 1600, 1200, "displayed-page-box-v1",
+        )
+        elapsed = time.perf_counter() - t0
+    finally:
+        reopened.close()
+
+    assert len(records) == 150
+    assert elapsed < 1.5
+
+
+@pytest.mark.parametrize(
+    "r4_case",
+    [
+        "closed_subpath_start_vertex_acute_miter_whiteout",
+        "closed_subpath_zero_length_prefix_acute_miter_whiteout",
+        "quad_ul_start_vertex_acute_miter_whiteout",
+        "multirun_later_30Tz_tall_white_overwrite",
+        "multirun_later_5Tz_extreme_tall_white_overwrite",
+        "same_seq_later_uncolored_30Tz_tall_dark_overwrite",
+    ],
+)
+def test_native_pdf_observation_r4_closed_subpath_miter_and_multirun_condensed_text_occluders(
+    r4_case: str,
+) -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    target = "100"
+
+    if r4_case == "closed_subpath_start_vertex_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 4.0 w 0 j 10 M 10 10 380 280 re 70.0 175.0 m 55.0 50.0 l 85.0 50.0 l h S Q\n",
+        )
+    elif r4_case == "closed_subpath_zero_length_prefix_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 4.0 w 0 j 10 M 10 10 380 280 re 70.0 175.0 m 70.0 175.0 l 55.0 50.0 l 85.0 50.0 l h S Q\n",
+        )
+    elif r4_case == "quad_ul_start_vertex_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        sh = page.new_shape()
+        sh.draw_rect(fitz.Rect(10, 10, 390, 290))
+        sh.draw_quad(
+            fitz.Quad(
+                fitz.Point(70.0, 125.0),
+                fitz.Point(85.0, 250.0),
+                fitz.Point(55.0, 250.0),
+                fitz.Point(70.0, 260.0),
+            )
+        )
+        sh.finish(color=(1, 1, 1), fill=None, width=4.0, lineJoin=0)
+        sh.commit()
+    elif r4_case == "multirun_later_30Tz_tall_white_overwrite":
+        page.insert_text((60, 114), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 1 1 1 rg /F0 12 Tf 1 0 0 1 15 280 Tm (A) Tj "
+            b"30 Tz /F0 30 Tf 45 -106 Td (MMMM) Tj "
+            b"100 Tz /F0 12 Tf 290 -154 Td (B) Tj ET Q\n",
+        )
+    elif r4_case == "multirun_later_5Tz_extreme_tall_white_overwrite":
+        page.insert_text((60, 114), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 1 1 1 rg /F0 12 Tf 1 0 0 1 15 280 Tm (A) Tj "
+            b"5 Tz /F0 60 Tf 45 -126 Td (MMMMMMMMMMMM) Tj "
+            b"100 Tz /F0 12 Tf 290 -134 Td (B) Tj ET Q\n",
+        )
+    else:
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf 1 0 0 1 60 186 Tm (100) Tj "
+            b"30 Tz /F0 30 Tf 0 -12 Td (MMMM) Tj ET Q\n",
+        )
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
+
+
+@pytest.mark.parametrize(
+    ("line_y", "expected"),
+    [
+        pytest.param(83.2, {"CONTROL"}, id="crosses-ink-above-0.68em"),
+        pytest.param(80.5, {"77", "CONTROL"}, id="clear-top-margin"),
+        pytest.param(99.5, {"CONTROL"}, id="crosses-ink-near-baseline"),
+        pytest.param(101.0, {"77", "CONTROL"}, id="clear-bottom-margin"),
+    ],
+)
+def test_native_pdf_observation_thin_stroke_at_glyph_bounds(
+    line_y: float, expected: set[str],
+) -> None:
+    with fitz.open() as document:
+        page = document.new_page(width=300, height=200)
+        page.insert_text((80, 100), "77", fontsize=24, fontname="helv")
+        page.insert_text((180, 100), "CONTROL", fontsize=12)
+        shape = page.new_shape()
+        shape.draw_rect(fitz.Rect(10, 10, 290, 190))
+        shape.draw_line((75, line_y), (112, line_y))
+        shape.finish(color=(0, 0, 0), width=0.20)
+        shape.commit()
+        pdf_bytes = document.tobytes()
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as reopened:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 600, 400, "displayed-page-box-v1",
+        )
+
+    assert {record["content"] for record in records} == expected
+
+
+@pytest.mark.parametrize(
+    ("line_start", "line_end", "expected"),
+    [
+        pytest.param(
+            (165.25953247070314, 84.0), (165.25953247070314, 119.0),
+            {"CONTROL"}, id="stroke-contacts-final-glyph-ink",
+        ),
+        pytest.param(
+            (165.25953247070314, 78.0), (165.25953247070314, 81.0),
+            {"10C", "CONTROL"}, id="stroke-in-clear-top-margin",
+        ),
+    ],
+)
+def test_native_pdf_observation_keeps_ink_contact_veto_at_final_glyph_edge(
+    line_start: tuple[float, float], line_end: tuple[float, float], expected: set[str],
+) -> None:
+    with fitz.open() as document:
+        page = document.new_page(width=400, height=300)
+        page.insert_text((80, 120), "10C", fontsize=48, fontname="helv")
+        page.insert_text((250, 250), "CONTROL", fontsize=12, fontname="helv")
+        shape = page.new_shape()
+        shape.draw_line(line_start, line_end)
+        shape.finish(color=(0, 0, 0), width=1.0)
+        shape.commit()
+        pdf_bytes = document.tobytes()
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as reopened:
+        records = fidelity_module._native_pdf_text_span_records(
+            reopened[0], 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+
+    assert {record["content"] for record in records} == expected
+
+
+def _native_pdf_font_resource_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[int, str, str, int]],
+):
+    from types import SimpleNamespace
+
+    import fontTools.ttLib
+
+    resources = [
+        (xref, "ttf", "Type0", name, f"F{xref}", encoding, 0)
+        for xref, name, encoding, _ in rows
+    ]
+    programs = {xref: program for xref, _, _, program in rows}
+    metadata = {}
+    for xref, _, _, program in rows:
+        metadata[xref, "DescendantFonts"] = ("array", f"[{xref + 100} 0 R]")
+        metadata[xref + 100, "CIDToGIDMap"] = ("name", "/Identity")
+        metadata[xref + 100, "FontDescriptor"] = ("xref", f"{xref + 200} 0 R")
+        metadata[xref + 200, "FontFile2"] = ("xref", f"{program} 0 R")
+        metadata[program, "Length1"] = ("int", "8")
+
+    extracted = []
+
+    def extract_font(xref):
+        extracted.append(xref)
+        return ("Fixture", "ttf", "Type0", bytes([programs[xref]]) * 8)
+
+    document = SimpleNamespace(
+        xref_get_key=lambda xref, key: metadata.get((xref, key), ("null", "null")),
+        xref_is_stream=lambda xref: xref in programs.values(),
+        extract_font=extract_font,
+    )
+    page = SimpleNamespace(parent=document, get_fonts=lambda **_: resources)
+    # The fixture observes extraction and identity handling before real font parsing.
+    monkeypatch.setattr(fontTools.ttLib, "TTFont", lambda stream, **_: stream.read())
+    return fidelity_module._NativePdfThinStrokeCheck(page, ()), extracted
+
+
+def test_native_pdf_preparation_extracts_shared_font_program_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, extracted = _native_pdf_font_resource_probe(monkeypatch, [
+        (1, "First+Fixture", "Identity-H", 41),
+        (2, "Second+Fixture", "Identity-H", 41),
+    ])
+
+    assert observer._embedded_font("Fixture") is not None
+    assert len(extracted) == 1
+
+
+def test_native_pdf_preparation_rejects_unsupported_shared_font_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observer, _ = _native_pdf_font_resource_probe(monkeypatch, [
+        (1, "First+Fixture", "Identity-H", 41),
+        (2, "Second+Fixture", "Identity-V", 41),
+    ])
+
+    assert observer._embedded_font("Fixture") is None
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit"),
+    [("_FONT_PROGRAM_LIMIT", 1), ("_FONT_BYTES_LIMIT", 8)],
+    ids=["distinct-programs", "retained-decoded-bytes"],
+)
+def test_native_pdf_preparation_stops_font_work_at_page_budget(
+    monkeypatch: pytest.MonkeyPatch, limit_name: str, limit: int,
+) -> None:
+    monkeypatch.setattr(fidelity_module._NativePdfThinStrokeCheck, limit_name, limit, raising=False)
+    observer, extracted = _native_pdf_font_resource_probe(monkeypatch, [
+        (1, "First", "Identity-H", 41),
+        (2, "Second", "Identity-H", 42),
+        (3, "Third", "Identity-H", 43),
+    ])
+
+    assert observer._embedded_font("First") is not None
+    later = [observer._embedded_font(name) for name in ("Second", "Third", "Second")]
+    assert later == [None, None, None]
+    assert extracted == [1]
+
+
+
+@pytest.mark.real_data
+@pytest.mark.parametrize(
+    ("swap_svg_strokes", "expected_target_retained"),
+    [
+        pytest.param(False, False, id="source-bound-contact"),
+        pytest.param(True, False, id="unavailable-stroke-proof-fails-closed"),
+    ],
+)
+def test_native_pdf_observation_jxs_below_baseline_stroke_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    swap_svg_strokes: bool,
+    expected_target_retained: bool,
+) -> None:
+    import hashlib
+    from xml.etree import ElementTree as ET
+
+    source_value = os.environ.get("CAD_AGENT_PR578_JXS_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_PR578_JXS_PDF is not configured")
+    source = Path(source_value).read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    assert source_sha == "622cb0e63817026bb2d680c8c2e7cb265b9fe3a5c8a6b86e5390e15bf86e8f05"
+
+    swapped = False
+    if swap_svg_strokes:
+        original_export = fitz.Page.get_svg_image
+
+        def export_with_mismatched_stroke(page, matrix=None, text_as_path=True):
+            nonlocal swapped
+            svg = original_export(page, matrix=matrix, text_as_path=text_as_path)
+            if not text_as_path:
+                return svg
+            root = ET.fromstring(svg)
+            path_positions = [i for i, child in enumerate(root) if child.tag.endswith("}path")]
+            path_sequences = [
+                i for i, (kind, _) in enumerate(page.get_bboxlog())
+                if kind in ("stroke-path", "fill-path")
+            ]
+            positions_by_sequence = dict(zip(path_sequences, path_positions, strict=True))
+            clear_stroke = positions_by_sequence[101]
+            contact_stroke = positions_by_sequence[103]
+            root[clear_stroke], root[contact_stroke] = root[contact_stroke], root[clear_stroke]
+            swapped = True
+            return ET.tostring(root, encoding="unicode")
+
+        monkeypatch.setattr(fitz.Page, "get_svg_image", export_with_mismatched_stroke)
+
+    with fitz.open(stream=source, filetype="pdf") as document:
+        page = document[0]
+        raster = page.get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+        result = fidelity_module._native_pdf_text_span_records(
+            page, 1, source_sha, hashlib.sha256(raster.samples).hexdigest(),
+            raster.width, raster.height, "displayed-page-box-v1",
+        )
+
+    spans = {span["id"]: span for span in result}
+    assert "native-pdf-p01-b041-l004-s000" in spans  # Verified clear gap of 0.292 pt.
+    assert "native-pdf-p01-b028-l000-s000" not in spans  # Existing stroke rejection.
+    assert swapped is swap_svg_strokes
+    target_retained = "native-pdf-p01-b007-l001-s000" in spans
+    assert target_retained is expected_target_retained
+
+
+@pytest.mark.real_data
+@pytest.mark.parametrize(
+    ("font_row_limit", "expected_target_retained"),
+    [
+        pytest.param(None, True, id="ordinary-source-with-proof"),
+        pytest.param(1, False, id="lowered-font-row-budget"),
+    ],
+)
+def test_native_pdf_observation_jxs_dark_fill_requires_glyph_separation(
+    monkeypatch: pytest.MonkeyPatch,
+    font_row_limit: int | None,
+    expected_target_retained: bool,
+) -> None:
+    import hashlib
+
+    source_value = os.environ.get("CAD_AGENT_PR578_JXS_PDF")
+    if not source_value:
+        pytest.skip("CAD_AGENT_PR578_JXS_PDF is not configured")
+    source_path = Path(source_value)
+    source = source_path.read_bytes()
+    source_sha = hashlib.sha256(source).hexdigest()
+    assert source_sha == "622cb0e63817026bb2d680c8c2e7cb265b9fe3a5c8a6b86e5390e15bf86e8f05"
+
+    if font_row_limit is not None:
+        monkeypatch.setattr(fidelity_module._NativePdfThinStrokeCheck, "_FONT_ROW_LIMIT", font_row_limit)
+
+    with fitz.open(stream=source, filetype="pdf") as document:
+        page = document[0]
+        assert len(page.get_fonts(full=True)) == 6
+        raster = page.get_pixmap(matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, source_sha, hashlib.sha256(raster.samples).hexdigest(),
+            raster.width, raster.height, "displayed-page-box-v1",
+        )
+
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_sha
+    spans = {span["id"]: span for span in records}
+    assert "native-pdf-p01-b041-l004-s000" in spans  # Unrelated clear dimension.
+    assert "native-pdf-p01-b028-l000-s000" not in spans  # Existing stroke rejection.
+    target_retained = "native-pdf-p01-b009-l000-s000" in spans
+    assert target_retained is expected_target_retained
+
+
+@pytest.mark.parametrize(
+    ("fill_left", "separated"),
+    [(0.0, False), (0.003, False), (0.004, False), (0.005, True)],
+    ids=["touching", "grazing", "touching-after-padding", "positive-padded-gap"],
+)
+def test_native_pdf_dark_fill_requires_strict_padded_separation(fill_left: float, separated: bool) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck
+    assert check._strict_fill_separation((-2.0, 0.0, 0.0, 1.0), (fill_left, 0.0, 2.0, 1.0)) is separated
+
+
+@pytest.mark.parametrize(
+    ("svg_path", "embedded_has_ink", "expected"),
+    [
+        ("", False, ()),
+        ("", True, None),
+        ("M0 0 L1 0 L1 1 Z", False, None),
+        ("M0 0 L1 0 L1 1 Z", True, (0.0, 0.0, 1.0, 1.0)),
+    ],
+    ids=["both-empty", "embedded-only-ink", "svg-only-ink", "both-ink"],
+)
+def test_native_pdf_dark_fill_checks_both_glyph_outlines(
+    monkeypatch: pytest.MonkeyPatch, svg_path: str, embedded_has_ink: bool, expected: tuple | None,
+) -> None:
+    from xml.etree.ElementTree import Element
+
+    from fontTools.pens.recordingPen import RecordingPen
+
+    embedded = RecordingPen()
+    if embedded_has_ink:
+        embedded.moveTo((0.0, 0.0))
+        embedded.lineTo((1.0, 0.0))
+        embedded.lineTo((1.0, 1.0))
+        embedded.closePath()
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    definition = Element("path", d=svg_path)
+    glyph_set = {"glyph": type("Glyph", (), {"draw": staticmethod(embedded.replay)})()}
+    binding = (glyph_set, "glyph", (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), "#000000", definition, 1.0)
+    monkeypatch.setattr(check, "_bound_glyph", lambda *args, **kwargs: binding)
+
+    if expected is None:
+        with pytest.raises(ValueError, match="Glyph outlines disagree"):
+            check._glyph_control_bounds({}, (), 1.0)
+    else:
+        assert check._glyph_control_bounds({}, (), 1.0) == expected
+
+
+def test_native_pdf_dark_fill_rejects_nonunique_glyph_use() -> None:
+    from xml.etree.ElementTree import Element
+
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    matrix = (10.0, 0.0, 0.0, -10.0, 20.0, 40.0)
+    check.glyphs[("A", 7)] = [(Element("use"), matrix), (Element("use"), matrix)]
+    trace = {"type": 0, "opacity": 1, "wmode": 0, "dir": (1.0, 0.0), "size": 10.0}
+    glyph = (ord("A"), 7, (20.0, 40.0), (20.0, 30.0, 26.0, 40.0))
+    with pytest.raises(ValueError, match="Glyph cannot be uniquely bound"):
+        check._glyph_control_bounds(trace, glyph, 10.0)
+
+
+def test_native_pdf_dark_fill_reuses_unavailable_binding_and_keeps_stroke_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    calls = []
+    monkeypatch.setattr(check, "_bound_fill_components", lambda sequence, *_: calls.append(sequence))
+    check.pairs = check._PAIR_LIMIT  # The protected stroke phase spent its full allowance.
+
+    for sequence in (5, 5, 6, 7):
+        assert not check.separates_dark_fill(sequence, {}, [], {"_trace_order_idx": 0}, 1.0)
+    assert calls == [5, 6]
+    assert check.pairs == check._PAIR_LIMIT
+    assert check.fill_attempts == 2
+    assert check.pixels == 0
+
+
+@pytest.mark.parametrize(
+    ("cached_ink", "paint_box", "work_limit", "expected_pass", "expected_bindings"),
+    [
+        pytest.param(True, (0.0, 2.0, 1.0, 3.0), 4, True, [5], id="warm-ink-proves-clearance"),
+        pytest.param(True, (0.0, 1.0, 1.0, 2.0), 4, False, [5], id="touching"),
+        pytest.param(False, (0.0, 2.0, 1.0, 3.0), 4, False, [], id="missing-ink"),
+        pytest.param(True, None, 4, False, [5], id="missing-paint-binding"),
+        pytest.param(True, (0.0, 2.0, 1.0, 3.0), 0, False, [], id="budget-before-binding"),
+        pytest.param(True, (0.0, 2.0, 1.0, 3.0), 1, False, [5], id="budget-before-comparison"),
+    ],
+)
+def test_native_pdf_dark_fill_reuses_warm_ink_without_spending_preparation_attempts(
+    cached_ink, paint_box, work_limit, expected_pass, expected_bindings, monkeypatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    check.fill_attempts = check._FILL_PAIR_LIMIT
+    if cached_ink:
+        check.ink_bounds[(0, 18.0, None)] = [(0.0, 0.0, 1.0, 1.0)]
+    bindings = []
+
+    def bind(sequence, _drawing, _components):
+        bindings.append(sequence)
+        return [paint_box] if paint_box is not None else None
+
+    monkeypatch.setattr(check, "_bound_fill_components", bind)
+    budget = fidelity_module._GlyphPairWorkBudget(work_limit)
+    assert check.separates_dark_fill(
+        5, {}, [fitz.Rect(0.0, 2.0, 1.0, 3.0)], {"_trace_order_idx": 0}, 18.0, work_budget=budget,
+    ) is expected_pass
+    assert bindings == expected_bindings
+    assert check.fill_attempts == check._FILL_PAIR_LIMIT
+    assert budget.work <= work_limit
+
+
+def test_native_pdf_dark_fill_bounds_glyph_by_component_comparisons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    check.fill_bounds[5] = [(0.0, 0.0, 1.0, 1.0)] * 1_000
+    trace = {"_trace_order_idx": 0}
+    check.ink_bounds[(0, 18.0, None)] = [(2.0, 2.0, 3.0, 3.0)] * 101
+    comparison_count = 0
+
+    def count_comparison(_ink, _fill):
+        nonlocal comparison_count
+        comparison_count += 1
+        return True
+
+    monkeypatch.setattr(check, "_strict_fill_separation", count_comparison)
+
+    separated = check.separates_dark_fill(5, {}, [], trace, 18.0)
+    assert comparison_count <= 100_000
+    assert not separated
+
+
+@pytest.mark.parametrize("compare_whole", [False, True])
+def test_native_pdf_dark_fill_keeps_binding_receipts_per_character_scope(
+    compare_whole: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    check = fidelity_module._NativePdfThinStrokeCheck(None, [])
+    check.export_ready = True
+    lookups = []
+    monkeypatch.setattr(check, "_bound_fill_components", lambda sequence, *_: lookups.append(sequence))
+
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text((40, 80), "CAD NOTES", fontsize=18)
+        trace, = page.get_texttrace()
+    whole = {**trace, "_trace_order_idx": 0}
+    chars = whole["chars"]
+    split = 3
+
+    def selected(start: int, end: int) -> dict[str, Any]:
+        return {
+            **whole,
+            "chars": chars[start:end],
+            "_source_character_range": (start, end),
+            "_aggregate_trace_char_count": len(chars),
+        }
+
+    first = selected(0, split)
+    second = selected(split, len(chars))
+    malformed = {**second, "_source_character_range": (split, len(chars) + 1)}
+    for scope in (first, first, whole if compare_whole else second, malformed):
+        assert not check.separates_dark_fill(5, {}, [], scope, 18.0)
+
+    assert len(check.fill_separations) == 2
+    assert check.fill_attempts == 2
+    assert check.pairs == 0
+    assert lookups == [5]
+
+
+@pytest.mark.parametrize(("vertical_scale", "contact"), [(1.0, False), (1.019, True)])
+def test_native_pdf_observation_uses_displayed_stroke_width(
+    vertical_scale: float, contact: bool,
+) -> None:
+    with fitz.open() as document:
+        page = document.new_page(width=160, height=140)
+        page.insert_text((55, 90), "1", fontsize=48)
+        raw = page.get_text("rawdict", flags=fitz.TEXTFLAGS_RAWDICT | fitz.TEXT_ACCURATE_BBOXES)
+        glyph = raw["blocks"][0]["lines"][0]["spans"][0]["chars"][0]
+        assert glyph["c"] == "1"
+        ink = fitz.Rect(glyph["bbox"])
+        page.insert_text((20, 20), "CONTROL", fontsize=10)
+        clip = fitz.Rect(ink.x0 - 0.25, ink.y0 - 0.03, ink.x1 + 0.25, ink.y0 + 0.1)
+        scale = fitz.Matrix(256, 256)
+        before = np.frombuffer(
+            page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples, np.uint8,
+        )
+        # A 1 pt line at this distance clears the top at unit scale.
+        # Transverse expansion about its center increases only the painted width.
+        center = ink.y0 - 0.507
+        page.draw_line(
+            (ink.x0 - 2, center), (ink.x1 + 2, center), width=1,
+            color=(0.25, 0.25, 0.25), morph=(fitz.Point(ink.x0, center), fitz.Matrix(1, vertical_scale)),
+        )
+        after = np.frombuffer(
+            page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples, np.uint8,
+        )
+        records = fidelity_module._native_pdf_text_span_records(
+            page, 1, "a" * 64, "b" * 64, 320, 280, "displayed-page-box-v1",
+        )
+
+    assert bool(np.any((before < 16) & (after > before + 8))) is contact
+    contents = {record["content"] for record in records}
+    assert "CONTROL" in contents
+    assert ("1" not in contents) is contact
+
+
+def test_native_pdf_observation_distinguishes_right_angle_miter_ink_contact() -> None:
+    from cad_agent import fidelity as fidelity_module
+
+    clip = fitz.Rect(60, 105, 69, 122)
+    scale = fitz.Matrix(10, 10)
+    with fitz.open() as document:
+        page = document.new_page(width=140, height=140)
+        page.insert_text((70, 50), "CONTROL", fontsize=12)
+        page.insert_text((60, 120), "1", fontsize=12)
+        reference = page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples
+        unpainted = document.tobytes()
+
+    for join in (0, 1, 2):
+        with fitz.open(stream=unpainted, filetype="pdf") as document:
+            page = document[0]
+            shape = page.new_shape()
+            shape.draw_polyline([(38.75, 99), (53.75, 114), (38.75, 129)])
+            shape.finish(width=12, color=(1, 1, 1), lineJoin=join, closePath=False)
+            shape.commit()
+            paint = page.get_pixmap(matrix=scale, colorspace=fitz.csGRAY, clip=clip).samples
+            records = fidelity_module._native_pdf_text_span_records(
+                page, 1, "a" * 64, "b" * 64, 280, 280, "displayed-page-box-v1",
+            )
+
+        contents = {record["content"] for record in records}
+        assert (paint != reference) is (join == 0)
+        assert "CONTROL" in contents
+        assert ("1" in contents) is (join != 0), f"Incorrect native text admission for line join {join}"
+
+
+@pytest.mark.parametrize(
+    "r5_case",
+    [
+        "bezier_bezier_acute_miter_whiteout",
+        "closed_bezier_line_start_vertex_miter_whiteout",
+        "projecting_square_cap_2J_45deg_whiteout",
+        "anisotropic_ctm_1M_with_diag_whiteout",
+        "oversized_svg_anisotropic_ctm_whiteout",
+        "tounicode_space_mapped_glyph_whiteout",
+        "expanded_1500Tz_midbody_strikethrough",
+        "expanded_500Tz_10pt_thick_bar_erase",
+        "tilted_3deg_intratrace_W8_overprint",
+        "oblique_35deg_multitrace_W8_overprint",
+    ],
+)
+def test_native_pdf_observation_r5_bezier_miter_square_cap_aniso_ctm_tounicode_space_expanded_tz_and_tilted_overprint(
+    r5_case: str,
+) -> None:
+    import math
+    from cad_agent import fidelity as fidelity_module
+
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((250, 250), "CONTROL", fontsize=12)
+    target = "100"
+
+    if r5_case == "bezier_bezier_acute_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 8.0 w 0 j 10 M 20 100 140 150 re "
+            b"55.0 48.0 m 60.0 89.67 65.0 131.33 70.0 173.0 c "
+            b"75.0 131.33 80.0 89.67 85.0 48.0 c S Q\n",
+        )
+    elif r5_case == "closed_bezier_line_start_vertex_miter_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 4.0 w 0 j 10 M 10 10 380 280 re "
+            b"70.0 175.0 m 65.0 133.33 60.0 91.67 55.0 50.0 c "
+            b"85.0 50.0 l h S Q\n",
+        )
+    elif r5_case == "projecting_square_cap_2J_45deg_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 1 1 1 RG 40.0 w 2 J 1 j 10 80 160 200 re "
+            b"50.0 137.0 m 70.0 157.0 l 90.0 230.0 m 70.0 210.0 l S Q\n",
+        )
+    elif r5_case in {"anisotropic_ctm_1M_with_diag_whiteout", "oversized_svg_anisotropic_ctm_whiteout"}:
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq 0.1 0 0 10 0 0 cm 1 1 1 RG 3.0 w 0 j 1 M "
+            b"400 16.0 600 5.0 re 410 16.1 m 420 16.2 l 550 17.5 m 850 17.5 l S Q\n",
+        )
+    elif r5_case == "tounicode_space_mapped_glyph_whiteout":
+        page.insert_text((60, 120), target, fontsize=12)
+        page.clean_contents()
+        cmap_stream = (
+            b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+            b"/CMapName /CustomSpaceMap def\n/CMapType 2 def\n"
+            b"1 begincodespacerange\n<00> <FF>\nendcodespacerange\n"
+            b"1 beginbfchar\n<4D> <0020>\nendbfchar\nendcmap\n"
+            b"CMapName currentdict /CMap defineresource pop\nend\nend\n"
+        )
+        cmap_xref = document.get_new_xref()
+        document.update_object(cmap_xref, "<< >>")
+        document.update_stream(cmap_xref, cmap_stream)
+        font_xref = document.get_new_xref()
+        document.update_object(
+            font_xref,
+            f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode {cmap_xref} 0 R >>",
+        )
+        pg_obj = document.xref_object(page.xref)
+        if "/Font <<" in pg_obj:
+            document.update_object(page.xref, pg_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+        else:
+            res_type, res_val = document.xref_get_key(page.xref, "Resources")
+            r_xref = int(res_val.split()[0])
+            r_obj = document.xref_object(r_xref)
+            if "/Font <<" in r_obj:
+                document.update_object(r_xref, r_obj.replace("/Font <<", f"/Font << /F99 {font_xref} 0 R ", 1))
+            else:
+                _, f_val = document.xref_get_key(r_xref, "Font")
+                f_xref = int(f_val.split()[0])
+                document.update_object(f_xref, document.xref_object(f_xref).replace("<<", f"<< /F99 {font_xref} 0 R ", 1))
+        c_xref = page.get_contents()[0]
+        document.update_stream(
+            c_xref,
+            document.xref_stream(c_xref)
+            + b"\nq BT 1 1 1 rg /F99 18 Tf 1 0 0 1 58 178 Tm (M) Tj 2 0 Td (M) Tj 2 0 Td (M) Tj 2 0 Td (M) Tj 2 0 Td (M) Tj ET Q\n",
+        )
+    elif r5_case == "expanded_1500Tz_midbody_strikethrough":
+        target = "10"
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 1500 Tz /F0 10 Tf 1 0 0 1 40 180 Tm (10) Tj ET Q\n"
+            b"q 0 0 0 RG 2.0 w 10 10 380 280 re 35 183.6 m 230 183.6 l S Q\n",
+        )
+    elif r5_case == "expanded_500Tz_10pt_thick_bar_erase":
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg 500 Tz /F0 10 Tf 1 0 0 1 40 180 Tm (100) Tj ET Q\n"
+            b"q 0 0 0 RG 10.0 w 10 10 380 280 re 35 176.95 m 195 176.95 l S Q\n",
+        )
+    elif r5_case == "tilted_3deg_intratrace_W8_overprint":
+        target = "W8"
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        ang = math.radians(-3.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        t1 = f"{ca:.6f} {sa:.6f} {-sa:.6f} {ca:.6f} 60.0 180.0 Tm".encode("ascii")
+        document.update_stream(xref, document.xref_stream(xref) + b"\nq BT 0 0 0 rg /F0 12 Tf " + t1 + b" [(W) 650 (8)] TJ ET Q\n")
+    else:
+        target = "W8"
+        page.clean_contents()
+        xref = page.get_contents()[0]
+        ang = math.radians(-35.7)
+        ca, sa = math.cos(ang), math.sin(ang)
+        t1 = f"{ca:.6f} {sa:.6f} {-sa:.6f} {ca:.6f} 60.0 180.0 Tm".encode("ascii")
+        t2 = f"{ca:.6f} {sa:.6f} {-sa:.6f} {ca:.6f} {60.0 + 3.5 * ca:.6f} {180.0 + 3.5 * sa:.6f} Tm".encode("ascii")
+        document.update_stream(
+            xref,
+            document.xref_stream(xref)
+            + b"\nq BT 0 0 0 rg /F0 12 Tf " + t1 + b" (W) Tj ET Q\n"
+            + b"q BT 0 0 0 rg /F0 12 Tf " + t2 + b" (8) Tj ET Q\n",
+        )
+
+    reopened = fitz.open(stream=document.tobytes(), filetype="pdf")
+    document.close()
+    try:
+        observation_page: Any = reopened[0]
+        if r5_case == "oversized_svg_anisotropic_ctm_whiteout":
+            class OversizedSvgPage:
+                svg_calls = 0
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(reopened[0], name)
+
+                def get_svg_image(self, **kwargs: Any) -> str:
+                    self.svg_calls += 1
+                    return "<svg>" + (" " * (4 * 1024 * 1024 + 1))
+
+            observation_page = OversizedSvgPage()
+        records = fidelity_module._native_pdf_text_span_records(
+            observation_page, 1, "a" * 64, "b" * 64, 800, 600, "displayed-page-box-v1",
+        )
+        if r5_case == "oversized_svg_anisotropic_ctm_whiteout":
+            assert observation_page.svg_calls == 1
+    finally:
+        reopened.close()
+
+    contents = {r["content"] for r in records}
+    assert target not in contents
+    assert "CONTROL" in contents
