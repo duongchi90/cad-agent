@@ -5839,27 +5839,33 @@ def test_native_pdf_observation_maps_exact_b041_aigdt_gid80_to_unverified_diamet
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     native = observation["native_pdf_spans"]
 
-    assert len(native) == 1  # Only B041 trace 321 has no later paint overlap under current policy.
-    span = native[0]
-    assert span["content"] == "\u2300"
-    assert span["source_text_raw"] == "n"
-    assert span["source_font_resource"] == {
-        "xref": 24,
-        "resource_name": "F5",
-        "base_font": "ADSINV+AIGDT",
-    }
-    assert span["source_font_file_sha256"] == (
-        "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b"
-    )
-    assert span["source_glyph_id"] == 80
-    assert span["source_glyph_name"] == "uniF06E"
-    assert span["source_cmap_codepoint"] == 0xF06E
-    assert span["source_paint_evidence"]["sequence_number"] == 321
-    assert span["visibility"] == "unverified"
-    assert span["source_sha256"] == manifest["source"]["sha256"]
+    diameter_spans = [
+        span for span in native
+        if span.get("source_glyph_id") == 80 or span["content"] == "\u2300"
+    ]
+    # Source raster readback confirms these three distinct embedded diameter marks.
+    assert sorted(span["source_paint_evidence"]["sequence_number"] for span in diameter_spans) == [
+        266, 321, 336,
+    ]
     audit_path = output / observation["source_layout_audit"]["artifact"]
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    assert span["render_sha256"] == audit["source_page"]["render_sha256"]
+    for span in diameter_spans:
+        assert span["content"] == "\u2300"
+        assert span["source_text_raw"] == "n"
+        assert span["source_font_resource"] == {
+            "xref": 24,
+            "resource_name": "F5",
+            "base_font": "ADSINV+AIGDT",
+        }
+        assert span["source_font_file_sha256"] == (
+            "aac3c6c7451139928755b08a4bc193a63ed93b51df58ed2fdd559c450696029b"
+        )
+        assert span["source_glyph_id"] == 80
+        assert span["source_glyph_name"] == "uniF06E"
+        assert span["source_cmap_codepoint"] == 0xF06E
+        assert span["visibility"] == "unverified"
+        assert span["source_sha256"] == manifest["source"]["sha256"]
+        assert span["render_sha256"] == audit["source_page"]["render_sha256"]
     assert observation["candidates"]  # OCR remains a separate typed collection.
     assert all(candidate.get("source") != "native_pdf" for candidate in observation["candidates"])
     assert not any(key in observation for key in ("TEXT", "MTEXT", "DIMENSION"))
@@ -5919,8 +5925,13 @@ def test_native_pdf_text_approval_rejects_overlapping_b041_ocr_and_native_spans(
         source, output, manifest, workspace_root=Path.cwd(),
     )[0]
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    native = next(span for span in observation["native_pdf_spans"] if span["content"] == "\u2300")
-    ocr = next(candidate for candidate in observation["candidates"] if candidate["content"] == "12,00")
+    # Among B041's identical diameter glyphs, trace 321 belongs to this callout.
+    native, = [
+        span for span in observation["native_pdf_spans"]
+        if span["content"] == "\u2300"
+        and span["source_paint_evidence"]["sequence_number"] == 321
+    ]
+    ocr, = [candidate for candidate in observation["candidates"] if candidate["content"] == "12,00"]
     native_bbox = native["bbox_px"]
     ocr_bbox = ocr["bbox_px"]
     overlap_width = min(native_bbox[2], ocr_bbox[2]) - max(native_bbox[0], ocr_bbox[0])
