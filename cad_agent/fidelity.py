@@ -1769,6 +1769,11 @@ class _NativePdfThinStrokeCheck:
     _PATH_OPERATION_LIMIT = 10_000
     _SVG_NS = "{http://www.w3.org/2000/svg}"
     _HREF = "{http://www.w3.org/1999/xlink}href"
+    _BASE14_NAMES = {
+        "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
+        "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
+        "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic", "Symbol", "ZapfDingbats",
+    }
 
     def __init__(self, page: fitz.Page, paint_log: Collection[Any]) -> None:
         self.page = page
@@ -1777,6 +1782,8 @@ class _NativePdfThinStrokeCheck:
         self.paths: dict[int, Any] = {}
         self.glyphs: dict[tuple[str, int], list[tuple[Any, tuple[float, ...]]]] = {}
         self.definitions: dict[str, Any] = {}
+        self.export_has_raster_wrappers = False
+        self.empty_stock_spaces: dict[tuple[str, int], bool] = {}
         self.fonts: dict[str, Any] = {}
         self.base14_fonts: dict[str, fitz.Font | None] = {}
         self.base14_trace_bounds: dict[int, dict[tuple[int, tuple[Any, ...]], fitz.Rect] | None] = {}
@@ -1852,8 +1859,21 @@ class _NativePdfThinStrokeCheck:
             0.0, 0.0, round(self.page.rect.width, 3), round(self.page.rect.height, 3),
         ):
             return
-        if any(child.tag not in {ns + "defs", ns + "path", ns + "use"} for child in root):
+        if any(child.tag not in {ns + "defs", ns + "path", ns + "use", ns + "g"} for child in root):
             return
+        raster_wrappers = root.findall(ns + "g")
+        # A renderer-emitted group containing only an inline raster carries no
+        # glyph use. Such groups are admitted only for area-paint glyph binding.
+        for wrapper in raster_wrappers:
+            if set(wrapper.attrib) != {"transform"} or len(wrapper) != 1:
+                return
+            raster = wrapper[0]
+            if (
+                raster.tag != ns + "image" or len(raster)
+                or set(raster.attrib) != {"id", "width", "height", self._HREF}
+                or not raster.get(self._HREF, "").startswith(("data:image/png;base64,", "data:image/jpeg;base64,"))
+            ):
+                return
         defs = root.findall(ns + "defs")
         if len(defs) != 1:
             return
@@ -1879,16 +1899,13 @@ class _NativePdfThinStrokeCheck:
                 return
         self.glyphs = indexed
         self.definitions = definitions
-        self.paths = {index: node for (index, _), node in zip(path_sequences, path_nodes)}
+        self.export_has_raster_wrappers = bool(raster_wrappers)
+        if not self.export_has_raster_wrappers:
+            self.paths = {index: node for (index, _), node in zip(path_sequences, path_nodes)}
 
     def _base14_font(self, trace: dict[str, Any]) -> fitz.Font | None:
         font_name = trace.get("font")
-        base14_names = {
-            "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
-            "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
-            "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic", "Symbol", "ZapfDingbats",
-        }
-        if not isinstance(font_name, str) or font_name not in base14_names:
+        if not isinstance(font_name, str) or font_name not in self._BASE14_NAMES:
             return None
         if font_name not in self.base14_fonts:
             self.base14_fonts[font_name] = None
@@ -2181,8 +2198,11 @@ class _NativePdfThinStrokeCheck:
         match = re.fullmatch(r"(\d+) 0 R", value)
         return int(match[1]) if match is not None else None
 
-    def _font_program_reference(self, document: fitz.Document, resource: tuple[Any, ...]) -> int | None:
-        if resource[1:3] != ("ttf", "Type0") or resource[5] != "Identity-H" or resource[6] != 0:
+    def _font_program_reference(
+        self, document: fitz.Document, resource: tuple[Any, ...], *, stock_cff: bool = False,
+    ) -> int | None:
+        extension = "cid" if stock_cff else "ttf"
+        if resource[1:3] != (extension, "Type0") or resource[5] != "Identity-H" or resource[6] != 0:
             return None
         kind, descendant = document.xref_get_key(resource[0], "DescendantFonts")
         if kind == "xref":
@@ -2196,15 +2216,20 @@ class _NativePdfThinStrokeCheck:
         if descendant_ref is None:
             return None
         descendant_xref = int(descendant_ref[1])
-        if document.xref_get_key(descendant_xref, "CIDToGIDMap") != ("name", "/Identity"):
+        if stock_cff:
+            if document.xref_get_key(descendant_xref, "Subtype") != ("name", "/CIDFontType0"):
+                return None
+        elif document.xref_get_key(descendant_xref, "CIDToGIDMap") != ("name", "/Identity"):
             return None
         descriptor = self._object_reference(*document.xref_get_key(descendant_xref, "FontDescriptor"))
         if descriptor is None:
             return None
         # Bind to the exact stream that the pinned extractor would select.
-        if any(document.xref_get_key(descriptor, key)[0] != "null" for key in ("FontFile", "FontFile3")):
+        program_key = "FontFile3" if stock_cff else "FontFile2"
+        other_key = "FontFile2" if stock_cff else "FontFile3"
+        if any(document.xref_get_key(descriptor, key)[0] != "null" for key in ("FontFile", other_key)):
             return None
-        reference = self._object_reference(*document.xref_get_key(descriptor, "FontFile2"))
+        reference = self._object_reference(*document.xref_get_key(descriptor, program_key))
         return reference if reference is not None and document.xref_is_stream(reference) else None
 
     def _load_font_program(self, document: fitz.Document, reference: int, font_xref: int) -> bytes | None:
@@ -2257,10 +2282,64 @@ class _NativePdfThinStrokeCheck:
             program = data
         return TTFont(BytesIO(program), lazy=True) if program is not None else None
 
+    def _empty_stock_cff_space(self, trace: dict[str, Any], glyph: tuple[Any, ...]) -> bool:
+        # A renderer glyph with no SVG path still needs a font-side empty
+        # outline. Only inspect CFF data identical to a built-in font program.
+        from io import BytesIO
+
+        from fontTools.cffLib import CFFFontSet
+        from fontTools.pens.boundsPen import ControlBoundsPen
+
+        code, gid, *_ = glyph
+        if code != 32:
+            return False
+        key = (trace["font"], gid)
+        if key in self.empty_stock_spaces:
+            return self.empty_stock_spaces[key]
+        if len(self.empty_stock_spaces) >= self._FONT_PROGRAM_LIMIT:
+            return False
+        self.empty_stock_spaces[key] = False
+        document = self.page.parent
+        if document is None or self.preparation_exhausted:
+            return False
+        resources = self.page.get_fonts(full=True)
+        if len(resources) > self._FONT_ROW_LIMIT:
+            return False
+        composite = [row for row in resources if row[2] == "Type0"]
+        if len(composite) != 1 or composite[0][3] not in self._BASE14_NAMES:
+            return False
+        resource = composite[0]
+        # Additional resources must be direct, unembedded Base-14 Type1 fonts.
+        for row in resources:
+            if row != resource and (row[1:3] != ("n/a", "Type1") or row[3] not in self._BASE14_NAMES or row[6] != 0):
+                return False
+        reference = self._font_program_reference(document, resource, stock_cff=True)
+        if reference is None:
+            return False
+        program = self._load_font_program(document, reference, resource[0])
+        stock = fitz.Font(resource[3])
+        if not program or program != stock.buffer or stock.has_glyph(code) != gid:
+            return False
+        fonts = CFFFontSet()
+        fonts.decompile(BytesIO(program), None)
+        if fonts.fontNames != [trace["font"]]:
+            return False
+        font = fonts[trace["font"]]
+        if not 0 <= gid < len(font.charset) or font.charset[gid] != "space":
+            return False
+        pen = ControlBoundsPen(None)
+        font.CharStrings["space"].draw(self._metered_pen(pen))
+        empty = pen.bounds is None
+        self.empty_stock_spaces[key] = empty
+        return empty
+
     def _bound_svg_glyph(
         self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float, *,
         allow_quarter_turn: bool = False,
+        area_paint: bool = False,
     ) -> tuple[tuple[float, ...], str, Any] | None:
+        if self.export_has_raster_wrappers and not area_paint:
+            return None
         code, gid, (ox, oy), _ = glyph
         if trace.get("type") != 0 or trace.get("opacity") != 1 or trace.get("layer") or trace.get("wmode") != 0:
             return None
@@ -2274,7 +2353,9 @@ class _NativePdfThinStrokeCheck:
         if not set(node.attrib) <= {"data-text", self._HREF, "transform", "fill"}:
             return None
         direction = tuple(trace.get("dir", ()))
-        if direction == (1.0, 0.0) and b == 0 and c == 0:
+        if direction == (1.0, 0.0) and b == 0 and (c == 0 or (area_paint and math.isfinite(c))):
+            # Horizontal shear leaves the baseline length and determinant
+            # intact. The area proof transforms the complete glyph hull.
             advance, cross = a, -d
         elif allow_quarter_turn and direction in ((0.0, -1.0), (0.0, 1.0)) and a == 0 and d == 0:
             advance, cross = b * direction[1], c * direction[1]
@@ -2295,8 +2376,11 @@ class _NativePdfThinStrokeCheck:
     def _bound_glyph(
         self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float, *,
         allow_quarter_turn: bool = False,
+        area_paint: bool = False,
     ) -> tuple[Any, str, tuple[float, ...], str, Any, float] | None:
-        bound = self._bound_svg_glyph(trace, glyph, span_size, allow_quarter_turn=allow_quarter_turn)
+        bound = self._bound_svg_glyph(
+            trace, glyph, span_size, allow_quarter_turn=allow_quarter_turn, area_paint=area_paint,
+        )
         if bound is None:
             return None
         matrix, fill, definition = bound
@@ -2339,7 +2423,8 @@ class _NativePdfThinStrokeCheck:
                      for path in (source_path, font_path))
 
     def _glyph_control_bounds(
-        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float,
+        self, trace: dict[str, Any], glyph: tuple[Any, ...], span_size: float, *,
+        area_paint: bool = False,
     ) -> tuple[float, ...]:
         from fontTools.pens.basePen import BasePen
         from fontTools.pens.boundsPen import ControlBoundsPen
@@ -2373,7 +2458,9 @@ class _NativePdfThinStrokeCheck:
             def _endPath(self):
                 self.operations.append(("end", ()))
 
-        bound = self._bound_glyph(trace, glyph, span_size, allow_quarter_turn=True)
+        bound = self._bound_glyph(
+            trace, glyph, span_size, allow_quarter_turn=True, area_paint=area_paint,
+        )
         if bound is None:
             raise ValueError("Glyph cannot be uniquely bound to the embedded font and SVG")
         glyph_set, name, matrix, _, definition, unit = bound
@@ -2639,6 +2726,25 @@ class _GlyphPairWorkBudget:
             return False
         self.work += work
         return True
+
+def _native_pdf_shared_area_hits_overhang(
+    paint_rect: fitz.Rect,
+    span_rect: fitz.Rect,
+    shared_rect: fitz.Rect,
+    ink_overhang: Collection[fitz.Rect] | None,
+    work: _GlyphPairWorkBudget,
+) -> bool:
+    if ink_overhang is None:
+        ink_overhang = () if span_rect.contains(shared_rect) else (shared_rect,)
+    if not work.reserve(ink_overhang, (None,)):
+        return True
+    for bounds in ink_overhang:
+        contact = bounds & paint_rect
+        # A valid degenerate intersection is edge contact, not clearance.
+        if contact.is_valid and not span_rect.contains(contact):
+            return True
+    return False
+
 
 def _native_pdf_glyph_source_key(glyph: tuple[Any, ...]) -> tuple[Any, tuple[Any, ...]]:
     return glyph[0], tuple(glyph[2])
@@ -3909,19 +4015,26 @@ def _native_pdf_text_span_records(
                 min_y, max_y = min(min_y, min(y)), max(max_y, max(y))
         return (min_x, min_y, max_x, max_y)
 
-    def shared_source_glyph_boxes(trace: dict[str, Any], span_size: float) -> list[fitz.Rect] | None:
+    def shared_source_glyph_boxes(
+        trace: dict[str, Any], span_size: float, *, area_paint: bool,
+    ) -> list[fitz.Rect] | None:
         # Bind each glyph use before reusing its definition's local control box.
         # Transformed outlines supplement metric boxes for a shared paint operation.
         if not thin_stroke_check.export_ready:
             thin_stroke_check._prepare_export()
         boxes = []
         for glyph in trace["chars"]:
-            bound = thin_stroke_check._bound_svg_glyph(trace, glyph, span_size, allow_quarter_turn=True)
+            bound = thin_stroke_check._bound_svg_glyph(
+                trace, glyph, span_size, allow_quarter_turn=True,
+                area_paint=area_paint,
+            )
             if bound is None:
                 return None
             matrix, _, definition = bound
             if not definition.get("d"):
-                if thin_stroke_check._glyph_control_bounds(trace, glyph, span_size):
+                if area_paint and thin_stroke_check._empty_stock_cff_space(trace, glyph):
+                    continue
+                if thin_stroke_check._glyph_control_bounds(trace, glyph, span_size, area_paint=area_paint):
                     return None
                 continue
             definition_id = definition.attrib["id"]
@@ -3975,7 +4088,7 @@ def _native_pdf_text_span_records(
         source_paint_candidate_rect: fitz.Rect | None = None
         source_paint_envelope: fitz.Rect | None = None
         shared_paint_rect: fitz.Rect | None = None
-        shared_ink_boxes: list[fitz.Rect] | None = None
+        shared_ink_by_paint_kind: dict[bool, list[fitz.Rect] | None] = {}
 
         def intersects_source_paint_overhang(
             source_rect: fitz.Rect | None,
@@ -4015,10 +4128,8 @@ def _native_pdf_text_span_records(
                 source_paint_rect = fitz.Rect(source_paint_item[1])
                 if not source_paint_rect.is_empty:
                     source_paint_candidate_rect = source_paint_rect
-                    # A paint bbox shared by multiple traces cannot attribute
-                    # overhang to this span. It remains useful for conservative
-                    # fill-path checks, but image/shade fallback needs a
-                    # span-specific envelope to avoid suppressing clear siblings.
+                    # Shared paint bounds are useful for discovery, but a
+                    # span needs bound glyph ink before its bounds can narrow.
                     if (
                         len(traces_by_sequence.get(sequence_number, [])) == 1
                         and not isinstance(trace.get("_source_character_range"), (tuple, list))
@@ -4270,40 +4381,59 @@ def _native_pdf_text_span_records(
                     source_candidate_rect if paint_type == "fill-path" else source_interaction_rect
                 )
                 shared_stroke = paint_type == "stroke-path" and shared_paint_rect is not None
-                if shared_stroke:
+                shared_area_paint = paint_type in ("fill-image", "fill-shade") and shared_paint_rect is not None
+                if shared_stroke or shared_area_paint:
                     interaction_rect = interaction_rect | shared_paint_rect
+                if shared_area_paint:
+                    # Include the padding used by the bound glyph control boxes.
+                    pad = thin_stroke_check._FILL_PADDING_PT
+                    interaction_rect += (-pad, -pad, pad, pad)
                 if (
                     isinstance(paint_bbox, (tuple, list))
                     and len(paint_bbox) == 4
                     and all(isinstance(v, (int, float)) and math.isfinite(float(v)) for v in paint_bbox)
                     and (
-                        float(paint_bbox[2]) <= interaction_rect.x0
-                        or float(paint_bbox[0]) >= interaction_rect.x1
-                        or float(paint_bbox[3]) <= interaction_rect.y0
-                        or float(paint_bbox[1]) >= interaction_rect.y1
+                        float(paint_bbox[2]) < interaction_rect.x0
+                        or float(paint_bbox[0]) > interaction_rect.x1
+                        or float(paint_bbox[3]) < interaction_rect.y0
+                        or float(paint_bbox[1]) > interaction_rect.y1
                     )
                 ):
                     continue
                 paint_rect = fitz.Rect(paint_bbox)
-                if overlap_ratio(interaction_rect, paint_rect) <= 0:
+                if shared_area_paint:
+                    if paint_rect.is_empty or not (interaction_rect & paint_rect).is_valid:
+                        continue
+                elif overlap_ratio(interaction_rect, paint_rect) <= 0:
                     continue
-                if shared_stroke:
-                    if shared_ink_boxes is None:
+                if shared_stroke or shared_area_paint:
+                    if shared_area_paint not in shared_ink_by_paint_kind:
+                        bound_ink = None
                         try:
                             if glyph_pair_work.reserve(trace["chars"], (None,)):
-                                shared_ink_boxes = shared_source_glyph_boxes(trace, span_font_size)
+                                bound_ink = shared_source_glyph_boxes(
+                                    trace, span_font_size, area_paint=shared_area_paint,
+                                )
                         except (TypeError, ValueError, RuntimeError):
-                            shared_ink_boxes = None
+                            pass
                         # Keep the original operation's envelope when ink cannot be attributed.
-                        shared_ink_boxes = [
-                            box for box in (shared_ink_boxes or [shared_paint_rect])
-                            if not source_interaction_rect.contains(box)
-                        ]
+                        shared_ink_by_paint_kind[shared_area_paint] = (
+                            None if bound_ink is None else [
+                                box for box in bound_ink if not source_interaction_rect.contains(box)
+                            ]
+                        )
+                    shared_ink_boxes = shared_ink_by_paint_kind[shared_area_paint]
+                    if shared_area_paint and _native_pdf_shared_area_hits_overhang(
+                        paint_rect, source_interaction_rect, shared_paint_rect, shared_ink_boxes, glyph_pair_work,
+                    ):
+                        return True
+                    if shared_stroke and shared_ink_boxes is None:
+                        shared_ink_boxes = [] if source_interaction_rect.contains(shared_paint_rect) else [shared_paint_rect]
                     overhang = [
                         box for box in shared_ink_boxes
                         if not (box & paint_rect).is_empty
                         and not source_interaction_rect.contains(box & paint_rect)
-                    ]
+                    ] if shared_stroke else []
                     if overhang:
                         verified = get_verified_stroke_seq(index, paint_rect)
                         if index not in explicit_line_strokes:

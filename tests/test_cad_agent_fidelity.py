@@ -1770,6 +1770,31 @@ def test_native_pdf_observation_fails_closed_for_aggregate_sheared_text_overpain
     document.close()
 
 
+@pytest.mark.parametrize(
+    "area, verified_ink, limit, veto_expected, charged",
+    [
+        pytest.param((11, 2, 12, 4), (9, 1, 12, 5), 1, True, 1, id="positive-contact"),
+        pytest.param((12, 2, 13, 4), (9, 1, 12, 5), 1, True, 1, id="edge-contact"),
+        pytest.param((13, 2, 14, 4), (9, 1, 12, 5), 1, False, 1, id="clear-sibling"),
+        pytest.param((13, 2, 14, 4), None, 1, True, 1, id="unknown-uses-shared-envelope"),
+        pytest.param((21, 2, 22, 4), None, 1, False, 1, id="clear-even-without-binding"),
+        pytest.param((13, 2, 14, 4), (9, 1, 12, 5), 0, True, 0, id="budget-exhausted"),
+        pytest.param((8, 2, 9, 4), (9, 1, 12, 5), 1, False, 1, id="metric-contact-handled-by-owner"),
+    ],
+)
+def test_native_pdf_shared_area_paint_geometry(
+    area: tuple[float, ...], verified_ink: tuple[float, ...] | None,
+    limit: int, veto_expected: bool, charged: int,
+) -> None:
+    work = fidelity_module._GlyphPairWorkBudget(limit)
+    veto = fidelity_module._native_pdf_shared_area_hits_overhang(
+        fitz.Rect(area), fitz.Rect(0, 0, 10, 10), fitz.Rect(0, 0, 20, 10),
+        None if verified_ink is None else (fitz.Rect(verified_ink),), work,
+    )
+    assert veto is veto_expected
+    assert work.work == charged
+
+
 @pytest.mark.parametrize("paint_x, expect_contact", [(155.0, True), (550.0, False)])
 def test_native_pdf_observation_rejects_only_occluded_aggregate_image_span(
     paint_x: float, expect_contact: bool,
